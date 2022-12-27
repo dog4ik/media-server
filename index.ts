@@ -1,95 +1,30 @@
 import express from "express";
-import cors from "cors";
 import path from "path";
 import fs from "fs";
-type LibItem = {
-  title: string;
-  episodes: { number: number; src: string }[];
-  season: number;
-};
-function cleanTitle(rawTitle: string) {
-  let cleanedTitle = rawTitle;
-  if (cleanedTitle.indexOf(".") !== -1) {
-    cleanedTitle = cleanedTitle.replace(/\./g, " ");
-  }
-
-  cleanedTitle = cleanedTitle.replace(/_/g, " ");
-  cleanedTitle = cleanedTitle.replace(/([(_]|- )$/, "").trim();
-
-  return cleanedTitle;
-}
-const scanDir = "S://video//show";
-const getLibrary = (folder: string) => {
-  const library: LibItem[] = [];
-  const getFilesRecursively = (directory: string) => {
-    const filesInDirectory = fs.readdirSync(directory);
-    for (const file of filesInDirectory) {
-      const absolute = path.join(directory, file);
-      const relative = path.relative(scanDir, absolute);
-      const regExp = /s[0-9]{1,2} ?e[0-9]{1,2}.+mkv|mp4/gi;
-      if (fs.statSync(absolute).isDirectory()) {
-        getFilesRecursively(absolute);
-      } else {
-        const match = file.match(regExp);
-        if (match) {
-          const title = cleanTitle(file)
-            .split(/s[0-9]{1,2} ?e[0-9]{1,2}/gi)[0]
-            .trim()
-            .toLowerCase();
-          const season = Number(
-            file
-              .match(/s[0-9]{1,2}/gi)![0]
-              .toUpperCase()
-              .replace("S", "")
-          );
-
-          if (
-            library.findIndex(
-              (item) => item.title == title && item.season == season
-            ) == -1
-          ) {
-            library.push({
-              episodes: [
-                {
-                  number: Number(
-                    file
-                      .match(/e[0-9]{1,2}/gi)![0]
-                      .toUpperCase()
-                      .replace("E", "")
-                  ),
-                  src: "/" + relative.replace("\\", "/"),
-                },
-              ],
-              title,
-              season,
-            });
-          } else {
-            library[
-              library.findIndex(
-                (item) => item.title == title && item.season == season
-              )
-            ].episodes.push({
-              number: Number(
-                file
-                  .match(/e[0-9]{1,2}/gi)![0]
-                  .toUpperCase()
-                  .replace("E", "")
-              ),
-              src: "/" + relative.replace("\\", "/"),
-            });
-          }
-        }
-      }
-    }
-  };
-  getFilesRecursively(folder);
-  return library;
-};
+import cors from "cors";
+import getLibrary from "./src/GetLibrary";
 const app = express();
+const scanDir = "S://video//show";
 app.use(cors());
 app.use("/static", express.static(scanDir));
-app.get("/show", (_, res) => {
-  res.send(getLibrary(scanDir));
+app.get("/show", async (_, res) => {
+  res.send(await getLibrary(scanDir));
+});
+app.get("/test", (_, res) => {
+  function getAllFiles(folder: string, files: string[]) {
+    const filesInDir = fs.readdirSync(folder);
+    for (const file of filesInDir) {
+      const absolute = path.join(folder, file);
+      if (fs.statSync(absolute).isDirectory()) {
+        getAllFiles(absolute, files);
+        continue;
+      }
+      files.push(file);
+    }
+    return files;
+  }
+  let files: string[] = [];
+  res.send(getAllFiles("S:\\video\\show", files));
 });
 app.listen(3001, () => {
   console.log(`[server]: Server is running at https://localhost:${3001}`);
