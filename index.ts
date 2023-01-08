@@ -2,9 +2,11 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import cors from "cors";
+import dotenv from "dotenv";
 import getLibrary from "./src/GetLibrary";
+dotenv.config();
 const app = express();
-const scanDir = "S://video//show";
+const scanDir = process.env.SCAN_DIR ?? "";
 app.use(cors());
 app.use("/static", express.static(scanDir));
 app.get("/show", async (_, res) => {
@@ -26,6 +28,8 @@ app.get("/test", (_, res) => {
   let files: string[] = [];
   res.send(getAllFiles("S:\\video\\show", files));
 });
-app.listen(3001, () => {
-  console.log(`[server]: Server is running at https://localhost:${3001}`);
+app.listen(process.env.PORT, () => {
+  console.log(
+    `[server]: Server is running at https://localhost:${process.env.PORT}`
+  );
 });
