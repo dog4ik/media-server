@@ -49,6 +49,7 @@ const getLibrary = async (folder: string) => {
             .split(/s[0-9]{1,2} ?e[0-9]{1,2}/gi)[0]
             .trim()
             .toLowerCase();
+          if (!title) return;
           const season = Number(
             file
               .match(/s[0-9]{1,2}/gi)![0]

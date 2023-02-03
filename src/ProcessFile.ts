@@ -1,7 +1,6 @@
 import { exec } from "child_process";
 import util from "util";
 import fs from "fs";
-import path from "path";
 type FileMetaData = {
   streams: {
     index: number;
@@ -12,20 +11,9 @@ type FileMetaData = {
     tags: { language: string };
   }[];
 };
-const EXTRACT_TOOL_PATH = path.join(
-  "C:",
-  "Program Files",
-  "Ffmpeg",
-  "bin",
-  "ffmpeg.exe"
-);
-const INFO_TOOL_PATH = path.join(
-  "C:",
-  "Program Files",
-  "Ffmpeg",
-  "bin",
-  "ffprobe.exe"
-);
+const EXTRACT_TOOL_PATH = "ffmpeg";
+const INFO_TOOL_PATH = "ffprobe";
+
 const asyncExec = util.promisify(exec);
 
 const encodeAudio = async (filePath: string, desiredTrackId: number) => {
@@ -102,7 +90,13 @@ export default async function prosessFile(
       result.audioSuccess = true;
       continue;
     }
-    if (track.codec_name === "ac3" || track.codec_name === "dts") {
+    console.log("audio ", track.codec_name);
+
+    if (
+      track.codec_name === "ac3" ||
+      track.codec_name === "dts" ||
+      track.codec_name === "eac3"
+    ) {
       await encodeAudio(filePath, track.index)
         .then(() => {
           result.audioSuccess = true;
