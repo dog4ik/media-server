@@ -3,7 +3,12 @@ import path from "path";
 import processFile from "./ProcessFile";
 type LibItem = {
   title: string;
-  episodes: { number: number; src: string; subSrc: string | null }[];
+  episodes: {
+    number: number;
+    src: string;
+    subSrc: string | null;
+    duration: number | null;
+  }[];
   season: number;
 };
 function cleanTitle(rawTitle: string) {
@@ -87,6 +92,7 @@ const getLibrary = async (folder: string) => {
               ),
               src: "/" + relative.replaceAll("\\", "/"),
               subSrc: subsPath,
+              duration: fileProcessResult.duration,
             });
           }
         }

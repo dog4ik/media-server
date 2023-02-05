@@ -10,6 +10,14 @@ type FileMetaData = {
     duration: string;
     tags: { language: string };
   }[];
+  format: {
+    duration: string;
+  };
+};
+type Response = {
+  audioSuccess: boolean;
+  subsSuccess: boolean;
+  duration: number | null;
 };
 const EXTRACT_TOOL_PATH = "ffmpeg";
 const INFO_TOOL_PATH = "ffprobe";
@@ -36,18 +44,18 @@ export default async function prosessFile(
   filePath: string,
   fileName: string,
   allFiles: string[]
-) {
-  let result = {
+): Promise<Response> {
+  let result: Response = {
     audioSuccess: false,
     subsSuccess: false,
+    duration: null,
   };
-  const infoQuery = `"${INFO_TOOL_PATH}" -v quiet -print_format json -show_streams "${filePath}"`;
-  const mkvdata = await asyncExec(infoQuery).catch((e) => {
-    console.log(e);
-    return e;
-  });
-  if (!mkvdata.stdout) return { audioSuccess: false, subsSuccess: false };
-  const metaData = JSON.parse(mkvdata.stdout) as FileMetaData;
+  const metaDataQuery = `"${INFO_TOOL_PATH}" -v quiet -show_entries format=duration -print_format json -show_streams "${filePath}"`;
+  const ffprobeResult = await asyncExec(metaDataQuery);
+  if (!ffprobeResult.stdout)
+    return { audioSuccess: false, subsSuccess: false, duration: null };
+  const metaData = JSON.parse(ffprobeResult.stdout) as FileMetaData;
+  if (metaData.format.duration) result.duration = +metaData.format.duration;
 
   //handle Subtitles
   let desiredTrackId: null | number = null;
