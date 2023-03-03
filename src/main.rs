@@ -1,12 +1,9 @@
-use axum::{routing::get, Router};
-use media_server::serve_file;
+use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    let app = Router::new().route("/video.mkv", get(serve_file));
-    let addr = "127.0.0.1:5000".parse().unwrap();
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    let hello = warp::path!("hello" / String).map(|name| format!("Hello, {}!", name));
+    let dir = warp::path("static").and(warp::fs::dir("test"));
+    let routes = warp::any().and(hello.or(dir));
+    warp::serve(routes).run(([127, 0, 0, 1], 5000)).await;
 }
