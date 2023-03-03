@@ -1,6 +1,8 @@
+pub mod process_file;
 pub mod scan;
+pub mod show_file;
 pub mod test;
 
-pub use scan::process_file;
+pub use process_file::get_metadata;
 pub use scan::scan;
-pub use scan::ShowFile;
+pub use show_file::ShowFile;
