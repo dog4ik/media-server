@@ -7,8 +7,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.69"
-axum = { version = "0.6.9", features = ["headers"] }
 bytes = "1.4.0"
+http-body-util = "0.1.0-rc.2" 
+serde = { version = "1.0.152", features = ["serde_derive"] }
 serde_json = "1.0.93"
 tokio = { version = "1.25.0", features = ["full"] }
 tokio-util = { version = "0.7.7", features = ["full"] }
+warp = "0.3.3"
