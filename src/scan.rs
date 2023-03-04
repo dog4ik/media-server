@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use crate::ShowFile;
 
@@ -102,6 +103,38 @@ pub async fn scan(folders: Vec<PathBuf>) -> Vec<ShowFile> {
                 }
             }
         }
+        let preview_folder = fs::read_dir(
+            PathBuf::from_str(
+                format!("{}/previews/", file.resources_path.to_str().unwrap()).as_str(),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut count_previews = 0;
+        for file in preview_folder {
+            let file = file.unwrap().path();
+            if file.extension().unwrap() != "webm" {
+                count_previews += 1;
+            }
+        }
+        if count_previews == 0 {
+            file.generate_previews().await.unwrap();
+        }
     }
+
+    //clean up
+    let resources_dir = fs::read_dir("resources").unwrap();
+    for file in resources_dir {
+        let file = file.unwrap().path();
+        if file.is_dir()
+            && result
+                .iter()
+                .any(|x| &x.title == file.file_name().unwrap().to_str().unwrap())
+        {
+            continue;
+        }
+        fs::remove_dir_all(file).unwrap();
+    }
+
     result
 }

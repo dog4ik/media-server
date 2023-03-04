@@ -139,6 +139,21 @@ impl ShowFile {
     pub async fn get_metadata(&self) -> Result<process_file::FFprobeOutput, anyhow::Error> {
         get_metadata(&self.video_path).await
     }
+
+    pub async fn generate_previews(&self) -> Result<(), anyhow::Error> {
+        let out = Command::new("ffmpeg")
+            .args([
+                "-i",
+                self.video_path.to_str().unwrap(),
+                "-vf",
+                "fps=1/10,scale=120:-1",
+                format!("{}/previews/%d.jpg", self.resources_path.to_str().unwrap()).as_str(),
+            ])
+            .output()
+            .await?;
+        println!("{:?}", out);
+        Ok(())
+    }
 }
 
 fn generate_resources(title: &str, season: u8, episode: u8) -> Result<PathBuf, std::io::Error> {
