@@ -91,7 +91,7 @@ impl ShowFile {
         track: i32,
         language: &str,
     ) -> Result<(), anyhow::Error> {
-        let out = Command::new("ffmpeg")
+        Command::new("ffmpeg")
             .args(&[
                 "-i",
                 self.video_path.to_str().unwrap(),
@@ -105,17 +105,25 @@ impl ShowFile {
                 .as_str(),
                 "-y",
             ])
-            .output()
+            .spawn()
+            .unwrap()
+            .wait()
             .await?;
-        println!("{:?}", out);
+        println!(
+            "Generating subs for {:?}",
+            format!("{} {} {}", self.title, self.season, self.episode)
+        );
         Ok(())
     }
 
     pub async fn transcode_audio(&self, track: i32) -> Result<(), anyhow::Error> {
         let buffer_path = format!("{}buffer", self.video_path.to_str().unwrap(),);
-        println!("{buffer_path}");
+        println!(
+            "Transcoding audio for {:?}",
+            format!("{} {} {}", self.title, self.season, self.episode)
+        );
         fs::rename(&self.video_path, &buffer_path)?;
-        let out = Command::new("ffmpeg")
+        Command::new("ffmpeg")
             .args(&[
                 "-i",
                 &buffer_path,
@@ -129,9 +137,11 @@ impl ShowFile {
                 "copy",
                 format!("{}", self.video_path.to_str().unwrap()).as_str(),
             ])
-            .output()
+            .spawn()
+            .unwrap()
+            .wait()
             .await?;
-        println!("Remove {:?}", buffer_path);
+        println!("Removed file: {:?}", buffer_path);
         fs::remove_file(buffer_path)?;
         Ok(())
     }
@@ -141,7 +151,7 @@ impl ShowFile {
     }
 
     pub async fn generate_previews(&self) -> Result<(), anyhow::Error> {
-        let out = Command::new("ffmpeg")
+        Command::new("ffmpeg")
             .args([
                 "-i",
                 self.video_path.to_str().unwrap(),
@@ -149,9 +159,14 @@ impl ShowFile {
                 "fps=1/10,scale=120:-1",
                 format!("{}/previews/%d.jpg", self.resources_path.to_str().unwrap()).as_str(),
             ])
-            .output()
+            .spawn()
+            .unwrap()
+            .wait()
             .await?;
-        println!("{:?}", out);
+        println!(
+            "Generating previews for {:?}",
+            format!("{} {} {}", self.title, self.season, self.episode)
+        );
         Ok(())
     }
 }

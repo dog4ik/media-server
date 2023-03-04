@@ -69,8 +69,8 @@ pub async fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error
         ])
         .output()
         .await?;
-    println!("{:?}", path);
     let output = from_utf8(&output.stdout)?;
     let metadata: FFprobeOutput = serde_json::from_str(output)?;
+    println!("getting metadata for a file");
     Ok(metadata)
 }
