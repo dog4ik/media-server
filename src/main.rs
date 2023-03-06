@@ -1,20 +1,18 @@
 use media_server::{serve_file::serve_file, serve_previews, serve_subs, Library};
+use std::sync::{Arc, RwLock};
 use std::{path::PathBuf, str::FromStr};
-use warp::{
-    hyper::{Body, Response, StatusCode},
-    Filter,
-};
+use warp::Filter;
 
 #[tokio::main]
 async fn main() {
     let dirs =
         vec![PathBuf::from_str("/home/dog4ik/Documents/dev/rust/media-server/test").unwrap()];
-    let library = Library::new(dirs).await;
-    let clonned_lib = library.clone();
-    let lib = library.clone();
-    let title_filter = warp::path!(String / i32 / i32 / ..).map(
+    let library = Arc::new(RwLock::new(Library::new(dirs).await));
+    let title_filter = warp::path!(String / i32 / i32 / ..).map({
+        let library = library.clone();
         move |title: String, season: i32, episode: i32| {
-            let file = lib.items.iter().find(|item| {
+            let library = library.read().unwrap();
+            let file = library.items.iter().find(|item| {
                 item.episode == episode as u8
                     && item.title == title.replace("-", " ")
                     && item.season == season as u8
@@ -23,10 +21,10 @@ async fn main() {
             if let Some(file) = file {
                 file.clone()
             } else {
-                panic!("ayaya")
+                panic!("aayayaya")
             }
-        },
-    );
+        }
+    });
 
     let previews = warp::path!("previews" / String / i32 / i32 / i32)
         .and(warp::get())
@@ -39,43 +37,33 @@ async fn main() {
     let subs_verbose = warp::any()
         .and(warp::get())
         .and(warp::path("subs"))
-        .and(title_filter)
+        .and(title_filter.clone())
         .and(warp::path::param::<String>())
         .and_then(|ep, lang| {
             println!("{lang}");
             serve_subs(ep, Some(lang))
         });
 
-    let video = warp::path!("videos" / String / i32 / i32)
+    let video = warp::any()
         .and(warp::get())
+        .and(warp::path("videos"))
+        .and(title_filter.clone())
         .and(warp::header::optional::<String>("Range"))
-        .and_then({
-            move |name: String, season: i32, episode: i32, range: Option<String>| {
-                let lib = library.clone();
-                let name = name.replace("-", " ");
-                async move {
-                    match lib.items.iter().find(|item| {
-                        item.title == name
-                            && item.season == season as u8
-                            && item.episode == episode as u8
-                    }) {
-                        Some(ep) => serve_file(&ep.video_path, range).await,
-                        None => Ok(Response::builder()
-                            .status(StatusCode::NOT_FOUND)
-                            .body(Body::empty())
-                            .unwrap()),
-                    }
-                }
-            }
-        });
-    let library = warp::path!("library")
-        .and(warp::get())
-        .map(move || clonned_lib.as_json());
+        .and_then(serve_file);
+    let summory = warp::path!("summary").map({
+        let library = library.clone();
+        move || library.read().unwrap().get_summary()
+    });
+    let library = warp::path!("library").and(warp::get()).map({
+        let library = library.clone();
+        move || library.read().unwrap().as_json()
+    });
     let routes = warp::any()
         .and(subs_verbose)
         .or(subs)
         .or(previews)
         .or(video)
-        .or(library);
+        .or(library)
+        .or(summory);
     warp::serve(routes).run(([127, 0, 0, 1], 5000)).await;
 }

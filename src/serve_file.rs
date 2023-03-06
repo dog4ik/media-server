@@ -1,16 +1,16 @@
-use std::path::PathBuf;
-
 use tokio::fs;
 use tokio::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 use warp::hyper::{Body, Response, StatusCode};
+
+use crate::ShowFile;
 pub async fn serve_file(
-    path: &PathBuf,
+    episode: ShowFile,
     range: Option<String>,
 ) -> Result<Response<Body>, warp::Rejection> {
-    let mut file = fs::File::open(&path).await.unwrap();
-    let file_size = fs::metadata(path).await.unwrap().len();
+    let mut file = fs::File::open(&episode.video_path).await.unwrap();
+    let file_size = fs::metadata(&episode.video_path).await.unwrap().len();
     let response = match range {
         Some(range_header) => {
             //parsing header

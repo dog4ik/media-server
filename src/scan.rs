@@ -14,12 +14,13 @@ pub struct Library {
     pub dirs: Vec<PathBuf>,
 }
 
-struct Summary {
-    title: String,
-    season: u8,
-    episode: u8,
-    have_subs: bool,
-    have_previews: bool,
+#[derive(Clone, Debug, Serialize)]
+pub struct Summary {
+    pub title: String,
+    pub season: u8,
+    pub episode: u8,
+    pub previews: i32,
+    pub subs: Vec<String>,
 }
 impl Library {
     pub async fn new(dirs: Vec<PathBuf>) -> Library {
@@ -35,9 +36,38 @@ impl Library {
     pub fn as_json(&self) -> String {
         serde_json::to_string(&self.items).unwrap()
     }
-    //    pub fn get_summary(&self) -> Vec<Summary> {
-    //        for item in self.items {}
-    //    }
+
+    pub fn get_summary(&self) -> String {
+        let mut result = vec![];
+        for item in self.items.clone() {
+            let mut path = item.resources_path;
+            // handle Subs
+            path.push("subs");
+            let subs_dir = fs::read_dir(&path).unwrap();
+            let subs: Vec<_> = subs_dir
+                .map(|sub| {
+                    sub.unwrap()
+                        .path()
+                        .file_stem()
+                        .unwrap()
+                        .to_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            path.pop();
+            path.push("previews");
+            let previews_count = fs::read_dir(&path).unwrap().count();
+            result.push(Summary {
+                previews: previews_count as i32,
+                subs,
+                title: item.title,
+                season: item.season,
+                episode: item.episode,
+            })
+        }
+        serde_json::to_string(&result).unwrap()
+    }
 }
 pub fn walk_recursive(path_buf: &PathBuf) -> Result<Vec<ShowFile>, std::io::Error> {
     let mut local_paths: Vec<ShowFile> = vec![];
