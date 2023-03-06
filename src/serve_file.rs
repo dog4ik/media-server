@@ -1,16 +1,19 @@
+use std::path::PathBuf;
+
 use tokio::fs;
 use tokio::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
-use warp::hyper::{Body, HeaderMap, Response, StatusCode};
-pub async fn serve_file(req_header: HeaderMap) -> Response<Body> {
-    let mut file = fs::File::open("video.mkv").await.unwrap();
-    let file_size = fs::metadata("video.mkv").await.unwrap().len();
-    let content_range_header = req_header.get("range");
-    let response = match content_range_header {
+use warp::hyper::{Body, Response, StatusCode};
+pub async fn serve_file(
+    path: &PathBuf,
+    range: Option<String>,
+) -> Result<Response<Body>, warp::Rejection> {
+    let mut file = fs::File::open(&path).await.unwrap();
+    let file_size = fs::metadata(path).await.unwrap().len();
+    let response = match range {
         Some(range_header) => {
             //parsing header
-            let range_header = range_header.to_str().unwrap();
             let mut ranges = range_header.split('=').skip(1);
             let range = ranges.next().unwrap().to_owned();
             let parts: Vec<&str> = range.split('-').collect();
@@ -53,5 +56,5 @@ pub async fn serve_file(req_header: HeaderMap) -> Response<Body> {
         }
     };
 
-    response
+    Ok(response)
 }

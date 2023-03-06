@@ -2,11 +2,44 @@ use std::fs;
 use std::path::PathBuf;
 use std::str::FromStr;
 
+use serde::Serialize;
+
 use crate::ShowFile;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
 
-fn walk_recursive(path_buf: &PathBuf) -> Result<Vec<ShowFile>, std::io::Error> {
+#[derive(Debug, Clone, Serialize)]
+pub struct Library {
+    pub items: Vec<ShowFile>,
+    pub dirs: Vec<PathBuf>,
+}
+
+struct Summary {
+    title: String,
+    season: u8,
+    episode: u8,
+    have_subs: bool,
+    have_previews: bool,
+}
+impl Library {
+    pub async fn new(dirs: Vec<PathBuf>) -> Library {
+        Library {
+            items: scan(&dirs).await,
+            dirs,
+        }
+    }
+    pub async fn update(&mut self) {
+        let result = scan(&self.dirs).await;
+        self.items = result
+    }
+    pub fn as_json(&self) -> String {
+        serde_json::to_string(&self.items).unwrap()
+    }
+    //    pub fn get_summary(&self) -> Vec<Summary> {
+    //        for item in self.items {}
+    //    }
+}
+pub fn walk_recursive(path_buf: &PathBuf) -> Result<Vec<ShowFile>, std::io::Error> {
     let mut local_paths: Vec<ShowFile> = vec![];
     let dir = fs::read_dir(&path_buf)?;
     for file in dir {
@@ -30,7 +63,7 @@ fn walk_recursive(path_buf: &PathBuf) -> Result<Vec<ShowFile>, std::io::Error> {
     return Ok(local_paths);
 }
 
-pub async fn scan(folders: Vec<PathBuf>) -> Vec<ShowFile> {
+pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
     let mut result = vec![];
     for dir in folders {
         match walk_recursive(&dir) {
@@ -123,7 +156,8 @@ pub async fn scan(folders: Vec<PathBuf>) -> Vec<ShowFile> {
     }
 
     //clean up
-    let resources_dir = fs::read_dir("resources").unwrap();
+    let resources_dir =
+        fs::read_dir("/home/dog4ik/Documents/dev/rust/media-server/resources").unwrap();
     for file in resources_dir {
         let file = file.unwrap().path();
         if file.is_dir()

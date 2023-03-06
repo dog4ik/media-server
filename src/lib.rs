@@ -7,7 +7,7 @@ pub mod show_file;
 pub mod test;
 
 pub use process_file::get_metadata;
-pub use scan::scan;
+pub use scan::Library;
 pub use serve_previews::serve_previews;
 pub use serve_subs::serve_subs;
 pub use show_file::ShowFile;

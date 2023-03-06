@@ -20,9 +20,9 @@ pub async fn serve_previews(
         if let Some(file) = previews_dir.next_entry().await.unwrap() {
             let file_path = file.path();
             let file_name = file_path.file_stem().unwrap().to_str().unwrap();
-
             if file_name.to_string().parse::<i32>().unwrap() == number {
                 preview = Some(fs::read(file_path).await.unwrap());
+                break;
             }
         } else {
             break;

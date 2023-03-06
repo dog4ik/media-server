@@ -1,10 +1,11 @@
 use std::{fs, path::PathBuf};
 
+use serde::Serialize;
 use tokio::process::Command;
 
 use crate::{get_metadata, process_file};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ShowFile {
     pub title: String,
     pub episode: u8,
@@ -61,14 +62,38 @@ impl ShowFile {
         }
     }
 
-    pub fn get_subtitles(&self) -> Option<String> {
-        match fs::read_to_string(format!(
-            "{}/subs/eng.srt",
-            self.resources_path.to_str().unwrap()
-        )) {
-            Ok(sub) => Some(sub),
-            Err(_) => None,
+    pub async fn get_subtitles(&self, lang: Option<String>) -> Option<String> {
+        let mut subs_dir =
+            tokio::fs::read_dir(format!("{}/subs", self.resources_path.to_str().unwrap()))
+                .await
+                .unwrap();
+        let mut subs: Option<String> = None;
+        loop {
+            if let Some(file) = subs_dir.next_entry().await.unwrap() {
+                let file_path = file.path();
+                let file_name = file_path.file_stem().unwrap().to_str().unwrap();
+
+                subs = match &lang {
+                    Some(lang) => {
+                        if file_name == lang {
+                            Some(tokio::fs::read_to_string(file.path()).await.unwrap())
+                        } else {
+                            continue;
+                        }
+                    }
+                    None => {
+                        if &file_name == &"unknown" || &file_name == &"eng" {
+                            Some(tokio::fs::read_to_string(file_path).await.unwrap())
+                        } else {
+                            continue;
+                        }
+                    }
+                };
+            } else {
+                break;
+            }
         }
+        subs
     }
 
     pub fn get_previews(&self) -> Result<Vec<Vec<u8>>, std::io::Error> {
