@@ -61,7 +61,7 @@ impl Library {
             path.push("previews");
             let previews_count = fs::read_dir(&path).unwrap().count();
             let href = format!(
-                "{}/{}/{}",
+                "/{}/{}/{}",
                 item.title.replace(" ", "-"),
                 item.season,
                 item.episode
