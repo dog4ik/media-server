@@ -29,6 +29,8 @@ async fn main() {
         }
     });
 
+    let cors = warp::cors().allow_any_origin();
+
     let previews = warp::any()
         .and(warp::get())
         .and(warp::path("previews"))
@@ -70,6 +72,7 @@ async fn main() {
         .or(previews)
         .or(video)
         .or(library)
-        .or(summory);
+        .or(summory)
+        .with(cors);
     warp::serve(routes).run(([127, 0, 0, 1], 5000)).await;
 }
