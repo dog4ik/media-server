@@ -21,6 +21,7 @@ async fn main() {
             if let Some(file) = file {
                 file.clone()
             } else {
+                //TODO: fix this panic
                 panic!("aayayaya")
             }
         }
