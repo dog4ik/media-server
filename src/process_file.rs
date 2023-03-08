@@ -1,8 +1,8 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use std::process::Command;
 use std::{path::PathBuf, str::from_utf8};
-use tokio::process::Command;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeStream {
     pub index: i32,
     pub codec_name: String,
@@ -24,17 +24,17 @@ pub struct FFprobeStream {
     pub tags: FFprobeTags,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeFormat {
     pub duration: String,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeTags {
     pub language: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeDisposition {
     pub default: Option<i32>,
     pub dub: Option<i32>,
@@ -50,12 +50,12 @@ pub struct FFprobeDisposition {
     pub timed_thumbnails: Option<i32>,
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeOutput {
     pub streams: Vec<FFprobeStream>,
     pub format: FFprobeFormat,
 }
-pub async fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
+pub fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
     let output = Command::new("ffprobe")
         .args(&[
             "-v",
@@ -68,7 +68,7 @@ pub async fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error
             path.to_str().unwrap(),
         ])
         .output()
-        .await?;
+        .unwrap();
     let output = from_utf8(&output.stdout)?;
     let metadata: FFprobeOutput = serde_json::from_str(output)?;
     println!("getting metadata for a file");
