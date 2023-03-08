@@ -3,7 +3,10 @@ use std::{fs, path::PathBuf};
 use serde::Serialize;
 use tokio::process::Command;
 
-use crate::{get_metadata, process_file};
+use crate::{
+    get_metadata,
+    process_file::{self, FFprobeOutput},
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShowFile {
@@ -12,6 +15,7 @@ pub struct ShowFile {
     pub season: u8,
     pub video_path: PathBuf,
     pub resources_path: PathBuf,
+    pub metadata: FFprobeOutput,
 }
 
 impl ShowFile {
@@ -49,12 +53,14 @@ impl ShowFile {
         }
         if let (Some(name), Some(season), Some(episode)) = (name, season, episode) {
             let resource = generate_resources(&name, season, episode)?;
+            let metadata = get_metadata(&path).unwrap();
             let show_file = ShowFile {
                 title: name,
                 episode,
                 season,
                 video_path: path,
                 resources_path: resource,
+                metadata,
             };
             Ok(show_file)
         } else {
@@ -172,7 +178,7 @@ impl ShowFile {
     }
 
     pub async fn get_metadata(&self) -> Result<process_file::FFprobeOutput, anyhow::Error> {
-        get_metadata(&self.video_path).await
+        get_metadata(&self.video_path)
     }
 
     pub async fn generate_previews(&self) -> Result<(), anyhow::Error> {
@@ -198,8 +204,11 @@ impl ShowFile {
 
 fn generate_resources(title: &str, season: u8, episode: u8) -> Result<PathBuf, std::io::Error> {
     let episode_dir_path = format!(
-        "/home/dog4ik/Documents/dev/rust/media-server/resources/{}/{}/{}",
-        title, season, episode
+        "{}/{}/{}/{}",
+        std::env::var("RESOURCES_PATH").unwrap(),
+        title,
+        season,
+        episode
     );
     fs::create_dir_all(format!("{}/subs", &episode_dir_path))?;
     fs::create_dir_all(format!("{}/previews", &episode_dir_path))?;

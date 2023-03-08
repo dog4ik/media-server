@@ -5,8 +5,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_scan() {
-        let input = vec![PathBuf::from(
-            "/home/dog4ik/Documents/dev/rust/media-server/test",
-        )];
+        let input = vec![PathBuf::from(std::env::var("LIBRARY_PATH").unwrap())];
     }
 }

@@ -1,3 +1,4 @@
+use dotenv::dotenv;
 use media_server::{serve_file::serve_file, serve_previews, serve_subs, Library};
 use std::sync::{Arc, RwLock};
 use std::{path::PathBuf, str::FromStr};
@@ -5,8 +6,9 @@ use warp::Filter;
 
 #[tokio::main]
 async fn main() {
-    let dirs =
-        vec![PathBuf::from_str("/home/dog4ik/Documents/dev/rust/media-server/test").unwrap()];
+    dotenv().ok();
+    let library_dir = std::env::var("LIBRARY_PATH").unwrap();
+    let dirs = vec![PathBuf::from_str(&library_dir).unwrap()];
     let library = Arc::new(RwLock::new(Library::new(dirs).await));
     let title_filter = warp::path!(String / i32 / i32 / ..).map({
         let library = library.clone();
@@ -27,8 +29,11 @@ async fn main() {
         }
     });
 
-    let previews = warp::path!("previews" / String / i32 / i32 / i32)
+    let previews = warp::any()
         .and(warp::get())
+        .and(warp::path("previews"))
+        .and(title_filter.clone())
+        .and(warp::path::param::<i32>())
         .and_then(serve_previews);
     let subs = warp::any()
         .and(warp::get())

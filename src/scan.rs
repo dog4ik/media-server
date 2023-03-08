@@ -195,8 +195,7 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
     }
 
     //clean up
-    let resources_dir =
-        fs::read_dir("/home/dog4ik/Documents/dev/rust/media-server/resources").unwrap();
+    let resources_dir = fs::read_dir(std::env::var("RESOURCES_PATH").unwrap()).unwrap();
     for file in resources_dir {
         let file = file.unwrap().path();
         if file.is_dir()

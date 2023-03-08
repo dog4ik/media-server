@@ -3,16 +3,19 @@ use std::path::PathBuf;
 use tokio::fs;
 use warp::hyper::{Body, Response, StatusCode};
 
+use crate::ShowFile;
+
 pub async fn serve_previews(
-    title: String,
-    season: i32,
-    episode: i32,
+    file: ShowFile,
     number: i32,
 ) -> Result<Response<Body>, warp::Rejection> {
-    let title = title.replace("-", " ");
+    let title = file.title.replace("-", " ");
     let path = PathBuf::from(format!(
-        "/home/dog4ik/Documents/dev/rust/media-server/resources/{}/{}/{}/previews",
-        title, season, episode
+        "{}/{}/{}/{}/previews",
+        file.resources_path.to_str().unwrap(),
+        title,
+        file.season,
+        file.episode
     ));
     let mut previews_dir = fs::read_dir(path).await.unwrap();
     let mut preview: Option<Vec<u8>> = None;
