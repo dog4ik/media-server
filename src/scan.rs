@@ -21,6 +21,8 @@ pub struct Summary {
     pub episode: u8,
     pub previews: i32,
     pub subs: Vec<String>,
+    pub duration: String,
+    pub href: String,
 }
 impl Library {
     pub async fn new(dirs: Vec<PathBuf>) -> Library {
@@ -58,12 +60,20 @@ impl Library {
             path.pop();
             path.push("previews");
             let previews_count = fs::read_dir(&path).unwrap().count();
+            let href = format!(
+                "{}/{}/{}",
+                item.title.replace(" ", "-"),
+                item.season,
+                item.episode
+            );
             result.push(Summary {
                 previews: previews_count as i32,
                 subs,
                 title: item.title,
                 season: item.season,
                 episode: item.episode,
+                duration: item.metadata.format.duration,
+                href,
             })
         }
         serde_json::to_string(&result).unwrap()
@@ -105,8 +115,7 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
         };
     }
     for file in &result {
-        let metadata = file.get_metadata().await.unwrap();
-
+        let metadata = &file.metadata;
         //handle subs
         for stream in metadata
             .streams
