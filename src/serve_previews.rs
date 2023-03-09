@@ -9,13 +9,9 @@ pub async fn serve_previews(
     file: ShowFile,
     number: i32,
 ) -> Result<Response<Body>, warp::Rejection> {
-    let title = file.title.replace("-", " ");
     let path = PathBuf::from(format!(
-        "{}/{}/{}/{}/previews",
+        "{}/previews",
         file.resources_path.to_str().unwrap(),
-        title,
-        file.season,
-        file.episode
     ));
     let mut previews_dir = fs::read_dir(path).await.unwrap();
     let mut preview: Option<Vec<u8>> = None;
