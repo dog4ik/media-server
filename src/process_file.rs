@@ -21,7 +21,7 @@ pub struct FFprobeStream {
     pub duration_ts: Option<i64>,
     pub duration: Option<String>,
     pub bit_rate: Option<String>,
-    pub tags: FFprobeTags,
+    pub tags: Option<FFprobeTags>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

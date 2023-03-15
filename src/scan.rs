@@ -122,56 +122,60 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
             .iter()
             .filter(|&s| s.codec_type == "subtitle")
         {
-            match &stream.tags.language {
-                Some(lang) => {
-                    if !PathBuf::from(format!(
-                        "{}/subs/{}.srt",
-                        &file.resources_path.to_str().unwrap(),
-                        lang
-                    ))
-                    .try_exists()
-                    .unwrap()
-                    {
-                        file.generate_subtitles(stream.index, lang).await.unwrap();
-                    } else {
-                        continue;
+            if let Some(tags) = &stream.tags {
+                match &tags.language {
+                    Some(lang) => {
+                        if !PathBuf::from(format!(
+                            "{}/subs/{}.srt",
+                            &file.resources_path.to_str().unwrap(),
+                            lang
+                        ))
+                        .try_exists()
+                        .unwrap()
+                        {
+                            file.generate_subtitles(stream.index, lang).await.unwrap();
+                        } else {
+                            continue;
+                        }
                     }
-                }
-                None => {
-                    if !PathBuf::from(format!(
-                        "{}/subs/{}.srt",
-                        &file.resources_path.to_str().unwrap(),
-                        "unknown"
-                    ))
-                    .exists()
-                    {
-                        continue;
+                    None => {
+                        if !PathBuf::from(format!(
+                            "{}/subs/{}.srt",
+                            &file.resources_path.to_str().unwrap(),
+                            "unknown"
+                        ))
+                        .exists()
+                        {
+                            continue;
+                        }
+                        file.generate_subtitles(stream.index, "unknown")
+                            .await
+                            .unwrap();
+                        break;
                     }
-                    file.generate_subtitles(stream.index, "unknown")
-                        .await
-                        .unwrap();
-                    break;
-                }
-            };
+                };
+            }
         }
 
         //handle audio
         for stream in metadata.streams.iter().filter(|&s| s.codec_type == "audio") {
-            match &stream.tags.language {
-                Some(lang) => {
-                    if lang == "eng" {
+            if let Some(tags) = &stream.tags {
+                match &tags.language {
+                    Some(lang) => {
+                        if lang == "eng" {
+                            if stream.codec_name != "aac" && stream.codec_name != "mp3" {
+                                file.transcode_audio(stream.index).await.unwrap();
+                                break;
+                            }
+                            break;
+                        }
+                    }
+                    None => {
                         if stream.codec_name != "aac" && stream.codec_name != "mp3" {
                             file.transcode_audio(stream.index).await.unwrap();
-                            break;
                         }
                         break;
                     }
-                }
-                None => {
-                    if stream.codec_name != "aac" && stream.codec_name != "mp3" {
-                        file.transcode_audio(stream.index).await.unwrap();
-                    }
-                    break;
                 }
             }
         }
