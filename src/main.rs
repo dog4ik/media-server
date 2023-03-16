@@ -74,5 +74,10 @@ async fn main() {
         .or(library)
         .or(summory)
         .with(cors);
-    warp::serve(routes).run(([127, 0, 0, 1], 5000)).await;
+    warp::serve(routes)
+        .run((
+            [127, 0, 0, 1],
+            std::env::var("PORT").unwrap().parse().unwrap(),
+        ))
+        .await;
 }
