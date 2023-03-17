@@ -186,14 +186,14 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
             .unwrap(),
         )
         .unwrap();
-        let mut count_previews = 0;
+        let mut previews_count = 0;
         for file in preview_folder {
             let file = file.unwrap().path();
             if file.extension().unwrap() != "webm" {
-                count_previews += 1;
+                previews_count += 1;
             }
         }
-        if count_previews == 0 {
+        if previews_count == 0 {
             file.generate_previews().await.unwrap();
         }
     }
