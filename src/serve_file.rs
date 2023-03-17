@@ -47,7 +47,7 @@ pub async fn serve_file(
             let stream_of_bytes = FramedRead::new(file.take(size as u64), BytesCodec::new());
 
             Response::builder()
-                .status(StatusCode::OK)
+                .status(StatusCode::PARTIAL_CONTENT)
                 .header("Content-Type", "video/x-matroska")
                 .header("Content-Length", size.to_string())
                 .header("Accept-Ranges", "bytes")
