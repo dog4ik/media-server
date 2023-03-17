@@ -76,7 +76,7 @@ async fn main() {
         .with(cors);
     warp::serve(routes)
         .run((
-            [127, 0, 0, 1],
+            [0, 0, 0, 0],
             std::env::var("PORT").unwrap().parse().unwrap(),
         ))
         .await;
