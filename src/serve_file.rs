@@ -2,7 +2,7 @@ use tokio::fs;
 use tokio::io::SeekFrom;
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
-use warp::hyper::{Body, Response, StatusCode};
+use warp::hyper::{header, Body, Response, StatusCode};
 
 use crate::ShowFile;
 pub async fn serve_file(
@@ -14,6 +14,8 @@ pub async fn serve_file(
     let response = match range {
         Some(range_header) => {
             //parsing header
+            println!("{:?}", range_header);
+
             let mut ranges = range_header.split('=').skip(1);
             let range = ranges.next().unwrap().to_owned();
             let parts: Vec<&str> = range.split('-').collect();
@@ -30,12 +32,16 @@ pub async fn serve_file(
 
             Response::builder()
                 .header(
-                    "Content-Range",
+                    header::CONTENT_RANGE,
                     format!("bytes {}-{}/{}", start, end, file_size),
                 )
-                .header("Content-Length", chunk_size.to_string())
-                .header("Accept-Ranges", "bytes")
-                .header("Content-Type", "video/x-matroska")
+                .header(header::CONTENT_LENGTH, chunk_size.to_string())
+                .header(header::CACHE_CONTROL, "public, max-age=0")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                //WARN:
+                .header(header::LAST_MODIFIED, "Wed, 08 Mar 2023 12:55:12 GMT")
+                .header(header::ACCEPT_RANGES, "bytes")
+                .header(header::CONTENT_TYPE, "video/x-matroska")
                 .status(StatusCode::PARTIAL_CONTENT)
                 .body(Body::wrap_stream(stream_of_bytes))
                 .unwrap()
@@ -48,9 +54,9 @@ pub async fn serve_file(
 
             Response::builder()
                 .status(StatusCode::PARTIAL_CONTENT)
-                .header("Content-Type", "video/x-matroska")
-                .header("Content-Length", size.to_string())
-                .header("Accept-Ranges", "bytes")
+                .header(header::CONTENT_TYPE, "video/x-matroska")
+                .header(header::CONTENT_LENGTH, size.to_string())
+                .header(header::ACCEPT_RANGES, "bytes")
                 .body(Body::wrap_stream(stream_of_bytes))
                 .unwrap()
         }

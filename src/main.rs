@@ -19,7 +19,6 @@ async fn main() {
                     && item.title == title.replace("-", " ")
                     && item.season == season as u8
             });
-            println!("{:?} {:?} {:?}", title, season, episode);
             if let Some(file) = file {
                 file.clone()
             } else {
