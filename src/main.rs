@@ -57,7 +57,7 @@ async fn main() {
         .and(title_filter.clone())
         .and(warp::header::optional::<String>("Range"))
         .and_then(serve_file);
-    let summory = warp::path!("summary").map({
+    let summary = warp::path!("summary").map({
         let library = library.clone();
         move || library.read().unwrap().get_summary()
     });
@@ -71,7 +71,7 @@ async fn main() {
         .or(previews)
         .or(video)
         .or(library)
-        .or(summory)
+        .or(summary)
         .with(cors);
     warp::serve(routes)
         .run((
