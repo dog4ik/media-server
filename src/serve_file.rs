@@ -38,8 +38,6 @@ pub async fn serve_file(
                 .header(header::CONTENT_LENGTH, chunk_size.to_string())
                 .header(header::CACHE_CONTROL, "public, max-age=0")
                 .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                //WARN:
-                .header(header::LAST_MODIFIED, "Wed, 08 Mar 2023 12:55:12 GMT")
                 .header(header::ACCEPT_RANGES, "bytes")
                 .header(header::CONTENT_TYPE, "video/x-matroska")
                 .status(StatusCode::PARTIAL_CONTENT)
