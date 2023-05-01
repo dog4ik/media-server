@@ -1,3 +1,4 @@
+pub mod posters;
 pub mod process_file;
 pub mod scan;
 pub mod serve_file;

@@ -1,4 +1,7 @@
 use dotenv::dotenv;
+use media_server::posters::{
+    get_backdrop, get_poster, save_backrop, save_poster, BackdropData, PosterData,
+};
 use media_server::{serve_file::serve_file, serve_previews, serve_subs, Library};
 use std::sync::{Arc, RwLock};
 use std::{path::PathBuf, str::FromStr};
@@ -61,6 +64,28 @@ async fn main() {
         let library = library.clone();
         move || library.read().unwrap().get_summary()
     });
+    let clone_images = warp::path!("saveposter")
+        .and(warp::post())
+        .and(warp::body::json::<PosterData>())
+        .and_then(save_poster);
+    let clone_backdrop = warp::path!("savebackdrop")
+        .and(warp::post())
+        .and(warp::body::json::<BackdropData>())
+        .and_then(save_backrop);
+    let show_backdrop = warp::path!(String / "backdrop")
+        .and(warp::get())
+        .and_then(|show| async move { get_backdrop(show) });
+    let show_poster = warp::path!(String / "poster")
+        .and(warp::get())
+        .and_then(|show| async move { get_poster(show, None, None) });
+    let season_poster = warp::path!(String / i32 / "poster")
+        .and(warp::get())
+        .and_then(|show, season| async move { get_poster(show, Some(season), None) });
+    let episode_poster = warp::path!(String / i32 / i32 / "poster")
+        .and(warp::get())
+        .and_then(
+            |show, season, episode| async move { get_poster(show, Some(season), Some(episode)) },
+        );
     let library = warp::path!("library").and(warp::get()).map({
         let library = library.clone();
         move || library.read().unwrap().as_json()
@@ -72,6 +97,12 @@ async fn main() {
         .or(video)
         .or(library)
         .or(summary)
+        .or(clone_images)
+        .or(clone_backdrop)
+        .or(show_poster)
+        .or(show_backdrop)
+        .or(season_poster)
+        .or(episode_poster)
         .with(cors);
     warp::serve(routes)
         .run((
