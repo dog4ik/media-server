@@ -33,7 +33,15 @@ impl ShowFile {
         let mut season: Option<u8> = None;
         let mut episode: Option<u8> = None;
         for token in tokens.map(|x| x.to_string().to_lowercase()) {
-            if token.len() == 6 && token.starts_with("s") {
+            let chars: Vec<char> = token.chars().into_iter().collect();
+            if token.len() == 6
+                && chars[0] == 's'
+                && chars[1].is_ascii_digit()
+                && chars[2].is_ascii_digit()
+                && chars[3] == 'e'
+                && chars[4].is_ascii_digit()
+                && chars[5].is_ascii_digit()
+            {
                 match (
                     Some(token.get(1..3).unwrap().parse().unwrap()),
                     Some(token.get(4..6).unwrap().parse().unwrap()),
