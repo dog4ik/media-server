@@ -55,6 +55,7 @@ pub struct FFprobeOutput {
     pub streams: Vec<FFprobeStream>,
     pub format: FFprobeFormat,
 }
+
 pub fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
     let output = Command::new("ffprobe")
         .args(&[
@@ -71,6 +72,9 @@ pub fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
         .unwrap();
     let output = from_utf8(&output.stdout)?;
     let metadata: FFprobeOutput = serde_json::from_str(output)?;
-    println!("getting metadata for a file");
+    println!(
+        "getting metadata for a file: {}",
+        path.iter().last().unwrap().to_str().unwrap()
+    );
     Ok(metadata)
 }

@@ -1,7 +1,8 @@
+use axum::response::AppendHeaders;
 use bytes::Bytes;
+use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
-use warp::hyper::{Body, Response, StatusCode};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PosterData {
@@ -23,7 +24,7 @@ async fn get_img(url: &str) -> anyhow::Result<Bytes> {
     Ok(body)
 }
 
-pub async fn save_poster(items: PosterData) -> Result<Response<Body>, warp::Rejection> {
+pub async fn save_poster(items: PosterData) -> (StatusCode, Option<String>) {
     let res_dir: PathBuf = std::env::var("RESOURCES_PATH").unwrap().parse().unwrap();
     let mut path = PathBuf::new();
     path.push(&items.show);
@@ -38,30 +39,23 @@ pub async fn save_poster(items: PosterData) -> Result<Response<Body>, warp::Reje
     if exists {
         let bytes = match get_img(&items.url).await {
             Ok(bytes) => bytes,
-            Err(_) => return Ok(Response::builder().status(400).body(Body::empty()).unwrap()),
+            Err(_) => return (StatusCode::BAD_REQUEST, None),
         };
         joined_path.push("poster.jpg");
-        match fs::write(joined_path, bytes) {
-            Ok(_) => {
-                return Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(format!(
-                        "/{}",
-                        path.to_str().unwrap().replace(" ", "-")
-                    )))
-                    .unwrap());
-            }
-            Err(_) => return Ok(Response::builder().status(400).body(Body::empty()).unwrap()),
+        if let Ok(_) = fs::write(joined_path, bytes) {
+            return (
+                StatusCode::OK,
+                Some(format!("/{}", path.to_str().unwrap().replace(" ", "-"))),
+            );
+        } else {
+            return (StatusCode::INTERNAL_SERVER_ERROR, None);
         }
     } else {
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .unwrap());
+        return (StatusCode::NOT_FOUND, None);
     }
 }
 
-pub async fn save_backrop(item: BackdropData) -> Result<Response<Body>, warp::Rejection> {
+pub async fn save_backrop(item: BackdropData) -> Result<String, StatusCode> {
     let res_dir: PathBuf = std::env::var("RESOURCES_PATH").unwrap().parse().unwrap();
     let mut path = PathBuf::new();
     path.push(item.show);
@@ -70,34 +64,23 @@ pub async fn save_backrop(item: BackdropData) -> Result<Response<Body>, warp::Re
     if exists {
         let bytes = match get_img(&item.url).await {
             Ok(bytes) => bytes,
-            Err(_) => return Ok(Response::builder().status(400).body(Body::empty()).unwrap()),
+            Err(_) => return Err(StatusCode::BAD_REQUEST),
         };
         joined_path.push("backdrop.jpg");
         match fs::write(joined_path, bytes) {
-            Ok(_) => {
-                return Ok(Response::builder()
-                    .status(StatusCode::OK)
-                    .body(Body::from(format!(
-                        "/{}",
-                        path.to_str().unwrap().replace(" ", "-")
-                    )))
-                    .unwrap());
-            }
-            Err(_) => return Ok(Response::builder().status(400).body(Body::empty()).unwrap()),
+            Ok(_) => return Ok(format!("/{}", path.to_str().unwrap().replace(" ", "-"))),
+            Err(_) => return Err(StatusCode::BAD_REQUEST),
         }
     } else {
-        return Ok(Response::builder()
-            .status(StatusCode::BAD_REQUEST)
-            .body(Body::empty())
-            .unwrap());
+        return Err(StatusCode::NOT_FOUND);
     }
 }
 
-pub fn get_poster(
+pub fn get_poster<'a>(
     show: String,
     season: Option<i32>,
     episode: Option<i32>,
-) -> Result<Response<Body>, warp::Rejection> {
+) -> (StatusCode, AppendHeaders<(&'a str, &'a str)>, Option<Bytes>) {
     let res_dir: String = std::env::var("RESOURCES_PATH").unwrap().parse().unwrap();
     let mut path = PathBuf::from(res_dir);
     path.push(show.replace("-", " "));
@@ -108,42 +91,40 @@ pub fn get_poster(
         }
     }
     path.push("poster.jpg");
-    match fs::read(path) {
-        Ok(bytes) => {
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "image/jpeg")
-                .body(Body::from(bytes))
-                .unwrap())
-        }
-        Err(_) => {
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .unwrap())
-        }
+    if let Ok(bytes) = fs::read(path) {
+        return (
+            StatusCode::OK,
+            AppendHeaders(("Content-Type", "image/jpeg")),
+            Some(bytes.into()),
+        );
+    } else {
+        return (
+            StatusCode::NOT_FOUND,
+            AppendHeaders(("Content-Type", "image/jpeg")),
+            None,
+        );
     }
 }
 
-pub fn get_backdrop(show: String) -> Result<Response<Body>, warp::Rejection> {
+pub fn get_backdrop<'a>(
+    show: String,
+) -> (StatusCode, AppendHeaders<(&'a str, &'a str)>, Option<Bytes>) {
     let res_dir: String = std::env::var("RESOURCES_PATH").unwrap().parse().unwrap();
     let mut path = PathBuf::from(res_dir);
     //TODO: handle shows with space
     path.push(show.replace("-", " "));
     path.push("backdrop.jpg");
-    match fs::read(path) {
-        Ok(bytes) => {
-            return Ok(Response::builder()
-                .status(StatusCode::OK)
-                .header("Content-Type", "image/jpeg")
-                .body(Body::from(bytes))
-                .unwrap())
-        }
-        Err(_) => {
-            return Ok(Response::builder()
-                .status(StatusCode::BAD_REQUEST)
-                .body(Body::empty())
-                .unwrap())
-        }
+    if let Ok(bytes) = fs::read(path) {
+        return (
+            StatusCode::OK,
+            AppendHeaders(("Content-Type", "image/jpeg")),
+            Some(bytes.into()),
+        );
+    } else {
+        return (
+            StatusCode::NOT_FOUND,
+            AppendHeaders(("Content-Type", "image/jpeg")),
+            None,
+        );
     }
 }

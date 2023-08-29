@@ -1,21 +1,13 @@
-use warp::hyper::{Body, Response, StatusCode};
+use reqwest::StatusCode;
 
 use crate::ShowFile;
 
-pub async fn serve_subs(
-    episode: ShowFile,
-    lang: Option<String>,
-) -> Result<Response<Body>, warp::Rejection> {
+pub async fn serve_subs(episode: ShowFile, lang: Option<String>) -> (StatusCode, Option<String>) {
     println!("{:?}", lang);
     let subs = episode.get_subtitles(lang).await;
-    match subs {
-        Some(subs) => Ok(Response::builder()
-            .status(StatusCode::OK)
-            .body(Body::from(subs))
-            .unwrap()),
-        None => Ok(Response::builder()
-            .status(StatusCode::NO_CONTENT)
-            .body(Body::empty())
-            .unwrap()),
+    if let Some(subs) = subs {
+        return (StatusCode::OK, Some(subs));
+    } else {
+        return (StatusCode::NO_CONTENT, None);
     }
 }
