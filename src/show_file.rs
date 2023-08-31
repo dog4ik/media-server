@@ -139,30 +139,26 @@ impl ShowFile {
                 .await
                 .unwrap();
         let mut subs: Option<String> = None;
-        loop {
-            if let Some(file) = subs_dir.next_entry().await.unwrap() {
-                let file_path = file.path();
-                let file_name = file_path.file_stem().unwrap().to_str().unwrap();
+        while let Some(file) = subs_dir.next_entry().await.unwrap() {
+            let file_path = file.path();
+            let file_name = file_path.file_stem().unwrap().to_str().unwrap();
 
-                subs = match &lang {
-                    Some(lang) => {
-                        if file_name == lang {
-                            Some(tokio::fs::read_to_string(file.path()).await.unwrap())
-                        } else {
-                            continue;
-                        }
+            subs = match &lang {
+                Some(lang) => {
+                    if file_name == lang {
+                        Some(tokio::fs::read_to_string(file.path()).await.unwrap())
+                    } else {
+                        continue;
                     }
-                    None => {
-                        if &file_name == &"unknown" || &file_name == &"eng" {
-                            Some(tokio::fs::read_to_string(file_path).await.unwrap())
-                        } else {
-                            continue;
-                        }
+                }
+                None => {
+                    if &file_name == &"unknown" || &file_name == &"eng" {
+                        Some(tokio::fs::read_to_string(file_path).await.unwrap())
+                    } else {
+                        continue;
                     }
-                };
-            } else {
-                break;
-            }
+                }
+            };
         }
         subs
     }
@@ -205,47 +201,43 @@ impl ShowFile {
             .await
             .unwrap();
 
-        println!(
-            "Generating subs for {:?} in {}",
-            format!("{} {} {}", self.title, self.season, self.episode),
-            format!(
-                "{}/subs/{}.srt",
-                self.resources_path.to_str().unwrap(),
-                language
-            ),
-        );
         Ok(())
     }
 
-    pub async fn transcode_audio(
+    pub async fn transcode_file(
         &self,
-        track: i32,
+        audio_track: Option<i32>,
+        transcode_video: bool,
         sender: Sender<ProgressChunk>,
     ) -> Result<(), anyhow::Error> {
         let buffer_path = format!("{}buffer", self.video_path.to_str().unwrap(),);
-        println!(
-            "Transcoding audio for {:?}",
-            format!("{} {} {}", self.title, self.season, self.episode)
-        );
-        fs::rename(&self.video_path, &buffer_path)?;
-        let args = vec![
-            "-i".into(),
-            buffer_path.clone(),
-            "-map".into(),
-            "0:v:0".into(),
-            "-map".into(),
-            format!("0:{}", track),
-            "-acodec".into(),
-            "aac".into(),
-            "-vcodec".into(),
-            "copy".into(),
-            format!("{}", self.video_path.to_str().unwrap()),
-        ];
-        self.run_command(args, TaskType::Sound, sender)
-            .await
-            .unwrap();
-        println!("Removed file: {:?}", buffer_path);
-        fs::remove_file(buffer_path)?;
+        tokio::fs::rename(&self.video_path, &buffer_path).await?;
+        let mut args = Vec::new();
+        args.push("-i".into());
+        args.push(buffer_path.clone());
+        args.push("-map".into());
+        args.push("0:v:0".into());
+        if let Some(track) = audio_track {
+            args.push("-map".into());
+            args.push(format!("0:{}", track));
+            args.push("-c:a".into());
+            args.push("aac".into());
+        } else {
+            args.push("-c:a".into());
+            args.push("copy".into());
+        }
+        args.push("-c:v".into());
+        if transcode_video {
+            args.push("h264".into());
+        } else {
+            args.push("copy".into());
+        }
+        args.push("-c:s".into());
+        args.push("copy".into());
+        args.push(format!("{}", self.video_path.to_str().unwrap()));
+        self.run_command(args, TaskType::Video, sender).await?;
+
+        tokio::fs::remove_file(buffer_path).await?;
         Ok(())
     }
 
@@ -352,22 +344,19 @@ impl ShowFile {
             self.resources_path.to_str().unwrap(),
         ));
         let mut previews_dir = tokio::fs::read_dir(path).await.unwrap();
-        loop {
-            if let Some(file) = previews_dir.next_entry().await.unwrap() {
-                let file_path = file.path();
-                let file_number: i32 = file_path
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .parse()
-                    .expect("file to contain only numbers");
-                if file_number == number {
-                    let bytes: Bytes = tokio::fs::read(file_path).await.unwrap().into();
-                    return Ok((TypedHeader(ContentType::jpeg()), bytes));
-                }
-            } else {
-                break;
+
+        while let Some(file) = previews_dir.next_entry().await.unwrap() {
+            let file_path = file.path();
+            let file_number: i32 = file_path
+                .file_stem()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .parse()
+                .expect("file to contain only numbers");
+            if file_number == number {
+                let bytes: Bytes = tokio::fs::read(file_path).await.unwrap().into();
+                return Ok((TypedHeader(ContentType::jpeg()), bytes));
             }
         }
         return Err(StatusCode::NO_CONTENT);

@@ -10,6 +10,10 @@ use tokio::sync::{mpsc, Semaphore};
 use crate::ShowFile;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
+const SUPPORTED_VIDEO_CODECS: &[&str] = &["h264", "mp4"];
+const SUPPORTED_AUDIO_CODECS: &[&str] = &["aac", "mp3"];
+const DISABLE_PRINT: bool = false;
+const THREADS: usize = 2;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Library {
@@ -20,7 +24,7 @@ pub struct Library {
 #[derive(Debug, Clone, Copy)]
 pub enum TaskType {
     Preview,
-    Sound,
+    Video,
     Subtitles,
 }
 
@@ -53,7 +57,7 @@ impl Display for TaskType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TaskType::Preview => write!(f, "Preview"),
-            TaskType::Sound => write!(f, "Sound"),
+            TaskType::Video => write!(f, "Video"),
             TaskType::Subtitles => write!(f, "Subtitles"),
         }
     }
@@ -97,7 +101,7 @@ impl Library {
             let previews_count = fs::read_dir(&path).unwrap().count();
             let href = format!(
                 "/{}/{}/{}",
-                item.title.replace(" ", "-"),
+                item.title.replace(' ', "-"),
                 item.season,
                 item.episode
             );
@@ -150,18 +154,16 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
         };
     }
     let mut handles = Vec::new();
-    let subs_semaphore = Arc::new(Semaphore::new(10));
-    let audio_semaphore = Arc::new(Semaphore::new(3));
-    let previews_semaphore = Arc::new(Semaphore::new(2));
+    let semaphore = Arc::new(Semaphore::new(THREADS));
     let (tx, mut rx) = mpsc::channel(100);
 
     for file in files.clone() {
-        let file_copy = file.clone();
-        let tx_clone = tx.clone();
-        let subs_semaphore_clone = subs_semaphore.clone();
+        let file = file.clone();
+        let semaphore = semaphore.clone();
+        let tx = tx.clone();
         let handle = tokio::spawn(async move {
-            let permit = subs_semaphore_clone.acquire_owned().await.unwrap();
-            let metadata = &file_copy.metadata;
+            let permit = semaphore.acquire_owned().await.unwrap();
+            let metadata = &file.metadata;
             //handle subs
             for stream in metadata
                 .streams
@@ -172,14 +174,13 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                     if let Some(lang) = &tags.language {
                         if !PathBuf::from(format!(
                             "{}/subs/{}.srt",
-                            &file_copy.resources_path.to_str().unwrap(),
+                            &file.resources_path.to_str().unwrap(),
                             lang
                         ))
                         .try_exists()
                         .unwrap_or(false)
                         {
-                            file_copy
-                                .generate_subtitles(stream.index, lang, tx_clone.clone())
+                            file.generate_subtitles(stream.index, lang, tx.clone())
                                 .await
                                 .unwrap();
                         } else {
@@ -188,14 +189,13 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                     } else {
                         if !PathBuf::from(format!(
                             "{}/subs/{}.srt",
-                            &file_copy.resources_path.to_str().unwrap(),
+                            &file.resources_path.to_str().unwrap(),
                             "unknown"
                         ))
                         .try_exists()
                         .unwrap_or(false)
                         {
-                            file_copy
-                                .generate_subtitles(stream.index, "unknown", tx_clone)
+                            file.generate_subtitles(stream.index, "unknown", tx.clone())
                                 .await
                                 .unwrap();
                             break;
@@ -205,57 +205,11 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                     };
                 }
             }
-            drop(permit);
-        });
-        handles.push(handle);
 
-        let tx_clone = tx.clone();
-        let file_copy = file.clone();
-        let audio_semaphore_clone = audio_semaphore.clone();
-        let handle = tokio::spawn(async move {
-            let permit = audio_semaphore_clone.acquire_owned().await.unwrap();
-            let metadata = &file_copy.metadata;
-            //handle audio
-            for stream in metadata.streams.iter().filter(|&s| s.codec_type == "audio") {
-                if let Some(tags) = &stream.tags {
-                    match &tags.language {
-                        Some(lang) => {
-                            if lang == "eng" {
-                                if stream.codec_name != "aac" && stream.codec_name != "mp3" {
-                                    file_copy
-                                        .transcode_audio(stream.index, tx_clone.clone())
-                                        .await
-                                        .unwrap();
-                                    break;
-                                }
-                                break;
-                            }
-                        }
-                        None => {
-                            if stream.codec_name != "aac" && stream.codec_name != "mp3" {
-                                file_copy
-                                    .transcode_audio(stream.index, tx_clone)
-                                    .await
-                                    .unwrap();
-                            }
-                            break;
-                        }
-                    }
-                }
-            }
-            drop(permit);
-        });
-        handles.push(handle);
-
-        // handle previews
-        let tx_copy = tx.clone();
-        let file_copy = file.clone();
-        let previews_semaphore_clone = previews_semaphore.clone();
-        let handle = tokio::spawn(async move {
-            let permit = previews_semaphore_clone.acquire_owned().await.unwrap();
+            // handle previews
             let preview_folder = fs::read_dir(
                 PathBuf::from_str(
-                    format!("{}/previews/", file_copy.resources_path.to_str().unwrap()).as_str(),
+                    format!("{}/previews/", file.resources_path.to_str().unwrap()).as_str(),
                 )
                 .unwrap(),
             )
@@ -268,17 +222,49 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                 }
             }
             let duration = std::time::Duration::from_secs(
-                file_copy
-                    .metadata
+                file.metadata
                     .format
                     .duration
                     .parse::<f64>()
                     .expect("duration to look like 123.1233")
-                    .floor() as u64,
+                    .round() as u64,
             );
 
-            if previews_count < duration.as_secs() / 10 {
-                file_copy.generate_previews(tx_copy).await.unwrap();
+            if (previews_count as f64) < (duration.as_secs() as f64 / 10.0).round() {
+                file.generate_previews(tx.clone()).await.unwrap();
+            }
+
+            // handle last one: codecs
+            let mut transcode_audio_track: Option<i32> = None;
+            let mut should_transcode_video = false;
+            for stream in metadata.streams.iter() {
+                if stream.codec_type == "video" && !should_transcode_video {
+                    if !SUPPORTED_VIDEO_CODECS.contains(&stream.codec_name.as_str()) {
+                        should_transcode_video = true;
+                    }
+                }
+                if stream.codec_type == "audio" {
+                    if !SUPPORTED_AUDIO_CODECS.contains(&stream.codec_name.as_str()) {
+                        if let Some(tags) = &stream.tags {
+                            match &tags.language {
+                                Some(lang) if lang == "eng" => {
+                                    transcode_audio_track = Some(stream.index);
+                                    break;
+                                }
+                                Some(_) => continue,
+                                None => {
+                                    transcode_audio_track = Some(stream.index);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if should_transcode_video || transcode_audio_track.is_some() {
+                file.transcode_file(transcode_audio_track, should_transcode_video, tx)
+                    .await
+                    .unwrap();
             }
             drop(permit);
         });
@@ -288,73 +274,106 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
     // handle progress
     // clear the screen
     print!("{}[2J", 27 as char);
-
-    let capacity = files.len();
-
     let files_copy = files.clone();
-    let mut tasks: Vec<ProgressItem<'_>> = Vec::with_capacity(capacity);
+    let print_handle = tokio::spawn(async move {
+        if DISABLE_PRINT {
+            while let Some(_) = rx.recv().await {}
+            return;
+        };
+        let mut tasks: Vec<ProgressItem<'_>> = Vec::with_capacity(files_copy.len());
+        while let Some(progress) = rx.recv().await {
+            // print changes
+            let mut out = std::io::stdout();
+            let std_out_lock = out.lock();
+            // set top position
+            out.write_all(format!("{}[H", 27 as char).as_bytes())
+                .unwrap();
 
-    while let Some(progress) = rx.recv().await {
-        // print changes
-        let mut founded = false;
-        let mut should_end = true;
-        let mut std_out = std::io::stdout();
-        let std_out_lock = std_out.lock();
-        // set top position
-        std_out
-            .write_all(format!("{}[H", 27 as char).as_bytes())
-            .unwrap();
-
-        for item in &mut tasks {
-            if item.file.video_path == progress.video_path {
-                item.percent = progress.percent;
-                founded = true;
+            for file in &files_copy {
+                if let Some(task) = tasks
+                    .iter_mut()
+                    .find(|x| x.file.video_path == file.video_path)
+                {
+                    if progress.video_path == task.file.video_path {
+                        task.percent = progress.percent;
+                        task.task_type = progress.task_type;
+                    }
+                    out.write_all(
+                        format!(
+                            "{} {}: {} ({}%)                         \n",
+                            file.title,
+                            format_episode(&file),
+                            task.task_type,
+                            task.percent
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                } else {
+                    out.write_all(
+                        format!(
+                            "{} {}: TBD                         \n",
+                            file.title,
+                            format_episode(&file)
+                        )
+                        .as_bytes(),
+                    )
+                    .unwrap();
+                };
+                // add task
+                if progress.video_path == file.video_path {
+                    if tasks
+                        .iter()
+                        .find(|x| progress.video_path == x.file.video_path)
+                        .is_none()
+                    {
+                        tasks.push(ProgressItem {
+                            task_type: progress.task_type,
+                            percent: progress.percent,
+                            file,
+                        })
+                    }
+                }
             }
-            if item.percent == 100 {
-                let out = format!(
-                    "{} season {} episode {} >> {} is {}%\n",
-                    item.file.title,
-                    item.file.season,
-                    item.file.episode,
-                    item.task_type,
-                    item.percent
-                );
-                std_out.write_all(format_success(out).as_bytes()).unwrap();
-            } else {
-                should_end = false;
-                let out = format!(
-                    "{} season {} episode {} >> {} is {}%\n",
-                    item.file.title,
-                    item.file.season,
-                    item.file.episode,
-                    item.task_type,
-                    item.percent
-                );
-                std_out.write(out.as_bytes()).unwrap();
-            }
+            out.flush().unwrap();
+            drop(std_out_lock);
         }
-        std_out.flush().unwrap();
-        drop(std_out_lock);
-        if !founded {
-            let f = files_copy
-                .iter()
-                .find(|x| x.video_path == progress.video_path)
-                .expect("file is being processed thus it is being found");
-            tasks.push(ProgressItem {
-                task_type: progress.task_type,
-                percent: progress.percent,
-                file: f,
-            });
-        }
-        if founded && should_end {
-            break;
-        }
-    }
+    });
 
     for handle in handles {
-        let _ = handle.await;
+        handle.await.unwrap();
     }
 
+    print_handle.abort();
+
+    clean_up(&files);
+
+    println!("Everything is ready to play");
+
+    return files;
+}
+
+/// prints green text in terminal
+#[allow(dead_code)]
+fn format_success(text: String) -> String {
+    format!("\x1B[32m{}\x1B[0m", text)
+}
+
+/// formats episode like S01E01
+fn format_episode(file: &ShowFile) -> String {
+    let mut res = String::new();
+    match file.season {
+        x if x < 10 => res.push_str(&format!("S0{}", x)),
+        x => res.push_str(&format!("S{}", x)),
+    };
+    match file.episode {
+        x if x < 10 => res.push_str(&format!("E0{}", x)),
+        x => res.push_str(&format!("E{}", x)),
+    };
+    return res;
+}
+
+fn clean_up(files: &Vec<ShowFile>) {
     //clean up
     let resources_dir = fs::read_dir(std::env::var("RESOURCES_PATH").unwrap()).unwrap();
     for file in resources_dir {
@@ -368,13 +387,4 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
         }
         fs::remove_dir_all(file).unwrap();
     }
-
-    println!("Everything is ready to play");
-
-    return files;
-}
-
-/// prints green text in terminal
-fn format_success(text: String) -> String {
-    format!("\x1B[32m{}\x1B[0m", text)
 }
