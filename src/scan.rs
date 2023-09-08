@@ -1,12 +1,14 @@
 use std::io::Write;
 use std::path::PathBuf;
-use std::str::FromStr;
+use std::sync::mpsc;
 use std::sync::Arc;
 use std::{fmt::Display, fs};
 
 use serde::Serialize;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::sync::Semaphore;
 
+use crate::library::LibraryItem;
+use crate::movie_file::MovieFile;
 use crate::ShowFile;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
@@ -15,10 +17,20 @@ const SUPPORTED_AUDIO_CODECS: &[&str] = &["aac", "mp3"];
 const DISABLE_PRINT: bool = false;
 const THREADS: usize = 2;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize)]
+struct Summary {
+    href: String,
+    subs: Vec<String>,
+    previews: usize,
+    duration: String,
+    title: String,
+    season: Option<u8>,
+    episode: Option<u8>,
+}
+
 pub struct Library {
-    pub items: Vec<ShowFile>,
-    pub dirs: Vec<PathBuf>,
+    pub shows: Vec<ShowFile>,
+    pub movies: Vec<MovieFile>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -26,31 +38,6 @@ pub enum TaskType {
     Preview,
     Video,
     Subtitles,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProgressChunk {
-    pub video_path: PathBuf,
-    pub percent: u32,
-    pub task_type: TaskType,
-}
-
-#[derive(Debug, Clone)]
-struct ProgressItem<'a> {
-    percent: u32,
-    task_type: TaskType,
-    file: &'a ShowFile,
-}
-
-#[derive(Clone, Debug, Serialize)]
-pub struct Summary {
-    pub title: String,
-    pub season: u8,
-    pub episode: u8,
-    pub previews: i32,
-    pub subs: Vec<String>,
-    pub duration: String,
-    pub href: String,
 }
 
 impl Display for TaskType {
@@ -63,107 +50,77 @@ impl Display for TaskType {
     }
 }
 
-impl Library {
-    pub async fn new(dirs: Vec<PathBuf>) -> Library {
-        Library {
-            items: scan(&dirs).await,
-            dirs,
-        }
-    }
-    pub async fn update(&mut self) {
-        let result = scan(&self.dirs).await;
-        self.items = result
-    }
-    pub fn as_json(&self) -> String {
-        serde_json::to_string(&self.items).unwrap()
-    }
+#[derive(Debug, Clone)]
+pub struct ProgressChunk {
+    pub video_path: PathBuf,
+    pub percent: u32,
+    pub task_type: TaskType,
+}
 
+#[derive(Clone)]
+struct ProgressItem<'a> {
+    percent: u32,
+    task_type: TaskType,
+    file: &'a dyn LibraryItem,
+}
+
+impl Library {
     pub fn get_summary(&self) -> String {
         let mut result = vec![];
-        for item in self.items.clone() {
-            let mut path = item.resources_path;
-            // handle Subs
-            path.push("subs");
-            let subs_dir = fs::read_dir(&path).unwrap();
-            let subs: Vec<_> = subs_dir
-                .map(|sub| {
-                    sub.unwrap()
-                        .path()
-                        .file_stem()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .to_string()
-                })
-                .collect();
-            path.pop();
-            path.push("previews");
-            let previews_count = fs::read_dir(&path).unwrap().count();
-            let href = format!(
-                "/{}/{}/{}",
-                item.title.replace(' ', "-"),
-                item.season,
-                item.episode
-            );
-            result.push(Summary {
-                previews: previews_count as i32,
-                subs,
-                title: item.title,
-                season: item.season,
-                episode: item.episode,
-                duration: item.metadata.format.duration,
-                href,
-            })
+        for item in self.shows.clone() {
+            result.push(extract_summary(item));
+        }
+        for item in self.movies.clone() {
+            result.push(extract_summary(item));
         }
         serde_json::to_string(&result).unwrap()
     }
 }
-pub fn walk_recursive(path_buf: &PathBuf) -> Result<Vec<ShowFile>, std::io::Error> {
-    let mut local_paths: Vec<ShowFile> = vec![];
-    let dir = fs::read_dir(&path_buf)?;
+
+fn extract_summary(thing: impl LibraryItem) -> Summary {
+    return Summary {
+        previews: thing.previews_count(),
+        subs: thing.get_subs(),
+        duration: thing.metadata().format.duration.clone(),
+        href: thing.url(),
+        title: thing.title(),
+        season: thing.season(),
+        episode: thing.episode(),
+    };
+}
+
+pub fn walk_recursive<T: LibraryItem>(folder: &PathBuf) -> Result<Vec<T>, std::io::Error> {
+    let mut local_paths = vec![];
+    let dir = fs::read_dir(&folder)?;
     for file in dir {
-        let file = file.unwrap().path();
+        let file = file?.path();
         if file.is_file() {
             if SUPPORTED_FILES.contains(&file.extension().unwrap().to_str().unwrap()) {
-                let entry = ShowFile::new(file);
-                if let Ok(entry) = entry {
-                    local_paths.push(entry)
-                }
-                continue;
+                let out = T::from_path(folder.clone());
+                local_paths.push(out);
             }
         }
         if file.is_dir() {
             let mut new_path = PathBuf::new();
-            new_path.push(path_buf);
+            new_path.push(&folder);
             new_path.push(file);
-            local_paths.append(walk_recursive(&new_path)?.as_mut());
+            local_paths.append(walk_recursive(folder)?.as_mut());
         }
     }
     return Ok(local_paths);
 }
 
-pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
-    let mut files = Vec::new();
-    for dir in folders {
-        match walk_recursive(&dir) {
-            Ok(res) => files.extend(res),
-            Err(err) => {
-                println!("Failed to scan dir {:?} {:?}", dir, err);
-                continue;
-            }
-        };
-    }
+pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'static>) {
     let mut handles = Vec::new();
     let semaphore = Arc::new(Semaphore::new(THREADS));
-    let (tx, mut rx) = mpsc::channel(100);
+    let (tx, rx) = mpsc::channel();
 
     for file in files.clone() {
-        let file = file.clone();
         let semaphore = semaphore.clone();
         let tx = tx.clone();
         let handle = tokio::spawn(async move {
             let permit = semaphore.acquire_owned().await.unwrap();
-            let metadata = &file.metadata;
+            let metadata = &file.metadata();
             //handle subs
             for stream in metadata
                 .streams
@@ -173,30 +130,28 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                 if let Some(tags) = &stream.tags {
                     if let Some(lang) = &tags.language {
                         if !PathBuf::from(format!(
-                            "{}/subs/{}.srt",
-                            &file.resources_path.to_str().unwrap(),
+                            "{}/{}.srt",
+                            &file.subtitles_path().to_str().unwrap(),
                             lang
                         ))
                         .try_exists()
                         .unwrap_or(false)
                         {
                             file.generate_subtitles(stream.index, lang, tx.clone())
-                                .await
                                 .unwrap();
                         } else {
                             continue;
                         }
                     } else {
                         if !PathBuf::from(format!(
-                            "{}/subs/{}.srt",
-                            &file.resources_path.to_str().unwrap(),
+                            "{}/{}.srt",
+                            &file.subtitles_path().to_str().unwrap(),
                             "unknown"
                         ))
                         .try_exists()
                         .unwrap_or(false)
                         {
                             file.generate_subtitles(stream.index, "unknown", tx.clone())
-                                .await
                                 .unwrap();
                             break;
                         } else {
@@ -207,13 +162,7 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
             }
 
             // handle previews
-            let preview_folder = fs::read_dir(
-                PathBuf::from_str(
-                    format!("{}/previews/", file.resources_path.to_str().unwrap()).as_str(),
-                )
-                .unwrap(),
-            )
-            .unwrap();
+            let preview_folder = fs::read_dir(file.previews_path()).unwrap();
             let mut previews_count = 0;
             for preview in preview_folder {
                 let file = preview.unwrap().path();
@@ -222,7 +171,7 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                 }
             }
             let duration = std::time::Duration::from_secs(
-                file.metadata
+                file.metadata()
                     .format
                     .duration
                     .parse::<f64>()
@@ -231,8 +180,11 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
             );
 
             if (previews_count as f64) < (duration.as_secs() as f64 / 10.0).round() {
-                file.generate_previews(tx.clone()).await.unwrap();
+                file.generate_previews(tx.clone()).unwrap();
             }
+
+            //BUG: there is small chance when we are not able to transcode audio
+            //when tags dont contanin english
 
             // handle last one: codecs
             let mut transcode_audio_track: Option<i32> = None;
@@ -262,8 +214,7 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                 }
             }
             if should_transcode_video || transcode_audio_track.is_some() {
-                file.transcode_file(transcode_audio_track, should_transcode_video, tx)
-                    .await
+                file.transcode_video(transcode_audio_track, should_transcode_video, tx)
                     .unwrap();
             }
             drop(permit);
@@ -277,11 +228,11 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
     let files_copy = files.clone();
     let print_handle = tokio::spawn(async move {
         if DISABLE_PRINT {
-            while let Some(_) = rx.recv().await {}
+            while let Ok(_) = rx.recv() {}
             return;
         };
         let mut tasks: Vec<ProgressItem<'_>> = Vec::with_capacity(files_copy.len());
-        while let Some(progress) = rx.recv().await {
+        while let Ok(progress) = rx.recv() {
             // print changes
             let mut out = std::io::stdout();
             let std_out_lock = out.lock();
@@ -292,17 +243,16 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
             for file in &files_copy {
                 if let Some(task) = tasks
                     .iter_mut()
-                    .find(|x| x.file.video_path == file.video_path)
+                    .find(|x| x.file.resources_path() == file.resources_path())
                 {
-                    if progress.video_path == task.file.video_path {
+                    if progress.video_path == task.file.source_path() {
                         task.percent = progress.percent;
                         task.task_type = progress.task_type;
                     }
                     out.write_all(
                         format!(
-                            "{} {}: {} ({}%)                         \n",
-                            file.title,
-                            format_episode(&file),
+                            "{} {}: ({}%)                         \n",
+                            file.title(),
                             task.task_type,
                             task.percent
                         )
@@ -312,19 +262,18 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
                 } else {
                     out.write_all(
                         format!(
-                            "{} {}: TBD                         \n",
-                            file.title,
-                            format_episode(&file)
+                            "{}: TBD                                           \n",
+                            file.title(),
                         )
                         .as_bytes(),
                     )
                     .unwrap();
                 };
                 // add task
-                if progress.video_path == file.video_path {
+                if progress.video_path == file.source_path() {
                     if tasks
                         .iter()
-                        .find(|x| progress.video_path == x.file.video_path)
+                        .find(|x| progress.video_path == x.file.source_path())
                         .is_none()
                     {
                         tasks.push(ProgressItem {
@@ -349,8 +298,6 @@ pub async fn scan(folders: &Vec<PathBuf>) -> Vec<ShowFile> {
     clean_up(&files);
 
     println!("Everything is ready to play");
-
-    return files;
 }
 
 /// prints green text in terminal
@@ -373,7 +320,7 @@ fn format_episode(file: &ShowFile) -> String {
     return res;
 }
 
-fn clean_up(files: &Vec<ShowFile>) {
+fn clean_up(files: &Vec<impl LibraryItem>) {
     //clean up
     let resources_dir = fs::read_dir(std::env::var("RESOURCES_PATH").unwrap()).unwrap();
     for file in resources_dir {
@@ -381,7 +328,7 @@ fn clean_up(files: &Vec<ShowFile>) {
         if file.is_dir()
             && files
                 .iter()
-                .any(|x| &x.title == file.file_name().unwrap().to_str().unwrap())
+                .any(|x| &x.title() == file.file_name().unwrap().to_str().unwrap())
         {
             continue;
         }
