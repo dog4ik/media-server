@@ -74,7 +74,7 @@ impl<T: LibraryItem> ServeContent for T {
                     HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size))
                         .unwrap(),
                 ),
-                (header::CONTENT_LENGTH, HeaderValue::from(file_size)),
+                (header::CONTENT_LENGTH, HeaderValue::from(end - start)),
                 (
                     header::CACHE_CONTROL,
                     HeaderValue::from_str("public, max-age=0").unwrap(),
