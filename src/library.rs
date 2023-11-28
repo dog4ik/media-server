@@ -1,23 +1,31 @@
 use std::{
-    io::{BufRead, BufReader},
+    io::Read,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    sync::mpsc::Sender,
+    process::Stdio,
+    sync::Arc,
     time::Duration,
 };
 
 use axum::{
     extract::{Path as AxumPath, State},
     http::Request,
+    response::IntoResponse,
 };
+use crc32fast::Hasher;
 use reqwest::StatusCode;
+use serde::Serialize;
+use tokio::{
+    process::{Child, Command},
+    sync::Mutex,
+};
 
 use crate::{
+    db::DbVideo,
     movie_file::{MovieFile, MovieParams},
-    process_file::FFprobeOutput,
-    scan::{ProgressChunk, TaskType},
-    show_file::ShowParams,
-    Library, ShowFile,
+    process_file::{AudioCodec, FFmpegJob, FFprobeOutput, VideoCodec},
+    scan::Library,
+    serve_content::ServeContent,
+    show_file::{ShowFile, ShowParams},
 };
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -29,6 +37,70 @@ pub struct PreviewQuery {
 pub enum LibraryFile {
     Show(ShowFile),
     Movie(MovieFile),
+}
+
+#[derive(Debug, Clone)]
+pub struct MediaFolders {
+    pub shows: Vec<PathBuf>,
+    pub movies: Vec<PathBuf>,
+}
+
+#[derive(Debug, Clone)]
+pub enum MediaType {
+    Show,
+    Movie,
+}
+
+impl MediaFolders {
+    pub fn get_all_folders(&self) -> Vec<&PathBuf> {
+        let mut out = Vec::with_capacity(self.shows.len() + self.movies.len());
+        out.extend(self.shows.iter());
+        out.extend(self.movies.iter());
+        out
+    }
+
+    pub fn get_folder_type(&self, path: &PathBuf) -> Option<MediaType> {
+        for show_dir in &self.shows {
+            if path.starts_with(show_dir) {
+                return Some(MediaType::Show);
+            };
+        }
+        for movie_dir in &self.movies {
+            if path.starts_with(movie_dir) {
+                return Some(MediaType::Movie);
+            };
+        }
+        None
+    }
+}
+
+impl LibraryFile {
+    pub async fn serve_video(&self, range: axum::headers::Range) -> impl IntoResponse {
+        match self {
+            LibraryFile::Show(s) => s.serve_video(range).await,
+            LibraryFile::Movie(m) => m.serve_video(range).await,
+        }
+    }
+
+    pub async fn serve_previews(&self, number: i32) -> impl IntoResponse {
+        match self {
+            LibraryFile::Show(s) => s.serve_previews(number).await,
+            LibraryFile::Movie(m) => m.serve_previews(number).await,
+        }
+    }
+
+    pub async fn serve_subs(&self, lang: Option<String>) -> impl IntoResponse {
+        match self {
+            LibraryFile::Show(s) => s.serve_subs(lang).await,
+            LibraryFile::Movie(m) => m.serve_subs(lang).await,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct Chapter {
+    title: String,
+    start_time: String,
 }
 
 pub struct LibraryFileExtractor(pub LibraryFile);
@@ -43,12 +115,13 @@ where
     type Rejection = StatusCode;
 
     async fn from_request(req: Request<B>, _s: &S) -> Result<Self, Self::Rejection> {
-        let state = req.extensions().get::<State<&'static Library>>();
+        let state = req.extensions().get::<State<Arc<Mutex<Library>>>>();
         let movie_path_params = req.extensions().get::<AxumPath<MovieParams>>();
         let show_path_params = req.extensions().get::<AxumPath<ShowParams>>();
 
         if let Some(state) = state {
             if let Some(path_params) = movie_path_params {
+                let state = state.lock().await;
                 let file = state
                     .movies
                     .iter()
@@ -59,6 +132,7 @@ where
             }
 
             if let Some(path_params) = show_path_params {
+                let state = state.lock().await;
                 let file = state.shows.iter().find(|item| {
                     item.episode == path_params.episode as u8
                         && item.title == path_params.show_name.replace('-', " ")
@@ -75,7 +149,13 @@ where
     }
 }
 
-/// Resources folder path
+#[derive(Debug, Clone, Copy, Serialize)]
+pub enum VideoId {
+    Movie(i32),
+    Episode(i32),
+}
+
+/// Trait that must be implemented for all library items
 pub trait LibraryItem {
     /// Resources folder path
     fn resources_path(&self) -> &Path;
@@ -90,21 +170,66 @@ pub trait LibraryItem {
     fn url(&self) -> String;
 
     /// Construct self from path
-    fn from_path(path: PathBuf) -> Self
+    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
     where
         Self: Sized;
 
     /// Title
     fn title(&self) -> String;
 
-    /// Season
-    fn season(&self) -> Option<u8> {
-        None
+    /// Calculate hash for the file
+    fn calulate_hash(&self) -> Result<u32, anyhow::Error> {
+        let mut hasher = Hasher::new();
+        let path = self.source_path();
+        let mut file = std::fs::File::open(path)?;
+        let mut buffer = [0; 4096];
+
+        loop {
+            let bytes_read = file.read(&mut buffer)?;
+            if bytes_read == 0 {
+                break;
+            }
+            hasher.update(&buffer[..bytes_read]);
+        }
+        let result = hasher.finalize();
+
+        return Ok(result);
     }
 
-    /// Episode
-    fn episode(&self) -> Option<u8> {
-        None
+    /// Returns struct compatible with database Video table
+    fn into_db_video(&self) -> DbVideo {
+        let metadata = self.metadata();
+        let now = time::OffsetDateTime::now_utc();
+        let hash = self.calulate_hash().unwrap();
+
+        DbVideo {
+            id: None,
+            path: self.source_path().to_str().unwrap().to_string(),
+            hash: hash.to_string(),
+            local_title: self.title(),
+            size: self.get_file_size() as i64,
+            duration: metadata.format.duration.parse::<f64>().unwrap() as i64,
+            audio_codec: metadata.default_audio().map(|c| c.codec_name.to_string()),
+            video_codec: metadata.default_video().map(|c| c.codec_name.to_string()),
+            scan_date: now.to_string(),
+        }
+    }
+
+    /// Chapters
+    fn chapters(&self) -> Vec<Chapter> {
+        self.metadata()
+            .chapters
+            .iter()
+            .map(|ffprobe_chapter| Chapter {
+                title: ffprobe_chapter.tags.title.clone(),
+                start_time: ffprobe_chapter.start_time.clone(),
+            })
+            .collect()
+    }
+
+    /// Get source file size in bytes
+    fn get_file_size(&self) -> u64 {
+        std::fs::metadata(self.source_path()).expect("exist").len()
     }
 
     /// Previews folder path
@@ -120,6 +245,23 @@ pub trait LibraryItem {
     /// Get prewies count
     fn previews_count(&self) -> usize {
         return std::fs::read_dir(self.previews_path()).unwrap().count();
+    }
+
+    /// Clean resources
+    fn delete_resources(&self) -> Result<(), std::io::Error> {
+        std::fs::remove_dir_all(self.resources_path())
+    }
+
+    /// Get video duration
+    fn get_duration(&self) -> Duration {
+        std::time::Duration::from_secs(
+            self.metadata()
+                .format
+                .duration
+                .parse::<f64>()
+                .expect("duration to look like 123.1233")
+                .round() as u64,
+        )
     }
 
     // Get subtitles list
@@ -138,78 +280,21 @@ pub trait LibraryItem {
             .collect()
     }
 
-    /// Run ffmpeg command
-    fn run_command(
-        &self,
-        args: Vec<String>,
-        task_type: TaskType,
-        sender: Sender<ProgressChunk>,
-    ) -> Result<(), anyhow::Error> {
-        let overall_duration = self.metadata().format.duration.clone();
-        let video_path = self.source_path();
-        let mut cmd = Command::new("ffmpeg")
-            .args(args)
+    /// Run ffmpeg command. Returns handle to transconding process and percent progress Receiver channel
+    fn run_command(&self, args: Vec<String>) -> Child {
+        let cmd = Command::new("ffmpeg")
+            .kill_on_drop(true)
             .args(["-progress", "pipe:1", "-nostats"])
+            .args(args.clone())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
             .expect("process to spawn");
-        let out = cmd.stdout.take().unwrap();
-        let reader = BufReader::new(out);
-        let mut lines = reader.lines();
-        while let Ok(line) = lines.next().unwrap() {
-            let (key, value) = line.trim().split_once('=').expect("output to be key=value");
-            match key {
-                "progress" => {
-                    // end | continue
-                    if value == "end" {
-                        break;
-                        // end logic is unhandled
-                        // how do we handle channel close?
-                    }
-                }
-                "speed" => {
-                    // speed looks like 10x
-                    // sometimes have wierd space in front
-                }
-                "out_time_ms" => {
-                    // just a number
-                    let current_duration =
-                        Duration::from_micros(value.parse().expect("to parse")).as_secs();
-                    let overall_duration = Duration::from_secs(
-                        overall_duration.parse::<f64>().unwrap().floor() as u64,
-                    )
-                    .as_secs();
-                    let percent =
-                        (current_duration as f64 / overall_duration as f64) as f64 * 100.0;
-                    let percent = percent.floor() as u32;
-                    if percent == 100 {
-                        break;
-                    }
-                    sender
-                        .send(ProgressChunk {
-                            task_type,
-                            video_path: video_path.to_owned(),
-                            percent,
-                        })
-                        .unwrap();
-                }
-                _ => {}
-            }
-        }
-        cmd.wait().unwrap();
-        sender
-            .send(ProgressChunk {
-                task_type,
-                video_path: video_path.into(),
-                percent: 100,
-            })
-            .unwrap();
-        return Ok(());
+        return cmd;
     }
 
     /// Generate previews for file
-    fn generate_previews(&self, sender: Sender<ProgressChunk>) -> Result<(), anyhow::Error> {
+    fn generate_previews(&self) -> Child {
         let args = vec![
             "-i".into(),
             self.source_path().to_str().unwrap().into(),
@@ -217,16 +302,11 @@ pub trait LibraryItem {
             "fps=1/10,scale=120:-1".into(),
             format!("{}/%d.jpg", self.previews_path().to_str().unwrap()),
         ];
-        self.run_command(args, TaskType::Preview, sender)
+        self.run_command(args)
     }
 
     /// Generate subtitles for file
-    fn generate_subtitles(
-        &self,
-        track: i32,
-        language: &str,
-        sender: Sender<ProgressChunk>,
-    ) -> Result<(), anyhow::Error> {
+    fn generate_subtitles(&self, track: i32, language: &str) -> Child {
         let args = vec![
             "-i".into(),
             self.source_path().to_str().unwrap().into(),
@@ -240,44 +320,43 @@ pub trait LibraryItem {
             "-y".into(),
         ];
 
-        self.run_command(args, TaskType::Subtitles, sender)
+        self.run_command(args)
     }
 
     /// Transcode file for browser compatability
     fn transcode_video(
         &self,
-        audio_track: Option<i32>,
-        transcode_video: bool,
-        sender: Sender<ProgressChunk>,
-    ) -> Result<(), anyhow::Error> {
+        video: Option<VideoCodec>,
+        audio: Option<(usize, AudioCodec)>,
+    ) -> Result<FFmpegJob, anyhow::Error> {
         let buffer_path = format!("{}buffer", self.source_path().to_str().unwrap(),);
         std::fs::rename(&self.source_path(), &buffer_path)?;
         let mut args = Vec::new();
         args.push("-i".into());
-        args.push(buffer_path.clone());
+        args.push(buffer_path);
         args.push("-map".into());
         args.push("0:v:0".into());
-        if let Some(track) = audio_track {
+        if let Some((audio_track, audio_codec)) = audio {
             args.push("-map".into());
-            args.push(format!("0:{}", track));
+            args.push(format!("0:{}", audio_track));
             args.push("-c:a".into());
-            args.push("aac".into());
+            args.push(audio_codec.to_string());
         } else {
             args.push("-c:a".into());
             args.push("copy".into());
         }
         args.push("-c:v".into());
-        if transcode_video {
-            args.push("h264".into());
+        if let Some(video_codec) = video {
+            args.push(video_codec.to_string());
         } else {
             args.push("copy".into());
         }
         args.push("-c:s".into());
         args.push("copy".into());
         args.push(format!("{}", self.source_path().to_str().unwrap()));
-        let result = self.run_command(args, TaskType::Video, sender);
-        std::fs::remove_file(buffer_path)?;
-        result
+        let child = self.run_command(args);
+        let job = FFmpegJob::new(child, self.get_duration(), self.source_path().into());
+        return Ok(job);
     }
 }
 
@@ -298,11 +377,11 @@ impl LibraryItem for MovieFile {
         format!("/{}", self.title)
     }
 
-    fn from_path(path: PathBuf) -> Self
+    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
-        Self::new(path).unwrap()
+        Self::new(path)
     }
 }
 
@@ -319,20 +398,14 @@ impl LibraryItem for ShowFile {
     fn title(&self) -> String {
         self.title.clone()
     }
-    fn season(&self) -> Option<u8> {
-        Some(self.season)
-    }
-    fn episode(&self) -> Option<u8> {
-        Some(self.episode)
-    }
     fn url(&self) -> String {
         format!("/{}/{}/{}", self.title, self.season, self.episode)
     }
 
-    fn from_path(path: PathBuf) -> Self
+    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
     where
         Self: Sized,
     {
-        Self::new(path).unwrap()
+        Self::new(path)
     }
 }

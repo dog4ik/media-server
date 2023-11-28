@@ -1,13 +1,16 @@
+use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
+use anyhow::anyhow;
 use axum::extract::{Path, State};
 use axum::http::Request;
 use axum::middleware::Next;
 use axum::response::Response;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-use crate::Library;
-use crate::{get_metadata, process_file::FFprobeOutput};
+use crate::process_file::{get_metadata, FFprobeOutput};
+use crate::scan::Library;
 
 pub struct ShowExtractor(pub ShowFile);
 
@@ -20,7 +23,7 @@ pub struct ShowParams {
 
 pub async fn show_path_middleware<B>(
     Path(params): Path<ShowParams>,
-    State(state): State<&'static Library>,
+    State(state): State<Arc<Mutex<Library>>>,
     mut request: Request<B>,
     next: Next<B>,
 ) -> Response {
@@ -42,7 +45,11 @@ pub struct ShowFile {
 
 impl ShowFile {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
-        let file_name = path.file_name().unwrap().to_str().unwrap();
+        let file_name = path
+            .file_name()
+            .ok_or(anyhow!("fail to get filename"))?
+            .to_str()
+            .ok_or(anyhow!("fail convert filename"))?;
         let mut is_spaced = false;
         if file_name.contains(" ") {
             is_spaced = true
@@ -64,10 +71,7 @@ impl ShowFile {
                 && chars[4].is_ascii_digit()
                 && chars[5].is_ascii_digit()
             {
-                match (
-                    Some(token.get(1..3).unwrap().parse().unwrap()),
-                    Some(token.get(4..6).unwrap().parse().unwrap()),
-                ) {
+                match (Some(token[1..3].parse()?), Some(token[4..6].parse()?)) {
                     (Some(se), Some(ep)) => {
                         season = Some(se);
                         episode = Some(ep);
@@ -81,11 +85,11 @@ impl ShowFile {
                 None => name = Some(token),
             }
         }
-        if let (Some(name), Some(season), Some(episode)) = (name, season, episode) {
+        if let (Some(name), Some(season), Some(episode)) = (name.clone(), season, episode) {
             let resource = generate_resources(&name, season, episode)?;
-            let metadata = get_metadata(&path).unwrap();
+            let metadata = get_metadata(&path)?;
             let show_file = Self {
-                title: name,
+                title: name.replace('-', " ").trim().into(),
                 episode,
                 season,
                 video_path: path,
@@ -94,7 +98,12 @@ impl ShowFile {
             };
             Ok(show_file)
         } else {
-            return Err(anyhow::Error::msg("Failed to build"));
+            return Err(anyhow::anyhow!(
+                "Failed to construct a show name ({:?}, {:?}, {:?})",
+                name,
+                season,
+                episode
+            ));
         }
     }
 
@@ -103,10 +112,10 @@ impl ShowFile {
     }
 }
 
-fn generate_resources(title: &str, season: u8, episode: u8) -> Result<PathBuf, std::io::Error> {
+pub fn generate_resources(title: &str, season: u8, episode: u8) -> Result<PathBuf, std::io::Error> {
     let episode_dir_path = format!(
         "{}/{}/{}/{}",
-        std::env::var("RESOURCES_PATH").unwrap(),
+        std::env::var("RESOURCES_PATH").expect("env to be set"),
         title,
         season,
         episode

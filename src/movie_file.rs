@@ -1,5 +1,6 @@
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, sync::Arc};
 
+use anyhow::anyhow;
 use axum::{
     extract::{Path, State},
     http::Request,
@@ -7,8 +8,12 @@ use axum::{
     response::Response,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-use crate::{get_metadata, process_file::FFprobeOutput, Library};
+use crate::{
+    process_file::{get_metadata, FFprobeOutput},
+    scan::Library,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MovieFile {
@@ -25,7 +30,7 @@ pub struct MovieParams {
 
 pub async fn movie_path_middleware<B>(
     Path(params): Path<MovieParams>,
-    State(state): State<&'static Library>,
+    State(state): State<Arc<Mutex<Library>>>,
     mut request: Request<B>,
     next: Next<B>,
 ) -> Response {
@@ -37,7 +42,11 @@ pub async fn movie_path_middleware<B>(
 
 impl MovieFile {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
-        let file_name = path.file_name().unwrap().to_str().unwrap();
+        let file_name = path
+            .file_name()
+            .ok_or(anyhow!("fail to get filename"))?
+            .to_str()
+            .ok_or(anyhow!("fail convert filename"))?;
         let mut is_spaced = false;
         if file_name.contains(" ") {
             is_spaced = true
@@ -64,7 +73,7 @@ impl MovieFile {
         }
         if let Some(name) = name {
             let resource = generate_resources(&name)?;
-            let metadata = get_metadata(&path).unwrap();
+            let metadata = get_metadata(&path)?;
             let show_file = Self {
                 title: name,
                 video_path: path,
@@ -73,7 +82,7 @@ impl MovieFile {
             };
             Ok(show_file)
         } else {
-            return Err(anyhow::Error::msg("Failed to build"));
+            return Err(anyhow::Error::msg("Failed to construct a movie name"));
         }
     }
 
@@ -83,7 +92,7 @@ impl MovieFile {
 }
 
 fn generate_resources(title: &str) -> Result<PathBuf, std::io::Error> {
-    let movie_dir_path = format!("{}/{}", std::env::var("RESOURCES_PATH").unwrap(), title,);
+    let movie_dir_path = format!("{}/{}", std::env::var("RESOURCES_PATH").unwrap(), title);
     fs::create_dir_all(format!("{}/subs", &movie_dir_path))?;
     fs::create_dir_all(format!("{}/previews", &movie_dir_path))?;
     let folder = PathBuf::from(movie_dir_path);

@@ -6,13 +6,24 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0.69"
+anyhow = "1.0.75"
 axum = { version = "0.6.20", features = ["macros", "headers"] }
-bytes = "1.4.0"
+base64 = "0.21.5"
+bytes = "1.5.0"
+crc32fast = { version = "1.3.2", features = ["nightly"] }
 dotenvy = "0.15.7"
-http-body-util = "0.1.0-rc.2" 
-reqwest = { version = "0.11.17", features = ["json"] }
-serde = { version = "1.0.152", features = ["serde_derive"] }
-serde_json = "1.0.93"
-tokio = { version = "1.25.0", features = ["full"] }
-tokio-util = { version = "0.7.7", features = ["full"] }
+image = "0.24.7"
+notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
+reqwest = { version = "0.11.22", features = ["json"] }
+serde = { version = "1.0.190", features = ["serde_derive"] }
+serde_json = "1.0.108"
+sha2 = "0.10.8"
+sqlx = { version = "0.7.2", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
+time = { version = "0.3.30", features = ["serde", "parsing"] }
+tokio = { version = "1.33.0", features = ["full"] }
+tokio-stream = { version = "0.1.14", features = ["full"] }
+tokio-util = { version = "0.7.10", features = ["full"] }
+tower-http = { version = "0.4.4", features = ["cors"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time"] }
+uuid = { version = "1.5.0", features = ["v4", "serde"] }

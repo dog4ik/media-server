@@ -1,4 +1,6 @@
 /target
 /test
-/resources
+/dist
+/db
+/test-dir
 .env

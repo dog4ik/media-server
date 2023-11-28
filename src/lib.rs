@@ -1,13 +1,21 @@
-#![feature(async_fn_in_trait)]
+#![feature(map_try_insert)]
+#![feature(iter_intersperse)]
+#![feature(async_iterator)]
+pub mod admin_api;
+pub mod testing;
+pub mod tracing;
+pub mod app_state;
+pub mod auth;
+pub mod db;
 pub mod library;
+pub mod metadata_provider;
 pub mod movie_file;
-pub mod posters;
 pub mod process_file;
+pub mod progress;
+pub mod public_api;
 pub mod scan;
 pub mod serve_content;
 pub mod show_file;
-pub mod test;
+pub mod tmdb_api;
+pub mod watch;
 
-pub use process_file::get_metadata;
-pub use scan::Library;
-pub use show_file::ShowFile;

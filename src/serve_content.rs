@@ -19,6 +19,7 @@ use crate::library::LibraryItem;
 
 pub trait ServeContent {
     /// Serve video file
+    #[allow(async_fn_in_trait)]
     async fn serve_video(
         &self,
         range: Range,
@@ -29,12 +30,14 @@ pub trait ServeContent {
     );
 
     /// Serve previews
+    #[allow(async_fn_in_trait)]
     async fn serve_previews(
         &self,
         number: i32,
     ) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode>;
 
     /// Serve subtitles
+    #[allow(async_fn_in_trait)]
     async fn serve_subs(&self, lang: Option<String>) -> Result<String, StatusCode>;
 }
 
