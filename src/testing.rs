@@ -18,11 +18,9 @@ impl TestResource {
         fs::create_dir_all(&temp_dir).unwrap();
         deep_copy_folder(test_folder, &temp_dir);
 
-        let mut show_video_path = temp_dir.clone();
-        show_video_path.push("Episode.S01E01.mkv");
+        let show_video_path = temp_dir.join("Episode.S01E01.mkv");
 
-        let mut resource_path = temp_dir.clone();
-        resource_path.push("resources");
+        let resource_path = temp_dir.join("resources");
 
         let metadata = get_metadata(&show_video_path).unwrap();
 

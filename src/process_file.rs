@@ -403,6 +403,7 @@ pub fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
     Ok(metadata)
 }
 
+// NOTE: cleanup callback? (after job is done)
 #[derive(Debug)]
 pub struct FFmpegJob {
     process: Child,

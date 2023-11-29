@@ -162,7 +162,6 @@ async fn main() {
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), PORT);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
-
     info!("Starting server on port {}", PORT);
+    axum::serve(listener, app).await.unwrap();
 }

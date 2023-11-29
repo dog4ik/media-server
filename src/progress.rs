@@ -169,11 +169,10 @@ impl TaskResource {
                 self.remove_task(id).await;
                 if let Err(_) = job.wait().await{
                     let _ = channel.send(ProgressChunk::error(id));
-                    Ok(())
                 } else {
                     let _ = channel.send(ProgressChunk::finish(id));
-                    Ok(())
                 }
+                Ok(())
             },
             _ = rx => {
                 self.remove_task(id).await;
