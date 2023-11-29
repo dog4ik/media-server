@@ -405,7 +405,7 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
                 let mut subtitles_path = file.subtitles_path();
                 subtitles_path.push(format!("{}.srt", stream.language));
                 if !subtitles_path.try_exists().unwrap_or(false) {
-                    let process = file.generate_subtitles(stream.index, stream.language);
+                    let mut process = file.generate_subtitles(stream.index, stream.language);
                     process.wait().await.unwrap();
                 }
             }
@@ -415,7 +415,7 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
             let duration = file.get_duration();
 
             if (previews_count as f64) < (duration.as_secs() as f64 / 10.0).round() {
-                let process = file.generate_previews();
+                let mut process = file.generate_previews();
                 process.wait().await.unwrap();
             }
 
@@ -451,7 +451,7 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
                     true => Some(VideoCodec::H264),
                     false => None,
                 };
-                let process = file
+                let mut process = file
                     .transcode_video(
                         video_codec,
                         transcode_audio_track.map(|t| (t as usize, AudioCodec::AAC)),

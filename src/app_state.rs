@@ -90,7 +90,7 @@ impl AppState {
                 jobs.push((job, stream));
             }
         }
-        for (job, stream) in jobs {
+        for (mut job, stream) in jobs {
             if let Ok(status) = job.wait().await {
                 if status.success() {
                     let mut file_path = subtitles_path.clone();

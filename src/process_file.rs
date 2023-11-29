@@ -192,7 +192,6 @@ impl FFprobeOutput {
             .find(|s| s.disposition.default == 1)
     }
 
-
     /// Video resoultion
     pub fn resolution(&self) -> Option<(i32, i32)> {
         self.default_video().map(|v| v.resoultion())
@@ -236,7 +235,10 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
-            language: &tags.language.as_ref().ok_or(anyhow!("language tag is absent"))?,
+            language: &tags
+                .language
+                .as_ref()
+                .ok_or(anyhow!("language tag is absent"))?,
             disposition: &self.disposition,
         };
         return Ok(video);
@@ -423,7 +425,7 @@ impl FFmpegJob {
         };
     }
 
-    pub async fn wait(mut self) -> Result<ExitStatus, std::io::Error> {
+    pub async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
         self.process.wait().await
     }
 
@@ -509,8 +511,8 @@ async fn cancel_transcode() {
             process.kill().await;
             task_resource.remove_task(task_id).await;
             fs::remove_file(&video_path).await.unwrap();
-            fs::rename(&original_buffer, &video_path).await.unwrap();
-        }
+            fs::rename(&original_buffer, &video_path).await.unwrap()
+        },
     }
 
     let size_after = fs::metadata(&video_path).await.unwrap().len();
