@@ -13,6 +13,7 @@ pub enum TaskKind {
     Transcode,
     Scan,
     Previews,
+    Subtitles,
 }
 
 #[derive(Debug)]
@@ -105,6 +106,14 @@ impl ProgressChunk {
             status: ProgressStatus::Cancel,
         }
     }
+
+    pub fn error(task_id: Uuid) -> Self {
+        Self {
+            task_id,
+            progress: 0,
+            status: ProgressStatus::Error,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -147,7 +156,9 @@ impl TaskResource {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let (tx, rx) = oneshot::channel();
         let mut progress = job.progress();
-        let id = self.add_new_task(job.target, kind, Some(tx)).await?;
+        let id = self
+            .add_new_task(job.target.clone(), kind, Some(tx))
+            .await?;
         tokio::select! {
             _ = async {
                 let _ = channel.send(ProgressChunk::start(id));
@@ -156,11 +167,17 @@ impl TaskResource {
                 };
             } => {
                 self.remove_task(id).await;
-                let _ = channel.send(ProgressChunk::finish(id));
-                Ok(())
+                if let Err(_) = job.wait().await{
+                    let _ = channel.send(ProgressChunk::error(id));
+                    Ok(())
+                } else {
+                    let _ = channel.send(ProgressChunk::finish(id));
+                    Ok(())
+                }
             },
             _ = rx => {
                 self.remove_task(id).await;
+                job.kill().await;
                 let _ = channel.send(ProgressChunk::cancel(id));
                 Err(TaskError::Canceled)
             }

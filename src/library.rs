@@ -1,5 +1,4 @@
 use std::{
-    io::Read,
     path::{Path, PathBuf},
     process::Stdio,
     sync::Arc,
@@ -188,7 +187,7 @@ pub trait LibraryItem {
     fn into_db_video(&self) -> DbVideo {
         let metadata = self.metadata();
         let now = time::OffsetDateTime::now_utc();
-        let hash = self.calulate_hash().unwrap();
+        let hash = self.calculate_video_hash().unwrap();
 
         DbVideo {
             id: None,
@@ -240,6 +239,12 @@ pub trait LibraryItem {
         std::fs::remove_dir_all(self.resources_path())
     }
 
+    /// Delete self
+    fn delete(&self) -> Result<(), std::io::Error> {
+        std::fs::remove_file(self.source_path())?;
+        self.delete_resources()
+    }
+
     /// Get video duration
     fn get_duration(&self) -> Duration {
         std::time::Duration::from_secs(
@@ -268,7 +273,7 @@ pub trait LibraryItem {
             .collect()
     }
 
-    /// Run ffmpeg command. Returns handle to transconding process and percent progress Receiver channel
+    /// Run ffmpeg command. Returns handle to process
     fn run_command(&self, args: Vec<String>) -> Child {
         let cmd = Command::new("ffmpeg")
             .kill_on_drop(true)
@@ -282,36 +287,46 @@ pub trait LibraryItem {
     }
 
     /// Generate previews for file
-    fn generate_previews(&self) -> Child {
+    fn generate_previews(&self) -> FFmpegJob {
         let args = vec![
             "-i".into(),
             self.source_path().to_str().unwrap().into(),
             "-vf".into(),
             "fps=1/10,scale=120:-1".into(),
-            format!("{}/%d.jpg", self.previews_path().to_str().unwrap()),
+            format!(
+                "{}{}%d.jpg",
+                self.previews_path().to_str().unwrap(),
+                std::path::MAIN_SEPARATOR
+            ),
         ];
-        self.run_command(args)
+
+        let child = self.run_command(args);
+        FFmpegJob::new(child, self.get_duration(), self.source_path().into())
     }
 
     /// Generate subtitles for file
-    fn generate_subtitles(&self, track: i32, language: &str) -> Child {
+    fn generate_subtitles(&self, track: i32, language: &str) -> FFmpegJob {
         let args = vec![
             "-i".into(),
             self.source_path().to_str().unwrap().into(),
             "-map".into(),
             format!("0:{}", track),
             format!(
-                "{}/{}.srt",
+                "{}{}{}.srt",
                 self.subtitles_path().to_str().unwrap(),
+                std::path::MAIN_SEPARATOR,
                 language
             ),
+            "-c:s".into(),
+            "copy".into(),
             "-y".into(),
         ];
 
-        self.run_command(args)
+        let child = self.run_command(args);
+        FFmpegJob::new(child, self.get_duration(), self.source_path().into())
     }
 
-    /// Transcode file for browser compatability
+    /// Transcode file
     fn transcode_video(
         &self,
         video: Option<VideoCodec>,

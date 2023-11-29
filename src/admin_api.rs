@@ -17,9 +17,8 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use crate::library::LibraryItem;
 use crate::metadata_provider::ShowMetadataProvider;
-use crate::process_file::{AudioCodec, FFmpegJob, VideoCodec};
+use crate::process_file::{AudioCodec, VideoCodec};
 use crate::progress::{TaskKind, TaskResource};
 use crate::public_api::{IdQuery, StringIdQuery};
 use crate::{
@@ -97,30 +96,10 @@ pub async fn remove_video(
     State(state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,
 ) -> Result<(), StatusCode> {
-    let AppState { library, db, .. } = state;
-
-    let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", id)
-        .fetch_one(&db.pool)
+    state
+        .remove_video(id)
         .await
-        .map_err(sqlx_err_wrap)?;
-
-    let library = library.lock().await;
-    let file = library
-        .find_library_file(&PathBuf::from(video_path.path))
-        .ok_or(StatusCode::NOT_FOUND)?;
-    match file {
-        crate::library::LibraryFile::Show(file) => {
-            file.delete_resources().map_err(|_| StatusCode::NOT_FOUND)?
-        }
-        crate::library::LibraryFile::Movie(file) => {
-            file.delete_resources().map_err(|_| StatusCode::NOT_FOUND)?
-        }
-    }
-    drop(library);
-
-    db.remove_video(id).await.map_err(sqlx_err_wrap)?;
-
-    Ok(())
+        .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 pub async fn refresh_show_metadata(
@@ -157,9 +136,10 @@ pub async fn trascode_video(
     Json(payload): Json<TranscodeFilePayload>,
 ) -> Result<(), StatusCode> {
     tokio::spawn(async move {
-        let _ = app_state
+        app_state
             .transcode_video(payload.video_id, payload.video_codec, payload.audio_codec)
-            .await;
+            .await
+            .unwrap();
     });
 
     Ok(())
@@ -167,54 +147,11 @@ pub async fn trascode_video(
 
 pub async fn generate_previews(
     State(app_state): State<AppState>,
-    Query(id): Query<IdQuery>,
+    Query(IdQuery { id }): Query<IdQuery>,
 ) -> Result<(), StatusCode> {
-    let AppState { library, db, tasks } = app_state;
-    let video = sqlx::query!("SELECT * FROM videos WHERE id = ?", id.id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
-
-    let library = library.lock().await;
-
-    let file = library
-        .shows
-        .iter()
-        .find(|f| f.source_path().to_str().unwrap_or_default() == &video.path)
-        .ok_or(StatusCode::NOT_FOUND)?;
-
-    let (tx, rx) = oneshot::channel();
-
-    // FIX: magic numbers
-    if (file.previews_count() as f64) < (file.get_duration().as_secs() as f64 / 10.0).round() {
-        let task_id = tasks
-            .add_new_task(file.source_path().into(), TaskKind::Previews, Some(tx))
-            .await
-            .map_err(|_| StatusCode::BAD_REQUEST)?;
-        let process = file.generate_previews();
-        let ProgressChannel(progress_channel) = tasks.progress_channel.clone();
-        let video_duration = file.get_duration();
-        let mut ffmpeg_progress =
-            FFmpegJob::new(process, video_duration, file.source_path().into());
-        let mut progress = ffmpeg_progress.progress();
-
-        tokio::spawn(async move {
-            tokio::select! {
-                _ = async {
-                    while let Some(value) = progress.recv().await {
-                        let _ = progress_channel.send(ProgressChunk::pending(task_id, value));
-                    };
-                } => {
-                    let _ = progress_channel.send(ProgressChunk::finish(task_id));
-                },
-                _ = rx => {
-                    let _ = progress_channel.send(ProgressChunk::cancel(task_id));
-                    ffmpeg_progress.kill().await;
-                }
-            };
-        });
-    }
-
+    tokio::spawn(async move {
+        app_state.generate_previews(id).await.unwrap();
+    });
     Ok(())
 }
 

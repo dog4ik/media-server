@@ -2,14 +2,15 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
 use axum::extract::FromRef;
-use tokio::sync::Mutex;
+use tokio::{fs, sync::Mutex};
 
 use crate::{
-    db::Db,
+    db::{Db, DbSubtitles},
     metadata_provider::{MovieMetadataProvider, ShowMetadataProvider},
     process_file::{AudioCodec, VideoCodec},
-    progress::{TaskKind, TaskResource},
+    progress::{TaskError, TaskKind, TaskResource},
     scan::{handle_movie, handle_show, Library},
+    utils,
 };
 
 #[derive(Debug, Clone)]
@@ -27,16 +28,18 @@ impl AppState {
         library.reconciliate_library(&self.db, tmdb_api).await
     }
 
-    pub async fn remove_video(&self, video_path: &PathBuf) -> Result<(), anyhow::Error> {
+    pub async fn remove_video(&self, id: i64) -> Result<(), anyhow::Error> {
+        let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", id)
+            .fetch_one(&self.db.pool)
+            .await?
+            .path;
         let library = self.library.lock().await;
         let file = library
             .find(video_path)
             .ok_or(anyhow::anyhow!("path not found in the library"))?;
 
-        file.delete_resources()?;
-        drop(library);
-
-        self.db.remove_video_by_path(video_path).await?;
+        file.delete()?;
+        self.db.remove_video(id).await?;
         Ok(())
     }
 
@@ -73,6 +76,46 @@ impl AppState {
         let file = library
             .find(&path)
             .ok_or(anyhow!("path not found in library"))?;
+        let metadata = file.metadata();
+        let mut jobs = Vec::new();
+        let task_id = self
+            .tasks
+            .add_new_task(file.source_path().to_path_buf(), TaskKind::Subtitles, None)
+            .await
+            .unwrap();
+        let subtitles_path = file.subtitles_path();
+        for stream in metadata.subtitle_streams() {
+            if stream.codec().supports_text() {
+                let job = file.generate_subtitles(stream.index, stream.language);
+                jobs.push((job, stream));
+            }
+        }
+        for (job, stream) in jobs {
+            if let Ok(status) = job.wait().await {
+                if status.success() {
+                    let mut file_path = subtitles_path.clone();
+                    file_path.push(format!("{}.srt", stream.language));
+                    let mut file = std::fs::File::open(&file_path)?;
+                    let metadata = fs::metadata(&file_path).await?;
+                    let size = metadata.len();
+                    let hash = utils::file_hash(&mut file)?;
+                    let db_subtitles = DbSubtitles {
+                        id: None,
+                        language: stream.language.to_string(),
+                        path: subtitles_path.to_str().unwrap().to_string(),
+                        hash: hash.to_string(),
+                        size: size as i64,
+                        video_id,
+                    };
+
+                    self.db.insert_subtitles(db_subtitles).await?;
+                }
+            }
+        }
+        self.tasks
+            .remove_task(task_id)
+            .await
+            .expect("task to exist");
         Ok(())
     }
 
@@ -109,6 +152,33 @@ impl AppState {
             Ok(_) => {}
             Err(err) => {
                 // cancel logic
+            }
+        }
+        Ok(())
+    }
+
+    pub async fn generate_previews(&self, video_id: i64) -> Result<(), TaskError> {
+        let path: PathBuf = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
+            .fetch_one(&self.db.pool)
+            .await
+            .map_err(|_| TaskError::NotFound)?
+            .path
+            .into();
+
+        let library = self.library.lock().await;
+        let file = library.find(&path).ok_or(TaskError::NotFound)?;
+        let previews_path = file.previews_path();
+
+        if (file.previews_count() as f64) < (file.get_duration().as_secs() as f64 / 10.0).round() {
+            let job = file.generate_previews();
+
+            let run_result = self.tasks.run_ffmpeg_task(job, TaskKind::Previews).await;
+
+            if let Err(err) = run_result {
+                if let TaskError::Canceled = err {
+                    let _ = utils::clear_directory(previews_path).await;
+                }
+                return Err(err);
             }
         }
         Ok(())

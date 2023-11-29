@@ -145,6 +145,7 @@ async fn main() {
         .route("/api/get_episodes", get(public_api::get_episodes))
         .route("/api/get_episode", get(public_api::get_episode))
         .route("/api/get_episode_by_id", get(public_api::get_episode_by_id))
+        .route("/api/get_video_by_id", get(public_api::get_video_by_id))
         .route(
             "/admin/refresh_show_metadata",
             post(admin_api::refresh_show_metadata),

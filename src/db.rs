@@ -256,6 +256,20 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
         video_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
+    pub async fn insert_subtitles(&self, db_subtitles: DbSubtitles) -> Result<i64, Error> {
+        let subtitles_query = sqlx::query!(
+            "INSERT INTO subtitles
+            (language, hash, path, size, video_id)
+            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+            db_subtitles.language,
+            db_subtitles.hash,
+            db_subtitles.path,
+            db_subtitles.size,
+            db_subtitles.video_id
+        );
+        subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
+    }
+
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
         sqlx::query!("DELETE FROM videos WHERE videos.id = ?;", id)
             .fetch_one(&self.pool)
@@ -530,6 +544,6 @@ pub struct DbSubtitles {
     pub language: String,
     pub path: String,
     pub hash: String,
-    pub size: i32,
-    pub video_id: i32,
+    pub size: i64,
+    pub video_id: i64,
 }

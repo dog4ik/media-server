@@ -402,63 +402,22 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
             let metadata = &file.metadata();
             //handle subs
             for stream in metadata.subtitle_streams().iter() {
-                if let Some(tags) = &stream.tags {
-                    if let Some(lang) = &tags.language {
-                        if !PathBuf::from(format!(
-                            "{}/{}.srt",
-                            &file.subtitles_path().to_str().unwrap(),
-                            lang
-                        ))
-                        .try_exists()
-                        .unwrap_or(false)
-                        {
-                            let mut process = file.generate_subtitles(stream.index, lang);
-                            process.wait().await.unwrap();
-                        } else {
-                            continue;
-                        }
-                    } else if !PathBuf::from(format!(
-                        "{}/{}.srt",
-                        &file.subtitles_path().to_str().unwrap(),
-                        "unknown"
-                    ))
-                    .try_exists()
-                    .unwrap_or(false)
-                    {
-                        let mut process = file.generate_subtitles(stream.index, "unknown");
-                        process.wait().await.unwrap();
-                        break;
-                    } else {
-                        continue;
-                    };
+                let mut subtitles_path = file.subtitles_path();
+                subtitles_path.push(format!("{}.srt", stream.language));
+                if !subtitles_path.try_exists().unwrap_or(false) {
+                    let process = file.generate_subtitles(stream.index, stream.language);
+                    process.wait().await.unwrap();
                 }
             }
 
             // handle previews
-            let preview_folder = fs::read_dir(file.previews_path()).unwrap();
-            let mut previews_count = 0;
-            for preview in preview_folder {
-                let file = preview.unwrap().path();
-                if file.extension().unwrap() != "webm" {
-                    previews_count += 1;
-                }
-            }
-            let duration = std::time::Duration::from_secs(
-                file.metadata()
-                    .format
-                    .duration
-                    .parse::<f64>()
-                    .expect("duration to look like 123.1233")
-                    .round() as u64,
-            );
+            let previews_count = file.previews_count();
+            let duration = file.get_duration();
 
             if (previews_count as f64) < (duration.as_secs() as f64 / 10.0).round() {
-                let mut process = file.generate_previews();
+                let process = file.generate_previews();
                 process.wait().await.unwrap();
             }
-
-            //BUG: there is a bug when file has video tags that does not contain
-            //eng track and we are not able to transcode audio
 
             // handle last one: codecs
             let mut transcode_audio_track: Option<i32> = None;
@@ -492,7 +451,7 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
                     true => Some(VideoCodec::H264),
                     false => None,
                 };
-                let mut process = file
+                let process = file
                     .transcode_video(
                         video_codec,
                         transcode_audio_track.map(|t| (t as usize, AudioCodec::AAC)),
