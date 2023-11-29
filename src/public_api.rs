@@ -8,6 +8,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
+use crate::process_file::{AudioCodec, VideoCodec};
 use crate::{app_state::AppState, db::Db};
 
 fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
@@ -96,6 +97,18 @@ pub struct DetailedEpisode {
     pub rating: f64,
     pub poster: String,
     pub blur_data: Option<String>,
+}
+
+#[derive(Debug, Serialize, FromRow)]
+pub struct DetailedVideo {
+    pub path: PathBuf,
+    pub hash: String,
+    pub local_title: String,
+    pub size: u64,
+    pub duration: std::time::Duration,
+    pub video_codec: Option<VideoCodec>,
+    pub audio_codec: Option<AudioCodec>,
+    pub scan_date: String,
 }
 
 pub async fn previews(
@@ -465,4 +478,30 @@ pub async fn get_episode_by_id(
     } else {
         return Err(StatusCode::NOT_FOUND);
     }
+}
+
+pub async fn get_video_by_id(
+    Query(query): Query<IdQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<DetailedVideo>, StatusCode> {
+    let AppState { library, db, .. } = state;
+    let db_video = sqlx::query!("SELECT hash, scan_date, path FROM videos WHERE id = ?", query.id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(sqlx_err_wrap)?;
+    let library = library.lock().await;
+    let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
+    let metadata = file.metadata();
+    let date = db_video.scan_date.unwrap();
+    let detailed_episode = DetailedVideo {
+        path: file.source_path().to_path_buf(),
+        hash: db_video.hash,
+        local_title: file.title(),
+        size: file.get_file_size(),
+        duration: file.get_duration(),
+        audio_codec: metadata.default_audio().map(|v| v.codec()),
+        video_codec: metadata.default_video().map(|v| v.codec()),
+        scan_date: date.to_string(),
+    };
+    Ok(Json(detailed_episode))
 }
