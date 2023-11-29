@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::fmt::Display;
@@ -10,8 +11,6 @@ use tokio::process::Child;
 use tokio::sync::mpsc;
 use tracing::trace;
 
-use crate::progress::TaskKind;
-
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CodecType {
@@ -20,6 +19,7 @@ pub enum CodecType {
     Subtitle,
 }
 
+/// General track stream provided by FFprobe
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeStream {
     pub index: i32,
@@ -28,10 +28,12 @@ pub struct FFprobeStream {
     pub codec_type: String,
     pub codec_tag_string: String,
     pub codec_tag: String,
+    pub channels: Option<i32>,
     pub width: Option<i32>,
     pub height: Option<i32>,
     pub coded_width: Option<i32>,
     pub coded_height: Option<i32>,
+    pub sample_rate: Option<String>,
     pub sample_aspect_ratio: Option<String>,
     pub display_aspect_ratio: Option<String>,
     pub id: Option<String>,
@@ -41,6 +43,36 @@ pub struct FFprobeStream {
     pub bit_rate: Option<String>,
     pub disposition: FFprobeDisposition,
     pub tags: Option<FFprobeTags>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FFprobeVideoStream<'a> {
+    pub index: i32,
+    pub codec_name: &'a str,
+    pub codec_long_name: &'a str,
+    pub display_aspect_ratio: &'a str,
+    pub width: i32,
+    pub height: i32,
+    pub disposition: &'a FFprobeDisposition,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FFprobeAudioStream<'a> {
+    pub index: i32,
+    pub codec_name: &'a str,
+    pub codec_long_name: &'a str,
+    pub channels: i32,
+    pub sample_rate: &'a str,
+    pub disposition: &'a FFprobeDisposition,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct FFprobeSubtitleStream<'a> {
+    pub index: i32,
+    pub codec_name: &'a str,
+    pub codec_long_name: &'a str,
+    pub disposition: &'a FFprobeDisposition,
+    pub language: &'a str,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -92,66 +124,148 @@ pub struct FFprobeOutput {
     pub chapters: Vec<FFprobeChapter>,
 }
 
+impl<'a> FFprobeAudioStream<'a> {
+    pub fn codec(&self) -> AudioCodec {
+        AudioCodec::from_str(self.codec_name).expect("audio stream codec")
+    }
+}
+
+impl<'a> FFprobeVideoStream<'a> {
+    pub fn codec(&self) -> VideoCodec {
+        VideoCodec::from_str(self.codec_name).expect("video stream codec")
+    }
+
+    pub fn resoultion(&self) -> (i32, i32) {
+        (self.width, self.height)
+    }
+}
+
+impl<'a> FFprobeSubtitleStream<'a> {
+    pub fn codec(&self) -> SubtitlesCodec {
+        SubtitlesCodec::from_str(self.codec_name).expect("subtitles stream codec")
+    }
+}
+
 impl FFprobeOutput {
-    pub fn video_streams(&self) -> Vec<&FFprobeStream> {
+    pub fn video_streams(&self) -> Vec<FFprobeVideoStream> {
         self.streams
             .iter()
             .filter(|s| s.codec_type == "video")
+            .map(|s| s.video_stream().expect("video stream"))
             .collect()
     }
 
-    pub fn audio_streams(&self) -> Vec<&FFprobeStream> {
+    pub fn audio_streams(&self) -> Vec<FFprobeAudioStream> {
         self.streams
             .iter()
             .filter(|s| s.codec_type == "audio")
+            .map(|s| s.audio_stream().expect("audio stream"))
             .collect()
     }
 
-    pub fn subtitle_streams(&self) -> Vec<&FFprobeStream> {
+    pub fn subtitle_streams(&self) -> Vec<FFprobeSubtitleStream> {
         self.streams
             .iter()
             .filter(|s| s.codec_type == "subtitle")
+            .map(|s| s.subtitles_stream().expect("subtitles stream"))
             .collect()
     }
 
     /// Default audio stream
-    pub fn default_audio(&self) -> Option<&FFprobeStream> {
+    pub fn default_audio(&self) -> Option<FFprobeAudioStream> {
         self.audio_streams()
             .into_iter()
-            .find(|v| v.disposition.default == 1)
+            .find(|a| a.disposition.default == 1)
     }
 
     /// Default video stream
-    pub fn default_video(&self) -> Option<&FFprobeStream> {
+    pub fn default_video(&self) -> Option<FFprobeVideoStream> {
         self.video_streams()
             .into_iter()
             .find(|v| v.disposition.default == 1)
     }
+
+    /// Default subtitles stream
+    pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream> {
+        self.subtitle_streams()
+            .into_iter()
+            .find(|s| s.disposition.default == 1)
+    }
+
+
+    /// Video resoultion
+    pub fn resolution(&self) -> Option<(i32, i32)> {
+        self.default_video().map(|v| v.resoultion())
+    }
 }
 
 impl FFprobeStream {
-    pub fn audio_codec(&self) -> AudioCodec {
-        AudioCodec::from_str(&self.codec_name).expect("any string to be valid")
+    pub fn audio_stream<'a>(&'a self) -> Result<FFprobeAudioStream<'a>, anyhow::Error> {
+        Ok(FFprobeAudioStream {
+            index: self.index,
+            codec_name: &self.codec_name,
+            codec_long_name: &self.codec_long_name,
+            channels: self.channels.ok_or(anyhow!("channels are absent"))?,
+            sample_rate: &self
+                .sample_rate
+                .as_ref()
+                .ok_or(anyhow!("sample rate is absent"))?,
+            disposition: &self.disposition,
+        })
     }
 
-    pub fn video_codec(&self) -> VideoCodec {
-        VideoCodec::from_str(&self.codec_name).expect("any string to be valid")
+    pub fn video_stream<'a>(&'a self) -> Result<FFprobeVideoStream<'a>, anyhow::Error> {
+        let video = FFprobeVideoStream {
+            index: self.index,
+            codec_name: &self.codec_name,
+            codec_long_name: &self.codec_long_name,
+            display_aspect_ratio: &self
+                .display_aspect_ratio
+                .as_ref()
+                .ok_or(anyhow!("aspect ratio is absent"))?,
+            width: self.width.ok_or(anyhow!("width is absent"))?,
+            height: self.height.ok_or(anyhow!("height is absent"))?,
+            disposition: &self.disposition,
+        };
+        return Ok(video);
+    }
+
+    pub fn subtitles_stream<'a>(&'a self) -> Result<FFprobeSubtitleStream<'a>, anyhow::Error> {
+        let tags = &self.tags.as_ref().ok_or(anyhow!("tags are absent"))?;
+        let video = FFprobeSubtitleStream {
+            index: self.index,
+            codec_name: &self.codec_name,
+            codec_long_name: &self.codec_long_name,
+            language: &tags.language.as_ref().ok_or(anyhow!("language tag is absent"))?,
+            disposition: &self.disposition,
+        };
+        return Ok(video);
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase", untagged)]
 pub enum AudioCodec {
     AAC,
     AC3,
     Other(String),
 }
 
+impl Serialize for AudioCodec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
 impl Display for AudioCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            AudioCodec::AAC => write!(f, "aac"),
-            AudioCodec::AC3 => write!(f, "ac3"),
-            AudioCodec::Other(codec) => write!(f, "{codec}"),
+            Self::AAC => write!(f, "aac"),
+            Self::AC3 => write!(f, "ac3"),
+            Self::Other(codec) => write!(f, "{codec}"),
         }
     }
 }
@@ -169,19 +283,29 @@ impl FromStr for AudioCodec {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase", untagged)]
 pub enum VideoCodec {
     Hevc,
     H264,
     Other(String),
 }
 
+impl Serialize for VideoCodec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
 impl Display for VideoCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            VideoCodec::Hevc => write!(f, "hevc"),
-            VideoCodec::H264 => write!(f, "h264"),
-            VideoCodec::Other(codec) => write!(f, "{codec}"),
+            Self::Hevc => write!(f, "hevc"),
+            Self::H264 => write!(f, "h264"),
+            Self::Other(codec) => write!(f, "{codec}"),
         }
     }
 }
@@ -196,6 +320,60 @@ impl FromStr for VideoCodec {
             rest => VideoCodec::Other(rest.to_string()),
         };
         Ok(parsed)
+    }
+}
+
+#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[serde(rename_all = "lowercase", untagged)]
+pub enum SubtitlesCodec {
+    SubRip,
+    WebVTT,
+    DvdSubtitle,
+    Other(String),
+}
+
+impl Serialize for SubtitlesCodec {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl Display for SubtitlesCodec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SubRip => write!(f, "subrip"),
+            Self::WebVTT => write!(f, "webvtt"),
+            Self::DvdSubtitle => write!(f, "dvd_subtitle"),
+            Self::Other(codec) => write!(f, "{codec}"),
+        }
+    }
+}
+
+impl FromStr for SubtitlesCodec {
+    type Err = Infallible;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let parsed = match s {
+            "subrip" => SubtitlesCodec::SubRip,
+            "webvtt" => SubtitlesCodec::WebVTT,
+            "dvd_subtitle" => SubtitlesCodec::DvdSubtitle,
+            rest => SubtitlesCodec::Other(rest.to_string()),
+        };
+        Ok(parsed)
+    }
+}
+
+impl SubtitlesCodec {
+    pub fn supports_text(&self) -> bool {
+        match self {
+            SubtitlesCodec::SubRip => true,
+            SubtitlesCodec::WebVTT => true,
+            SubtitlesCodec::DvdSubtitle => false,
+            SubtitlesCodec::Other(_) => false,
+        }
     }
 }
 
@@ -239,7 +417,7 @@ impl FFmpegJob {
         }
     }
 
-    pub async fn kill(mut self) {
+    pub async fn kill(&mut self) {
         if let Err(_) = self.process.kill().await {
             tracing::error!("Failed to kill ffmpeg job")
         };
