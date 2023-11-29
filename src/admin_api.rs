@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::{convert::Infallible, fmt::Display};
 
 use axum::extract::Query;
+use axum::http::StatusCode;
 use axum::{
     extract::State,
     response::{
@@ -10,7 +11,6 @@ use axum::{
     },
     Json,
 };
-use reqwest::StatusCode;
 use serde::Deserialize;
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
@@ -92,6 +92,7 @@ fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
     }
 }
 
+#[axum::debug_handler]
 pub async fn remove_video(
     State(state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,

@@ -1,8 +1,10 @@
 use axum::extract::{Query, State};
-use axum::headers::{ContentType, Range};
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
-use axum::{Extension, Json, Router, TypedHeader};
+use axum::{Extension, Json, Router};
+use axum_extra::headers::{ContentType, Range};
+use axum_extra::TypedHeader;
 use bytes::Bytes;
 use dotenvy::dotenv;
 use media_server::admin_api;
@@ -17,7 +19,6 @@ use media_server::serve_content::ServeContent;
 use media_server::show_file::show_path_middleware;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
-use reqwest::StatusCode;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -72,7 +73,6 @@ async fn main() {
         .allow_methods(Any)
         .allow_origin(Any)
         .allow_headers(Any);
-        
 
     let database_url = std::env::var("DATABASE_URL").unwrap();
     let db = Db::connect(&database_url)
@@ -161,10 +161,8 @@ async fn main() {
         .with_state(app_state);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), PORT);
+    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 
     info!("Starting server on port {}", PORT);
-    axum::Server::bind(&addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
 }

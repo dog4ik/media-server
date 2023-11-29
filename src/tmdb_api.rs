@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 
-use axum::http::{HeaderMap, HeaderValue};
-use reqwest::{header::ACCEPT_ENCODING, Client, Url};
+use reqwest::{header::{ACCEPT_ENCODING, HeaderMap, HeaderValue}, Client, Url};
 use serde::Deserialize;
 use tokio::sync::Mutex;
 

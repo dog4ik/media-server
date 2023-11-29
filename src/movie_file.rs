@@ -2,6 +2,7 @@ use std::{fs, path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::Request,
     middleware::Next,
@@ -28,14 +29,14 @@ pub struct MovieParams {
     pub movie_name: String,
 }
 
-pub async fn movie_path_middleware<B>(
+pub async fn movie_path_middleware(
     Path(params): Path<MovieParams>,
     State(state): State<Arc<Mutex<Library>>>,
-    mut request: Request<B>,
-    next: Next<B>,
+    mut request: Request<Body>,
+    next: Next,
 ) -> Response {
-    request.extensions_mut().insert(Path(params));
-    request.extensions_mut().insert(State(state));
+    request.extensions_mut().insert(Path(params).clone());
+    request.extensions_mut().insert(State(state).clone());
     let response = next.run(request).await;
     response
 }

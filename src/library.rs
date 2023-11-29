@@ -6,11 +6,11 @@ use std::{
 };
 
 use axum::{
-    extract::{Path as AxumPath, State},
-    http::Request,
+    extract::{FromRequest, Path as AxumPath, Request, State},
+    http::StatusCode,
     response::IntoResponse,
 };
-use reqwest::StatusCode;
+use axum_extra::headers::Range;
 use serde::Serialize;
 use tokio::{
     process::{Child, Command},
@@ -23,7 +23,8 @@ use crate::{
     process_file::{AudioCodec, FFmpegJob, FFprobeOutput, VideoCodec},
     scan::Library,
     serve_content::ServeContent,
-    show_file::{ShowFile, ShowParams}, utils,
+    show_file::{ShowFile, ShowParams},
+    utils,
 };
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -73,7 +74,7 @@ impl MediaFolders {
 }
 
 impl LibraryFile {
-    pub async fn serve_video(&self, range: axum::headers::Range) -> impl IntoResponse {
+    pub async fn serve_video(&self, range: Range) -> impl IntoResponse {
         match self {
             LibraryFile::Show(s) => s.serve_video(range).await,
             LibraryFile::Movie(m) => m.serve_video(range).await,
@@ -104,15 +105,14 @@ pub struct Chapter {
 pub struct LibraryFileExtractor(pub LibraryFile);
 
 #[axum::async_trait]
-impl<S, B> axum::extract::FromRequest<S, B> for LibraryFileExtractor
+impl<S> FromRequest<S> for LibraryFileExtractor
 where
     // these bounds are required by `async_trait`
-    B: Send + 'static,
     S: Send + Sync,
 {
     type Rejection = StatusCode;
 
-    async fn from_request(req: Request<B>, _s: &S) -> Result<Self, Self::Rejection> {
+    async fn from_request(req: Request, _s: &S) -> Result<Self, Self::Rejection> {
         let state = req.extensions().get::<State<Arc<Mutex<Library>>>>();
         let movie_path_params = req.extensions().get::<AxumPath<MovieParams>>();
         let show_path_params = req.extensions().get::<AxumPath<ShowParams>>();

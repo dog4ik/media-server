@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::{fs, path::PathBuf};
 
 use anyhow::anyhow;
+use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::Request;
 use axum::middleware::Next;
@@ -21,14 +22,14 @@ pub struct ShowParams {
     pub episode: usize,
 }
 
-pub async fn show_path_middleware<B>(
+pub async fn show_path_middleware(
     Path(params): Path<ShowParams>,
     State(state): State<Arc<Mutex<Library>>>,
-    mut request: Request<B>,
-    next: Next<B>,
+    mut request: Request<Body>,
+    next: Next,
 ) -> Response {
-    request.extensions_mut().insert(Path(params));
-    request.extensions_mut().insert(State(state));
+    request.extensions_mut().insert(Path(params).clone());
+    request.extensions_mut().insert(State(state).clone());
     let response = next.run(request).await;
     response
 }

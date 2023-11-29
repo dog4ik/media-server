@@ -1,10 +1,11 @@
 use std::path::PathBuf;
 
 use axum::extract::{Query, State};
-use axum::headers::Range;
+use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::{Json, TypedHeader};
-use reqwest::StatusCode;
+use axum::Json;
+use axum_extra::TypedHeader;
+use axum_extra::headers::Range;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
@@ -485,10 +486,13 @@ pub async fn get_video_by_id(
     State(state): State<AppState>,
 ) -> Result<Json<DetailedVideo>, StatusCode> {
     let AppState { library, db, .. } = state;
-    let db_video = sqlx::query!("SELECT hash, scan_date, path FROM videos WHERE id = ?", query.id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
+    let db_video = sqlx::query!(
+        "SELECT hash, scan_date, path FROM videos WHERE id = ?",
+        query.id
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map_err(sqlx_err_wrap)?;
     let library = library.lock().await;
     let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
     let metadata = file.metadata();

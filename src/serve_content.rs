@@ -1,18 +1,16 @@
 use std::{io::SeekFrom, path::PathBuf};
 
 use axum::{
-    body::StreamBody,
-    headers::{ContentType, Range},
-    http::{HeaderName, HeaderValue},
+    body::Body,
+    http::{HeaderName, HeaderValue, StatusCode, header},
     response::AppendHeaders,
+};
+use axum_extra::{
+    headers::{ContentType, Range},
     TypedHeader,
 };
 use bytes::Bytes;
-use reqwest::{header, StatusCode};
-use tokio::{
-    fs::File,
-    io::{AsyncReadExt, AsyncSeekExt},
-};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::library::LibraryItem;
@@ -26,7 +24,7 @@ pub trait ServeContent {
     ) -> (
         StatusCode,
         AppendHeaders<[(HeaderName, HeaderValue); 6]>,
-        StreamBody<FramedRead<tokio::io::Take<File>, BytesCodec>>,
+        Body,
     );
 
     /// Serve previews
@@ -48,11 +46,11 @@ impl<T: LibraryItem> ServeContent for T {
     ) -> (
         StatusCode,
         AppendHeaders<[(HeaderName, HeaderValue); 6]>,
-        StreamBody<FramedRead<tokio::io::Take<File>, BytesCodec>>,
+        Body,
     ) {
         let mut file = tokio::fs::File::open(&self.source_path()).await.unwrap();
         let file_size = file.metadata().await.unwrap().len();
-        let (start, end) = range.iter().next().expect("at least one tuple");
+        let (start, end) = range.satisfiable_ranges(file_size).next().expect("at least one tuple");
         let start = match start {
             std::ops::Bound::Included(val) => val,
             std::ops::Bound::Excluded(val) => val,
@@ -95,7 +93,7 @@ impl<T: LibraryItem> ServeContent for T {
                     HeaderValue::from_str("video/x-matroska").unwrap(),
                 ),
             ]),
-            stream_of_bytes.into(),
+            Body::from_stream(stream_of_bytes),
         );
     }
 
