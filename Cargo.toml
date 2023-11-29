@@ -16,15 +16,15 @@ dotenvy = "0.15.7"
 image = "0.24.7"
 notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
 reqwest = { version = "0.11.22", features = ["json"] }
-serde = { version = "1.0.190", features = ["serde_derive"] }
+serde = { version = "1.0.193", features = ["serde_derive"] }
 serde_json = "1.0.108"
 sha2 = "0.10.8"
-sqlx = { version = "0.7.2", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
+sqlx = { version = "0.7.3", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
 time = { version = "0.3.30", features = ["serde", "parsing"] }
-tokio = { version = "1.33.0", features = ["full"] }
+tokio = { version = "1.34.0", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["full"] }
-tower-http = { version = "0.4.4", features = ["cors"] }
+tower-http = { version = "0.5.0", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time"] }
-uuid = { version = "1.5.0", features = ["v4", "serde"] }
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
