@@ -20,6 +20,7 @@ use crate::movie_file::MovieFile;
 use crate::process_file::AudioCodec;
 use crate::process_file::VideoCodec;
 use crate::show_file::ShowFile;
+use crate::utils;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
 const SUPPORTED_VIDEO_CODECS: &[&str] = &["h264", "mp4"];
@@ -382,34 +383,8 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
         .unwrap_or(false)
 }
 
-pub fn walk_recursive<F>(
-    folder: &PathBuf,
-    filter_fn: Option<F>,
-) -> Result<Vec<PathBuf>, std::io::Error>
-where
-    F: Fn(&PathBuf) -> bool + std::marker::Copy,
-{
-    let mut local_paths = Vec::new();
-    let dir = fs::read_dir(&folder)?;
-    for file in dir {
-        let path = file?.path();
-        if path.is_file() {
-            if let Some(filter_fn) = filter_fn {
-                if filter_fn(&path) {
-                    local_paths.push(path);
-                }
-            } else {
-                local_paths.push(path);
-            }
-        } else if path.is_dir() {
-            local_paths.append(walk_recursive(&path.to_path_buf(), filter_fn)?.as_mut());
-        }
-    }
-    return Ok(local_paths);
-}
-
 pub fn read_library_items<T: LibraryItem>(folder: &PathBuf) -> Result<Vec<T>, anyhow::Error> {
-    let files = walk_recursive(folder, Some(is_format_supported))?;
+    let files = utils::walk_recursive(folder, Some(is_format_supported))?;
     Ok(files
         .into_iter()
         .filter_map(|f| T::from_path(f).ok())

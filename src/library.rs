@@ -11,7 +11,6 @@ use axum::{
     http::Request,
     response::IntoResponse,
 };
-use crc32fast::Hasher;
 use reqwest::StatusCode;
 use serde::Serialize;
 use tokio::{
@@ -25,7 +24,7 @@ use crate::{
     process_file::{AudioCodec, FFmpegJob, FFprobeOutput, VideoCodec},
     scan::Library,
     serve_content::ServeContent,
-    show_file::{ShowFile, ShowParams},
+    show_file::{ShowFile, ShowParams}, utils,
 };
 
 #[derive(Debug, serde::Deserialize, Clone)]
@@ -177,23 +176,12 @@ pub trait LibraryItem {
     /// Title
     fn title(&self) -> String;
 
-    /// Calculate hash for the file
-    fn calulate_hash(&self) -> Result<u32, anyhow::Error> {
-        let mut hasher = Hasher::new();
+    /// Calculate hash for the video
+    fn calculate_video_hash(&self) -> Result<u32, std::io::Error> {
         let path = self.source_path();
         let mut file = std::fs::File::open(path)?;
-        let mut buffer = [0; 4096];
-
-        loop {
-            let bytes_read = file.read(&mut buffer)?;
-            if bytes_read == 0 {
-                break;
-            }
-            hasher.update(&buffer[..bytes_read]);
-        }
-        let result = hasher.finalize();
-
-        return Ok(result);
+        let hash = utils::file_hash(&mut file)?;
+        return Ok(hash);
     }
 
     /// Returns struct compatible with database Video table

@@ -13,7 +13,7 @@ use notify::{
 use crate::{
     app_state::AppState,
     library::{MediaFolders, MediaType},
-    scan::{is_format_supported, walk_recursive},
+    scan::is_format_supported, utils,
 };
 
 #[derive(Debug, Clone)]
@@ -79,7 +79,7 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
     let mut flattened_paths = Vec::new();
     let metadata = path.metadata()?;
     if metadata.is_dir() {
-        flattened_paths.append(&mut walk_recursive(&path, Some(is_format_supported))?);
+        flattened_paths.append(&mut utils::walk_recursive(&path, Some(is_format_supported))?);
     }
     if metadata.is_file() {
         flattened_paths.push(path.clone())

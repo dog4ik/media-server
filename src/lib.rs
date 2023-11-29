@@ -2,6 +2,7 @@
 #![feature(iter_intersperse)]
 #![feature(async_iterator)]
 pub mod admin_api;
+pub mod utils;
 pub mod testing;
 pub mod tracing;
 pub mod app_state;
