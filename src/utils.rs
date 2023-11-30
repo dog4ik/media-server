@@ -1,8 +1,8 @@
 use crc32fast::Hasher;
 use std::{
     fs::{self, File},
-    io::{Read, self},
-    path::{PathBuf, Path},
+    io::{self, Read},
+    path::{Path, PathBuf},
 };
 
 pub fn file_hash(file: &mut File) -> Result<u32, std::io::Error> {
@@ -59,4 +59,12 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
         };
     }
     Ok(removed_files)
+}
+
+pub fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Error> {
+    let resources_path = resources_path.as_ref();
+    fs::create_dir_all(resources_path.join("subs"))?;
+    fs::create_dir_all(resources_path.join("previews"))?;
+    fs::create_dir_all(resources_path.join("variants"))?;
+    Ok(())
 }

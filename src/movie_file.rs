@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
 use axum::{
@@ -14,6 +14,7 @@ use tokio::sync::Mutex;
 use crate::{
     process_file::{get_metadata, FFprobeOutput},
     scan::Library,
+    utils,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -45,16 +46,13 @@ impl MovieFile {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
         let file_name = path
             .file_name()
-            .ok_or(anyhow!("fail to get filename"))?
+            .ok_or(anyhow!("failed to get filename"))?
             .to_str()
-            .ok_or(anyhow!("fail convert filename"))?;
-        let mut is_spaced = false;
-        if file_name.contains(" ") {
-            is_spaced = true
-        }
+            .ok_or(anyhow!("failed to convert filename"))?;
+        let is_spaced = file_name.contains(' ');
         let tokens = match is_spaced {
-            true => file_name.split(" "),
-            false => file_name.split("."),
+            true => file_name.split(' '),
+            false => file_name.split('.'),
         };
         let mut name: Option<String> = None;
         for token in tokens.map(|x| x.to_string().to_lowercase()) {
@@ -73,12 +71,13 @@ impl MovieFile {
             }
         }
         if let Some(name) = name {
-            let resource = generate_resources(&name)?;
+            let resources_path = generate_resources_path(&name);
+            utils::generate_resources(&resources_path)?;
             let metadata = get_metadata(&path)?;
             let show_file = Self {
                 title: name,
                 video_path: path,
-                resources_path: resource,
+                resources_path,
                 metadata,
             };
             Ok(show_file)
@@ -92,10 +91,8 @@ impl MovieFile {
     }
 }
 
-fn generate_resources(title: &str) -> Result<PathBuf, std::io::Error> {
-    let movie_dir_path = format!("{}/{}", std::env::var("RESOURCES_PATH").unwrap(), title);
-    fs::create_dir_all(format!("{}/subs", &movie_dir_path))?;
-    fs::create_dir_all(format!("{}/previews", &movie_dir_path))?;
-    let folder = PathBuf::from(movie_dir_path);
-    Ok(folder)
+fn generate_resources_path(title: &str) -> PathBuf {
+    let mut movie_dir_path = PathBuf::from(std::env::var("RESOURCES_PATH").expect("env to be set"));
+    movie_dir_path.push(title);
+    movie_dir_path
 }
