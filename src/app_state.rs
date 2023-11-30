@@ -1,7 +1,7 @@
 use std::{path::PathBuf, sync::Arc};
 
 use anyhow::anyhow;
-use axum::extract::FromRef;
+use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, sync::Mutex};
 
 use crate::{
@@ -20,15 +20,99 @@ pub struct AppState {
     pub tasks: TaskResource,
 }
 
-impl AppState {
-    pub async fn reconciliate_library(&self) -> Result<(), sqlx::Error> {
-        use crate::tmdb_api::TmdbApi;
-        let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").expect("tmdb token to be in env"));
-        let mut library = self.library.lock().await;
-        library.reconciliate_library(&self.db, tmdb_api).await
+#[derive(Debug, Clone)]
+pub struct AppError {
+    pub message: String,
+    pub kind: AppErrorKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum AppErrorKind {
+    InternalError,
+    NotFound,
+    Dubplicate,
+    BadRequest,
+}
+
+impl Into<StatusCode> for AppErrorKind {
+    fn into(self) -> StatusCode {
+        match self {
+            AppErrorKind::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+            AppErrorKind::NotFound => StatusCode::NOT_FOUND,
+            AppErrorKind::Dubplicate => StatusCode::BAD_REQUEST,
+            AppErrorKind::BadRequest => StatusCode::BAD_REQUEST,
+        }
+    }
+}
+
+impl<E> From<E> for AppError
+where
+    E: Into<anyhow::Error>,
+{
+    fn from(err: E) -> Self {
+        Self {
+            message: err.into().to_string(),
+            kind: AppErrorKind::InternalError,
+        }
+    }
+}
+
+impl AppError {
+    pub fn new(message: impl AsRef<str>, kind: AppErrorKind) -> Self {
+        Self {
+            message: message.as_ref().into(),
+            kind,
+        }
     }
 
-    pub async fn remove_video(&self, id: i64) -> Result<(), anyhow::Error> {
+    pub fn not_found(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::NotFound,
+        }
+    }
+
+    pub fn bad_request(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::BadRequest,
+        }
+    }
+
+    pub fn internal_error(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::InternalError,
+        }
+    }
+}
+
+impl IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        let response_json = serde_json::json!({
+        "message": &self.message,
+        });
+        let status: StatusCode = self.kind.into();
+        (status, Json(response_json)).into_response()
+    }
+}
+
+impl AppState {
+    pub async fn reconciliate_library(&self) -> Result<(), AppError> {
+        use crate::tmdb_api::TmdbApi;
+        let tmdb_api = TmdbApi::new(
+            std::env::var("TMDB_TOKEN")
+                .map_err(|_| AppError::internal_error("tmdb token not found"))?,
+        );
+        let mut library = self.library.lock().await;
+        let str = String::from("thing");
+        library
+            .reconciliate_library(&self.db, tmdb_api)
+            .await
+            .map_err(move |_| AppError::not_found(str))
+    }
+
+    pub async fn remove_video(&self, id: i64) -> Result<(), AppError> {
         let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", id)
             .fetch_one(&self.db.pool)
             .await?
@@ -47,7 +131,7 @@ impl AppState {
         &self,
         video_path: PathBuf,
         metadata_provider: &impl ShowMetadataProvider,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), AppError> {
         let mut library = self.library.lock().await;
         let show = library.add_show(video_path)?;
         drop(library);
@@ -59,14 +143,14 @@ impl AppState {
         &self,
         video_path: PathBuf,
         metadata_provider: &impl MovieMetadataProvider,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), AppError> {
         let mut library = self.library.lock().await;
         let movie = library.add_movie(video_path)?;
         handle_movie(movie, self.db.clone(), metadata_provider).await?;
         Ok(())
     }
 
-    pub async fn extract_subs(&self, video_id: i64) -> Result<(), anyhow::Error> {
+    pub async fn extract_subs(&self, video_id: i64) -> Result<(), AppError> {
         let path: PathBuf = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
             .fetch_one(&self.db.pool)
             .await?
@@ -124,7 +208,7 @@ impl AppState {
         video_id: i64,
         video_codec: Option<VideoCodec>,
         audio_codec: Option<AudioCodec>,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), AppError> {
         let path: PathBuf = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
             .fetch_one(&self.db.pool)
             .await?
@@ -148,11 +232,13 @@ impl AppState {
 
         let run_result = self.tasks.run_ffmpeg_task(job, TaskKind::Transcode).await;
 
-        match run_result {
-            Ok(_) => {}
-            Err(err) => {
-                // cancel logic
+        if let Err(err) = run_result {
+            match err {
+                TaskError::Canceled => todo!(),
+                TaskError::NotFound => todo!(),
+                _ => todo!(),
             }
+            // cancel logic
         }
         Ok(())
     }

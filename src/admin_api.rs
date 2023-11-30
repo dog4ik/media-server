@@ -17,6 +17,7 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use crate::app_state::AppError;
 use crate::metadata_provider::ShowMetadataProvider;
 use crate::process_file::{AudioCodec, VideoCodec};
 use crate::progress::{TaskKind, TaskResource};
@@ -96,11 +97,8 @@ fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
 pub async fn remove_video(
     State(state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,
-) -> Result<(), StatusCode> {
-    state
-        .remove_video(id)
-        .await
-        .map_err(|_| StatusCode::BAD_REQUEST)
+) -> Result<(), AppError> {
+    state.remove_video(id).await
 }
 
 pub async fn refresh_show_metadata(
