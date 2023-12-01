@@ -3,7 +3,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{movie_file::MovieFile, process_file::get_metadata, show_file::ShowFile};
+use crate::{movie_file::MovieFile, show_file::ShowFile, source::Source, utils};
 
 pub struct TestResource {
     pub temp_dir: PathBuf,
@@ -16,28 +16,30 @@ impl TestResource {
         let test_folder: PathBuf = "/home/dog4ik/personal/rust-media-server/test-dir".into();
         let temp_dir = generate_temp_dir_path();
         fs::create_dir_all(&temp_dir).unwrap();
-        deep_copy_folder(test_folder, &temp_dir);
+        deep_copy_folder(&test_folder, &temp_dir);
 
         let show_video_path = temp_dir.join("Episode.S01E01.mkv");
 
         let resource_path = temp_dir.join("resources");
 
-        let metadata = get_metadata(&show_video_path).unwrap();
+
+        let show_resource_path = resource_path.join("episode").join("1").join("1");
+        let movie_resource_path = resource_path.join("movie");
+        dbg!(&show_resource_path, &movie_resource_path);
+
+        utils::generate_resources(&show_resource_path).unwrap();
+        utils::generate_resources(&movie_resource_path).unwrap();
 
         let show_file = ShowFile {
-            title: "episode".into(),
+            local_title: "episode".into(),
             episode: 1,
             season: 1,
-            video_path: show_video_path.clone(),
-            resources_path: resource_path.clone(),
-            metadata: metadata.clone(),
+            source: Source::new(&show_video_path, &show_resource_path).unwrap(),
         };
 
         let movie_file = MovieFile {
-            video_path: show_video_path.clone(),
-            metadata,
-            title: "movie".into(),
-            resources_path: resource_path.clone(),
+            source: Source::new(show_video_path, movie_resource_path).unwrap(),
+            local_title: "movie".into(),
         };
 
         Self {

@@ -2,6 +2,7 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use std::convert::Infallible;
 use std::fmt::Display;
+use std::path::Path;
 use std::process::{Command, ExitStatus};
 use std::str::FromStr;
 use std::time::Duration;
@@ -135,8 +136,8 @@ impl<'a> FFprobeVideoStream<'a> {
         VideoCodec::from_str(self.codec_name).expect("video stream codec")
     }
 
-    pub fn resoultion(&self) -> (i32, i32) {
-        (self.width, self.height)
+    pub fn resoultion(&self) -> Resolution {
+        (self.width as usize, self.height as usize).into()
     }
 }
 
@@ -193,8 +194,19 @@ impl FFprobeOutput {
     }
 
     /// Video resoultion
-    pub fn resolution(&self) -> Option<(i32, i32)> {
+    pub fn resolution(&self) -> Option<Resolution> {
         self.default_video().map(|v| v.resoultion())
+    }
+
+    /// Duration
+    pub fn duration(&self) -> Duration {
+        std::time::Duration::from_secs(
+            self.format
+                .duration
+                .parse::<f64>()
+                .expect("duration to look like 123.1233")
+                .round() as u64,
+        )
     }
 }
 
@@ -325,6 +337,51 @@ impl FromStr for VideoCodec {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Resolution(pub (usize, usize));
+
+impl Serialize for Resolution {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let (x, y) = self.0;
+        serializer.serialize_str(&format!("{}x{}", x, y))
+    }
+}
+
+impl Display for Resolution {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (x, y) = self.0;
+        write!(f, "{}x{}", x, y)
+    }
+}
+
+impl From<(usize, usize)> for Resolution {
+    fn from(value: (usize, usize)) -> Self {
+        Self((value.0, value.1))
+    }
+}
+
+impl Into<(usize, usize)> for Resolution {
+    fn into(self) -> (usize, usize) {
+        self.0
+    }
+}
+
+impl FromStr for Resolution {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (x, y) = s
+            .split_once('x')
+            .ok_or(anyhow!("str must be seperated with 'x'"))?;
+        let x = x.parse()?;
+        let y = y.parse()?;
+        Ok((x, y).into())
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase", untagged)]
 pub enum SubtitlesCodec {
@@ -379,7 +436,8 @@ impl SubtitlesCodec {
     }
 }
 
-pub fn get_metadata(path: &PathBuf) -> Result<FFprobeOutput, anyhow::Error> {
+pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Error> {
+    let path = path.as_ref();
     trace!(
         "Getting metadata for a file: {}",
         path.iter().last().unwrap().to_str().unwrap()
@@ -475,7 +533,6 @@ impl FFmpegJob {
 
 #[tokio::test]
 async fn cancel_transcode() {
-    use crate::library::LibraryItem;
     use crate::process_file::VideoCodec;
     use crate::progress::{TaskKind, TaskResource};
     use crate::testing::TestResource;
@@ -487,14 +544,18 @@ async fn cancel_transcode() {
     let testing_resource = TestResource::new();
     let subject = testing_resource.test_show.clone();
     let task_resource = TaskResource::new();
-    let size_before = fs::metadata(&subject.video_path).await.unwrap().len();
-    let video_path = subject.source_path().to_path_buf();
+    let size_before = fs::metadata(&subject.source.origin.path)
+        .await
+        .unwrap()
+        .len();
+    let video_path = subject.source.source_path().to_path_buf();
     let (tx, rx) = oneshot::channel();
     let task_id = task_resource
         .add_new_task(video_path.to_path_buf(), TaskKind::Transcode, Some(tx))
         .await
         .unwrap();
     let mut process = subject
+        .source
         .transcode_video(Some(VideoCodec::H264), None)
         .unwrap();
     {
@@ -520,9 +581,4 @@ async fn cancel_transcode() {
     let is_cleaned = !fs::try_exists(original_buffer).await.unwrap_or(false);
     assert_eq!(size_before, size_after);
     assert!(is_cleaned);
-}
-
-#[tokio::test]
-async fn progress_going() {
-    todo!()
 }

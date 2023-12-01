@@ -101,7 +101,7 @@ impl<T: LibraryItem> ServeContent for T {
         &self,
         number: i32,
     ) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode> {
-        let path = PathBuf::from(self.previews_path().to_str().unwrap());
+        let path = PathBuf::from(self.source().previews_path().to_str().unwrap());
         let mut previews_dir = tokio::fs::read_dir(path).await.unwrap();
 
         while let Some(file) = previews_dir.next_entry().await.unwrap() {
@@ -122,7 +122,7 @@ impl<T: LibraryItem> ServeContent for T {
     }
 
     async fn serve_subs(&self, lang: Option<String>) -> Result<String, StatusCode> {
-        get_subtitles(self.subtitles_path(), lang)
+        get_subtitles(self.source().subtitles_path(), lang)
             .await
             .ok_or(StatusCode::NO_CONTENT)
     }

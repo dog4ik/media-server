@@ -12,17 +12,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::{
-    process_file::{get_metadata, FFprobeOutput},
     scan::Library,
+    source::Source,
     utils,
 };
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MovieFile {
-    pub title: String,
-    pub video_path: PathBuf,
-    pub resources_path: PathBuf,
-    pub metadata: FFprobeOutput,
+    pub local_title: String,
+    pub source: Source,
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -73,21 +71,15 @@ impl MovieFile {
         if let Some(name) = name {
             let resources_path = generate_resources_path(&name);
             utils::generate_resources(&resources_path)?;
-            let metadata = get_metadata(&path)?;
+            let source = Source::new(path, resources_path)?;
             let show_file = Self {
-                title: name,
-                video_path: path,
-                resources_path,
-                metadata,
+                local_title: name,
+                source,
             };
             Ok(show_file)
         } else {
             return Err(anyhow::Error::msg("Failed to construct a movie name"));
         }
-    }
-
-    pub async fn get_metadata(&self) -> Result<FFprobeOutput, anyhow::Error> {
-        get_metadata(&self.video_path)
     }
 }
 

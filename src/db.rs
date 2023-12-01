@@ -71,14 +71,25 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     UNIQUE (metadata_id, metadata_provider),
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
-                                    path TEXT NOT NULL,
+                                    path TEXT NOT NULL UNIQUE,
                                     hash TEXT NOT NULL,
                                     local_title TEXT NOT NULL,
                                     size INTEGER NOT NULL,
                                     duration INTEGER NOT NULL,
                                     video_codec TEXT,
                                     audio_codec TEXT,
+                                    resolution TEXT,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS variants (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+                                    video_id INTEGER NOT NULL,
+                                    path TEXT NOT NULL UNIQUE,
+                                    hash TEXT NOT NULL,
+                                    size INTEGER NOT NULL,
+                                    duration INTEGER NOT NULL,
+                                    video_codec TEXT,
+                                    audio_codec TEXT,
+                                    resolution TEXT,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,
                                     hash TEXT NOT NULL,
@@ -101,12 +112,30 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
         DELETE FROM episodes;
         DELETE FROM movies;
         DELETE FROM videos;
+        DELETE FROM variants;
         DELETE FROM subtitles;
         ",
         )
         .execute(&self.pool)
         .await?;
         Ok(())
+    }
+
+    pub async fn insert_variant(&self, db_variant: DbVariant) -> Result<i64, Error> {
+        let subtitles_query = sqlx::query!(
+            "INSERT INTO variants
+            (video_id, path, hash, size, duration, video_codec, audio_codec, resolution)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            db_variant.video_id,
+            db_variant.path,
+            db_variant.hash,
+            db_variant.size,
+            db_variant.duration,
+            db_variant.video_codec,
+            db_variant.audio_codec,
+            db_variant.resolution,
+        );
+        subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
     pub async fn insert_movie(&self, movie: DbMovie) -> Result<i64, Error> {
@@ -270,9 +299,16 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
         subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
+    pub async fn remove_variant(&self, id: i64) -> Result<(), Error> {
+        sqlx::query!("DELETE FROM variants WHERE id = ?;", id)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
-        sqlx::query!("DELETE FROM videos WHERE videos.id = ?;", id)
-            .fetch_one(&self.pool)
+        sqlx::query!("DELETE FROM videos WHERE id = ?;", id)
+            .execute(&self.pool)
             .await?;
 
         if let Ok(episode) =
@@ -317,6 +353,14 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
         )
         .execute(&self.pool)
         .await?;
+
+        sqlx::query!(
+            "DELETE FROM variants WHERE video_id = ?",
+            delete_episode_result.video_id
+        )
+        .execute(&self.pool)
+        .await?;
+
         let siblings_count = sqlx::query!(
             "SELECT COUNT(*) as count FROM episodes WHERE season_id = ?",
             season_id
@@ -535,7 +579,21 @@ pub struct DbVideo {
     pub duration: i64,
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
+    pub resolution: Option<String>,
     pub scan_date: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DbVariant {
+    pub id: Option<i64>,
+    pub video_id: i64,
+    pub path: String,
+    pub hash: String,
+    pub size: i64,
+    pub duration: i64,
+    pub video_codec: Option<String>,
+    pub audio_codec: Option<String>,
+    pub resolution: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]

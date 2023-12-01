@@ -117,12 +117,13 @@ impl AppState {
             .fetch_one(&self.db.pool)
             .await?
             .path;
-        let library = self.library.lock().await;
+        let mut library = self.library.lock().await;
         let file = library
-            .find(video_path)
+            .find_source(&video_path)
             .ok_or(anyhow::anyhow!("path not found in the library"))?;
-
-        file.delete()?;
+        file.delete()
+            .map_err(|_| AppError::internal_error("Failed to remove video"))?;
+        library.remove_file(video_path);
         self.db.remove_video(id).await?;
         Ok(())
     }
@@ -158,9 +159,8 @@ impl AppState {
             .into();
         let library = self.library.lock().await;
         let file = library
-            .find(&path)
-            .ok_or(anyhow!("path not found in library"))?;
-        let metadata = file.metadata();
+            .find_source(&path)
+            .ok_or(AppError::not_found("path not found in library"))?;
         let mut jobs = Vec::new();
         let task_id = self
             .tasks
@@ -168,7 +168,7 @@ impl AppState {
             .await
             .unwrap();
         let subtitles_path = file.subtitles_path();
-        for stream in metadata.subtitle_streams() {
+        for stream in file.origin.subtitle_streams() {
             if stream.codec().supports_text() {
                 let job = file.generate_subtitles(stream.index, stream.language);
                 jobs.push((job, stream));
@@ -216,16 +216,16 @@ impl AppState {
             .into();
 
         let library = self.library.lock().await;
-        let file = library
-            .find(&path)
+        let source = library
+            .find_source(&path)
             .ok_or(anyhow!("path not found in library"))?;
-        let metadata = file.metadata();
 
-        let audio_stream = metadata
+        let audio_stream = source
+            .origin
             .default_audio()
             .ok_or(anyhow!("video does not contain audio stream"))?;
 
-        let job = file.transcode_video(
+        let job = source.transcode_video(
             video_codec,
             audio_codec.map(|c| (audio_stream.index as usize, c)),
         )?;
@@ -252,10 +252,10 @@ impl AppState {
             .into();
 
         let library = self.library.lock().await;
-        let file = library.find(&path).ok_or(TaskError::NotFound)?;
+        let file = library.find_source(&path).ok_or(TaskError::NotFound)?;
         let previews_path = file.previews_path();
 
-        if (file.previews_count() as f64) < (file.get_duration().as_secs() as f64 / 10.0).round() {
+        if (file.previews_count() as f64) < (file.duration().as_secs() as f64 / 10.0).round() {
             let job = file.generate_previews();
 
             let run_result = self.tasks.run_ffmpeg_task(job, TaskKind::Previews).await;

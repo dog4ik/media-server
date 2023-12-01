@@ -4,6 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde::Serialize;
 use tokio::sync::Semaphore;
@@ -20,6 +21,7 @@ use crate::movie_file::MovieFile;
 use crate::process_file::AudioCodec;
 use crate::process_file::VideoCodec;
 use crate::show_file::ShowFile;
+use crate::source::Source;
 use crate::utils;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
@@ -32,7 +34,7 @@ pub struct Summary {
     pub href: String,
     pub subs: Vec<String>,
     pub previews: usize,
-    pub duration: String,
+    pub duration: Duration,
     pub title: String,
     pub chapters: Vec<Chapter>,
 }
@@ -59,7 +61,7 @@ pub async fn handle_show(
                     JOIN seasons ON seasons.id = episodes.season_id
                     JOIN shows ON shows.id = seasons.show_id
                     WHERE videos.local_title = ?;"#,
-        show.title
+        show.local_title
     )
     .fetch_one(&db.pool)
     .await
@@ -69,7 +71,7 @@ pub async fn handle_show(
         Ok(data) => data,
         Err(e) => match e {
             sqlx::Error::RowNotFound => {
-                let metadata = metadata_provider.show(&show.title).await.unwrap();
+                let metadata = metadata_provider.show(&show.local_title).await.unwrap();
                 let provider = metadata.metadata_provider.to_string();
                 let metadata_id = metadata.metadata_id.clone().unwrap();
                 let db_show = metadata.into_db_show().await;
@@ -126,8 +128,12 @@ pub async fn handle_show(
                 )
                 .await
                 .unwrap();
-            let db_video = show.into_db_video();
+            let db_video = show.source.into_db_video(show.local_title.clone());
             let video_id = db.insert_video(db_video).await?;
+            for variant in &show.source.variants {
+                let db_variant = variant.into_db_variant(video_id);
+                db.insert_variant(db_variant).await?;
+            }
             let db_episode = metadata.into_db_episode(season_id, video_id).await;
             db.insert_episode(db_episode).await?;
         } else {
@@ -147,7 +153,7 @@ pub async fn handle_movie(
         r#"SELECT movies.id as "id!", movies.metadata_id, movies.metadata_provider FROM movies 
                     JOIN videos ON videos.id = movies.video_id
                     WHERE videos.local_title = ?;"#,
-        movie.title
+        movie.local_title
     )
     .fetch_one(&db.pool)
     .await
@@ -156,9 +162,9 @@ pub async fn handle_movie(
     match movie_query {
         Err(e) => {
             if let sqlx::Error::RowNotFound = e {
-                let db_video = movie.into_db_video();
+                let metadata = metadata_provider.movie(&movie.local_title).await.unwrap();
+                let db_video = movie.source.into_db_video(movie.local_title);
                 let video_id = db.insert_video(db_video).await?;
-                let metadata = metadata_provider.movie(&movie.title).await.unwrap();
                 let provider = metadata.metadata_provider.to_string();
                 let metadata_id = metadata.metadata_id.clone().unwrap();
                 let db_movie = metadata.into_db_movie(video_id).await;
@@ -243,6 +249,22 @@ impl Library {
         return show;
     }
 
+    pub fn find_source(&self, path: impl AsRef<Path>) -> Option<&Source> {
+        let show = self
+            .shows
+            .iter()
+            .find(|f| f.source_path() == path.as_ref())
+            .map(|x| &x.source);
+        if show.is_none() {
+            return self
+                .movies
+                .iter()
+                .find(|f| f.source_path() == path.as_ref())
+                .map(|x| &x.source)
+        }
+        show
+    }
+
     pub fn find_library_file(&self, path: impl AsRef<Path>) -> Option<LibraryFile> {
         let show = self
             .shows
@@ -314,7 +336,7 @@ impl Library {
 
         let local_episodes: HashMap<String, &ShowFile> = local_episodes
             .iter()
-            .map(|ep| (ep.source_path().to_str().unwrap().into(), ep))
+            .map(|ep| (ep.source.source_path().to_str().unwrap().into(), ep))
             .collect();
 
         for db_episode_video in &db_episodes_videos {
@@ -322,7 +344,8 @@ impl Library {
             let size_match;
             if let Some(local_eqivalent) = local_episodes.get(&db_episode_video.path) {
                 exists_in_db = true;
-                size_match = local_eqivalent.get_file_size() == db_episode_video.size as u64;
+                size_match =
+                    local_eqivalent.source.origin.file_size() == db_episode_video.size as u64;
             } else {
                 size_match = false;
                 exists_in_db = false;
@@ -333,10 +356,11 @@ impl Library {
             };
         }
 
+        // clean up variants
+
         // clean up db
         for db_episode_video in &db_episodes_videos {
             if !common_paths.contains(db_episode_video.path.as_str()) {
-                println!("removing episode id {}", db_episode_video.episode_id);
                 db.remove_episode(db_episode_video.episode_id).await?;
             }
         }
@@ -366,13 +390,14 @@ impl Library {
 }
 
 fn extract_summary(file: &impl LibraryItem) -> Summary {
+    let source = file.source();
     return Summary {
-        previews: file.previews_count(),
-        subs: file.get_subs(),
-        duration: file.metadata().format.duration.clone(),
+        previews: source.previews_count(),
+        subs: source.get_subs(),
+        duration: source.origin.duration(),
         href: file.url(),
         title: file.title(),
-        chapters: file.chapters(),
+        chapters: source.origin.chapters(),
     };
 }
 
@@ -391,7 +416,7 @@ pub fn read_library_items<T: LibraryItem>(folder: &PathBuf) -> Result<Vec<T>, an
         .collect())
 }
 
-pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'static>) {
+pub async fn transcode(files: &Vec<Source>) {
     let mut handles = Vec::new();
     let semaphore = Arc::new(Semaphore::new(MAX_THREADS));
 
@@ -399,9 +424,8 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
         let semaphore = semaphore.clone();
         let handle = tokio::spawn(async move {
             let permit = semaphore.acquire_owned().await.unwrap();
-            let metadata = &file.metadata();
             //handle subs
-            for stream in metadata.subtitle_streams().iter() {
+            for stream in file.origin.subtitle_streams().iter() {
                 let mut subtitles_path = file.subtitles_path();
                 subtitles_path.push(format!("{}.srt", stream.language));
                 if !subtitles_path.try_exists().unwrap_or(false) {
@@ -412,7 +436,7 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
 
             // handle previews
             let previews_count = file.previews_count();
-            let duration = file.get_duration();
+            let duration = file.origin.duration();
 
             if (previews_count as f64) < (duration.as_secs() as f64 / 10.0).round() {
                 let mut process = file.generate_previews();
@@ -422,28 +446,17 @@ pub async fn transcode(files: &Vec<impl LibraryItem + Clone + Send + Sync + 'sta
             // handle last one: codecs
             let mut transcode_audio_track: Option<i32> = None;
             let mut should_transcode_video = false;
-            for stream in metadata.streams.iter() {
-                if stream.codec_type == "video" && !should_transcode_video {
-                    if !SUPPORTED_VIDEO_CODECS.contains(&stream.codec_name.as_str()) {
+            if let Some(v_codec) = file.origin.default_video().map(|s| s.codec()) {
+                if !should_transcode_video {
+                    if !SUPPORTED_VIDEO_CODECS.contains(&v_codec.to_string().as_str()) {
                         should_transcode_video = true;
                     }
                 }
-                if stream.codec_type == "audio" {
-                    if !SUPPORTED_AUDIO_CODECS.contains(&stream.codec_name.as_str()) {
-                        if let Some(tags) = &stream.tags {
-                            match &tags.language {
-                                Some(lang) if lang == "eng" => {
-                                    transcode_audio_track = Some(stream.index);
-                                    break;
-                                }
-                                Some(_) => continue,
-                                None => {
-                                    transcode_audio_track = Some(stream.index);
-                                    break;
-                                }
-                            }
-                        }
-                    }
+            }
+
+            if let Some(a_stream) = file.origin.default_audio() {
+                if !SUPPORTED_AUDIO_CODECS.contains(&a_stream.codec().to_string().as_str()) {
+                    transcode_audio_track = Some(a_stream.index);
                 }
             }
             if should_transcode_video || transcode_audio_track.is_some() {

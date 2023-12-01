@@ -82,7 +82,7 @@ async fn main() {
     let movies_dir = PathBuf::from(std::env::var("MOVIES_PATH").unwrap());
     let shows_dir = PathBuf::from(std::env::var("SHOWS_PATH").unwrap());
 
-    if !movies_dir.exists() || !shows_dir.exists() {
+    if !movies_dir.try_exists().unwrap_or(false) || !shows_dir.try_exists().unwrap_or(false) {
         panic!("one or more library paths does not exists");
     }
 

@@ -10,8 +10,8 @@ use axum::response::Response;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
-use crate::process_file::{get_metadata, FFprobeOutput};
 use crate::scan::Library;
+use crate::source::Source;
 use crate::utils;
 
 pub struct ShowExtractor(pub ShowFile);
@@ -37,12 +37,10 @@ pub async fn show_path_middleware(
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShowFile {
-    pub title: String,
+    pub local_title: String,
     pub episode: u8,
     pub season: u8,
-    pub video_path: PathBuf,
-    pub resources_path: PathBuf,
-    pub metadata: FFprobeOutput,
+    pub source: Source,
 }
 
 impl ShowFile {
@@ -86,14 +84,12 @@ impl ShowFile {
         if let (Some(name), Some(season), Some(episode)) = (name.clone(), season, episode) {
             let resources_path = generate_resources_path(&name, season, episode);
             utils::generate_resources(&resources_path)?;
-            let metadata = get_metadata(&path)?;
+            let source = Source::new(path, resources_path)?;
             let show_file = Self {
-                title: name.replace('-', " ").trim().into(),
+                local_title: name,
                 episode,
                 season,
-                video_path: path,
-                resources_path,
-                metadata,
+                source,
             };
             Ok(show_file)
         } else {
@@ -106,9 +102,6 @@ impl ShowFile {
         }
     }
 
-    pub async fn get_metadata(&self) -> Result<FFprobeOutput, anyhow::Error> {
-        get_metadata(&self.video_path)
-    }
 }
 
 fn generate_resources_path(title: &str, season: u8, episode: u8) -> PathBuf {

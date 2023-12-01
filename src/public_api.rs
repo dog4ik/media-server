@@ -4,12 +4,13 @@ use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
-use axum_extra::TypedHeader;
 use axum_extra::headers::Range;
+use axum_extra::TypedHeader;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
-use crate::process_file::{AudioCodec, VideoCodec};
+use crate::db::DbVariant;
+use crate::process_file::{AudioCodec, Resolution, VideoCodec};
 use crate::{app_state::AppState, db::Db};
 
 fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
@@ -109,6 +110,8 @@ pub struct DetailedVideo {
     pub duration: std::time::Duration,
     pub video_codec: Option<VideoCodec>,
     pub audio_codec: Option<AudioCodec>,
+    pub resolution: Option<Resolution>,
+    pub variants: Vec<DbVariant>,
     pub scan_date: String,
 }
 
@@ -302,12 +305,11 @@ pub async fn get_episodes(
     .fetch_all(&db.pool)
     .await
     .map_err(sqlx_err_wrap)?;
-
     let library = library.lock().await;
     let episodes: Vec<DetailedEpisode> = db_episodes
         .into_iter()
         .filter_map(|db_episode| {
-            if let Some(file) = library.find(&PathBuf::from(db_episode.path)) {
+            if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
                 let previews_amount = file.previews_count();
                 Some(DetailedEpisode {
                     duration: db_episode.duration,
@@ -359,7 +361,7 @@ pub async fn get_season_episodes_by_id(
     let episodes: Vec<DetailedEpisode> = episodes
         .into_iter()
         .filter_map(|db_episode| {
-            if let Some(file) = library.find(&PathBuf::from(db_episode.path)) {
+            if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
                 let previews_amount = file.previews_count();
                 Some(DetailedEpisode {
                     duration: db_episode.duration,
@@ -412,7 +414,7 @@ pub async fn get_episode(
     .map_err(sqlx_err_wrap)?;
 
     let library = library.lock().await;
-    if let Some(file) = library.find(&PathBuf::from(db_episode.path.clone())) {
+    if let Some(file) = library.find_source(&PathBuf::from(db_episode.path.clone())) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
             duration: db_episode.duration,
@@ -458,7 +460,7 @@ pub async fn get_episode_by_id(
     .map_err(sqlx_err_wrap)?;
 
     let library = library.lock().await;
-    if let Some(file) = library.find(&PathBuf::from(db_episode.path)) {
+    if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
             duration: db_episode.duration,
@@ -493,18 +495,30 @@ pub async fn get_video_by_id(
     .fetch_one(&db.pool)
     .await
     .map_err(sqlx_err_wrap)?;
+
+    let variants = sqlx::query_as!(
+        DbVariant,
+        "SELECT * FROM variants WHERE video_id = ?",
+        query.id
+    )
+    .fetch_all(&db.pool)
+    .await
+    .map_err(sqlx_err_wrap)?;
+
     let library = library.lock().await;
     let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
-    let metadata = file.metadata();
+    let source = file.source();
     let date = db_video.scan_date.unwrap();
     let detailed_episode = DetailedVideo {
         path: file.source_path().to_path_buf(),
         hash: db_video.hash,
         local_title: file.title(),
-        size: file.get_file_size(),
-        duration: file.get_duration(),
-        audio_codec: metadata.default_audio().map(|v| v.codec()),
-        video_codec: metadata.default_video().map(|v| v.codec()),
+        size: source.origin.file_size(),
+        duration: source.duration(),
+        audio_codec: source.origin.default_audio().map(|v| v.codec()),
+        video_codec: source.origin.default_video().map(|v| v.codec()),
+        resolution: source.origin.resolution().map(|v| v),
+        variants,
         scan_date: date.to_string(),
     };
     Ok(Json(detailed_episode))
