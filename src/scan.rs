@@ -260,7 +260,7 @@ impl Library {
                 .movies
                 .iter()
                 .find(|f| f.source_path() == path.as_ref())
-                .map(|x| &x.source)
+                .map(|x| &x.source);
         }
         show
     }
@@ -404,8 +404,7 @@ fn extract_summary(file: &impl LibraryItem) -> Summary {
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     path.as_ref()
         .extension()
-        .map(|ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()))
-        .unwrap_or(false)
+        .map_or(false, |ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()))
 }
 
 pub fn read_library_items<T: LibraryItem>(folder: &PathBuf) -> Result<Vec<T>, anyhow::Error> {

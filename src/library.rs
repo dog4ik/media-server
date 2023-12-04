@@ -44,14 +44,14 @@ pub enum MediaType {
 }
 
 impl MediaFolders {
-    pub fn get_all_folders(&self) -> Vec<&PathBuf> {
+    pub fn all(&self) -> Vec<&PathBuf> {
         let mut out = Vec::with_capacity(self.shows.len() + self.movies.len());
         out.extend(self.shows.iter());
         out.extend(self.movies.iter());
         out
     }
 
-    pub fn get_folder_type(&self, path: &PathBuf) -> Option<MediaType> {
+    pub fn folder_type(&self, path: &PathBuf) -> Option<MediaType> {
         for show_dir in &self.shows {
             if path.starts_with(show_dir) {
                 return Some(MediaType::Show);

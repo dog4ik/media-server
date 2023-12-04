@@ -90,9 +90,9 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
 pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> JoinHandle<()> {
     let metadata_provider = crate::tmdb_api::TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
     tokio::spawn(async move {
-        let (_watcher, mut rx) = watch_changes(folders.get_all_folders()).unwrap();
+        let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
         while let Some(event) = rx.recv().await {
-            if let Some(media_type) = folders.get_folder_type(&event.path) {
+            if let Some(media_type) = folders.folder_type(&event.path) {
                 println!("change event path: {:?}", &event.path);
                 match event.event_type {
                     EventType::Create => {

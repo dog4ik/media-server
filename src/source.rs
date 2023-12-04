@@ -118,11 +118,15 @@ impl Source {
     }
 
     /// Run ffmpeg command. Returns handle to process
-    pub fn run_command(&self, args: Vec<String>) -> Child {
+    pub fn run_command<I, S>(&self, args: I) -> Child
+    where
+        I: IntoIterator<Item = S> + Copy,
+        S: AsRef<std::ffi::OsStr>,
+    {
         Command::new("ffmpeg")
             .kill_on_drop(true)
             .args(["-progress", "pipe:1", "-nostats"])
-            .args(args.clone())
+            .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .spawn()
@@ -142,7 +146,7 @@ impl Source {
                 std::path::MAIN_SEPARATOR
             ),
         ];
-        let child = self.run_command(args);
+        let child = self.run_command(&args);
         FFmpegJob::new(child, self.origin.duration(), self.source_path().into())
     }
 
@@ -164,7 +168,7 @@ impl Source {
             "-y".into(),
         ];
 
-        let child = self.run_command(args);
+        let child = self.run_command(&args);
         FFmpegJob::new(child, self.origin.duration(), self.source_path().into())
     }
 
@@ -199,7 +203,7 @@ impl Source {
         args.push("-c:s".into());
         args.push("copy".into());
         args.push(format!("{}", self.source_path().to_str().unwrap()));
-        let child = self.run_command(args);
+        let child = self.run_command(&args);
         let job = FFmpegJob::new(child, self.origin.duration(), self.source_path().into());
         return Ok(job);
     }
