@@ -86,8 +86,8 @@ async fn main() {
         panic!("one or more library paths does not exists");
     }
 
-    let shows = read_library_items(&shows_dir).unwrap();
-    let movies = read_library_items(&movies_dir).unwrap();
+    let shows = explore_folder(&shows_dir).await.unwrap();
+    let movies = explore_folder(&movies_dir).await.unwrap();
 
     let media_folders = MediaFolders {
         shows: vec![shows_dir],

@@ -292,29 +292,21 @@ impl Library {
         return result;
     }
 
-    pub fn full_refresh(&mut self) {
-        let shows = self
-            .media_folders
-            .shows
-            .iter()
-            .fold(Vec::new(), |mut acc, show_path| {
-                read_library_items(&show_path)
-                    .into_iter()
-                    .for_each(|mut files| acc.append(&mut files));
-                return acc;
-            });
+    pub async fn full_refresh(&mut self) {
+        let mut shows = Vec::new();
+        for folder in &self.media_folders.shows {
+            if let Ok(items) = explore_folder(folder).await {
+                shows.extend(items);
+            }
+        }
         self.shows = shows;
 
-        let movies = self
-            .media_folders
-            .movies
-            .iter()
-            .fold(Vec::new(), |mut acc, movie_path| {
-                read_library_items(&movie_path)
-                    .into_iter()
-                    .for_each(|mut files| acc.append(&mut files));
-                return acc;
-            });
+        let mut movies = Vec::new();
+        for folder in &self.media_folders.movies {
+            if let Ok(items) = explore_folder(folder).await {
+                movies.extend(items);
+            }
+        }
         self.movies = movies;
     }
 
@@ -330,7 +322,7 @@ impl Library {
         )
         .fetch_all(&db.pool)
         .await?;
-        self.full_refresh();
+        self.full_refresh().await;
         let local_episodes = &self.shows;
         let mut common_paths: HashSet<&str> = HashSet::new();
 
@@ -407,12 +399,28 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
         .map_or(false, |ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()))
 }
 
-pub fn read_library_items<T: LibraryItem>(folder: &PathBuf) -> Result<Vec<T>, anyhow::Error> {
-    let files = utils::walk_recursive(folder, Some(is_format_supported))?;
-    Ok(files
-        .into_iter()
-        .filter_map(|f| T::from_path(f).ok())
-        .collect())
+#[tracing::instrument(level = "trace", name = "explore library folder")]
+pub async fn explore_folder<T: LibraryItem + Send + 'static>(
+    folder: &PathBuf,
+) -> Result<Vec<T>, anyhow::Error> {
+    let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
+    let mut handles = Vec::new();
+
+    for path in paths {
+        handles.push(tokio::spawn(async move { T::from_path(path) }));
+    }
+
+    let mut result = Vec::new();
+
+    for handle in handles {
+        if let Ok(item) = handle.await {
+            let _ = item.map(|x| result.push(x));
+        } else {
+            tracing::error!("One of the metadata collectors paniced");
+        }
+    }
+
+    return Ok(result);
 }
 
 pub async fn transcode(files: &Vec<Source>) {
