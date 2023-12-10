@@ -147,8 +147,20 @@ async fn main() {
         .route("/api/get_episode_by_id", get(public_api::get_episode_by_id))
         .route("/api/get_video_by_id", get(public_api::get_video_by_id))
         .route(
-            "/admin/refresh_show_metadata",
-            post(admin_api::refresh_show_metadata),
+            "/admin/alter_show_metadata",
+            post(admin_api::alter_show_metadata),
+        )
+        .route(
+            "/admin/alter_season_metadata",
+            post(admin_api::alter_season_metadata),
+        )
+        .route(
+            "/admin/alter_episode_metadata",
+            post(admin_api::alter_episode_metadata),
+        )
+        .route(
+            "/admin/alter_movie_metadata",
+            post(admin_api::alter_movie_metadata),
         )
         .route("/admin/latest_log", get(admin_api::latest_log))
         .route("/admin/progress", get(admin_api::progress))

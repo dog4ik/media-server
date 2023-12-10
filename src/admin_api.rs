@@ -121,10 +121,10 @@ impl Display for Provider {
     }
 }
 
-fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
+fn sqlx_err_wrap(err: sqlx::Error) -> AppError {
     match err {
-        sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
+        sqlx::Error::RowNotFound => AppError::not_found("row not found"),
+        _ => AppError::internal_error("unknown database error"),
     }
 }
 
@@ -136,33 +136,74 @@ pub async fn remove_video(
     state.remove_video(id).await
 }
 
-pub async fn refresh_show_metadata(
+pub async fn alter_show_metadata(
     State(db): State<Db>,
-    Json(payload): Json<RefreshShowMetadataPayload>,
-) -> Result<String, StatusCode> {
-    let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
-
-    let metadata_provider = payload.metadata_provider.unwrap_or_default();
-    let metadata_provider_name = metadata_provider.to_string();
-    let show = sqlx::query!(
-        "SELECT * FROM shows WHERE id = ? AND metadata_provider = ?",
-        payload.show_id,
-        metadata_provider_name
+    json: JsonExtractor,
+) -> Result<(), AppError> {
+    let show_id = json.i64("id")?;
+    let title = json.str("title")?;
+    let plot = json.str("plot")?;
+    sqlx::query!(
+        "UPDATE shows SET title = ?, plot = ? WHERE id = ?;",
+        title,
+        plot,
+        show_id
     )
-    .fetch_one(&db.pool)
+    .execute(&db.pool)
     .await
     .map_err(sqlx_err_wrap)?;
+    Ok(())
+}
 
-    match metadata_provider {
-        Provider::Tmdb => {
-            let metadata = tmdb_api.show(&show.title).await.unwrap();
-            db.update_show_metadata(show.id, metadata)
-                .await
-                .map_err(sqlx_err_wrap)?;
-        }
-    };
+pub async fn alter_season_metadata(
+    State(db): State<Db>,
+    json: JsonExtractor,
+) -> Result<(), AppError> {
+    let show_id = json.i64("id")?;
+    let plot = json.str("plot")?;
+    sqlx::query!("UPDATE seasons SET plot = ? WHERE id = ?;", plot, show_id)
+        .execute(&db.pool)
+        .await
+        .map_err(sqlx_err_wrap)?;
+    Ok(())
+}
 
-    Ok("Done".into())
+pub async fn alter_episode_metadata(
+    State(db): State<Db>,
+    json: JsonExtractor,
+) -> Result<(), AppError> {
+    let show_id = json.i64("id")?;
+    let title = json.str("title")?;
+    let plot = json.str("plot")?;
+    sqlx::query!(
+        "UPDATE episodes SET title = ?, plot = ? WHERE id = ?;",
+        title,
+        plot,
+        show_id
+    )
+    .execute(&db.pool)
+    .await
+    .map_err(sqlx_err_wrap)?;
+    Ok(())
+}
+
+pub async fn alter_movie_metadata(
+    State(db): State<Db>,
+    json: JsonExtractor,
+) -> Result<(), AppError> {
+    let movie_id = json.i64("id")?;
+    let title = json.str("title")?;
+    let plot = json.str("plot")?;
+    sqlx::query!(
+        "UPDATE movies SET title = ?, plot = ? WHERE id = ?;",
+        title,
+        plot,
+        movie_id
+    )
+    .execute(&db.pool)
+    .await
+    .map_err(sqlx_err_wrap)?;
+    Ok(())
 }
 
 pub async fn trascode_video(
