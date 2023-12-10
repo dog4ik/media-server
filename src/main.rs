@@ -14,7 +14,7 @@ use media_server::library::{LibraryFile, LibraryFileExtractor, MediaFolders, Pre
 use media_server::movie_file::movie_path_middleware;
 use media_server::progress::TaskResource;
 use media_server::public_api;
-use media_server::scan::{read_library_items, Library, Summary};
+use media_server::scan::{explore_folder, Library, Summary};
 use media_server::serve_content::ServeContent;
 use media_server::show_file::show_path_middleware;
 use media_server::tracing::{init_tracer, LogChannel};
@@ -167,8 +167,8 @@ async fn main() {
         .route("/admin/get_tasks", get(admin_api::get_tasks))
         .route("/admin/mock_progress", post(admin_api::mock_progress))
         .route("/admin/cancel_task", post(admin_api::cancel_task))
-        .route("/admin/scan", get(admin_api::reconciliate_lib))
-        .route("/admin/clear_db", get(admin_api::clear_db))
+        .route("/admin/scan", post(admin_api::reconciliate_lib))
+        .route("/admin/clear_db", delete(admin_api::clear_db))
         .route("/admin/remove_video", delete(admin_api::remove_video))
         .layer(cors)
         .with_state(app_state);

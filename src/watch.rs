@@ -46,7 +46,7 @@ fn watch_changes(
     let (tx, rx) = mpsc::channel(100);
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
         if let Ok(event) = res {
-            println!("event detected {:?}", event);
+            tracing::debug!("event detected {:?}", event);
             let event_type = match event.kind {
                 EventKind::Create(_) => EventType::Create,
                 EventKind::Modify(kind) if kind == ModifyKind::Name(RenameMode::To) => {
@@ -93,7 +93,6 @@ pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> Join
         let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
         while let Some(event) = rx.recv().await {
             if let Some(media_type) = folders.folder_type(&event.path) {
-                println!("change event path: {:?}", &event.path);
                 match event.event_type {
                     EventType::Create => {
                         let _ = match media_type {

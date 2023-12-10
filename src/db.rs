@@ -368,7 +368,7 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
         .fetch_one(&self.pool)
         .await?
         .count;
-        println!("remove episode siblings count: {}", siblings_count);
+        tracing::debug!("Removed episode siblings count: {}", siblings_count);
         if siblings_count == 0 {
             self.remove_season(season_id).await?;
         }

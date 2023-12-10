@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::Serialize;
 use tokio::sync::Semaphore;
 
+use crate::app_state::AppError;
 use crate::db::Db;
 use crate::library::Chapter;
 use crate::library::LibraryFile;
@@ -18,7 +19,6 @@ use crate::library::MediaFolders;
 use crate::metadata_provider::MovieMetadataProvider;
 use crate::metadata_provider::ShowMetadataProvider;
 use crate::movie_file::MovieFile;
-use crate::process_file::AudioCodec;
 use crate::process_file::VideoCodec;
 use crate::show_file::ShowFile;
 use crate::source::Source;
@@ -476,17 +476,11 @@ pub async fn transcode(files: &Vec<Source>) {
                 }
             }
             if should_transcode_video || transcode_audio_track.is_some() {
-                let video_codec = match should_transcode_video {
+                let _video_codec = match should_transcode_video {
                     true => Some(VideoCodec::H264),
                     false => None,
                 };
-                let mut process = file
-                    .transcode_video(
-                        video_codec,
-                        transcode_audio_track.map(|t| (t as usize, AudioCodec::AAC)),
-                    )
-                    .unwrap();
-                process.wait().await.unwrap();
+                // transcode here
             }
             drop(permit);
         });

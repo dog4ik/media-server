@@ -30,18 +30,10 @@ use crate::{
     app_state::AppState,
     db::Db,
     progress::{ProgressChannel, ProgressChunk},
-    tmdb_api::TmdbApi,
 };
 
-pub async fn reconciliate_lib(State(app_state): State<AppState>) -> String {
-    let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").expect("tmdb token to be in env"));
-    let mut library = app_state.library.lock().await;
-
-    library
-        .reconciliate_library(&app_state.db, tmdb_api)
-        .await
-        .unwrap();
-    "Done".into()
+pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
+    app_state.reconciliate_library().await
 }
 
 pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, StatusCode> {
@@ -128,7 +120,6 @@ fn sqlx_err_wrap(err: sqlx::Error) -> AppError {
     }
 }
 
-#[axum::debug_handler]
 pub async fn remove_video(
     State(state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,
@@ -218,11 +209,10 @@ pub async fn trascode_video(
 pub async fn generate_previews(
     State(app_state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,
-) -> Result<(), StatusCode> {
+) {
     tokio::spawn(async move {
         app_state.generate_previews(id).await.unwrap();
     });
-    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
