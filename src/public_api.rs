@@ -226,11 +226,12 @@ pub async fn get_seasons(
 ) -> Result<Json<Vec<DetailedSeason>>, StatusCode> {
     let seasons = sqlx::query_as!(
         DetailedSeason,
-        r#"SELECT seasons.id as "id!", seasons.release_date as "release_date!", 
-        seasons.poster, seasons.blur_data, seasons.number as "number!", seasons.show_id as "show_id!",
-        seasons.rating as "rating!", seasons.plot as "plot!", COUNT(episodes.id) AS episodes_count FROM shows
-        JOIN seasons ON seasons.show_id = shows.id JOIN episodes ON seasons.id = episodes.season_id
-        WHERE shows.id = ? ORDER BY seasons.number ASC;"#,
+        r#"SELECT id as "id!", release_date as "release_date!", 
+        poster, blur_data, number as "number!", show_id as "show_id!",
+        rating as "rating!", plot as "plot!",
+        (SELECT COUNT(*) as episodes_count FROM episodes WHERE episodes.season_id = seasons.id) as "episodes_count!: i64"
+        FROM seasons
+        WHERE show_id = ? ORDER BY number ASC;"#,
         query.id
     )
     .fetch_all(&db.pool)
