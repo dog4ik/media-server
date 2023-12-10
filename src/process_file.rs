@@ -598,7 +598,7 @@ async fn cancel_transcode() {
     use tokio::sync::oneshot;
     use tokio::time;
 
-    let testing_resource = TestResource::new();
+    let testing_resource = TestResource::new(true);
     let subject = testing_resource.test_show.clone();
     let task_resource = TaskResource::new();
     let size_before = fs::metadata(&subject.source.origin.path)

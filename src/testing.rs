@@ -9,10 +9,11 @@ pub struct TestResource {
     pub temp_dir: PathBuf,
     pub test_show: ShowFile,
     pub test_movie: MovieFile,
+    clean_on_drop: bool,
 }
 
 impl TestResource {
-    pub fn new() -> Self {
+    pub fn new(clean_on_drop: bool) -> Self {
         let test_folder: PathBuf = "/home/dog4ik/personal/rust-media-server/test-dir".into();
         let temp_dir = generate_temp_dir_path();
         fs::create_dir_all(&temp_dir).unwrap();
@@ -21,7 +22,6 @@ impl TestResource {
         let show_video_path = temp_dir.join("Episode.S01E01.mkv");
 
         let resource_path = temp_dir.join("resources");
-
 
         let show_resource_path = resource_path.join("episode").join("1").join("1");
         let movie_resource_path = resource_path.join("movie");
@@ -44,6 +44,7 @@ impl TestResource {
 
         Self {
             temp_dir,
+            clean_on_drop,
             test_show: show_file,
             test_movie: movie_file,
         }
@@ -84,6 +85,8 @@ fn deep_copy_folder(from_path: impl AsRef<Path>, to_path: impl AsRef<Path>) {
 
 impl Drop for TestResource {
     fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.temp_dir);
+        if self.clean_on_drop {
+            let _ = fs::remove_dir_all(&self.temp_dir);
+        }
     }
 }
