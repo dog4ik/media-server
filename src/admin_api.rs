@@ -54,6 +54,39 @@ pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, Statu
     Ok("done".into())
 }
 
+pub struct JsonExtractor(pub serde_json::Map<String, serde_json::Value>);
+
+impl JsonExtractor {
+    fn get_value(&self, key: &str) -> Result<&serde_json::Value, AppError> {
+        self.0
+            .get(key)
+            .ok_or(AppError::bad_request(format!("key {} not found", key)))
+    }
+
+    pub fn i64(&self, key: &str) -> Result<i64, AppError> {
+        self.get_value(key)?
+            .as_i64()
+            .ok_or(AppError::bad_request("cant parse number"))
+    }
+
+    pub fn str(&self, key: &str) -> Result<&str, AppError> {
+        self.get_value(key)?
+            .as_str()
+            .ok_or(AppError::bad_request("cant parse string"))
+    }
+}
+
+#[axum::async_trait]
+impl<S: Send + Sync> FromRequest<S> for JsonExtractor {
+    type Rejection = JsonRejection;
+
+    async fn from_request(req: Request<Body>, state: &S) -> Result<Self, Self::Rejection> {
+        let Json(json): axum::Json<serde_json::Map<String, serde_json::Value>> =
+            Json::from_request(req, state).await?;
+        Ok(JsonExtractor(json))
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RefreshShowMetadataPayload {
     pub metadata_provider: Option<Provider>,
