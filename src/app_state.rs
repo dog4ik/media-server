@@ -7,7 +7,7 @@ use tokio::{fs, sync::Mutex};
 use crate::{
     db::{Db, DbSubtitles},
     metadata_provider::{MovieMetadataProvider, ShowMetadataProvider},
-    process_file::{AudioCodec, VideoCodec},
+    process_file::TranscodePayload,
     progress::{TaskError, TaskKind, TaskResource},
     scan::{handle_movie, handle_show, Library},
     utils,
@@ -206,8 +206,7 @@ impl AppState {
     pub async fn transcode_video(
         &self,
         video_id: i64,
-        video_codec: Option<VideoCodec>,
-        audio_codec: Option<AudioCodec>,
+        payload: TranscodePayload,
     ) -> Result<(), AppError> {
         let path: PathBuf = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
             .fetch_one(&self.db.pool)
@@ -220,15 +219,7 @@ impl AppState {
             .find_source(&path)
             .ok_or(anyhow!("path not found in library"))?;
 
-        let audio_stream = source
-            .origin
-            .default_audio()
-            .ok_or(anyhow!("video does not contain audio stream"))?;
-
-        let job = source.transcode_video(
-            video_codec,
-            audio_codec.map(|c| (audio_stream.index as usize, c)),
-        )?;
+        let job = source.transcode_video(payload)?;
 
         let run_result = self.tasks.run_ffmpeg_task(job, TaskKind::Transcode).await;
 

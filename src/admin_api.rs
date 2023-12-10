@@ -23,8 +23,7 @@ use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::app_state::AppError;
-use crate::metadata_provider::ShowMetadataProvider;
-use crate::process_file::{AudioCodec, VideoCodec};
+use crate::process_file::TranscodePayload;
 use crate::progress::{TaskKind, TaskResource};
 use crate::public_api::{IdQuery, StringIdQuery};
 use crate::{
@@ -77,9 +76,7 @@ pub enum Provider {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct TranscodeFilePayload {
-    pub video_codec: Option<VideoCodec>,
-    pub audio_codec: Option<AudioCodec>,
-    pub audio_track: Option<usize>,
+    pub payload: TranscodePayload,
     pub video_id: i64,
 }
 
@@ -137,16 +134,11 @@ pub async fn refresh_show_metadata(
 
 pub async fn trascode_video(
     State(app_state): State<AppState>,
-    Json(payload): Json<TranscodeFilePayload>,
-) -> Result<(), StatusCode> {
+    Json(body): Json<TranscodeFilePayload>,
+) {
     tokio::spawn(async move {
-        app_state
-            .transcode_video(payload.video_id, payload.video_codec, payload.audio_codec)
-            .await
-            .unwrap();
+        let _ = app_state.transcode_video(body.video_id, body.payload).await;
     });
-
-    Ok(())
 }
 
 pub async fn generate_previews(

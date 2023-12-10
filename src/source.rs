@@ -12,8 +12,8 @@ use crate::{
     db::{DbVariant, DbVideo},
     library::Chapter,
     process_file::{
-        get_metadata, AudioCodec, FFmpegJob, FFprobeAudioStream, FFprobeOutput,
-        FFprobeSubtitleStream, FFprobeVideoStream, Resolution, VideoCodec,
+        get_metadata, FFmpegJob, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream,
+        FFprobeVideoStream, Resolution, TranscodePayload,
     },
     utils,
 };
@@ -173,21 +173,18 @@ impl Source {
     }
 
     /// Transcode file
-    pub fn transcode_video(
-        &self,
-        video: Option<VideoCodec>,
-        audio: Option<(usize, AudioCodec)>,
-    ) -> Result<FFmpegJob, anyhow::Error> {
+    pub fn transcode_video(&self, payload: TranscodePayload) -> Result<FFmpegJob, anyhow::Error> {
         let buffer_path = format!("{}buffer", self.source_path().to_str().unwrap(),);
         std::fs::rename(&self.source_path(), &buffer_path)?;
+        // NOTE: ffmpeg copies only one stream of each type by default.
+        // using -map will solve this issue but do we really need all streams on variants???
         let mut args = Vec::new();
         args.push("-i".into());
         args.push(buffer_path);
-        args.push("-map".into());
-        args.push("0:v:0".into());
-        if let Some((audio_track, audio_codec)) = audio {
-            args.push("-map".into());
-            args.push(format!("0:{}", audio_track));
+        if let Some(audio_codec) = payload.audio_codec {
+            // this map disables everything but this audio track
+            // args.push("-map".into());
+            // args.push(format!("0:{}", audio_track));
             args.push("-c:a".into());
             args.push(audio_codec.to_string());
         } else {
@@ -195,10 +192,14 @@ impl Source {
             args.push("copy".into());
         }
         args.push("-c:v".into());
-        if let Some(video_codec) = video {
+        if let Some(video_codec) = payload.video_codec {
             args.push(video_codec.to_string());
         } else {
             args.push("copy".into());
+        }
+        if let Some(resolution) = payload.resolution {
+            args.push("-s".into());
+            args.push(resolution.to_string());
         }
         args.push("-c:s".into());
         args.push("copy".into());

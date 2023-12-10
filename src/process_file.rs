@@ -257,6 +257,63 @@ impl FFprobeStream {
     }
 }
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct TranscodePayload {
+    pub audio_codec: Option<AudioCodec>,
+    pub audio_track: Option<usize>,
+    pub video_codec: Option<VideoCodec>,
+    pub resolution: Option<Resolution>,
+}
+
+impl TranscodePayload {
+    pub fn builder() -> TranscodePayloadBuilder {
+        TranscodePayloadBuilder::default()
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct TranscodePayloadBuilder {
+    audio_codec: Option<AudioCodec>,
+    audio_track: Option<usize>,
+    video_codec: Option<VideoCodec>,
+    resolution: Option<Resolution>,
+}
+
+impl TranscodePayloadBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn build(self) -> TranscodePayload {
+        TranscodePayload {
+            audio_codec: self.audio_codec,
+            audio_track: self.audio_track,
+            video_codec: self.video_codec,
+            resolution: self.resolution,
+        }
+    }
+
+    pub fn video_codec(mut self, codec: VideoCodec) -> Self {
+        self.video_codec = Some(codec);
+        self
+    }
+
+    pub fn audio_codec(mut self, codec: AudioCodec) -> Self {
+        self.audio_codec = Some(codec);
+        self
+    }
+
+    pub fn audio_track(mut self, track: usize) -> Self {
+        self.audio_track = Some(track);
+        self
+    }
+
+    pub fn resolution(mut self, resolution: Resolution) -> Self {
+        self.resolution = Some(resolution);
+        self
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "lowercase", untagged)]
 pub enum AudioCodec {
@@ -337,7 +394,7 @@ impl FromStr for VideoCodec {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Deserialize)]
 pub struct Resolution(pub (usize, usize));
 
 impl Serialize for Resolution {
@@ -554,10 +611,10 @@ async fn cancel_transcode() {
         .add_new_task(video_path.to_path_buf(), TaskKind::Transcode, Some(tx))
         .await
         .unwrap();
-    let mut process = subject
-        .source
-        .transcode_video(Some(VideoCodec::H264), None)
-        .unwrap();
+    let payload = TranscodePayloadBuilder::new()
+        .video_codec(VideoCodec::Hevc)
+        .build();
+    let mut process = subject.source.transcode_video(payload).unwrap();
     {
         let task_resource = task_resource.clone();
         let task_id = task_id.clone();
@@ -581,4 +638,27 @@ async fn cancel_transcode() {
     let is_cleaned = !fs::try_exists(original_buffer).await.unwrap_or(false);
     assert_eq!(size_before, size_after);
     assert!(is_cleaned);
+}
+
+#[tokio::test]
+async fn transcode_video() {
+    use crate::library::LibraryItem;
+    use crate::process_file::{AudioCodec, Resolution, VideoCodec};
+    use crate::testing::TestResource;
+
+    let testing_resource = TestResource::new(false);
+    let subject = testing_resource.test_show.clone();
+    let source = subject.source();
+    let default_audio_idx = source.origin.default_audio().unwrap().index as usize;
+    let desired_video_codec = VideoCodec::Hevc;
+    let desired_audio_codec = AudioCodec::AAC;
+    let desired_resoultion = Resolution((80, 60));
+    let payload = TranscodePayloadBuilder::new()
+        .video_codec(desired_video_codec)
+        .audio_codec(desired_audio_codec)
+        .resolution(desired_resoultion)
+        .audio_track(default_audio_idx)
+        .build();
+    let mut job = source.transcode_video(payload).unwrap();
+    job.wait().await.unwrap();
 }
