@@ -47,19 +47,26 @@ impl ShowFile {
     pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
         let file_name = path
             .file_name()
-            .ok_or(anyhow!("failed to get filename"))?
-            .to_str()
-            .ok_or(anyhow!("failed to convert filename"))?;
-        let is_spaced = file_name.contains(' ');
-        let tokens = match is_spaced {
-            true => file_name.split(' '),
-            false => file_name.split('.'),
-        };
+            .and_then(|n| n.to_os_string().into_string().ok())
+            .ok_or(anyhow!("Failed to get file name:{}", path.display()))?;
+        let tokens = utils::tokenize_filename(file_name);
         let mut name: Option<String> = None;
         let mut season: Option<u8> = None;
         let mut episode: Option<u8> = None;
-        for token in tokens.map(|x| x.to_string().to_lowercase()) {
+
+        for token in tokens {
             let chars: Vec<char> = token.chars().into_iter().collect();
+            let is_year = token.len() == 6
+                && chars[0] == '('
+                && chars[1].is_ascii_digit()
+                && chars[2].is_ascii_digit()
+                && chars[3].is_ascii_digit()
+                && chars[4].is_ascii_digit()
+                && chars[5] == ')';
+            if is_year && season.is_none() && episode.is_none() {
+                continue;
+            }
+
             if token.len() == 6
                 && chars[0] == 's'
                 && chars[1].is_ascii_digit()
@@ -101,7 +108,6 @@ impl ShowFile {
             ));
         }
     }
-
 }
 
 fn generate_resources_path(title: &str, season: u8, episode: u8) -> PathBuf {

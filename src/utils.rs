@@ -68,3 +68,14 @@ pub fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Er
     fs::create_dir_all(resources_path.join("variants"))?;
     Ok(())
 }
+
+pub fn tokenize_filename(file_name: String) -> Vec<String> {
+    let is_spaced = file_name.contains(' ');
+    match is_spaced {
+        true => file_name.split(' '),
+        false => file_name.split('.'),
+    }
+    .map(|e| e.trim().to_lowercase())
+    .filter(|t| t != "-")
+    .collect()
+}
