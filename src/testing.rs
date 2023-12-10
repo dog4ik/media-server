@@ -3,7 +3,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{movie_file::MovieFile, show_file::ShowFile, source::Source, utils};
+use crate::{library::{show::ShowFile, movie::MovieFile, Source}, utils};
+
 
 pub struct TestResource {
     pub temp_dir: PathBuf,

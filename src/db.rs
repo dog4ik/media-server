@@ -3,7 +3,8 @@ use std::path::PathBuf;
 use serde::Serialize;
 use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
 
-use crate::metadata_provider::{EpisodeMetadata, SeasonMetadata, ShowMetadata};
+use crate::metadata::{ShowMetadata, SeasonMetadata, EpisodeMetadata};
+
 
 #[derive(Debug, Clone)]
 pub struct Db {

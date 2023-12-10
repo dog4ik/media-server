@@ -1,14 +1,15 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT_ENCODING},
-    Client, Method, Request, Response, Url,
+    Client, Method, Request, Url,
 };
-use serde::{de::DeserializeOwned, Deserialize};
-use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
+use serde::Deserialize;
+use tokio::sync::Mutex;
 
-use crate::metadata_provider::{
-    EpisodeMetadata, MetadataImage, MovieMetadata, SeasonMetadata, ShowMetadata,
+use super::{
+    EpisodeMetadata, LimitedRequestClient, MetadataImage, MovieMetadata, MovieMetadataProvider,
+    SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
 
 #[derive(Debug)]
@@ -65,110 +66,6 @@ impl Into<MetadataImage> for TmdbImage {
     fn into(self) -> MetadataImage {
         MetadataImage::new(self.url)
     }
-}
-#[derive(Debug, Clone)]
-pub struct LimitedRequestClient {
-    request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>,
-}
-
-impl LimitedRequestClient {
-    pub fn new(client: Client, limit_number: usize, limit_duration: Duration) -> Self {
-        let (tx, mut rx) =
-            mpsc::channel::<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>(100);
-        tokio::spawn(async move {
-            let semaphore = Arc::new(Semaphore::new(limit_number));
-            while let Some((req, resp_tx)) = rx.recv().await {
-                let semaphore = semaphore.clone();
-                let client = client.clone();
-                tokio::spawn(async move {
-                    let permit = semaphore.acquire().await.unwrap();
-                    let response = client.execute(req).await;
-
-                    if let Err(_) = resp_tx.send(response) {
-                        tracing::error!("Failed to send response: channel closed")
-                    }
-                    tokio::time::sleep(limit_duration).await;
-                    drop(permit);
-                });
-            }
-        });
-        Self { request_tx: tx }
-    }
-
-    pub async fn request<T>(&self, req: Request) -> anyhow::Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
-        self.request_tx.clone().send((req, tx)).await?;
-        let response = rx
-            .await
-            .map_err(|_| anyhow::anyhow!("failed to receive response: channel closed"))?
-            .map_err(|e| anyhow::anyhow!("Request failed: {}", e))?;
-        Ok(response.json().await?)
-    }
-}
-
-#[tokio::test]
-async fn rate_limit() {
-    use axum::routing::post;
-    use axum::{Json, Router};
-    use serde::Serialize;
-    use tokio::task::JoinSet;
-
-    #[derive(Clone, Serialize, Deserialize)]
-    struct Count {
-        value: usize,
-    }
-
-    impl Count {
-        pub fn new(count: usize) -> Self {
-            Self { value: count }
-        }
-    }
-
-    async fn echo(count: Json<Count>) -> Json<Count> {
-        use rand::Rng;
-        let num = rand::thread_rng().gen_range(0..1000);
-        tokio::time::sleep(Duration::from_millis(num)).await;
-        count
-    }
-
-    let server_handle = tokio::spawn(async move {
-        let app = Router::new().route("/", post(echo));
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:32402")
-            .await
-            .unwrap();
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    let reqwest = Client::new();
-    let client = LimitedRequestClient::new(reqwest.clone(), 50, Duration::from_secs(1));
-    let mut handles = JoinSet::new();
-    let amount = 125;
-    for i in 0..amount {
-        let client = client.clone();
-        let count = Count::new(i);
-        let req = reqwest
-            .post("http://127.0.0.1:32402/")
-            .json(&count)
-            .build()
-            .unwrap();
-        handles.spawn(async move {
-            let count: Count = client.request(req).await.unwrap();
-            dbg!(i);
-            assert_eq!(i, count.value);
-            return count;
-        });
-    }
-    let mut sum = Vec::new();
-    while let Some(Ok(res)) = handles.join_next().await {
-        sum.push(res.value);
-    }
-    server_handle.abort();
-    let expected: Vec<usize> = (0..amount).collect();
-    assert_eq!(sum.len(), expected.len())
 }
 
 impl TmdbApi {
@@ -369,6 +266,59 @@ impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
             poster: poster.into(),
             rating: self.vote_average,
         }
+    }
+}
+
+impl MovieMetadataProvider for TmdbApi {
+    async fn movie(&self, movie_title: &str) -> Result<MovieMetadata, anyhow::Error> {
+        let movies = self.search_movie(movie_title).await?;
+        movies
+            .results
+            .into_iter()
+            .next()
+            .ok_or(anyhow::anyhow!("results are empty"))
+            .map(|s| s.into())
+    }
+
+    fn provider_identifier(&self) -> &'static str {
+        "tmdb"
+    }
+}
+
+impl ShowMetadataProvider for TmdbApi {
+    async fn show(&self, show_title: &str) -> Result<ShowMetadata, anyhow::Error> {
+        let shows = self.search_tv_show(show_title).await?;
+        shows
+            .results
+            .into_iter()
+            .next()
+            .ok_or(anyhow::anyhow!("results are empty"))
+            .map(|s| s.into())
+    }
+
+    async fn season(
+        &self,
+        metadata_show_id: &str,
+        season: usize,
+    ) -> Result<SeasonMetadata, anyhow::Error> {
+        let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
+        self.tv_show_season(show_id, season).await.map(|s| s.into())
+    }
+
+    async fn episode(
+        &self,
+        metadata_show_id: &str,
+        season: usize,
+        episode: usize,
+    ) -> Result<EpisodeMetadata, anyhow::Error> {
+        let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
+        self.tv_show_episode(show_id, season, episode)
+            .await
+            .map(|e| e.into())
+    }
+
+    fn provider_identifier(&self) -> &'static str {
+        "tmdb"
     }
 }
 

@@ -1,4 +1,8 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    path::PathBuf,
+    sync::Arc,
+};
 
 use anyhow::anyhow;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
@@ -6,10 +10,9 @@ use tokio::{fs, sync::Mutex};
 
 use crate::{
     db::{Db, DbSubtitles},
-    metadata_provider::{MovieMetadataProvider, ShowMetadataProvider},
-    process_file::TranscodePayload,
+    library::{movie::MovieFile, show::ShowFile, Library, TranscodePayload},
+    metadata::{MovieMetadataProvider, ShowMetadataProvider},
     progress::{TaskError, TaskKind, TaskResource},
-    scan::{handle_movie, handle_show, Library},
     utils,
 };
 
@@ -99,15 +102,14 @@ impl IntoResponse for AppError {
 
 impl AppState {
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
-        use crate::tmdb_api::TmdbApi;
+        use crate::metadata::tmdb_api::TmdbApi;
         let tmdb_api = TmdbApi::new(
             std::env::var("TMDB_TOKEN")
                 .map_err(|_| AppError::internal_error("tmdb token not found"))?,
         );
         let mut library = self.library.lock().await;
         let str = String::from("thing");
-        library
-            .reconciliate_library(&self.db, tmdb_api)
+        reconciliate_library(&mut library, &self.db, tmdb_api)
             .await
             .map_err(move |_| AppError::not_found(str))
     }
@@ -278,4 +280,213 @@ impl FromRef<AppState> for TaskResource {
     fn from_ref(app_state: &AppState) -> TaskResource {
         app_state.tasks.clone()
     }
+}
+pub async fn reconciliate_library(
+    library: &mut Library,
+    db: &Db,
+    metadata_provider: impl ShowMetadataProvider + Send + Sync + 'static,
+) -> Result<(), sqlx::Error> {
+    let metadata_provider = Arc::new(metadata_provider);
+    let db_episodes_videos = sqlx::query!(
+        r#"SELECT videos.*, episodes.id as "episode_id!" FROM videos
+        JOIN episodes ON videos.id = episodes.video_id"#
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    library.full_refresh().await;
+    let local_episodes = &library.shows;
+    let mut common_paths: HashSet<&str> = HashSet::new();
+
+    let local_episodes: HashMap<String, &ShowFile> = local_episodes
+        .iter()
+        .map(|ep| (ep.source.source_path().to_str().unwrap().into(), ep))
+        .collect();
+
+    for db_episode_video in &db_episodes_videos {
+        let exists_in_db;
+        let size_match;
+        if let Some(local_eqivalent) = local_episodes.get(&db_episode_video.path) {
+            exists_in_db = true;
+            size_match = local_eqivalent.source.origin.file_size() == db_episode_video.size as u64;
+        } else {
+            size_match = false;
+            exists_in_db = false;
+        }
+
+        if exists_in_db && size_match {
+            common_paths.insert(db_episode_video.path.as_str());
+        };
+    }
+
+    // clean up variants
+
+    // clean up db
+    for db_episode_video in &db_episodes_videos {
+        if !common_paths.contains(db_episode_video.path.as_str()) {
+            db.remove_episode(db_episode_video.episode_id).await?;
+        }
+    }
+
+    let mut handles = Vec::new();
+
+    for (local_ep_path, local_ep) in local_episodes {
+        // skip existing media
+        if common_paths.contains(local_ep_path.as_str()) {
+            continue;
+        }
+
+        let local_ep = local_ep.clone();
+        let db = db.clone();
+        let metadata_provider = metadata_provider.clone();
+        let handle = tokio::spawn(async move {
+            let _ = handle_show(local_ep, db, &*metadata_provider).await;
+        });
+        handles.push(handle);
+    }
+
+    for handle in handles {
+        handle.await.unwrap();
+    }
+    Ok(())
+}
+
+pub async fn handle_show(
+    show: ShowFile,
+    db: Db,
+    metadata_provider: &impl ShowMetadataProvider,
+) -> Result<(), AppError> {
+    // BUG: what happens if local title changes? Duplicate shows in db.
+    // We'll be fine if we avoid dublicate and insert video with different title.
+    // After failure it will lookup title in provider and match it again
+    let show_query = sqlx::query!(
+        r#"SELECT shows.id, shows.metadata_id, shows.metadata_provider FROM episodes 
+                    JOIN videos ON videos.id = episodes.video_id
+                    JOIN seasons ON seasons.id = episodes.season_id
+                    JOIN shows ON shows.id = seasons.show_id
+                    WHERE videos.local_title = ?;"#,
+        show.local_title
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map(|x| (x.id, x.metadata_id.unwrap(), x.metadata_provider));
+
+    let (show_id, show_metadata_id, _show_metadata_provider) = match show_query {
+        Ok(data) => data,
+        Err(e) => match e {
+            sqlx::Error::RowNotFound => {
+                let metadata = metadata_provider
+                    .show(&show.local_title)
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(
+                            "Metadata lookup failed for file with local title: {}",
+                            show.local_title
+                        );
+                        err
+                    })?;
+                let provider = metadata.metadata_provider.to_string();
+                let metadata_id = metadata.metadata_id.clone().unwrap();
+                let db_show = metadata.into_db_show().await;
+                (db.insert_show(db_show).await?, metadata_id, provider)
+            }
+            _ => {
+                return Err(e)?;
+            }
+        },
+    };
+
+    let season_id = sqlx::query!(
+        "SELECT id FROM seasons WHERE show_id = ? AND number = ?",
+        show_id,
+        show.season
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map(|x| x.id);
+
+    let season_id = match season_id {
+        Ok(season_id) => season_id,
+        Err(e) => match e {
+            sqlx::Error::RowNotFound => {
+                let metadata = metadata_provider
+                    .season(&show_metadata_id, show.season.into())
+                    .await
+                    .unwrap();
+                let db_season = metadata.into_db_season(show_id).await;
+                db.insert_season(db_season).await?
+            }
+            _ => {
+                return Err(e)?;
+            }
+        },
+    };
+
+    let episode_id = sqlx::query!(
+        "SELECT id FROM episodes WHERE season_id = ? AND number = ?;",
+        season_id,
+        show.episode
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map(|x| x.id);
+
+    if let Err(e) = episode_id {
+        if let sqlx::Error::RowNotFound = e {
+            let metadata = metadata_provider
+                .episode(
+                    &show_metadata_id,
+                    show.season as usize,
+                    show.episode as usize,
+                )
+                .await
+                .unwrap();
+            let db_video = show.source.into_db_video(show.local_title.clone());
+            let video_id = db.insert_video(db_video).await?;
+            for variant in &show.source.variants {
+                let db_variant = variant.into_db_variant(video_id);
+                db.insert_variant(db_variant).await?;
+            }
+            let db_episode = metadata.into_db_episode(season_id, video_id).await;
+            db.insert_episode(db_episode).await?;
+        } else {
+            tracing::error!("Unexpected error while fetching episode {}", e);
+            return Err(e)?;
+        }
+    };
+    Ok(())
+}
+
+pub async fn handle_movie(
+    movie: MovieFile,
+    db: Db,
+    metadata_provider: &impl MovieMetadataProvider,
+) -> Result<(), sqlx::Error> {
+    let movie_query = sqlx::query!(
+        r#"SELECT movies.id as "id!", movies.metadata_id, movies.metadata_provider FROM movies 
+                    JOIN videos ON videos.id = movies.video_id
+                    WHERE videos.local_title = ?;"#,
+        movie.local_title
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map(|x| (x.id, x.metadata_id.unwrap(), x.metadata_provider));
+
+    match movie_query {
+        Err(e) => {
+            if let sqlx::Error::RowNotFound = e {
+                let metadata = metadata_provider.movie(&movie.local_title).await.unwrap();
+                let db_video = movie.source.into_db_video(movie.local_title);
+                let video_id = db.insert_video(db_video).await?;
+                let provider = metadata.metadata_provider.to_string();
+                let metadata_id = metadata.metadata_id.clone().unwrap();
+                let db_movie = metadata.into_db_movie(video_id).await;
+                (db.insert_movie(db_movie).await?, metadata_id, provider);
+            } else {
+                return Err(e);
+            }
+        }
+        _ => (),
+    };
+
+    Ok(())
 }

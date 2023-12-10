@@ -22,10 +22,10 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+use super::{IdQuery, StringIdQuery};
 use crate::app_state::AppError;
-use crate::process_file::TranscodePayload;
+use crate::library::TranscodePayload;
 use crate::progress::{TaskKind, TaskResource};
-use crate::public_api::{IdQuery, StringIdQuery};
 use crate::{
     app_state::AppState,
     db::Db,

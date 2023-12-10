@@ -1,18 +1,11 @@
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use axum::body::Body;
-use axum::extract::{Path, State};
-use axum::http::Request;
-use axum::middleware::Next;
-use axum::response::Response;
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
-use crate::scan::Library;
-use crate::source::Source;
 use crate::utils;
+
+use super::{LibraryItem, Source};
 
 pub struct ShowExtractor(pub ShowFile);
 
@@ -21,18 +14,6 @@ pub struct ShowParams {
     pub show_name: String,
     pub season: usize,
     pub episode: usize,
-}
-
-pub async fn show_path_middleware(
-    Path(params): Path<ShowParams>,
-    State(state): State<Arc<Mutex<Library>>>,
-    mut request: Request<Body>,
-    next: Next,
-) -> Response {
-    request.extensions_mut().insert(Path(params).clone());
-    request.extensions_mut().insert(State(state).clone());
-    let response = next.run(request).await;
-    response
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -107,6 +88,28 @@ impl ShowFile {
                 episode
             ));
         }
+    }
+}
+
+impl LibraryItem for ShowFile {
+    fn resources_path(&self) -> &Path {
+        &self.source.resources_path
+    }
+    fn source(&self) -> &Source {
+        &self.source
+    }
+    fn title(&self) -> String {
+        self.local_title.clone()
+    }
+    fn url(&self) -> String {
+        format!("/{}/{}/{}", self.local_title, self.season, self.episode)
+    }
+
+    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
+    where
+        Self: Sized,
+    {
+        Self::new(path)
     }
 }
 

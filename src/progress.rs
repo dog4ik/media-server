@@ -5,7 +5,7 @@ use tokio::sync::{broadcast, oneshot, Mutex};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::process_file::FFmpegJob;
+use crate::ffmpeg::FFmpegJob;
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]

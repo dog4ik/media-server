@@ -1,17 +1,11 @@
-use std::{path::PathBuf, sync::Arc};
+use std::path::{Path, PathBuf};
 
 use anyhow::anyhow;
-use axum::{
-    body::Body,
-    extract::{Path, State},
-    http::Request,
-    middleware::Next,
-    response::Response,
-};
 use serde::{Deserialize, Serialize};
-use tokio::sync::Mutex;
 
-use crate::{scan::Library, source::Source, utils};
+use crate::utils;
+
+use super::{LibraryItem, Source};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MovieFile {
@@ -22,18 +16,6 @@ pub struct MovieFile {
 #[derive(Debug, Deserialize, Clone)]
 pub struct MovieParams {
     pub movie_name: String,
-}
-
-pub async fn movie_path_middleware(
-    Path(params): Path<MovieParams>,
-    State(state): State<Arc<Mutex<Library>>>,
-    mut request: Request<Body>,
-    next: Next,
-) -> Response {
-    request.extensions_mut().insert(Path(params).clone());
-    request.extensions_mut().insert(State(state).clone());
-    let response = next.run(request).await;
-    response
 }
 
 impl MovieFile {
@@ -81,6 +63,28 @@ impl MovieFile {
         } else {
             return Err(anyhow::Error::msg("Failed to construct a movie name"));
         }
+    }
+}
+
+impl LibraryItem for MovieFile {
+    fn resources_path(&self) -> &Path {
+        &self.source.resources_path
+    }
+    fn source(&self) -> &Source {
+        &self.source
+    }
+    fn title(&self) -> String {
+        self.local_title.clone()
+    }
+    fn url(&self) -> String {
+        format!("/{}", self.local_title)
+    }
+
+    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
+    where
+        Self: Sized,
+    {
+        Self::new(path)
     }
 }
 

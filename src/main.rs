@@ -1,22 +1,11 @@
-use axum::extract::{Query, State};
-use axum::http::StatusCode;
-use axum::response::IntoResponse;
 use axum::routing::{delete, get, post};
-use axum::{Extension, Json, Router};
-use axum_extra::headers::{ContentType, Range};
-use axum_extra::TypedHeader;
-use bytes::Bytes;
+use axum::{Extension, Router};
 use dotenvy::dotenv;
-use media_server::admin_api;
 use media_server::app_state::AppState;
 use media_server::db::Db;
-use media_server::library::{LibraryFile, LibraryFileExtractor, MediaFolders, PreviewQuery};
-use media_server::movie_file::movie_path_middleware;
+use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
-use media_server::public_api;
-use media_server::scan::{explore_folder, Library, Summary};
-use media_server::serve_content::ServeContent;
-use media_server::show_file::show_path_middleware;
+use media_server::server::{admin_api, public_api};
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -25,40 +14,6 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, Level};
-
-async fn get_library(State(library): State<Arc<Mutex<Library>>>) -> Json<Vec<Summary>> {
-    let library = library.lock().await;
-    return Json(library.get_summary());
-}
-
-async fn serve_previews(
-    Query(query): Query<PreviewQuery>,
-    LibraryFileExtractor(file): LibraryFileExtractor,
-) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode> {
-    return match file {
-        LibraryFile::Show(show) => show.serve_previews(query.number).await,
-        LibraryFile::Movie(movie) => movie.serve_previews(query.number).await,
-    };
-}
-
-async fn serve_video(
-    TypedHeader(range): TypedHeader<Range>,
-    LibraryFileExtractor(file): LibraryFileExtractor,
-) -> impl IntoResponse {
-    return match file {
-        LibraryFile::Show(show) => show.serve_video(range).await,
-        LibraryFile::Movie(movie) => movie.serve_video(range).await,
-    };
-}
-
-async fn serve_subtitles(
-    LibraryFileExtractor(file): LibraryFileExtractor,
-) -> Result<String, StatusCode> {
-    return match file {
-        LibraryFile::Show(show) => show.serve_subs(None).await,
-        LibraryFile::Movie(movie) => movie.serve_subs(None).await,
-    };
-}
 
 const PORT: u16 = 6969;
 
@@ -111,29 +66,9 @@ async fn main() {
     monitor_library(app_state.clone(), media_folders).await;
 
     let app = Router::new()
-        .route("/movie/subs/:movie_name", get(serve_subtitles))
-        .route("/movie/previews/:movie_name", get(serve_previews))
-        .route("/movie/:movie_name", get(serve_video))
-        .layer(axum::middleware::from_fn_with_state(
-            library.clone(),
-            movie_path_middleware,
-        ))
-        .route(
-            "/show/subs/:show_name/:season/:episode",
-            get(serve_subtitles),
-        )
-        .route(
-            "/show/previews/:show_name/:season/:episode",
-            get(serve_previews),
-        )
-        .route("/show/:show_name/:season/:episode", get(serve_video))
-        .layer(axum::middleware::from_fn_with_state(
-            library,
-            show_path_middleware,
-        ))
         .route("/admin/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
-        .route("/summary", get(get_library))
+        .route("/summary", get(public_api::get_summary))
         .route("/api/get_all_shows", get(public_api::get_all_shows))
         .route("/api/watch", get(public_api::watch))
         .route("/api/previews", get(public_api::previews))

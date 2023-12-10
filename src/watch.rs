@@ -12,8 +12,8 @@ use notify::{
 
 use crate::{
     app_state::AppState,
-    library::{MediaFolders, MediaType},
-    scan::is_format_supported, utils,
+    library::{is_format_supported, MediaFolders, MediaType},
+    utils,
 };
 
 #[derive(Debug, Clone)]
@@ -79,7 +79,10 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
     let mut flattened_paths = Vec::new();
     let metadata = path.metadata()?;
     if metadata.is_dir() {
-        flattened_paths.append(&mut utils::walk_recursive(&path, Some(is_format_supported))?);
+        flattened_paths.append(&mut utils::walk_recursive(
+            &path,
+            Some(is_format_supported),
+        )?);
     }
     if metadata.is_file() {
         flattened_paths.push(path.clone())
@@ -88,7 +91,8 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
 }
 
 pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> JoinHandle<()> {
-    let metadata_provider = crate::tmdb_api::TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
+    let metadata_provider =
+        crate::metadata::tmdb_api::TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
     tokio::spawn(async move {
         let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
         while let Some(event) = rx.recv().await {

@@ -6,53 +6,20 @@ use axum::response::IntoResponse;
 use axum::Json;
 use axum_extra::headers::Range;
 use axum_extra::TypedHeader;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
 
 use crate::db::DbVariant;
-use crate::process_file::{AudioCodec, Resolution, VideoCodec};
+use crate::library::{AudioCodec, Resolution, Summary, VideoCodec};
 use crate::{app_state::AppState, db::Db};
+
+use super::{EpisodeQuery, IdQuery, LanguageQuery, NumberQuery, PageQuery, SeasonQuery};
 
 fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
     match err {
         sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
-}
-
-#[derive(Deserialize)]
-pub struct PageQuery {
-    pub page: Option<usize>,
-}
-
-#[derive(Deserialize)]
-pub struct IdQuery {
-    pub id: i64,
-}
-
-#[derive(Deserialize)]
-pub struct StringIdQuery {
-    pub id: String,
-}
-
-#[derive(Deserialize)]
-pub struct SeasonQuery {
-    pub season: i32,
-}
-
-#[derive(Deserialize)]
-pub struct EpisodeQuery {
-    pub episode: i32,
-}
-
-#[derive(Deserialize)]
-pub struct NumberQuery {
-    pub number: i32,
-}
-
-#[derive(Deserialize)]
-pub struct LanguageQuery {
-    pub lang: Option<String>,
 }
 
 #[derive(Debug, Serialize, FromRow)]
@@ -170,6 +137,11 @@ pub async fn watch(
     } else {
         return Err(StatusCode::NOT_FOUND);
     };
+}
+
+pub async fn get_summary(State(state): State<AppState>) -> Json<Vec<Summary>> {
+    let library = state.library.lock().await;
+    return Json(library.get_summary());
 }
 
 pub async fn get_all_shows(
