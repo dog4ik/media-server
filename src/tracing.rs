@@ -1,5 +1,9 @@
 use std::convert::Infallible;
 use std::fmt::{self};
+use std::fs::{File, OpenOptions};
+use std::io::{LineWriter, Write};
+use std::path::PathBuf;
+use std::sync::Mutex;
 
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::Sse;
@@ -12,12 +16,27 @@ use tracing::{Level, Subscriber};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[derive(Debug)]
+pub struct FileLoggingLayer {
+    pub path: PathBuf,
+    pub writer: Mutex<LineWriter<File>>,
+}
+
+#[derive(Debug)]
 struct PublicTracerLayer {
     channel: broadcast::Sender<String>,
 }
 
 #[derive(Debug, Clone)]
 pub struct LogChannel(pub broadcast::Sender<String>);
+
+impl FileLoggingLayer {
+    pub fn from_path(path: PathBuf) -> Result<Self, std::io::Error> {
+        let file = OpenOptions::new().append(true).create(true).open(&path)?;
+        let writer = LineWriter::new(file);
+        let writer = Mutex::new(writer);
+        Ok(Self { path, writer })
+    }
+}
 
 impl LogChannel {
     pub async fn into_sse_stream(
@@ -63,6 +82,44 @@ impl Visit for JsonVisitor {
     }
 }
 
+fn event_to_json(event: &tracing::Event) -> Value {
+    let metadata = event.metadata();
+    let mut visitor = JsonVisitor::new();
+    let now = time::OffsetDateTime::now_utc().to_string();
+    let level = metadata.level().to_string();
+    event.record(&mut visitor);
+    serde_json::json!({
+    "timestamp": now,
+    "target": metadata.target(),
+    "level": level,
+    "name": metadata.name(),
+    "fields": visitor.value
+    })
+}
+
+impl<S: Subscriber> Layer<S> for FileLoggingLayer {
+    fn enabled(
+        &self,
+        metadata: &tracing::Metadata<'_>,
+        ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) -> bool {
+        let _ = (metadata, ctx);
+        true
+    }
+
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
+        let json = event_to_json(event);
+        let mut bytes = serde_json::to_vec(&json).unwrap();
+        bytes.extend("\n".as_bytes());
+        let mut writer = self.writer.lock().unwrap();
+        writer.write_all(&bytes).unwrap();
+    }
+}
+
 impl<S: Subscriber> Layer<S> for PublicTracerLayer {
     fn enabled(
         &self,
@@ -73,23 +130,13 @@ impl<S: Subscriber> Layer<S> for PublicTracerLayer {
         let patterns = ["hyper", "mio", "notify"];
         !patterns.iter().any(|pattern| target.starts_with(pattern))
     }
+
     fn on_event(
         &self,
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let metadata = event.metadata();
-        let mut visitor = JsonVisitor::new();
-        let now = time::OffsetDateTime::now_utc().to_string();
-        let level = metadata.level().to_string();
-        event.record(&mut visitor);
-        let json = serde_json::json!({
-        "timestamp": now,
-        "target": metadata.target(),
-        "level": level,
-        "name": metadata.name(),
-        "fields": visitor.value
-        });
+        let json = event_to_json(event);
         let _ = self.channel.send(serde_json::to_string(&json).unwrap());
     }
 }
@@ -100,7 +147,8 @@ pub fn init_tracer(max_level: Level) -> LogChannel {
         .with_max_level(max_level)
         .finish();
     let pub_tracer = PublicTracerLayer::new();
+    let file_logger = FileLoggingLayer::from_path("log.log".into()).unwrap();
     let log_channel = LogChannel(pub_tracer.channel.clone());
-    sub.with(pub_tracer).init();
+    sub.with(pub_tracer).with(file_logger).init();
     return log_channel;
 }
