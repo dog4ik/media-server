@@ -150,6 +150,7 @@ async fn main() {
             "/admin/refresh_show_metadata",
             post(admin_api::refresh_show_metadata),
         )
+        .route("/admin/latest_log", get(admin_api::latest_log))
         .route("/admin/progress", get(admin_api::progress))
         .route("/admin/get_tasks", get(admin_api::get_tasks))
         .route("/admin/mock_progress", post(admin_api::mock_progress))

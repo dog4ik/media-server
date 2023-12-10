@@ -1,8 +1,10 @@
 use std::path::PathBuf;
 use std::{convert::Infallible, fmt::Display};
 
-use axum::extract::Query;
-use axum::http::StatusCode;
+use axum::body::Body;
+use axum::extract::rejection::JsonRejection;
+use axum::extract::{FromRequest, Query};
+use axum::http::{Request, StatusCode};
 use axum::{
     extract::State,
     response::{
@@ -11,7 +13,10 @@ use axum::{
     },
     Json,
 };
+use axum_extra::headers::ContentType;
+use axum_extra::TypedHeader;
 use serde::Deserialize;
+use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
@@ -225,4 +230,38 @@ pub async fn progress(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
+}
+
+pub async fn latest_log() -> Result<(TypedHeader<ContentType>, String), AppError> {
+    use tokio::fs;
+    use tokio::io;
+    let file = fs::File::open("log.log").await?;
+    let take = 40_000;
+    let length = file.metadata().await?.len();
+    let start = std::cmp::min(length, take) as i64;
+    let mut reader = io::BufReader::new(file);
+    let mut buffer = String::new();
+    reader
+        .seek(io::SeekFrom::End(-start))
+        .await
+        .expect("start is not bigger then file");
+    let mut json = String::from('[');
+    reader.read_line(&mut buffer).await.unwrap();
+    if length < take {
+        json.push_str(&buffer);
+        json.push(',');
+    }
+    buffer.clear();
+    while let Ok(amount) = reader.read_line(&mut buffer).await {
+        if amount == 0 {
+            break;
+        }
+        json.push_str(&buffer);
+        json.push(',');
+        buffer.clear();
+    }
+    // remove trailing comma xd
+    json.pop();
+    json.push(']');
+    Ok((TypedHeader(ContentType::json()), json))
 }
