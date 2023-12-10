@@ -51,7 +51,7 @@ pub async fn handle_show(
     show: ShowFile,
     db: Db,
     metadata_provider: &impl ShowMetadataProvider,
-) -> Result<(), sqlx::Error> {
+) -> Result<(), AppError> {
     // BUG: what happens if local title changes? Duplicate shows in db.
     // We'll be fine if we avoid dublicate and insert video with different title.
     // After failure it will lookup title in provider and match it again
@@ -71,14 +71,23 @@ pub async fn handle_show(
         Ok(data) => data,
         Err(e) => match e {
             sqlx::Error::RowNotFound => {
-                let metadata = metadata_provider.show(&show.local_title).await.unwrap();
+                let metadata = metadata_provider
+                    .show(&show.local_title)
+                    .await
+                    .map_err(|err| {
+                        tracing::error!(
+                            "Metadata lookup failed for file with local title: {}",
+                            show.local_title
+                        );
+                        err
+                    })?;
                 let provider = metadata.metadata_provider.to_string();
                 let metadata_id = metadata.metadata_id.clone().unwrap();
                 let db_show = metadata.into_db_show().await;
                 (db.insert_show(db_show).await?, metadata_id, provider)
             }
             _ => {
-                return Err(e);
+                return Err(e)?;
             }
         },
     };
@@ -104,7 +113,7 @@ pub async fn handle_show(
                 db.insert_season(db_season).await?
             }
             _ => {
-                return Err(e);
+                return Err(e)?;
             }
         },
     };
@@ -137,8 +146,8 @@ pub async fn handle_show(
             let db_episode = metadata.into_db_episode(season_id, video_id).await;
             db.insert_episode(db_episode).await?;
         } else {
-            dbg!("unexpected error while fetching episode");
-            return Err(e);
+            tracing::error!("Unexpected error while fetching episode {}", e);
+            return Err(e)?;
         }
     };
     Ok(())
