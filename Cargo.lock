@@ -1182,6 +1182,7 @@ dependencies = [
  "dotenvy",
  "image",
  "notify",
+ "rand",
  "reqwest",
  "serde",
  "serde_json",

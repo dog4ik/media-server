@@ -1,12 +1,11 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT_ENCODING},
     Client, Method, Request, Response, Url,
 };
-use serde::Deserialize;
-use tokio::sync::{mpsc, oneshot, Mutex};
-use tower::{Service, ServiceExt};
+use serde::{de::DeserializeOwned, Deserialize};
+use tokio::sync::{mpsc, oneshot, Mutex, Semaphore};
 
 use crate::metadata_provider::{
     EpisodeMetadata, MetadataImage, MovieMetadata, SeasonMetadata, ShowMetadata,
@@ -69,42 +68,44 @@ impl Into<MetadataImage> for TmdbImage {
 }
 #[derive(Debug, Clone)]
 pub struct LimitedRequestClient {
-    request_tx: mpsc::Sender<(Request, oneshot::Sender<anyhow::Result<Response>>)>,
+    request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>,
 }
 
 impl LimitedRequestClient {
-    pub fn new(client: Client, limit_number: u64, limit_duration: Duration) -> Self {
+    pub fn new(client: Client, limit_number: usize, limit_duration: Duration) -> Self {
         let (tx, mut rx) =
-            mpsc::channel::<(Request, oneshot::Sender<anyhow::Result<Response>>)>(100);
+            mpsc::channel::<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>(100);
         tokio::spawn(async move {
-            let service = tower::ServiceBuilder::new()
-                .buffer(100)
-                .rate_limit(limit_number, limit_duration)
-                .service(client.clone());
+            let semaphore = Arc::new(Semaphore::new(limit_number));
             while let Some((req, resp_tx)) = rx.recv().await {
-                let mut inner_service = service.clone();
+                let semaphore = semaphore.clone();
+                let client = client.clone();
                 tokio::spawn(async move {
-                    let resp = match inner_service.ready().await {
-                        Ok(srv) => match srv.call(req).await {
-                            Ok(r) => Ok(r),
-                            Err(e) => Err(anyhow::anyhow!("Service call request failed: {}", e)),
-                        },
-                        Err(e) => Err(anyhow::anyhow!("Service ready failed: {}", e)),
-                    };
+                    let permit = semaphore.acquire().await.unwrap();
+                    let response = client.execute(req).await;
 
-                    if let Err(_) = resp_tx.send(resp) {
-                        tracing::error!("Send resp to resp_tx failed: channel closed")
+                    if let Err(_) = resp_tx.send(response) {
+                        tracing::error!("Failed to send response: channel closed")
                     }
+                    tokio::time::sleep(limit_duration).await;
+                    drop(permit);
                 });
             }
         });
         Self { request_tx: tx }
     }
 
-    pub async fn request(&self, req: Request) -> anyhow::Result<Response> {
-        let (tx, rx) = oneshot::channel::<anyhow::Result<Response>>();
+    pub async fn request<T>(&self, req: Request) -> anyhow::Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
         self.request_tx.clone().send((req, tx)).await?;
-        rx.await?
+        let response = rx
+            .await
+            .map_err(|_| anyhow::anyhow!("failed to receive response: channel closed"))?
+            .map_err(|e| anyhow::anyhow!("Request failed: {}", e))?;
+        Ok(response.json().await?)
     }
 }
 
@@ -126,12 +127,15 @@ async fn rate_limit() {
         }
     }
 
-    async fn root(count: Json<Count>) -> Json<Count> {
+    async fn echo(count: Json<Count>) -> Json<Count> {
+        use rand::Rng;
+        let num = rand::thread_rng().gen_range(0..1000);
+        tokio::time::sleep(Duration::from_millis(num)).await;
         count
     }
 
     let server_handle = tokio::spawn(async move {
-        let app = Router::new().route("/", post(root));
+        let app = Router::new().route("/", post(echo));
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:32402")
             .await
@@ -142,7 +146,7 @@ async fn rate_limit() {
     let reqwest = Client::new();
     let client = LimitedRequestClient::new(reqwest.clone(), 50, Duration::from_secs(1));
     let mut handles = JoinSet::new();
-    let amount = 150;
+    let amount = 125;
     for i in 0..amount {
         let client = client.clone();
         let count = Count::new(i);
@@ -152,13 +156,8 @@ async fn rate_limit() {
             .build()
             .unwrap();
         handles.spawn(async move {
-            let count = client
-                .request(req)
-                .await
-                .unwrap()
-                .json::<Count>()
-                .await
-                .unwrap();
+            let count: Count = client.request(req).await.unwrap();
+            dbg!(i);
             assert_eq!(i, count.value);
             return count;
         });
@@ -174,7 +173,7 @@ async fn rate_limit() {
 
 impl TmdbApi {
     const API_URL: &'static str = "http://api.themoviedb.org/3";
-    const RATE_LIMIT: u64 = 50;
+    const RATE_LIMIT: usize = 50;
     pub fn new(api_key: String) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT_ENCODING, HeaderValue::from_str("compress").unwrap());
@@ -204,8 +203,7 @@ impl TmdbApi {
         url.path_segments_mut().unwrap().push("search").push("tv");
         url.query_pairs_mut().extend_pairs(query);
         let req = Request::new(Method::GET, url);
-        let res = self.client.request(req).await?;
-        Ok(res.json().await?)
+        self.client.request(req).await
     }
 
     pub async fn search_tv_show(
@@ -217,8 +215,7 @@ impl TmdbApi {
         url.path_segments_mut().unwrap().push("search").push("tv");
         url.query_pairs_mut().extend_pairs(query);
         let req = Request::new(Method::GET, url);
-        let res = self.client.request(req).await?;
-        Ok(res.json().await?)
+        self.client.request(req).await
     }
 
     pub async fn tv_show_season(
@@ -234,7 +231,7 @@ impl TmdbApi {
             .push("season")
             .push(&season.to_string());
         let req = Request::new(Method::GET, url);
-        let response: TmdbShowSeason = self.client.request(req).await?.json().await?;
+        let response: TmdbShowSeason = self.client.request(req).await?;
 
         self.update_cache(tmdb_show_id, season, response.episodes.clone())
             .await;
