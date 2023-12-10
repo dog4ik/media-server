@@ -4,3 +4,4 @@
 /db
 /test-dir
 .env
+/*.log
