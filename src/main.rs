@@ -10,8 +10,7 @@ use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, Level};
 
@@ -69,6 +68,8 @@ async fn main() {
         .route("/admin/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
         .route("/summary", get(public_api::get_summary))
+        .route("/watch", get(public_api::watch))
+        .route("/watch/variant", get(public_api::watch_variant))
         .route("/api/get_all_shows", get(public_api::get_all_shows))
         .route("/api/watch", get(public_api::watch))
         .route("/api/previews", get(public_api::previews))

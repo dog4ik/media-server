@@ -93,8 +93,11 @@ pub async fn previews(
         .await
         .map_err(sqlx_err_wrap)?;
     let video_path = PathBuf::from(video.path);
-    let library = library.lock().await;
-    if let Some(file) = library.find_library_file(&video_path) {
+    let file = {
+        let library = library.lock().unwrap();
+        library.find_library_file(&video_path)
+    };
+    if let Some(file) = file {
         return Ok(file.serve_previews(number.number).await);
     } else {
         return Err(StatusCode::NOT_FOUND);
@@ -112,9 +115,40 @@ pub async fn subtitles(
         .await
         .map_err(sqlx_err_wrap)?;
     let video_path = PathBuf::from(video.path);
-    let library = library.lock().await;
-    if let Some(file) = library.find_library_file(&video_path) {
+    let file = {
+        let library = library.lock().unwrap();
+        library.find_library_file(&video_path)
+    };
+    if let Some(file) = file {
         return Ok(file.serve_subs(lang.lang).await);
+    } else {
+        return Err(StatusCode::NOT_FOUND);
+    };
+}
+
+pub async fn watch_variant(
+    Query(variant_id): Query<IdQuery>,
+    State(state): State<AppState>,
+    range: Option<TypedHeader<Range>>,
+) -> Result<impl IntoResponse, StatusCode> {
+    let AppState { library, db, .. } = state;
+    let video = sqlx::query!(
+        r#"SELECT variants.path as variant_path, videos.path as video_path FROM variants 
+        JOIN videos ON videos.id = variants.video_id WHERE variants.id = ?"#,
+        variant_id.id
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map_err(sqlx_err_wrap)?;
+    let file = {
+        let library = library.lock().unwrap();
+        library.find_source(&video.video_path).map(|x| x.clone())
+    };
+    if let Some(file) = file {
+        let variant = file
+            .find_variant(&video.variant_path)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        return Ok(variant.serve(range).await);
     } else {
         return Err(StatusCode::NOT_FOUND);
     };
@@ -122,8 +156,8 @@ pub async fn subtitles(
 
 pub async fn watch(
     Query(video_id): Query<IdQuery>,
-    TypedHeader(range): TypedHeader<Range>,
     State(state): State<AppState>,
+    range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, StatusCode> {
     let AppState { library, db, .. } = state;
     let video = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id.id)
@@ -131,16 +165,19 @@ pub async fn watch(
         .await
         .map_err(sqlx_err_wrap)?;
     let path = PathBuf::from(video.path);
-    let library = library.lock().await;
-    if let Some(file) = library.find_library_file(&path) {
-        return Ok(file.serve_video(range).await);
+    let file = {
+        let library = library.lock().unwrap();
+        library.find_source(&path).map(|x| x.origin.clone())
+    };
+    if let Some(file) = file {
+        return Ok(file.serve(range).await);
     } else {
         return Err(StatusCode::NOT_FOUND);
     };
 }
 
 pub async fn get_summary(State(state): State<AppState>) -> Json<Vec<Summary>> {
-    let library = state.library.lock().await;
+    let library = state.library.lock().unwrap();
     return Json(library.get_summary());
 }
 
@@ -278,7 +315,7 @@ pub async fn get_episodes(
     .fetch_all(&db.pool)
     .await
     .map_err(sqlx_err_wrap)?;
-    let library = library.lock().await;
+    let library = library.lock().unwrap();
     let episodes: Vec<DetailedEpisode> = db_episodes
         .into_iter()
         .filter_map(|db_episode| {
@@ -330,7 +367,7 @@ pub async fn get_season_episodes_by_id(
     .await
     .map_err(sqlx_err_wrap)?;
 
-    let library = library.lock().await;
+    let library = library.lock().unwrap();
     let episodes: Vec<DetailedEpisode> = episodes
         .into_iter()
         .filter_map(|db_episode| {
@@ -386,7 +423,7 @@ pub async fn get_episode(
     .await
     .map_err(sqlx_err_wrap)?;
 
-    let library = library.lock().await;
+    let library = library.lock().unwrap();
     if let Some(file) = library.find_source(&PathBuf::from(db_episode.path.clone())) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
@@ -432,7 +469,7 @@ pub async fn get_episode_by_id(
     .await
     .map_err(sqlx_err_wrap)?;
 
-    let library = library.lock().await;
+    let library = library.lock().unwrap();
     if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
@@ -478,10 +515,10 @@ pub async fn get_video_by_id(
     .await
     .map_err(sqlx_err_wrap)?;
 
-    let library = library.lock().await;
+    let library = library.lock().unwrap();
     let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
     let source = file.source();
-    let date = db_video.scan_date.unwrap();
+    let date = db_video.scan_date.expect("scan date always defined");
     let detailed_episode = DetailedVideo {
         path: file.source_path().to_path_buf(),
         hash: db_video.hash,

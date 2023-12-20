@@ -1,11 +1,14 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use serde::Serialize;
-use tokio::sync::{broadcast, oneshot, Mutex};
+use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::ffmpeg::FFmpegJob;
+use crate::ffmpeg::{FFmpegRunningJob, FFmpegTask};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -53,6 +56,10 @@ impl Task {
             kind,
             cancel: cancel_channel,
         }
+    }
+
+    pub fn is_cancelable(&self) -> bool {
+        self.cancel.is_some()
     }
 }
 
@@ -138,53 +145,39 @@ impl TaskResource {
         }
     }
 
-    pub async fn add_new_task(
+    pub async fn observe_ffmpeg_task(
         &self,
-        target: PathBuf,
-        kind: TaskKind,
-        cancel_channel: Option<oneshot::Sender<()>>,
-    ) -> Result<Uuid, TaskError> {
-        let task = Task::new(target, kind, cancel_channel);
-        self.add_task(task).await
-    }
-
-    pub async fn run_ffmpeg_task(
-        &self,
-        mut job: FFmpegJob,
+        mut job: FFmpegRunningJob<impl FFmpegTask>,
         kind: TaskKind,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let (tx, rx) = oneshot::channel();
         let mut progress = job.progress();
-        let id = self
-            .add_new_task(job.target.clone(), kind, Some(tx))
-            .await?;
-        tokio::select! {
+        let id = self.start_task(job.target.clone(), kind, Some(tx))?;
+        let job_result = tokio::select! {
             _ = async {
-                let _ = channel.send(ProgressChunk::start(id));
                 while let Some(percent) = progress.recv().await {
                     let _ = channel.send(ProgressChunk::pending(id,percent));
                 };
             } => {
-                self.remove_task(id).await;
                 if let Err(_) = job.wait().await{
-                    let _ = channel.send(ProgressChunk::error(id));
+                    let _ = self.error_task(id);
                 } else {
-                    let _ = channel.send(ProgressChunk::finish(id));
+                    let _ = self.finish_task(id);
                 }
                 Ok(())
             },
             _ = rx => {
-                self.remove_task(id).await;
                 job.kill().await;
-                let _ = channel.send(ProgressChunk::cancel(id));
+                self.cancel_task(id).unwrap();
                 Err(TaskError::Canceled)
             }
-        }
+        };
+        return job_result;
     }
 
-    async fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
-        let mut tasks = self.tasks.lock().await;
+    fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
+        let mut tasks = self.tasks.lock().unwrap();
         let duplicate = tasks
             .iter()
             .find(|t| t.target == task.target && t.kind == task.kind);
@@ -200,27 +193,51 @@ impl TaskResource {
         Ok(id)
     }
 
-    pub async fn remove_task(&self, id: Uuid) -> Option<Task> {
-        let mut tasks = self.tasks.lock().await;
+    pub fn start_task(
+        &self,
+        target: PathBuf,
+        kind: TaskKind,
+        cancel_channel: Option<oneshot::Sender<()>>,
+    ) -> Result<Uuid, TaskError> {
+        let task = Task::new(target, kind, cancel_channel);
+        let id = self.add_task(task)?;
+        let _ = self.progress_channel.0.send(ProgressChunk::start(id));
+        Ok(id)
+    }
+
+    fn remove_task(&self, id: Uuid) -> Option<Task> {
+        let mut tasks = self.tasks.lock().unwrap();
         let idx = tasks.iter().position(|t| t.id == id)?;
         Some(tasks.remove(idx))
     }
 
-    pub async fn cancel_task(&self, id: Uuid) -> Result<(), TaskError> {
-        let mut tasks = self.tasks.lock().await;
-        let task_to_cancel = tasks
-            .iter_mut()
-            .find(|t| t.id == id)
-            .ok_or(TaskError::NotFound)?;
-        let cancel = task_to_cancel
-            .cancel
-            .take()
-            .ok_or(TaskError::NotCancelable)?;
+    pub fn finish_task(&self, id: Uuid) -> Option<Task> {
+        let task = self.remove_task(id)?;
+        let _ = self.progress_channel.0.send(ProgressChunk::finish(id));
+        Some(task)
+    }
+
+    pub fn error_task(&self, id: Uuid) -> Option<Task> {
+        let task = self.remove_task(id)?;
+        let _ = self.progress_channel.0.send(ProgressChunk::error(id));
+        Some(task)
+    }
+
+    pub fn cancel_task(&self, id: Uuid) -> Result<(), TaskError> {
+        let mut task = self.remove_task(id).ok_or(TaskError::NotFound)?;
+        let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
         cancel.send(()).unwrap();
-        drop(tasks);
-        self.remove_task(id).await;
+        let _ = self.progress_channel.0.send(ProgressChunk::cancel(id));
         Ok(())
     }
+}
+
+pub trait ProgressJob {
+    fn progress(&mut self) -> Result<mpsc::Sender<usize>, anyhow::Error>;
+}
+
+pub trait CancelJob {
+    fn cancel(self) -> Result<(), anyhow::Error>;
 }
 
 impl ProgressChunk {

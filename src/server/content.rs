@@ -1,31 +1,18 @@
-use std::{io::SeekFrom, path::PathBuf};
+use std::path::PathBuf;
 
-use axum::{
-    body::Body,
-    http::{HeaderName, HeaderValue, StatusCode, header},
-    response::AppendHeaders,
-};
+use axum::{http::StatusCode, response::IntoResponse};
 use axum_extra::{
     headers::{ContentType, Range},
     TypedHeader,
 };
 use bytes::Bytes;
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
-use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::library::LibraryItem;
 
 pub trait ServeContent {
     /// Serve video file
     #[allow(async_fn_in_trait)]
-    async fn serve_video(
-        &self,
-        range: Range,
-    ) -> (
-        StatusCode,
-        AppendHeaders<[(HeaderName, HeaderValue); 6]>,
-        Body,
-    );
+    async fn serve_video(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse;
 
     /// Serve previews
     #[allow(async_fn_in_trait)]
@@ -40,61 +27,8 @@ pub trait ServeContent {
 }
 
 impl<T: LibraryItem> ServeContent for T {
-    async fn serve_video(
-        &self,
-        range: Range,
-    ) -> (
-        StatusCode,
-        AppendHeaders<[(HeaderName, HeaderValue); 6]>,
-        Body,
-    ) {
-        let mut file = tokio::fs::File::open(&self.source_path()).await.unwrap();
-        let file_size = file.metadata().await.unwrap().len();
-        let (start, end) = range.satisfiable_ranges(file_size).next().expect("at least one tuple");
-        let start = match start {
-            std::ops::Bound::Included(val) => val,
-            std::ops::Bound::Excluded(val) => val,
-            std::ops::Bound::Unbounded => 0,
-        };
-
-        let end = match end {
-            std::ops::Bound::Included(val) => val,
-            std::ops::Bound::Excluded(val) => val,
-            std::ops::Bound::Unbounded => file_size,
-        };
-
-        let chunk_size = end - start + 1;
-        file.seek(SeekFrom::Start(start)).await.unwrap();
-        let stream_of_bytes = FramedRead::new(file.take(chunk_size), BytesCodec::new());
-
-        return (
-            StatusCode::PARTIAL_CONTENT,
-            AppendHeaders([
-                (
-                    header::CONTENT_RANGE,
-                    HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size))
-                        .unwrap(),
-                ),
-                (header::CONTENT_LENGTH, HeaderValue::from(end - start)),
-                (
-                    header::CACHE_CONTROL,
-                    HeaderValue::from_str("public, max-age=0").unwrap(),
-                ),
-                (
-                    header::ACCESS_CONTROL_ALLOW_ORIGIN,
-                    HeaderValue::from_str("*").unwrap(),
-                ),
-                (
-                    header::ACCEPT_RANGES,
-                    HeaderValue::from_str("bytes").unwrap(),
-                ),
-                (
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_str("video/x-matroska").unwrap(),
-                ),
-            ]),
-            Body::from_stream(stream_of_bytes),
-        );
+    async fn serve_video(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
+        self.source().origin.serve(range).await
     }
 
     async fn serve_previews(
@@ -109,7 +43,8 @@ impl<T: LibraryItem> ServeContent for T {
             let file_number: i32 = file_path
                 .file_stem()
                 .unwrap()
-                .to_str()
+                .to_os_string()
+                .into_string()
                 .unwrap()
                 .parse()
                 .expect("file to contain only numbers");

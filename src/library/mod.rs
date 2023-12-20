@@ -1,6 +1,7 @@
 use std::{
     convert::Infallible,
     fmt::Display,
+    io::SeekFrom,
     path::{Path, PathBuf},
     process::Stdio,
     str::FromStr,
@@ -8,15 +9,25 @@ use std::{
 };
 
 use anyhow::Context;
-use axum::response::IntoResponse;
+use axum::{
+    body::Body,
+    http::{header, HeaderMap, HeaderValue, StatusCode},
+    response::IntoResponse,
+};
+use axum_extra::{headers::Range, TypedHeader};
 use serde::{Deserialize, Serialize};
-use tokio::process::{Child, Command};
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt},
+    process::{Child, Command},
+};
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
     db::{DbVariant, DbVideo},
     ffmpeg::{get_metadata, FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream},
-    ffmpeg::{FFmpegJob, FFprobeOutput},
-    utils, server::content::ServeContent,
+    ffmpeg::{FFmpegRunningJob, FFprobeOutput, PreviewsJob, SubtitlesJob, TranscodeJob},
+    server::content::ServeContent,
+    utils,
 };
 
 use self::movie::MovieFile;
@@ -261,10 +272,10 @@ pub enum LibraryFile {
 }
 
 impl LibraryFile {
-    pub async fn serve_video(&self, range: axum_extra::headers::Range) -> impl IntoResponse {
+    pub async fn serve_video(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
         match self {
-            LibraryFile::Show(s) => s.serve_video(range).await,
-            LibraryFile::Movie(m) => m.serve_video(range).await,
+            LibraryFile::Show(s) => s.serve_video(range).await.into_response(),
+            LibraryFile::Movie(m) => m.serve_video(range).await.into_response(),
         }
     }
 
@@ -360,6 +371,14 @@ impl Source {
         })
     }
 
+    /// Find variant
+    pub fn find_variant(&self, path: &impl AsRef<Path>) -> Option<Video> {
+        self.variants
+            .iter()
+            .find(|v| v.path == path.as_ref())
+            .cloned()
+    }
+
     /// Remove all files that belong to source
     pub fn delete(&self) -> Result<(), std::io::Error> {
         self.origin.delete()?;
@@ -386,6 +405,11 @@ impl Source {
         self.resources_path.join("subs")
     }
 
+    /// Variants forder path
+    pub fn variants_path(&self) -> PathBuf {
+        self.resources_path.join("variants")
+    }
+
     /// Get prewies count
     pub fn previews_count(&self) -> usize {
         return std::fs::read_dir(self.previews_path()).unwrap().count();
@@ -394,6 +418,11 @@ impl Source {
     /// Clean all generated resources
     pub fn delete_resources(&self) -> Result<(), std::io::Error> {
         std::fs::remove_dir_all(&self.resources_path)
+    }
+
+    /// Get title included in file metadata
+    pub fn metadata_title(&self) -> Option<String> {
+        self.origin.metadata.format.tags.title.clone()
     }
 
     /// Get subtitles list
@@ -429,79 +458,35 @@ impl Source {
     }
 
     /// Generate previews for file
-    pub fn generate_previews(&self) -> FFmpegJob {
-        let args = vec![
-            "-i".into(),
-            self.source_path().to_str().unwrap().into(),
-            "-vf".into(),
-            "fps=1/10,scale=120:-1".into(),
-            format!(
-                "{}{}%d.jpg",
-                self.previews_path().to_str().unwrap(),
-                std::path::MAIN_SEPARATOR
-            ),
-        ];
-        let child = self.run_command(&args);
-        FFmpegJob::new(child, self.origin.duration(), self.source_path().into())
+    pub fn generate_previews(&self) -> FFmpegRunningJob<PreviewsJob> {
+        let job = PreviewsJob::from_source(&self);
+        FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
     }
 
     /// Generate subtitles for file
-    pub fn generate_subtitles(&self, track: i32, language: &str) -> FFmpegJob {
-        let args = vec![
-            "-i".into(),
-            self.source_path().to_str().unwrap().into(),
-            "-map".into(),
-            format!("0:{}", track),
-            format!(
-                "{}{}{}.srt",
-                self.subtitles_path().to_str().unwrap(),
-                std::path::MAIN_SEPARATOR,
-                language
-            ),
-            "-c:s".into(),
-            "copy".into(),
-            "-y".into(),
-        ];
-
-        let child = self.run_command(&args);
-        FFmpegJob::new(child, self.origin.duration(), self.source_path().into())
+    pub fn generate_subtitles(
+        &self,
+        track: i32,
+    ) -> Result<FFmpegRunningJob<SubtitlesJob>, anyhow::Error> {
+        let job = SubtitlesJob::from_source(&self, track as usize)?;
+        Ok(FFmpegRunningJob::new_running(
+            job,
+            self.source_path().into(),
+            self.duration(),
+        ))
     }
 
     /// Transcode file
-    pub fn transcode_video(&self, payload: TranscodePayload) -> Result<FFmpegJob, anyhow::Error> {
-        let buffer_path = format!("{}buffer", self.source_path().to_str().unwrap(),);
-        std::fs::rename(&self.source_path(), &buffer_path)?;
-        // NOTE: ffmpeg copies only one stream of each type by default.
-        // using -map will solve this issue but do we really need all streams on variants???
-        let mut args = Vec::new();
-        args.push("-i".into());
-        args.push(buffer_path);
-        if let Some(audio_codec) = payload.audio_codec {
-            // this map disables everything but this audio track
-            // args.push("-map".into());
-            // args.push(format!("0:{}", audio_track));
-            args.push("-c:a".into());
-            args.push(audio_codec.to_string());
-        } else {
-            args.push("-c:a".into());
-            args.push("copy".into());
-        }
-        args.push("-c:v".into());
-        if let Some(video_codec) = payload.video_codec {
-            args.push(video_codec.to_string());
-        } else {
-            args.push("copy".into());
-        }
-        if let Some(resolution) = payload.resolution {
-            args.push("-s".into());
-            args.push(resolution.to_string());
-        }
-        args.push("-c:s".into());
-        args.push("copy".into());
-        args.push(format!("{}", self.source_path().to_str().unwrap()));
-        let child = self.run_command(&args);
-        let job = FFmpegJob::new(child, self.origin.duration(), self.source_path().into());
-        return Ok(job);
+    pub fn transcode_video(
+        &self,
+        payload: TranscodePayload,
+    ) -> Result<FFmpegRunningJob<TranscodeJob>, anyhow::Error> {
+        let job = TranscodeJob::from_source(&self, payload)?;
+        Ok(FFmpegRunningJob::new_running(
+            job,
+            self.source_path().into(),
+            self.duration(),
+        ))
     }
 
     /// Returns struct compatible with database Video table
@@ -602,6 +587,11 @@ impl Video {
         self.metadata.resolution()
     }
 
+    /// Video mime type
+    pub fn guess_mime_type(&self) -> &'static str {
+        self.metadata.guess_mime()
+    }
+
     /// Convert into database compatible struct
     pub fn into_db_variant(&self, video_id: i64) -> DbVariant {
         let hash = self
@@ -619,6 +609,57 @@ impl Video {
             audio_codec: self.default_audio().map(|c| c.codec().to_string()),
             resolution: self.resolution().map(|r| r.to_string()),
         }
+    }
+
+    pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
+        let file_size = self.file_size();
+        let range = range.map(|h| h.0).unwrap_or(Range::bytes(0..).unwrap());
+        let (start, end) = range
+            .satisfiable_ranges(file_size)
+            .next()
+            .expect("at least one tuple");
+        let start = match start {
+            std::ops::Bound::Included(val) => val,
+            std::ops::Bound::Excluded(val) => val,
+            std::ops::Bound::Unbounded => 0,
+        };
+
+        let end = match end {
+            std::ops::Bound::Included(val) => val,
+            std::ops::Bound::Excluded(val) => val,
+            std::ops::Bound::Unbounded => file_size,
+        };
+        let mut file = tokio::fs::File::open(&self.path)
+            .await
+            .expect("file to be open");
+
+        let chunk_size = end - start + 1;
+        file.seek(SeekFrom::Start(start)).await.unwrap();
+        let stream_of_bytes = FramedRead::new(file.take(chunk_size), BytesCodec::new());
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_LENGTH,
+            header::HeaderValue::from(end - start),
+        );
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(self.guess_mime_type()),
+        );
+        headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+        headers.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=0"),
+        );
+        headers.insert(
+            header::CONTENT_RANGE,
+            HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size)).unwrap(),
+        );
+
+        return (
+            StatusCode::PARTIAL_CONTENT,
+            headers,
+            Body::from_stream(stream_of_bytes),
+        );
     }
 }
 
@@ -876,28 +917,28 @@ async fn cancel_transcode() {
         .len();
     let video_path = subject.source.source_path().to_path_buf();
     let (tx, rx) = oneshot::channel();
-    let task_id = task_resource
-        .add_new_task(video_path.to_path_buf(), TaskKind::Transcode, Some(tx))
-        .await
-        .unwrap();
     let payload = TranscodePayloadBuilder::new()
         .video_codec(VideoCodec::Hevc)
         .build();
-    let mut process = subject.source.transcode_video(payload).unwrap();
+    let process = subject.source.transcode_video(payload).unwrap();
+    let task_id = task_resource
+        .start_task(video_path.to_path_buf(), TaskKind::Transcode, Some(tx))
+        .unwrap();
     {
         let task_resource = task_resource.clone();
         let task_id = task_id.clone();
         tokio::spawn(async move {
             time::sleep(Duration::from_secs(2)).await;
-            task_resource.cancel_task(task_id).await.unwrap();
+            task_resource.cancel_task(task_id).unwrap();
         });
     }
     let original_buffer = format!("{}buffer", video_path.to_str().unwrap());
     tokio::select! {
-        _ = process.wait() => {},
+        _ = task_resource.observe_cancelable(process, TaskKind::Transcode) => {
+            task_resource.finish_task(task_id);
+        },
         _ = rx => {
-            process.kill().await;
-            task_resource.remove_task(task_id).await;
+            task_resource.cancel_task(task_id).expect("task to be cancelable");
             fs::remove_file(&video_path).await.unwrap();
             fs::rename(&original_buffer, &video_path).await.unwrap()
         },

@@ -46,7 +46,7 @@ fn watch_changes(
     let (tx, rx) = mpsc::channel(100);
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
         if let Ok(event) = res {
-            tracing::debug!("event detected {:?}", event);
+            tracing::debug!("folders change detected");
             let event_type = match event.kind {
                 EventKind::Create(_) => EventType::Create,
                 EventKind::Modify(kind) if kind == ModifyKind::Name(RenameMode::To) => {

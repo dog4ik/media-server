@@ -127,8 +127,10 @@ impl<S: Subscriber> Layer<S> for PublicTracerLayer {
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) -> bool {
         let target = metadata.target();
-        let patterns = ["hyper", "mio", "notify"];
-        !patterns.iter().any(|pattern| target.starts_with(pattern))
+        let exclude_patterns = ["hyper", "mio", "notify", "sqlx", "reqwest"];
+        !exclude_patterns
+            .iter()
+            .any(|pattern| target.starts_with(pattern))
     }
 
     fn on_event(

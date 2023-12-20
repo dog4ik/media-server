@@ -226,7 +226,6 @@ pub async fn cancel_task(
 ) -> Result<(), StatusCode> {
     tasks
         .cancel_task(task_id)
-        .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
     Ok(())
 }
@@ -238,8 +237,7 @@ pub async fn mock_progress(
     debug!("Emitting fake progress with target: {}", target);
     let (tx, rx) = oneshot::channel();
     let task_id = tasks
-        .add_new_task(PathBuf::from(target), TaskKind::Scan, Some(tx))
-        .await
+        .start_task(PathBuf::from(target), TaskKind::Scan, Some(tx))
         .unwrap();
     let ProgressChannel(channel) = &tasks.progress_channel;
     let channel = channel.clone();
@@ -247,19 +245,16 @@ pub async fn mock_progress(
         tokio::select! {
             _ = async {
                 let mut progress = 0;
-                let _ = channel.send(ProgressChunk::start(task_id));
                 while progress <= 100 {
                     let _ = channel.send(ProgressChunk::pending(task_id, progress));
                     progress += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
-                tasks.remove_task(task_id).await;
-                let _ = channel.send(ProgressChunk::finish(task_id));
+                tasks.finish_task(task_id);
                 debug!("finished fake progress with id: {}", task_id);
             }=> {},
             _ = rx => {
-                tasks.remove_task(task_id).await;
-                let _ = channel.send(ProgressChunk::cancel(task_id));
+                tasks.cancel_task(task_id).expect("task to be canceleable");
                 debug!("Canceled fake progress with id: {}", task_id);
             }
         }
@@ -267,7 +262,7 @@ pub async fn mock_progress(
 }
 
 pub async fn get_tasks(State(tasks): State<TaskResource>) -> String {
-    let tasks = tasks.tasks.lock().await;
+    let tasks = tasks.tasks.lock().unwrap();
     serde_json::to_string(&*tasks).unwrap()
 }
 

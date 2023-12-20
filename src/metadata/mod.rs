@@ -1,9 +1,10 @@
-use std::{io::Cursor, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use crate::db::{DbEpisode, DbMovie, DbSeason, DbShow};
+use crate::{
+    db::{DbEpisode, DbMovie, DbSeason, DbShow},
+    ffmpeg, library::{movie::MovieFile, show::ShowFile},
+};
 use anyhow::Result;
-use base64::{engine::general_purpose, Engine};
-use image::{imageops::FilterType, GenericImageView};
 use reqwest::{Client, Request, Response, Url};
 use serde::{de::DeserializeOwned, Serialize};
 use tokio::sync::{mpsc, oneshot, Semaphore};
@@ -27,27 +28,15 @@ impl MetadataImage {
     pub fn new(url: Url) -> Self {
         MetadataImage(url)
     }
-    const BLUR_DATA_IMG_WIDTH: u32 = 30;
+    const BLUR_DATA_IMG_WIDTH: i32 = 30;
 
     //NOTE: This is slow (image crate)
     #[instrument(name = "Blur data", level = "trace")]
     pub async fn generate_blur_data(&self) -> Result<String, anyhow::Error> {
+        tracing::trace!("Generating blur data for: {}", self.0);
         let MetadataImage(url) = self;
         let bytes = reqwest::get(url.clone()).await?.bytes().await?;
-        let image = image::load_from_memory(&bytes)?;
-        let (img_width, img_height) = image.dimensions();
-        let img_aspect_ratio: f64 = img_width as f64 / img_height as f64;
-        let resized_image = image.resize(
-            Self::BLUR_DATA_IMG_WIDTH,
-            (Self::BLUR_DATA_IMG_WIDTH as f64 / img_aspect_ratio).floor() as u32,
-            FilterType::Triangle,
-        );
-        let mut image_data: Vec<u8> = Vec::new();
-        resized_image.write_to(
-            &mut Cursor::new(&mut image_data),
-            image::ImageOutputFormat::Jpeg(80),
-        )?;
-        Ok(general_purpose::STANDARD_NO_PAD.encode(image_data))
+        ffmpeg::resize_image_ffmpeg(bytes, Self::BLUR_DATA_IMG_WIDTH, None).await
     }
 
     pub fn as_str(&self) -> &str {
@@ -60,7 +49,7 @@ pub trait MovieMetadataProvider {
     #[allow(async_fn_in_trait)]
     fn movie(
         &self,
-        movie_title: &str,
+        movie: &MovieFile,
     ) -> impl std::future::Future<Output = Result<MovieMetadata>> + Send;
 
     /// Provider identifier
@@ -72,7 +61,7 @@ pub trait ShowMetadataProvider {
     #[allow(async_fn_in_trait)]
     fn show(
         &self,
-        show_title: &str,
+        show: &ShowFile,
     ) -> impl std::future::Future<Output = Result<ShowMetadata>> + Send;
 
     /// Query for season
@@ -130,11 +119,16 @@ impl LimitedRequestClient {
         T: DeserializeOwned,
     {
         let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
+        let url = req.url().clone();
         self.request_tx.clone().send((req, tx)).await?;
         let response = rx
             .await
             .map_err(|_| anyhow::anyhow!("failed to receive response: channel closed"))?
-            .map_err(|e| anyhow::anyhow!("Request failed: {}", e))?;
+            .map_err(|e| {
+                tracing::error!("Request in {} failed: {}", url, e);
+                return anyhow::anyhow!("Request failed: {}", e);
+            })?;
+        tracing::trace!("Succeded request: {}", url);
         Ok(response.json().await?)
     }
 }

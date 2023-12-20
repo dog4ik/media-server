@@ -1,17 +1,24 @@
+use std::io::Cursor;
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{path::Path, str::from_utf8};
 
+use base64::engine::general_purpose;
+use base64::Engine;
+use image::imageops::FilterType;
+use image::GenericImageView;
 use serde::{Deserialize, Serialize};
-use tokio::io::{BufReader, AsyncBufReadExt};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
-use crate::library::{AudioCodec, VideoCodec, Resolution, SubtitlesCodec};
+use crate::library::{
+    AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, VideoCodec,
+};
+use crate::utils;
 use anyhow::anyhow;
-
 
 /// General track stream provided by FFprobe
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -72,6 +79,14 @@ pub struct FFprobeSubtitleStream<'a> {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeFormat {
     pub duration: String,
+    pub format_name: String,
+    pub bit_rate: String,
+    pub tags: FormatTags,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct FormatTags {
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -201,6 +216,16 @@ impl FFprobeOutput {
                 .round() as u64,
         )
     }
+
+    /// Get mime type
+    pub fn guess_mime(&self) -> &'static str {
+        let format_name = &self.format.format_name;
+        match format_name.as_str() {
+            "matroska,webm" => "video/x-matroska",
+            "mov,mp4,m4a,3gp,3g2,mj2" => "video/mp4",
+            _ => "video/x-matroska",
+        }
+    }
 }
 
 impl FFprobeStream {
@@ -260,12 +285,11 @@ pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Err
         .args(&[
             "-v",
             "quiet",
-            "-show_entries",
-            "format=duration",
             "-print_format",
             "json",
             "-show_streams",
             "-show_chapters",
+            "-show_format",
             path.to_str().unwrap(),
         ])
         .output()
@@ -275,39 +299,252 @@ pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Err
     Ok(metadata)
 }
 
-// NOTE: cleanup callback? (after job is done)
-#[derive(Debug)]
-pub struct FFmpegJob {
-    process: Child,
-    duration: Duration,
-    pub target: PathBuf,
+#[derive(Debug, Clone)]
+pub enum JobType {
+    Previews,
+    Transcode,
+    Subtitles,
+    ImageResize,
 }
 
-impl FFmpegJob {
-    pub fn new(child: Child, duration: Duration, target: PathBuf) -> Self {
+pub trait FFmpegTask {
+    fn args(&self) -> Vec<String>;
+    #[allow(async_fn_in_trait)]
+    async fn cancel(self) -> Result<(), anyhow::Error>;
+}
+
+#[derive(Debug)]
+pub struct PreviewsJob {
+    output_folder: PathBuf,
+    source_path: PathBuf,
+}
+
+impl PreviewsJob {
+    pub fn from_source(source: &Source) -> Self {
         Self {
-            process: child,
+            source_path: source.source_path().to_path_buf(),
+            output_folder: source.previews_path(),
+        }
+    }
+    pub fn new(source_path: PathBuf, output_folder: PathBuf) -> Self {
+        Self {
+            output_folder,
+            source_path,
+        }
+    }
+}
+
+impl FFmpegTask for PreviewsJob {
+    fn args(&self) -> Vec<String> {
+        vec![
+            "-i".into(),
+            self.source_path.to_string_lossy().to_string(),
+            "-vf".into(),
+            "fps=1/10,scale=120:-1".into(),
+            format!(
+                "{}{}%d.jpg",
+                self.output_folder.to_string_lossy().to_string(),
+                std::path::MAIN_SEPARATOR
+            ),
+        ]
+    }
+
+    async fn cancel(self) -> Result<(), anyhow::Error> {
+        utils::clear_directory(self.output_folder).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct SubtitlesJob {
+    track: usize,
+    source_path: PathBuf,
+    output_file_path: PathBuf,
+}
+
+impl SubtitlesJob {
+    pub fn from_source(input: &Source, track: usize) -> Result<Self, anyhow::Error> {
+        let output_path = |lang: &str| {
+            input
+                .subtitles_path()
+                .join(PathBuf::new().with_file_name(lang).with_extension("srt"))
+        };
+
+        input
+            .origin
+            .subtitle_streams()
+            .iter()
+            .find(|s| s.index == track as i32 && s.codec().supports_text())
+            .map(|s| Self {
+                source_path: input.source_path().to_path_buf(),
+                track: s.index as usize,
+                output_file_path: output_path(s.language),
+            })
+            .ok_or(anyhow::anyhow!("cant find track in file"))
+    }
+
+    pub fn new(source_path: PathBuf, output_file: PathBuf, track: usize) -> Self {
+        Self {
+            source_path,
+            track,
+            output_file_path: output_file,
+        }
+    }
+}
+
+impl FFmpegTask for SubtitlesJob {
+    fn args(&self) -> Vec<String> {
+        let args = vec![
+            "-i".into(),
+            self.source_path.to_string_lossy().to_string(),
+            "-map".into(),
+            format!("0:{}", self.track),
+            self.output_file_path.to_string_lossy().to_string(),
+            "-c:s".into(),
+            "copy".into(),
+            "-y".into(),
+        ];
+        return args;
+    }
+
+    async fn cancel(self) -> Result<(), anyhow::Error> {
+        use tokio::fs;
+        fs::remove_file(self.output_file_path).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct TranscodeJob {
+    pub output_path: PathBuf,
+    pub source_path: PathBuf,
+    payload: TranscodePayload,
+}
+
+impl TranscodeJob {
+    pub fn from_source(source: &Source, payload: TranscodePayload) -> Result<Self, anyhow::Error> {
+        let source_path = source.source_path();
+        let extention = source_path
+            .extension()
+            .ok_or(anyhow::anyhow!("extention missing"))?;
+
+        let output_name = PathBuf::new()
+            .with_file_name(uuid::Uuid::new_v4().to_string())
+            .with_extension(extention);
+        let output_path = source.variants_path().join(output_name);
+        Ok(Self {
+            source_path: source.source_path().to_path_buf(),
+            payload,
+            output_path,
+        })
+    }
+
+    pub fn new(input_path: PathBuf, output_path: PathBuf, payload: TranscodePayload) -> Self {
+        Self {
+            output_path,
+            source_path: input_path,
+            payload,
+        }
+    }
+}
+
+impl FFmpegTask for TranscodeJob {
+    fn args(&self) -> Vec<String> {
+        let mut args = Vec::new();
+        args.push("-i".into());
+        args.push(self.source_path.to_string_lossy().to_string());
+        if let Some(audio_codec) = &self.payload.audio_codec {
+            args.push("-c:a".into());
+            args.push(audio_codec.to_string());
+        } else {
+            args.push("-c:a".into());
+            args.push("copy".into());
+        }
+        args.push("-c:v".into());
+        if let Some(video_codec) = &self.payload.video_codec {
+            args.push(video_codec.to_string());
+        } else {
+            args.push("copy".into());
+        }
+        if let Some(resolution) = &self.payload.resolution {
+            args.push("-s".into());
+            args.push(resolution.to_string());
+        }
+        args.push("-c:s".into());
+        args.push("copy".into());
+        args.push(self.output_path.to_string_lossy().to_string());
+        return args;
+    }
+    async fn cancel(self) -> Result<(), anyhow::Error> {
+        use tokio::fs;
+        fs::remove_file(self.output_path).await?;
+        Ok(())
+    }
+}
+
+// NOTE: cleanup callback? (after job is done)
+#[derive(Debug)]
+pub struct FFmpegRunningJob<T: FFmpegTask> {
+    process: Child,
+    pub target: PathBuf,
+    job: T,
+    duration: Duration,
+}
+
+impl<T: FFmpegTask> FFmpegRunningJob<T> {
+    pub fn new_running(job: T, source_path: PathBuf, duration: Duration) -> FFmpegRunningJob<T> {
+        let process = Self::run(&job.args());
+        Self {
+            process,
+            target: source_path,
             duration,
-            target,
+            job,
         }
     }
 
+    /// Run ffmpeg command. Returns handle to process
+    fn run<I, S>(args: I) -> Child
+    where
+        I: IntoIterator<Item = S> + Copy,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        tokio::process::Command::new("ffmpeg")
+            .kill_on_drop(true)
+            .args(["-progress", "pipe:1", "-nostats"])
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("process to spawn")
+    }
+
+    /// Kill the job
     pub async fn kill(&mut self) {
         if let Err(_) = self.process.kill().await {
             tracing::error!("Failed to kill ffmpeg job")
         };
     }
 
+    /// Wait until process fully complete or terminated
     pub async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
         self.process.wait().await
     }
 
+    /// Kill task cleaning up garbage
+    pub async fn cancel(mut self) -> Result<(), anyhow::Error> {
+        self.kill().await;
+        self.job.cancel().await?;
+        Ok(())
+    }
+
+    /// Channel with job progress in percents. Consumes stdout of process
+    /// Returns `None` if stdout is empty
     pub fn progress(&mut self) -> mpsc::Receiver<usize> {
         let (tx, rx) = mpsc::channel(100);
-        let out = self.process.stdout.take().expect("ffmpeg have stdout");
+        let out = self.process.stdout.take().expect("ffmpeg to have stdout");
         let reader = BufReader::new(out);
         let mut lines = reader.lines();
-        let duration = self.duration.clone();
+        let duration = self.duration;
         tokio::spawn(async move {
             while let Ok(Some(line)) = lines.next_line().await {
                 let (key, value) = line.trim().split_once('=').expect("output to be key=value");
@@ -343,4 +580,81 @@ impl FFmpegJob {
         });
         return rx;
     }
+}
+
+/// Resize and base64 encode image using ffmpeg image2pipe format
+pub async fn resize_image_ffmpeg(
+    bytes: bytes::Bytes,
+    width: i32,
+    height: Option<i32>,
+) -> Result<String, anyhow::Error> {
+    let scale = format!("scale={}:{}", width, height.unwrap_or(-1));
+    let mut child = tokio::process::Command::new("ffmpeg")
+        .args(&[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            "-",
+            "-vf",
+            &scale,
+            "-f",
+            "image2pipe",
+            "-",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    {
+        let mut stdin = child.stdin.take().ok_or(anyhow!("failed to take stdin"))?;
+        stdin.write_all(&bytes).await?;
+    }
+    let output = child.wait_with_output().await?;
+    if output.status.code().unwrap_or(1) == 0 {
+        Ok(general_purpose::STANDARD_NO_PAD.encode(output.stdout))
+    } else {
+        Err(anyhow::anyhow!(
+            "resize process was unexpectedly terminated"
+        ))
+    }
+}
+
+pub fn resize_image_crate(
+    bytes: Vec<u8>,
+    width: u32,
+    height: Option<u32>,
+) -> Result<String, anyhow::Error> {
+    let image = image::load_from_memory(&bytes)?;
+    let (img_width, img_height) = image.dimensions();
+    let img_aspect_ratio: f64 = img_width as f64 / img_height as f64;
+    let resized_image = image.resize(
+        width as u32,
+        height.unwrap_or((width as f64 / img_aspect_ratio).floor() as u32),
+        FilterType::Triangle,
+    );
+    let mut image_data = Vec::new();
+    resized_image.write_to(
+        &mut Cursor::new(&mut image_data),
+        image::ImageOutputFormat::Jpeg(80),
+    )?;
+    Ok(general_purpose::STANDARD_NO_PAD.encode(image_data))
+}
+
+#[tokio::test]
+async fn resize_image_ffmpeg_test() {
+    use tokio::fs;
+    let bytes = fs::read("test-dir/test.jpeg").await.unwrap();
+    let base64 = resize_image_ffmpeg(bytes.into(), 16, None).await.unwrap();
+    dbg!(&base64);
+    assert!(base64.len() > 100);
+}
+
+#[tokio::test]
+async fn resize_image_crate_test() {
+    use tokio::fs;
+    let bytes = fs::read("test-dir/test.jpeg").await.unwrap();
+    let base64 = resize_image_crate(bytes, 16, None).unwrap();
+    dbg!(&base64);
+    assert!(base64.len() > 100);
 }

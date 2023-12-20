@@ -1,11 +1,14 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
+use std::sync::Mutex;
 
 use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT_ENCODING},
     Client, Method, Request, Url,
 };
 use serde::Deserialize;
-use tokio::sync::Mutex;
+
+use crate::library::movie::MovieFile;
+use crate::library::show::ShowFile;
 
 use super::{
     EpisodeMetadata, LimitedRequestClient, MetadataImage, MovieMetadata, MovieMetadataProvider,
@@ -81,7 +84,7 @@ impl TmdbApi {
             .build()
             .expect("build to succeed");
         let limited_client =
-            LimitedRequestClient::new(client, Self::RATE_LIMIT, Duration::from_secs(1));
+            LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
         let base_url = Url::parse_with_params(Self::API_URL, params).expect("url to parse");
         Self {
             api_key,
@@ -130,8 +133,7 @@ impl TmdbApi {
         let req = Request::new(Method::GET, url);
         let response: TmdbShowSeason = self.client.request(req).await?;
 
-        self.update_cache(tmdb_show_id, season, response.episodes.clone())
-            .await;
+        self.update_cache(tmdb_show_id, season, response.episodes.clone());
 
         Ok(response)
     }
@@ -142,26 +144,26 @@ impl TmdbApi {
         season: usize,
         episode: usize,
     ) -> anyhow::Result<TmdbSeasonEpisode> {
-        if let Some(cache_episode) = self.get_from_cache(tmdb_show_id, season, episode).await {
+        if let Some(cache_episode) = self.get_from_cache(tmdb_show_id, season, episode) {
+            tracing::debug!(
+                "Reused cache entry for {} season: {} episode: {}",
+                tmdb_show_id,
+                season,
+                episode
+            );
             return Ok(cache_episode);
         } else {
             let response = self.tv_show_season(tmdb_show_id, season).await?;
-            self.update_cache(tmdb_show_id, season, response.episodes)
-                .await;
+            self.update_cache(tmdb_show_id, season, response.episodes);
             Ok(self
                 .get_from_cache(tmdb_show_id, season, episode)
-                .await
+                // this panics when episode does not exist in tmdb databes but we have it on disk
                 .expect("cache to contain episode"))
         }
     }
 
-    async fn update_cache(
-        &self,
-        tmdb_show_id: usize,
-        season: usize,
-        episodes: Vec<TmdbSeasonEpisode>,
-    ) {
-        let mut episodes_cache = self.episodes_cache.lock().await;
+    fn update_cache(&self, tmdb_show_id: usize, season: usize, episodes: Vec<TmdbSeasonEpisode>) {
+        let mut episodes_cache = self.episodes_cache.lock().unwrap();
         match episodes_cache.try_insert(tmdb_show_id, HashMap::new()) {
             Ok(entry) => {
                 entry.insert(season, episodes);
@@ -175,13 +177,13 @@ impl TmdbApi {
         }
     }
 
-    async fn get_from_cache(
+    fn get_from_cache(
         &self,
         tmdb_show_id: usize,
         season: usize,
         episode: usize,
     ) -> Option<TmdbSeasonEpisode> {
-        let episodes_cache = self.episodes_cache.lock().await;
+        let episodes_cache = self.episodes_cache.lock().unwrap();
         let show = episodes_cache.get(&tmdb_show_id)?;
         let season = show.get(&season)?;
         season.get(episode - 1).cloned()
@@ -270,8 +272,8 @@ impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
 }
 
 impl MovieMetadataProvider for TmdbApi {
-    async fn movie(&self, movie_title: &str) -> Result<MovieMetadata, anyhow::Error> {
-        let movies = self.search_movie(movie_title).await?;
+    async fn movie(&self, movie: &MovieFile) -> Result<MovieMetadata, anyhow::Error> {
+        let movies = self.search_movie(&movie.local_title).await?;
         movies
             .results
             .into_iter()
@@ -286,14 +288,53 @@ impl MovieMetadataProvider for TmdbApi {
 }
 
 impl ShowMetadataProvider for TmdbApi {
-    async fn show(&self, show_title: &str) -> Result<ShowMetadata, anyhow::Error> {
-        let shows = self.search_tv_show(show_title).await?;
-        shows
-            .results
-            .into_iter()
-            .next()
-            .ok_or(anyhow::anyhow!("results are empty"))
-            .map(|s| s.into())
+    async fn show(&self, show: &ShowFile) -> Result<ShowMetadata, anyhow::Error> {
+        let contains = |parts: &Vec<&str>, name: &str| parts.iter().any(|p| name.contains(p));
+        let shows = self.search_tv_show(&show.local_title).await?;
+        for result in shows.results.iter().take(5) {
+            let name = result.original_name.to_lowercase();
+            let name_parts: Vec<&str> = name.split_whitespace().collect();
+            // basic check
+            if contains(&name_parts, &show.local_title) {
+                return Ok(result.clone().into());
+            }
+            tracing::debug!(
+                "Show name ({}) does not contain local name ({}). Doing metadata check",
+                name,
+                show.local_title
+            );
+
+            // metadata title check
+            let metadata_title = show.source.metadata_title().map(|t| t.to_lowercase());
+            if let Some(file_title_tag) = metadata_title {
+                if contains(&name_parts, &file_title_tag) {
+                    return Ok(result.clone().into());
+                }
+            }
+
+            tracing::debug!(
+                "Show name does not contain file metadata title ({}). Doing duration check",
+                show.local_title
+            );
+
+            // duration check
+            let duration = show.source.origin.duration();
+            let duration_match = self
+                .tv_show_episode(result.id, show.season.into(), show.episode.into())
+                .await
+                .map_or(false, |e| {
+                    let threshold = time::Duration::minutes(2);
+                    let local_duration: time::Duration = duration.try_into().unwrap();
+                    let tmdb_duration = time::Duration::minutes(e.runtime as i64);
+                    let difference = (local_duration - tmdb_duration).abs();
+                    difference <= threshold
+                });
+            if duration_match {
+                return Ok(result.clone().into());
+            }
+        }
+        tracing::warn!("Failed to verify match for {}", show.local_title);
+        Err(anyhow::anyhow!("failed to find show"))
     }
 
     async fn season(
@@ -362,6 +403,8 @@ pub struct TmdbSeasonEpisode {
     pub overview: String,
     pub id: usize,
     pub production_code: Option<String>,
+    /// Duration in minutes
+    pub runtime: usize,
     pub season_number: usize,
     pub still_path: String,
     pub vote_average: f64,
