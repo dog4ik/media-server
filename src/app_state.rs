@@ -203,20 +203,24 @@ impl AppState {
         let source = self.get_file_by_id(video_id).await?;
 
         let job = source.transcode_video(payload)?;
+        let output_path = job.job.output_path.clone();
 
-        let run_result = self
-            .tasks
+        self.tasks
             .observe_ffmpeg_task(job, TaskKind::Transcode)
-            .await;
+            .await?;
+        let variant_video = Video::from_path(output_path).expect("file to be done transcoding");
+        match self
+            .db
+            .insert_variant(variant_video.into_db_variant(video_id))
+            .await
+        {
+            Ok(_) => tracing::trace!("Inserted variant in DB"),
+            Err(_) => tracing::error!("Failed to insert variant in DB"),
+        };
 
-        if let Err(err) = run_result {
-            match err {
-                TaskError::Canceled => todo!(),
-                TaskError::NotFound => todo!(),
-                _ => todo!(),
-            }
-            // cancel logic
-        }
+        let mut library = self.library.lock().unwrap();
+        library.add_variant(source.source_path(), variant_video);
+
         Ok(())
     }
 
@@ -247,7 +251,6 @@ impl AppState {
         Ok(())
     }
 
-    #[tracing::instrument]
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
         // TODO: Custom metadata provider
         use crate::metadata::tmdb_api::TmdbApi;
@@ -273,7 +276,7 @@ impl AppState {
 
         let local_episodes: HashMap<String, &ShowFile> = local_episodes
             .iter()
-            .map(|ep| (ep.source.source_path().to_str().unwrap().into(), ep))
+            .map(|ep| (ep.source.source_path().to_string_lossy().to_string(), ep))
             .collect();
 
         //TODO: add hashsum check
@@ -310,20 +313,22 @@ impl AppState {
             let semaphore = show_semaphore.clone();
             let handle = tokio::spawn(async move {
                 let permit = semaphore.acquire().await.unwrap();
-                let task_id = app_state
-                    .tasks
-                    .start_task(local_ep.source_path().clone(), TaskKind::Scan, None)
-                    //FIX: this unwrap panics at runtime Duplicate this creates zombie task
-                    .unwrap();
-                let scan_result = app_state.handle_show(local_ep, &*metadata_provider).await;
-                match scan_result {
-                    Err(_err) => {
-                        app_state.tasks.error_task(task_id);
-                    }
-                    Ok(_) => {
-                        app_state.tasks.finish_task(task_id);
-                    }
-                };
+                let task_id = app_state.tasks.start_task(
+                    local_ep.source_path().clone(),
+                    TaskKind::Scan,
+                    None,
+                );
+                if let Ok(task_id) = task_id {
+                    let scan_result = app_state.handle_show(local_ep, &*metadata_provider).await;
+                    match scan_result {
+                        Err(_err) => {
+                            app_state.tasks.error_task(task_id);
+                        }
+                        Ok(_) => {
+                            app_state.tasks.finish_task(task_id);
+                        }
+                    };
+                }
                 drop(permit);
             });
             handles.push(handle);
@@ -332,7 +337,7 @@ impl AppState {
         for handle in handles {
             let _ = handle.await;
         }
-        //BUG: this never fires
+
         tracing::info!("Finished library reconciliation");
         Ok(())
     }
@@ -406,8 +411,7 @@ impl AppState {
                     );
                     let metadata = metadata_provider
                         .season(&show_metadata_id, show.season.into())
-                        .await
-                        .unwrap();
+                        .await?;
                     let db_season = metadata.into_db_season(show_id).await;
                     self.db.insert_season(db_season).await?
                 }
@@ -442,8 +446,7 @@ impl AppState {
                         show.season as usize,
                         show.episode as usize,
                     )
-                    .await
-                    .unwrap();
+                    .await?;
                 let db_video = show.source.into_db_video(show.local_title.clone());
                 let video_id = self.db.insert_video(db_video).await?;
                 for variant in &show.source.variants {

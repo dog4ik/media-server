@@ -8,13 +8,14 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::ffmpeg::{FFmpegRunningJob, FFmpegTask};
+use crate::{ffmpeg::{FFmpegRunningJob, FFmpegTask}, app_state::AppError};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskKind {
     Transcode,
     Scan,
+    FullScan,
     Previews,
     Subtitles,
 }
@@ -137,6 +138,17 @@ pub enum TaskError {
     NotFound,
 }
 
+impl From<TaskError> for AppError {
+    fn from(value: TaskError) -> Self {
+        match value {
+            TaskError::Duplicate => Self::bad_request("Duplicate task encountered"),
+            TaskError::NotCancelable => Self::bad_request("Task can not be canceled"),
+            TaskError::Canceled => Self::bad_request("Task was canceled"),
+            TaskError::NotFound => Self::not_found("Task was not found"),
+        }
+    }
+}
+
 impl TaskResource {
     pub fn new() -> Self {
         TaskResource {
@@ -145,6 +157,7 @@ impl TaskResource {
         }
     }
 
+    /// Wait until task is over while dispatching progress
     pub async fn observe_ffmpeg_task(
         &self,
         mut job: FFmpegRunningJob<impl FFmpegTask>,
@@ -168,8 +181,7 @@ impl TaskResource {
                 Ok(())
             },
             _ = rx => {
-                job.kill().await;
-                self.cancel_task(id).unwrap();
+                let _ = job.cancel().await;
                 Err(TaskError::Canceled)
             }
         };
@@ -183,8 +195,9 @@ impl TaskResource {
             .find(|t| t.target == task.target && t.kind == task.kind);
         if let Some(duplicate) = duplicate {
             error!(
-                "Failed to create task: dublicate {:?} ({})",
-                task.target, duplicate.id
+                "Failed to create task: dublicate {} ({})",
+                task.target.display(),
+                duplicate.id
             );
             return Err(TaskError::Duplicate);
         }

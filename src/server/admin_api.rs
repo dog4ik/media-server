@@ -105,6 +105,25 @@ pub struct TranscodeFilePayload {
     pub video_id: i64,
 }
 
+#[test]
+fn parse_transcode_payload() {
+    use crate::library::{AudioCodec, VideoCodec};
+    let json = serde_json::json!({
+    "payload": {
+        "audio_codec": "aac",
+        "audio_track": 2,
+        "video_codec": "hevc",
+        "resolution": "1920x1080",
+        },
+    "video_id" : 23
+    })
+    .to_string();
+    let payload: TranscodeFilePayload = serde_json::from_str(&json).unwrap();
+    assert_eq!(payload.payload.audio_codec.unwrap(), AudioCodec::AAC);
+    assert_eq!(payload.payload.video_codec.unwrap(), VideoCodec::Hevc);
+    assert_eq!(payload.payload.resolution.unwrap(), (1920, 1080).into());
+}
+
 impl Display for Provider {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -197,7 +216,7 @@ pub async fn alter_movie_metadata(
     Ok(())
 }
 
-pub async fn trascode_video(
+pub async fn transcode_video(
     State(app_state): State<AppState>,
     Json(body): Json<TranscodeFilePayload>,
 ) {

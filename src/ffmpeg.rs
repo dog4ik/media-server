@@ -492,7 +492,7 @@ impl FFmpegTask for TranscodeJob {
 pub struct FFmpegRunningJob<T: FFmpegTask> {
     process: Child,
     pub target: PathBuf,
-    job: T,
+    pub job: T,
     duration: Duration,
 }
 
