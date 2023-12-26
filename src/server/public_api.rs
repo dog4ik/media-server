@@ -71,6 +71,7 @@ pub struct DetailedEpisode {
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct DetailedVideo {
+    pub id: i64,
     pub path: PathBuf,
     pub hash: String,
     pub local_title: String,
@@ -80,7 +81,22 @@ pub struct DetailedVideo {
     pub audio_codec: Option<AudioCodec>,
     pub resolution: Option<Resolution>,
     pub bitrate: usize,
+    pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DetailedVariant {
+    pub id: i64,
+    pub video_id: i64,
+    pub path: PathBuf,
+    pub hash: String,
+    pub size: i64,
+    pub duration: std::time::Duration,
+    pub video_codec: Option<VideoCodec>,
+    pub audio_codec: Option<AudioCodec>,
+    pub resolution: Option<Resolution>,
+    pub bitrate: usize,
 }
 
 pub async fn previews(
@@ -537,6 +553,7 @@ pub async fn get_video_by_id(
     let source = file.source();
     let date = db_video.scan_date.expect("scan date always defined");
     let detailed_episode = DetailedVideo {
+        id: query.id,
         path: file.source_path().to_path_buf(),
         hash: db_video.hash,
         local_title: file.title(),
@@ -546,6 +563,7 @@ pub async fn get_video_by_id(
         video_codec: source.origin.default_video().map(|v| v.codec()),
         resolution: source.origin.resolution().map(|v| v),
         bitrate: source.origin.bitrate(),
+        variants: detailed_variants,
         scan_date: date.to_string(),
     };
     Ok(Json(detailed_episode))
