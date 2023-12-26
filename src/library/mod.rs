@@ -3,7 +3,6 @@ use std::{
     fmt::Display,
     io::SeekFrom,
     path::{Path, PathBuf},
-    process::Stdio,
     str::FromStr,
     time::Duration,
 };
@@ -15,11 +14,8 @@ use axum::{
     response::IntoResponse,
 };
 use axum_extra::{headers::Range, TypedHeader};
-use serde::{Deserialize, Serialize};
-use tokio::{
-    io::{AsyncReadExt, AsyncSeekExt},
-    process::{Child, Command},
-};
+use serde::{de::Visitor, Deserialize, Serialize};
+use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
@@ -129,6 +125,11 @@ impl Library {
         })
     }
 
+    pub fn add_variant(&mut self, path: impl AsRef<Path>, video: Video) {
+        let item = self.find_source_mut(path).unwrap();
+        item.add_variant(video)
+    }
+
     pub fn remove_show(&mut self, path: impl AsRef<Path>) {
         self.shows
             .iter()
@@ -180,6 +181,22 @@ impl Library {
                 .iter()
                 .find(|f| f.source_path() == path.as_ref())
                 .map(|x| &x.source);
+        }
+        show
+    }
+
+    pub fn find_source_mut(&mut self, path: impl AsRef<Path>) -> Option<&mut Source> {
+        let show = self
+            .shows
+            .iter_mut()
+            .find(|f| f.source_path() == path.as_ref())
+            .map(|x| &mut x.source);
+        if show.is_none() {
+            return self
+                .movies
+                .iter_mut()
+                .find(|f| f.source_path() == path.as_ref())
+                .map(|x| &mut x.source);
         }
         show
     }
@@ -377,6 +394,11 @@ impl Source {
             .iter()
             .find(|v| v.path == path.as_ref())
             .cloned()
+    }
+
+    /// Add variant
+    pub fn add_variant(&mut self, video: Video) {
+        self.variants.push(video);
     }
 
     /// Remove all files that belong to source
