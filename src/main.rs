@@ -12,7 +12,7 @@ use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, Level};
 
@@ -66,13 +66,13 @@ async fn main() {
     };
 
     let library = Library::new(media_folders.clone(), shows, movies);
-    let library = Arc::new(Mutex::new(library));
+    let library = Box::leak(Box::new(Mutex::new(library)));
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
 
     let tasks = TaskResource::new();
 
     let app_state = AppState {
-        library: library.clone(),
+        library,
         configuration,
         db,
         tasks,

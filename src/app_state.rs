@@ -10,7 +10,9 @@ use tokio::{fs, sync::Semaphore};
 use crate::{
     config::ServerConfiguration,
     db::{Db, DbSubtitles},
-    library::{movie::MovieFile, show::ShowFile, Library, LibraryItem, Source, TranscodePayload},
+    library::{
+        movie::MovieFile, show::ShowFile, Library, LibraryItem, Source, TranscodePayload, Video,
+    },
     metadata::{MovieMetadataProvider, ShowMetadataProvider},
     progress::{TaskError, TaskKind, TaskResource},
     utils,
@@ -18,7 +20,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub struct AppState {
-    pub library: Arc<Mutex<Library>>,
+    pub library: &'static Mutex<Library>,
     pub db: Db,
     pub tasks: TaskResource,
     pub configuration: &'static Mutex<ServerConfiguration>,
@@ -507,9 +509,9 @@ impl AppState {
     }
 }
 
-impl FromRef<AppState> for Arc<Mutex<Library>> {
-    fn from_ref(app_state: &AppState) -> Arc<Mutex<Library>> {
-        app_state.library.clone()
+impl FromRef<AppState> for &'static Mutex<Library> {
+    fn from_ref(app_state: &AppState) -> &'static Mutex<Library> {
+        app_state.library
     }
 }
 
