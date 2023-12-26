@@ -421,7 +421,7 @@ impl Source {
     }
 
     /// Get title included in file metadata
-    pub fn metadata_title(&self) -> Option<String> {
+    pub fn metadata_title(&self) -> String {
         self.origin.metadata.format.tags.title.clone()
     }
 

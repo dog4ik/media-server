@@ -305,11 +305,9 @@ impl ShowMetadataProvider for TmdbApi {
             );
 
             // metadata title check
-            let metadata_title = show.source.metadata_title().map(|t| t.to_lowercase());
-            if let Some(file_title_tag) = metadata_title {
-                if contains(&name_parts, &file_title_tag) {
-                    return Ok(result.clone().into());
-                }
+            let metadata_title = show.source.metadata_title().to_lowercase();
+            if contains(&name_parts, &metadata_title) {
+                return Ok(result.clone().into());
             }
 
             tracing::debug!(

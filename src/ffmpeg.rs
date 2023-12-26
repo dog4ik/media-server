@@ -86,7 +86,7 @@ pub struct FFprobeFormat {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FormatTags {
-    pub title: Option<String>,
+    pub title: String,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
