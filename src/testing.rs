@@ -15,7 +15,7 @@ pub struct TestResource {
 
 impl TestResource {
     pub fn new(clean_on_drop: bool) -> Self {
-        let test_folder: PathBuf = "/home/dog4ik/personal/rust-media-server/test-dir".into();
+        let test_folder: PathBuf = "test-dir".into();
         let temp_dir = generate_temp_dir_path();
         fs::create_dir_all(&temp_dir).unwrap();
         deep_copy_folder(&test_folder, &temp_dir);
