@@ -194,7 +194,7 @@ impl Into<MovieMetadata> for TmdbSearchMovieResult {
     fn into(self) -> MovieMetadata {
         let poster = self
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::Original).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         let backdrop = self
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -216,7 +216,7 @@ impl Into<ShowMetadata> for TmdbSearchShowResult {
     fn into(self) -> ShowMetadata {
         let poster = self
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::Original).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         let backdrop = self
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -239,7 +239,7 @@ impl Into<SeasonMetadata> for TmdbShowSeason {
     fn into(self) -> SeasonMetadata {
         let poster = self
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::Original).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         SeasonMetadata {
             metadata_id: Some(self.id.to_string()),
             metadata_provider: "tmdb",
@@ -256,7 +256,7 @@ impl Into<SeasonMetadata> for TmdbShowSeason {
 
 impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
     fn into(self) -> EpisodeMetadata {
-        let poster = TmdbImage::new(&self.still_path, PosterSizes::Original);
+        let poster = TmdbImage::new(&self.still_path, PosterSizes::W342);
         EpisodeMetadata {
             metadata_id: Some(self.id.to_string()),
             metadata_provider: "tmdb",
