@@ -8,6 +8,7 @@ use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, sync::Semaphore};
 
 use crate::{
+    config::ServerConfiguration,
     db::{Db, DbSubtitles},
     library::{movie::MovieFile, show::ShowFile, Library, LibraryItem, Source, TranscodePayload},
     metadata::{MovieMetadataProvider, ShowMetadataProvider},
@@ -20,6 +21,7 @@ pub struct AppState {
     pub library: Arc<Mutex<Library>>,
     pub db: Db,
     pub tasks: TaskResource,
+    pub configuration: &'static Mutex<ServerConfiguration>,
 }
 
 #[derive(Debug, Clone)]
@@ -520,5 +522,11 @@ impl FromRef<AppState> for Db {
 impl FromRef<AppState> for TaskResource {
     fn from_ref(app_state: &AppState) -> TaskResource {
         app_state.tasks.clone()
+    }
+}
+
+impl FromRef<AppState> for &'static Mutex<ServerConfiguration> {
+    fn from_ref(app_state: &AppState) -> &'static Mutex<ServerConfiguration> {
+        app_state.configuration
     }
 }

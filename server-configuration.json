@@ -1,0 +1,10 @@
+{
+  "port": 6969,
+  "log_level": "trace",
+  "log_path": "log.log",
+  "movie_folders": [],
+  "show_folders": [],
+  "resources_folder": "resources",
+  "scan_max_concurrency": 10,
+  "is_setup": false
+}

@@ -1,7 +1,9 @@
 #![feature(map_try_insert)]
+#![feature(file_create_new)]
 #![feature(iter_intersperse)]
 #![feature(async_iterator)]
 pub mod app_state;
+pub mod config;
 pub mod db;
 pub mod ffmpeg;
 pub mod library;

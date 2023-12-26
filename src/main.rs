@@ -1,7 +1,9 @@
 use axum::routing::{delete, get, post};
 use axum::{Extension, Router};
+use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
+use media_server::config::{Args, ServerConfiguration};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
@@ -14,13 +16,11 @@ use std::sync::{Arc, Mutex};
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, Level};
 
-const PORT: u16 = 6969;
-
 #[tokio::main]
 async fn main() {
     let log_channel = init_tracer(Level::TRACE);
     if let Ok(path) = dotenv() {
-        info!("Loaded env variables from: {:?}", path);
+        info!("Loaded env variables from: {}", path.display());
     }
 
     let cors = CorsLayer::new()
@@ -33,34 +33,50 @@ async fn main() {
         .await
         .expect("database to be found");
 
-    let movies_dir = PathBuf::from(std::env::var("MOVIES_PATH").unwrap());
-    let shows_dir = PathBuf::from(std::env::var("SHOWS_PATH").unwrap());
+    let args = Args::parse();
+    let mut configuration = ServerConfiguration::from_file("server-configuration.json").unwrap();
+    configuration.apply_args(args);
+    let port = configuration.port;
 
-    if !movies_dir.try_exists().unwrap_or(false) || !shows_dir.try_exists().unwrap_or(false) {
-        panic!("one or more library paths does not exists");
+    let shows_dirs: Vec<PathBuf> = configuration
+        .show_folders
+        .clone()
+        .into_iter()
+        .filter(|d| d.try_exists().unwrap_or(false))
+        .collect();
+    let mut shows = Vec::new();
+    for dir in &shows_dirs {
+        shows.extend(explore_folder(dir).await.unwrap());
     }
 
-    let shows = explore_folder(&shows_dir).await.unwrap();
-    let movies = explore_folder(&movies_dir).await.unwrap();
+    let movies_dirs: Vec<PathBuf> = configuration
+        .movie_folders
+        .clone()
+        .into_iter()
+        .filter(|d| d.try_exists().unwrap_or(false))
+        .collect();
+    let mut movies = Vec::new();
+    for dir in &movies_dirs {
+        movies.extend(explore_folder(dir).await.unwrap());
+    }
 
     let media_folders = MediaFolders {
-        shows: vec![shows_dir],
-        movies: vec![movies_dir],
+        shows: shows_dirs,
+        movies: movies_dirs,
     };
 
     let library = Library::new(media_folders.clone(), shows, movies);
     let library = Arc::new(Mutex::new(library));
+    let configuration = Box::leak(Box::new(Mutex::new(configuration)));
 
     let tasks = TaskResource::new();
 
     let app_state = AppState {
         library: library.clone(),
+        configuration,
         db,
         tasks,
     };
-
-    // transcode(&library.shows).await;
-    // transcode(&library.movies).await;
 
     monitor_library(app_state.clone(), media_folders).await;
 
@@ -106,11 +122,12 @@ async fn main() {
         .route("/admin/scan", post(admin_api::reconciliate_lib))
         .route("/admin/clear_db", delete(admin_api::clear_db))
         .route("/admin/remove_video", delete(admin_api::remove_video))
+        .route("/admin/configuration", get(admin_api::server_configuration))
         .layer(cors)
         .with_state(app_state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), PORT);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    info!("Starting server on port {}", PORT);
+    info!("Starting server on port {}", port);
     axum::serve(listener, app).await.unwrap();
 }

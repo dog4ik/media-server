@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Mutex;
 use std::{convert::Infallible, fmt::Display};
 
 use axum::body::Body;
@@ -24,6 +25,7 @@ use uuid::Uuid;
 
 use super::{IdQuery, StringIdQuery};
 use crate::app_state::AppError;
+use crate::config::ServerConfiguration;
 use crate::library::TranscodePayload;
 use crate::progress::{TaskKind, TaskResource};
 use crate::{
@@ -334,4 +336,11 @@ pub async fn latest_log() -> Result<(TypedHeader<ContentType>, String), AppError
     json.pop();
     json.push(']');
     Ok((TypedHeader(ContentType::json()), json))
+}
+
+pub async fn server_configuration(
+    State(configuration): State<&'static Mutex<ServerConfiguration>>,
+) -> Json<ServerConfiguration> {
+    let configuration = configuration.lock().unwrap();
+    Json(configuration.clone())
 }
