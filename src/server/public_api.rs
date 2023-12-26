@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -78,7 +79,7 @@ pub struct DetailedVideo {
     pub video_codec: Option<VideoCodec>,
     pub audio_codec: Option<AudioCodec>,
     pub resolution: Option<Resolution>,
-    pub variants: Vec<DbVariant>,
+    pub bitrate: usize,
     pub scan_date: String,
 }
 
@@ -515,6 +516,22 @@ pub async fn get_video_by_id(
     .await
     .map_err(sqlx_err_wrap)?;
 
+    let detailed_variants = variants
+        .into_iter()
+        .map(|v| DetailedVariant {
+            id: v.id.unwrap(),
+            video_id: v.video_id,
+            path: v.path.into(),
+            hash: v.hash,
+            size: v.size,
+            duration: std::time::Duration::from_secs(v.duration as u64),
+            video_codec: v.video_codec.map(|v| VideoCodec::from_str(&v).unwrap()),
+            audio_codec: v.audio_codec.map(|v| AudioCodec::from_str(&v).unwrap()),
+            resolution: v.resolution.map(|r| Resolution::from_str(&r).unwrap()),
+            bitrate: v.bitrate as usize,
+        })
+        .collect();
+
     let library = library.lock().unwrap();
     let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
     let source = file.source();
@@ -528,7 +545,7 @@ pub async fn get_video_by_id(
         audio_codec: source.origin.default_audio().map(|v| v.codec()),
         video_codec: source.origin.default_video().map(|v| v.codec()),
         resolution: source.origin.resolution().map(|v| v),
-        variants,
+        bitrate: source.origin.bitrate(),
         scan_date: date.to_string(),
     };
     Ok(Json(detailed_episode))

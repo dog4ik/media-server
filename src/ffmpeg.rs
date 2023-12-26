@@ -206,6 +206,11 @@ impl FFprobeOutput {
         self.default_video().map(|v| v.resoultion())
     }
 
+    /// Video bitrate
+    pub fn bitrate(&self) -> usize {
+        self.format.bit_rate.parse().expect("bitrate to be number")
+    }
+
     /// Duration
     pub fn duration(&self) -> Duration {
         std::time::Duration::from_secs(

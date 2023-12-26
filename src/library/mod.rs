@@ -506,6 +506,7 @@ impl Source {
             audio_codec: origin.default_audio().map(|c| c.codec_name.to_string()),
             video_codec: origin.default_video().map(|c| c.codec_name.to_string()),
             resolution: origin.default_video().map(|c| c.resoultion().to_string()),
+            bitrate: origin.bitrate() as i64,
             scan_date: now.to_string(),
         }
     }
@@ -587,6 +588,11 @@ impl Video {
         self.metadata.resolution()
     }
 
+    /// Video bitrate
+    pub fn bitrate(&self) -> usize {
+        self.metadata.bitrate()
+    }
+
     /// Video mime type
     pub fn guess_mime_type(&self) -> &'static str {
         self.metadata.guess_mime()
@@ -608,6 +614,7 @@ impl Video {
             video_codec: self.default_video().map(|c| c.codec().to_string()),
             audio_codec: self.default_audio().map(|c| c.codec().to_string()),
             resolution: self.resolution().map(|r| r.to_string()),
+            bitrate: self.bitrate() as i64,
         }
     }
 

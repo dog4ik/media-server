@@ -3,8 +3,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
 
-use crate::metadata::{ShowMetadata, SeasonMetadata, EpisodeMetadata};
-
+use crate::metadata::{EpisodeMetadata, SeasonMetadata, ShowMetadata};
 
 #[derive(Debug, Clone)]
 pub struct Db {
@@ -80,6 +79,7 @@ CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     video_codec TEXT,
                                     audio_codec TEXT,
                                     resolution TEXT,
+                                    bitrate INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS variants (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     video_id INTEGER NOT NULL,
@@ -90,6 +90,7 @@ CREATE TABLE IF NOT EXISTS variants (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     video_codec TEXT,
                                     audio_codec TEXT,
                                     resolution TEXT,
+                                    bitrate INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,
@@ -125,8 +126,8 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_variant(&self, db_variant: DbVariant) -> Result<i64, Error> {
         let subtitles_query = sqlx::query!(
             "INSERT INTO variants
-            (video_id, path, hash, size, duration, video_codec, audio_codec, resolution)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            (video_id, path, hash, size, duration, video_codec, audio_codec, resolution, bitrate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
             db_variant.video_id,
             db_variant.path,
             db_variant.hash,
@@ -135,6 +136,7 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
             db_variant.video_codec,
             db_variant.audio_codec,
             db_variant.resolution,
+            db_variant.bitrate
         );
         subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
@@ -273,8 +275,8 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_video(&self, db_video: DbVideo) -> Result<i64, Error> {
         let video_query = sqlx::query!(
             "INSERT INTO videos
-            (path, hash, local_title, size, duration, video_codec, audio_codec)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            (path, hash, local_title, size, duration, video_codec, audio_codec, bitrate)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
             db_video.path,
             db_video.hash,
             db_video.local_title,
@@ -282,6 +284,7 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
             db_video.duration,
             db_video.video_codec,
             db_video.audio_codec,
+            db_video.bitrate
         );
         video_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
@@ -332,7 +335,7 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     pub async fn remove_video_by_path(&self, path: &PathBuf) -> Result<(), Error> {
         let str_path = path.to_str().unwrap();
-        let id = sqlx::query!("SELECT id FROM videos WHERE path = ?", str_path)
+        let id = sqlx::query!(r#"SELECT id as "id!" FROM videos WHERE path = ?"#, str_path)
             .fetch_one(&self.pool)
             .await?
             .id;
@@ -581,6 +584,7 @@ pub struct DbVideo {
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub resolution: Option<String>,
+    pub bitrate: i64,
     pub scan_date: String,
 }
 
@@ -595,6 +599,7 @@ pub struct DbVariant {
     pub video_codec: Option<String>,
     pub audio_codec: Option<String>,
     pub resolution: Option<String>,
+    pub bitrate: i64,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
