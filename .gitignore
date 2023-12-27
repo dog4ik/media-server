@@ -4,4 +4,5 @@
 /db
 /test-dir
 .env
+server-configuration.json
 /*.log
