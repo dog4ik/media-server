@@ -55,7 +55,7 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
         if fs::remove_file(file.path()).await.is_ok() {
             removed_files += 1;
         } else {
-            tracing::error!("Failed to remove file: {:?}", file.path());
+            tracing::error!("Failed to remove file: {}", file.path().display());
         };
     }
     Ok(removed_files)

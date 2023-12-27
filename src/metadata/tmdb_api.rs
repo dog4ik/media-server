@@ -144,6 +144,8 @@ impl TmdbApi {
         season: usize,
         episode: usize,
     ) -> anyhow::Result<TmdbSeasonEpisode> {
+        //FIX: case when episode cant be found by metadata provider while we have its siblings in
+        //cache
         if let Some(cache_episode) = self.get_from_cache(tmdb_show_id, season, episode) {
             tracing::debug!(
                 "Reused cache entry for {} season: {} episode: {}",
@@ -155,10 +157,10 @@ impl TmdbApi {
         } else {
             let response = self.tv_show_season(tmdb_show_id, season).await?;
             self.update_cache(tmdb_show_id, season, response.episodes);
-            Ok(self
-                .get_from_cache(tmdb_show_id, season, episode)
-                // this panics when episode does not exist in tmdb databes but we have it on disk
-                .expect("cache to contain episode"))
+            self.get_from_cache(tmdb_show_id, season, episode)
+                .ok_or(anyhow::anyhow!(
+                    "episode does not exist in metadata provider"
+                ))
         }
     }
 
