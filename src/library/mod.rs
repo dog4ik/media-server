@@ -14,7 +14,7 @@ use axum::{
     response::IntoResponse,
 };
 use axum_extra::{headers::Range, TypedHeader};
-use serde::{de::Visitor, Deserialize, Serialize};
+use serde::{de::Visitor, Deserialize, Serialize, ser::SerializeStruct};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -860,13 +860,22 @@ impl<'de> Deserialize<'de> for VideoCodec {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolution(pub (usize, usize));
 
+impl Resolution {
+    pub fn new(width: usize, height: usize) -> Self {
+        Self((width, height))
+    }
+}
+
 impl Serialize for Resolution {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         let (x, y) = self.0;
-        serializer.serialize_str(&format!("{}x{}", x, y))
+        let mut resolution = serializer.serialize_struct("Resolution", 2)?;
+        resolution.serialize_field("width", &x)?;
+        resolution.serialize_field("height", &y)?;
+        resolution.end()
     }
 }
 
@@ -877,11 +886,20 @@ impl<'de> Deserialize<'de> for Resolution {
     {
         struct ResolutionVisitor;
 
+        #[derive(Deserialize)]
+        #[serde(field_identifier, rename_all = "lowercase")]
+        enum Field {
+            Height,
+            Width,
+        }
+
         impl<'de> Visitor<'de> for ResolutionVisitor {
             type Value = Resolution;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("String like 1920x1080 or tuple of integers")
+                formatter.write_str(
+                    "String like 1920x1080 or tuple of integers or { height, width } object",
+                )
             }
 
             fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
@@ -902,6 +920,33 @@ impl<'de> Deserialize<'de> for Resolution {
                     .next_element()?
                     .ok_or(serde::de::Error::missing_field("height"))?;
                 Ok(Resolution::from((width, height)))
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut width = None;
+                let mut height = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Width => {
+                            if width.is_some() {
+                                return Err(serde::de::Error::duplicate_field("width"));
+                            }
+                            width = Some(map.next_value()?);
+                        }
+                        Field::Height => {
+                            if height.is_some() {
+                                return Err(serde::de::Error::duplicate_field("height"));
+                            }
+                            height = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let width = width.ok_or_else(|| serde::de::Error::missing_field("width"))?;
+                let height = height.ok_or_else(|| serde::de::Error::missing_field("height"))?;
+                Ok(Resolution::new(width, height))
             }
         }
         deserializer.deserialize_any(ResolutionVisitor)
