@@ -727,8 +727,7 @@ impl TranscodePayloadBuilder {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase", untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum AudioCodec {
     AAC,
     AC3,
@@ -767,8 +766,33 @@ impl FromStr for AudioCodec {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
-#[serde(rename_all = "lowercase", untagged)]
+impl<'de> Deserialize<'de> for AudioCodec {
+    fn deserialize<D>(deserializer: D) -> Result<AudioCodec, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct AudioCodecVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for AudioCodecVisitor {
+            type Value = AudioCodec;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an audio codec string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<AudioCodec, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(AudioCodec::from_str(value).expect("any str to be valid"))
+            }
+        }
+
+        deserializer.deserialize_str(AudioCodecVisitor)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum VideoCodec {
     Hevc,
     H264,
@@ -807,7 +831,33 @@ impl FromStr for VideoCodec {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+impl<'de> Deserialize<'de> for VideoCodec {
+    fn deserialize<D>(deserializer: D) -> Result<VideoCodec, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct VideoCodecVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for VideoCodecVisitor {
+            type Value = VideoCodec;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("an video codec string")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<VideoCodec, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(VideoCodec::from_str(value).expect("any str to be valid"))
+            }
+        }
+
+        deserializer.deserialize_str(VideoCodecVisitor)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Resolution(pub (usize, usize));
 
 impl Serialize for Resolution {
@@ -817,6 +867,44 @@ impl Serialize for Resolution {
     {
         let (x, y) = self.0;
         serializer.serialize_str(&format!("{}x{}", x, y))
+    }
+}
+
+impl<'de> Deserialize<'de> for Resolution {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ResolutionVisitor;
+
+        impl<'de> Visitor<'de> for ResolutionVisitor {
+            type Value = Resolution;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("String like 1920x1080 or tuple of integers")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(Resolution::from_str(v).expect("any str to be valid"))
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::SeqAccess<'de>,
+            {
+                let width = seq
+                    .next_element()?
+                    .ok_or(serde::de::Error::missing_field("width"))?;
+                let height = seq
+                    .next_element()?
+                    .ok_or(serde::de::Error::missing_field("height"))?;
+                Ok(Resolution::from((width, height)))
+            }
+        }
+        deserializer.deserialize_any(ResolutionVisitor)
     }
 }
 
