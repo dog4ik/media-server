@@ -463,22 +463,6 @@ impl Source {
             .collect()
     }
 
-    /// Run ffmpeg command. Returns handle to process
-    pub fn run_command<I, S>(&self, args: I) -> Child
-    where
-        I: IntoIterator<Item = S> + Copy,
-        S: AsRef<std::ffi::OsStr>,
-    {
-        Command::new("ffmpeg")
-            .kill_on_drop(true)
-            .args(["-progress", "pipe:1", "-nostats"])
-            .args(args)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null())
-            .spawn()
-            .expect("process to spawn")
-    }
-
     /// Generate previews for file
     pub fn generate_previews(&self) -> FFmpegRunningJob<PreviewsJob> {
         let job = PreviewsJob::from_source(&self);
@@ -490,12 +474,9 @@ impl Source {
         &self,
         track: i32,
     ) -> Result<FFmpegRunningJob<SubtitlesJob>, anyhow::Error> {
-        let job = SubtitlesJob::from_source(&self, track as usize)?;
-        Ok(FFmpegRunningJob::new_running(
-            job,
-            self.source_path().into(),
-            self.duration(),
-        ))
+        SubtitlesJob::from_source(&self, track as usize).map(|job| {
+            FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
+        })
     }
 
     /// Transcode file
@@ -503,12 +484,9 @@ impl Source {
         &self,
         payload: TranscodePayload,
     ) -> Result<FFmpegRunningJob<TranscodeJob>, anyhow::Error> {
-        let job = TranscodeJob::from_source(&self, payload)?;
-        Ok(FFmpegRunningJob::new_running(
-            job,
-            self.source_path().into(),
-            self.duration(),
-        ))
+        TranscodeJob::from_source(&self, payload).map(|job| {
+            FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
+        })
     }
 
     /// Returns struct compatible with database Video table
@@ -934,7 +912,6 @@ async fn cancel_transcode() {
     use crate::testing::TestResource;
     use std::time::Duration;
     use tokio::fs;
-    use tokio::sync::oneshot;
     use tokio::time;
 
     let testing_resource = TestResource::new(true);
@@ -945,37 +922,34 @@ async fn cancel_transcode() {
         .unwrap()
         .len();
     let video_path = subject.source.source_path().to_path_buf();
-    let (tx, rx) = oneshot::channel();
     let payload = TranscodePayloadBuilder::new()
         .video_codec(VideoCodec::Hevc)
         .build();
+
     let process = subject.source.transcode_video(payload).unwrap();
-    let task_id = task_resource
-        .start_task(video_path.to_path_buf(), TaskKind::Transcode, Some(tx))
-        .unwrap();
     {
         let task_resource = task_resource.clone();
-        let task_id = task_id.clone();
         tokio::spawn(async move {
             time::sleep(Duration::from_secs(2)).await;
-            task_resource.cancel_task(task_id).unwrap();
+            let id = {
+                let tasks = task_resource.tasks.lock().unwrap();
+                tasks.first().unwrap().id
+            };
+            task_resource.cancel_task(id).unwrap();
         });
     }
-    let original_buffer = format!("{}buffer", video_path.to_str().unwrap());
-    tokio::select! {
-        _ = task_resource.observe_cancelable(process, TaskKind::Transcode) => {
-            task_resource.finish_task(task_id);
-        },
-        _ = rx => {
-            task_resource.cancel_task(task_id).expect("task to be cancelable");
-            fs::remove_file(&video_path).await.unwrap();
-            fs::rename(&original_buffer, &video_path).await.unwrap()
-        },
-    }
+    let target_buffer = process.job.output_path.clone();
+    let result = task_resource
+        .observe_ffmpeg_task(process, TaskKind::Transcode)
+        .await;
+    // task is canceled
+    assert!(result.is_err());
 
     let size_after = fs::metadata(&video_path).await.unwrap().len();
-    let is_cleaned = !fs::try_exists(original_buffer).await.unwrap_or(false);
+    let is_cleaned = !fs::try_exists(target_buffer).await.unwrap();
+    // file is untouched
     assert_eq!(size_before, size_after);
+    // variant is cleared
     assert!(is_cleaned);
 }
 
