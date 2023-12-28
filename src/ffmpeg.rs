@@ -40,6 +40,7 @@ pub struct FFprobeStream {
     pub display_aspect_ratio: Option<String>,
     pub level: Option<i32>,
     pub id: Option<String>,
+    pub avg_frame_rate: Option<String>,
     pub start_time: Option<String>,
     pub duration_ts: Option<i64>,
     pub duration: Option<String>,
@@ -56,6 +57,7 @@ pub struct FFprobeVideoStream<'a> {
     pub profile: &'a str,
     pub display_aspect_ratio: &'a str,
     pub level: i32,
+    pub avg_frame_rate: &'a str,
     pub width: i32,
     pub height: i32,
     pub disposition: &'a FFprobeDisposition,
@@ -161,6 +163,14 @@ impl<'a> FFprobeVideoStream<'a> {
         self.disposition.default == 1
     }
 
+    pub fn framerate(&self) -> f64 {
+        let (frames, ms): (f64, f64) = self
+            .avg_frame_rate
+            .split_once('/')
+            .map(|(frames, ms)| (frames.parse().unwrap(), ms.parse().unwrap()))
+            .expect("look like 24000/1001");
+        frames / ms
+    }
 }
 
 impl<'a> FFprobeSubtitleStream<'a> {
@@ -269,9 +279,13 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
-            profile: &self.profile.as_ref().ok_or(anyhow!("profile is absent"))?,
+            profile: self.profile.as_ref().ok_or(anyhow!("profile is absent"))?,
             level: self.level.ok_or(anyhow!("level is absent"))?,
-            display_aspect_ratio: &self
+            avg_frame_rate: self
+                .avg_frame_rate
+                .as_ref()
+                .ok_or(anyhow!("avg_frame_rate is absent"))?,
+            display_aspect_ratio: self
                 .display_aspect_ratio
                 .as_ref()
                 .ok_or(anyhow!("aspect ratio is absent"))?,
