@@ -81,6 +81,8 @@ pub struct DetailedVideo {
     pub audio_codec: Option<AudioCodec>,
     pub resolution: Option<Resolution>,
     pub bitrate: usize,
+    pub level: Option<i32>,
+    pub profile: Option<String>,
     pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
 }
@@ -565,6 +567,8 @@ pub async fn get_video_by_id(
         bitrate: source.origin.bitrate(),
         variants: detailed_variants,
         scan_date: date.to_string(),
+        level: source.origin.default_video().map(|v| v.level),
+        profile: source.origin.default_video().map(|v| v.profile.into()),
     };
     Ok(Json(detailed_episode))
 }

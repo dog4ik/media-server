@@ -26,6 +26,7 @@ pub struct FFprobeStream {
     pub index: i32,
     pub codec_name: String,
     pub codec_long_name: String,
+    pub profile: Option<String>,
     pub codec_type: String,
     pub codec_tag_string: String,
     pub codec_tag: String,
@@ -37,6 +38,7 @@ pub struct FFprobeStream {
     pub sample_rate: Option<String>,
     pub sample_aspect_ratio: Option<String>,
     pub display_aspect_ratio: Option<String>,
+    pub level: Option<i32>,
     pub id: Option<String>,
     pub start_time: Option<String>,
     pub duration_ts: Option<i64>,
@@ -51,7 +53,9 @@ pub struct FFprobeVideoStream<'a> {
     pub index: i32,
     pub codec_name: &'a str,
     pub codec_long_name: &'a str,
+    pub profile: &'a str,
     pub display_aspect_ratio: &'a str,
+    pub level: i32,
     pub width: i32,
     pub height: i32,
     pub disposition: &'a FFprobeDisposition,
@@ -64,6 +68,7 @@ pub struct FFprobeAudioStream<'a> {
     pub codec_long_name: &'a str,
     pub channels: i32,
     pub sample_rate: &'a str,
+    pub bit_rate: &'a str,
     pub disposition: &'a FFprobeDisposition,
 }
 
@@ -239,7 +244,11 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
-            channels: self.channels.ok_or(anyhow!("channels are absent"))?,
+            bit_rate: self.bit_rate.as_ref().ok_or(anyhow!("bitrate is absent"))?,
+            channels: *self
+                .channels
+                .as_ref()
+                .ok_or(anyhow!("channels are absent"))?,
             sample_rate: &self
                 .sample_rate
                 .as_ref()
@@ -253,6 +262,8 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
+            profile: &self.profile.as_ref().ok_or(anyhow!("profile is absent"))?,
+            level: self.level.ok_or(anyhow!("level is absent"))?,
             display_aspect_ratio: &self
                 .display_aspect_ratio
                 .as_ref()
