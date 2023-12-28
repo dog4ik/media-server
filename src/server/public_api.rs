@@ -1,5 +1,4 @@
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -11,6 +10,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 
 use crate::db::DbVariant;
+use crate::ffmpeg::{FFprobeAudioStream, FFprobeVideoStream};
 use crate::library::{AudioCodec, Resolution, Summary, VideoCodec};
 use crate::{app_state::AppState, db::Db};
 
@@ -77,12 +77,8 @@ pub struct DetailedVideo {
     pub local_title: String,
     pub size: u64,
     pub duration: std::time::Duration,
-    pub video_codec: Option<VideoCodec>,
-    pub audio_codec: Option<AudioCodec>,
-    pub resolution: Option<Resolution>,
-    pub bitrate: usize,
-    pub level: Option<i32>,
-    pub profile: Option<String>,
+    pub video_tracks: Vec<DetailedVideoTrack>,
+    pub audio_tracks: Vec<DetailedAudioTrack>,
     pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
 }
@@ -95,10 +91,54 @@ pub struct DetailedVariant {
     pub hash: String,
     pub size: i64,
     pub duration: std::time::Duration,
-    pub video_codec: Option<VideoCodec>,
-    pub audio_codec: Option<AudioCodec>,
-    pub resolution: Option<Resolution>,
+    pub video_tracks: Vec<DetailedVideoTrack>,
+    pub audio_tracks: Vec<DetailedAudioTrack>,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DetailedAudioTrack {
+    pub is_default: bool,
+    pub sample_rate: String,
+    pub channels: i32,
+    pub profile: Option<String>,
+    pub codec: AudioCodec,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DetailedVideoTrack {
+    pub is_default: bool,
+    pub resolution: Resolution,
+    pub profile: String,
+    pub level: i32,
     pub bitrate: usize,
+    pub framerate: f64,
+    pub codec: VideoCodec,
+}
+
+impl DetailedVideoTrack {
+    pub fn from_video_stream(stream: FFprobeVideoStream<'_>, bitrate: usize) -> Self {
+        DetailedVideoTrack {
+            is_default: stream.is_default(),
+            resolution: stream.resoultion(),
+            profile: stream.profile.to_string(),
+            level: stream.level,
+            bitrate,
+            framerate: stream.framerate(),
+            codec: stream.codec(),
+        }
+    }
+}
+
+impl Into<DetailedAudioTrack> for FFprobeAudioStream<'_> {
+    fn into(self) -> DetailedAudioTrack {
+        DetailedAudioTrack {
+            is_default: self.disposition.default == 1,
+            sample_rate: self.sample_rate.to_string(),
+            channels: self.channels,
+            profile: self.profile.map(|x| x.to_string()),
+            codec: self.codec(),
+        }
+    }
 }
 
 pub async fn previews(
@@ -524,6 +564,11 @@ pub async fn get_video_by_id(
     .fetch_one(&db.pool)
     .await
     .map_err(sqlx_err_wrap)?;
+    let (title, source) = {
+        let library = library.lock().unwrap();
+        let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
+        (file.title(), file.source().clone())
+    };
 
     let variants = sqlx::query_as!(
         DbVariant,
@@ -536,39 +581,51 @@ pub async fn get_video_by_id(
 
     let detailed_variants = variants
         .into_iter()
-        .map(|v| DetailedVariant {
-            id: v.id.unwrap(),
-            video_id: v.video_id,
-            path: v.path.into(),
-            hash: v.hash,
-            size: v.size,
-            duration: std::time::Duration::from_secs(v.duration as u64),
-            video_codec: v.video_codec.map(|v| VideoCodec::from_str(&v).unwrap()),
-            audio_codec: v.audio_codec.map(|v| AudioCodec::from_str(&v).unwrap()),
-            resolution: v.resolution.map(|r| Resolution::from_str(&r).unwrap()),
-            bitrate: v.bitrate as usize,
+        .map(|v| {
+            let variant = source.find_variant(&v.path).unwrap();
+            DetailedVariant {
+                id: v.id.unwrap(),
+                video_id: v.video_id,
+                path: v.path.into(),
+                hash: v.hash,
+                size: v.size,
+                duration: std::time::Duration::from_secs(v.duration as u64),
+                video_tracks: variant
+                    .video_streams()
+                    .into_iter()
+                    .map(|s| DetailedVideoTrack::from_video_stream(s, variant.bitrate()))
+                    .collect(),
+                audio_tracks: variant
+                    .audio_streams()
+                    .into_iter()
+                    .map(|s| s.into())
+                    .collect(),
+            }
         })
         .collect();
 
-    let library = library.lock().unwrap();
-    let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
-    let source = file.source();
     let date = db_video.scan_date.expect("scan date always defined");
     let detailed_episode = DetailedVideo {
         id: query.id,
-        path: file.source_path().to_path_buf(),
+        path: source.source_path().to_path_buf(),
         hash: db_video.hash,
-        local_title: file.title(),
+        local_title: title,
         size: source.origin.file_size(),
         duration: source.duration(),
-        audio_codec: source.origin.default_audio().map(|v| v.codec()),
-        video_codec: source.origin.default_video().map(|v| v.codec()),
-        resolution: source.origin.resolution().map(|v| v),
-        bitrate: source.origin.bitrate(),
         variants: detailed_variants,
         scan_date: date.to_string(),
-        level: source.origin.default_video().map(|v| v.level),
-        profile: source.origin.default_video().map(|v| v.profile.into()),
+        video_tracks: source
+            .origin
+            .video_streams()
+            .into_iter()
+            .map(|s| DetailedVideoTrack::from_video_stream(s, source.origin.bitrate()))
+            .collect(),
+        audio_tracks: source
+            .origin
+            .audio_streams()
+            .into_iter()
+            .map(|s| s.into())
+            .collect(),
     };
     Ok(Json(detailed_episode))
 }

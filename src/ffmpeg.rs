@@ -69,6 +69,7 @@ pub struct FFprobeAudioStream<'a> {
     pub codec_name: &'a str,
     pub codec_long_name: &'a str,
     pub channels: i32,
+    pub profile: Option<&'a str>,
     pub sample_rate: &'a str,
     pub bit_rate: &'a str,
     pub disposition: &'a FFprobeDisposition,
@@ -266,6 +267,7 @@ impl FFprobeStream {
                 .channels
                 .as_ref()
                 .ok_or(anyhow!("channels are absent"))?,
+            profile: self.profile.as_deref(),
             sample_rate: &self
                 .sample_rate
                 .as_ref()
