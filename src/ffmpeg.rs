@@ -142,6 +142,10 @@ impl<'a> FFprobeAudioStream<'a> {
     pub fn codec(&self) -> AudioCodec {
         AudioCodec::from_str(self.codec_name).expect("audio stream codec")
     }
+
+    pub fn is_default(&self) -> bool {
+        self.disposition.default == 1
+    }
 }
 
 impl<'a> FFprobeVideoStream<'a> {
@@ -152,11 +156,20 @@ impl<'a> FFprobeVideoStream<'a> {
     pub fn resoultion(&self) -> Resolution {
         (self.width as usize, self.height as usize).into()
     }
+
+    pub fn is_default(&self) -> bool {
+        self.disposition.default == 1
+    }
+
 }
 
 impl<'a> FFprobeSubtitleStream<'a> {
     pub fn codec(&self) -> SubtitlesCodec {
         SubtitlesCodec::from_str(self.codec_name).expect("subtitles stream codec")
+    }
+
+    pub fn is_defalut(&self) -> bool {
+        self.disposition.default == 1
     }
 }
 
@@ -187,23 +200,17 @@ impl FFprobeOutput {
 
     /// Default audio stream
     pub fn default_audio(&self) -> Option<FFprobeAudioStream> {
-        self.audio_streams()
-            .into_iter()
-            .find(|a| a.disposition.default == 1)
+        self.audio_streams().into_iter().find(|a| a.is_default())
     }
 
     /// Default video stream
     pub fn default_video(&self) -> Option<FFprobeVideoStream> {
-        self.video_streams()
-            .into_iter()
-            .find(|v| v.disposition.default == 1)
+        self.video_streams().into_iter().find(|v| v.is_default())
     }
 
     /// Default subtitles stream
     pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream> {
-        self.subtitle_streams()
-            .into_iter()
-            .find(|s| s.disposition.default == 1)
+        self.subtitle_streams().into_iter().find(|s| s.is_defalut())
     }
 
     /// Video resoultion
