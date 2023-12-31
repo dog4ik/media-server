@@ -14,12 +14,12 @@ use axum::{
     response::IntoResponse,
 };
 use axum_extra::{headers::Range, TypedHeader};
-use serde::{de::Visitor, Deserialize, Serialize, ser::SerializeStruct};
+use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
-    db::{DbVariant, DbVideo},
+    db::DbVideo,
     ffmpeg::{get_metadata, FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream},
     ffmpeg::{FFmpegRunningJob, FFprobeOutput, PreviewsJob, SubtitlesJob, TranscodeJob},
     server::content::ServeContent,
@@ -389,10 +389,10 @@ impl Source {
     }
 
     /// Find variant
-    pub fn find_variant(&self, path: &impl AsRef<Path>) -> Option<Video> {
+    pub fn find_variant(&self, file_name: &str) -> Option<Video> {
         self.variants
             .iter()
-            .find(|v| v.path == path.as_ref())
+            .find(|v| v.path.file_stem().map(|s| s == file_name).unwrap_or(false))
             .cloned()
     }
 
@@ -596,26 +596,6 @@ impl Video {
     /// Video mime type
     pub fn guess_mime_type(&self) -> &'static str {
         self.metadata.guess_mime()
-    }
-
-    /// Convert into database compatible struct
-    pub fn into_db_variant(&self, video_id: i64) -> DbVariant {
-        let hash = self
-            .calculate_video_hash()
-            .expect("source file to be found");
-        let size = self.file_size();
-        DbVariant {
-            id: None,
-            video_id,
-            path: self.path.to_str().unwrap().to_string(),
-            hash: hash.to_string(),
-            size: size as i64,
-            duration: self.duration().as_secs() as i64,
-            video_codec: self.default_video().map(|c| c.codec().to_string()),
-            audio_codec: self.default_audio().map(|c| c.codec().to_string()),
-            resolution: self.resolution().map(|r| r.to_string()),
-            bitrate: self.bitrate() as i64,
-        }
     }
 
     pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {

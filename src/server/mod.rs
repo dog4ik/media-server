@@ -15,6 +15,11 @@ pub struct IdQuery {
 }
 
 #[derive(Deserialize)]
+pub struct VariantQuery {
+    pub variant: String,
+}
+
+#[derive(Deserialize)]
 pub struct StringIdQuery {
     pub id: String,
 }

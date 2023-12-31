@@ -213,14 +213,6 @@ impl AppState {
             .observe_ffmpeg_task(job, TaskKind::Transcode)
             .await?;
         let variant_video = Video::from_path(output_path).expect("file to be done transcoding");
-        match self
-            .db
-            .insert_variant(variant_video.into_db_variant(video_id))
-            .await
-        {
-            Ok(_) => tracing::trace!("Inserted variant in DB"),
-            Err(_) => tracing::error!("Failed to insert variant in DB"),
-        };
 
         let mut library = self.library.lock().unwrap();
         library.add_variant(source.source_path(), variant_video);
@@ -453,10 +445,6 @@ impl AppState {
                     .await?;
                 let db_video = show.source.into_db_video(show.local_title.clone());
                 let video_id = self.db.insert_video(db_video).await?;
-                for variant in &show.source.variants {
-                    let db_variant = variant.into_db_variant(video_id);
-                    self.db.insert_variant(db_variant).await?;
-                }
                 let db_episode = metadata.into_db_episode(season_id, video_id).await;
                 self.db.insert_episode(db_episode).await?;
             } else {

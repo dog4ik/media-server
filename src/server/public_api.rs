@@ -9,12 +9,13 @@ use axum_extra::TypedHeader;
 use serde::Serialize;
 use sqlx::FromRow;
 
-use crate::db::DbVariant;
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeVideoStream};
 use crate::library::{AudioCodec, Resolution, Summary, VideoCodec};
 use crate::{app_state::AppState, db::Db};
 
-use super::{EpisodeQuery, IdQuery, LanguageQuery, NumberQuery, PageQuery, SeasonQuery};
+use super::{
+    EpisodeQuery, IdQuery, LanguageQuery, NumberQuery, PageQuery, SeasonQuery, VariantQuery,
+};
 
 fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
     match err {
@@ -85,7 +86,7 @@ pub struct DetailedVideo {
 
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DetailedVariant {
-    pub id: i64,
+    pub id: String,
     pub video_id: i64,
     pub path: PathBuf,
     pub hash: String,
@@ -185,36 +186,9 @@ pub async fn subtitles(
     };
 }
 
-pub async fn watch_variant(
-    Query(variant_id): Query<IdQuery>,
-    State(state): State<AppState>,
-    range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let AppState { library, db, .. } = state;
-    let video = sqlx::query!(
-        r#"SELECT variants.path as variant_path, videos.path as video_path FROM variants 
-        JOIN videos ON videos.id = variants.video_id WHERE variants.id = ?"#,
-        variant_id.id
-    )
-    .fetch_one(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
-    let file = {
-        let library = library.lock().unwrap();
-        library.find_source(&video.video_path).map(|x| x.clone())
-    };
-    if let Some(file) = file {
-        let variant = file
-            .find_variant(&video.variant_path)
-            .ok_or(StatusCode::NOT_FOUND)?;
-        return Ok(variant.serve(range).await);
-    } else {
-        return Err(StatusCode::NOT_FOUND);
-    };
-}
-
 pub async fn watch(
     Query(video_id): Query<IdQuery>,
+    variant: Option<Query<VariantQuery>>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, StatusCode> {
@@ -226,13 +200,14 @@ pub async fn watch(
     let path = PathBuf::from(video.path);
     let file = {
         let library = library.lock().unwrap();
-        library.find_source(&path).map(|x| x.origin.clone())
-    };
-    if let Some(file) = file {
+        library.find_source(&path).map(|x| x.clone())
+    }
+    .ok_or(StatusCode::NOT_FOUND)?;
+    if let Some(Query(VariantQuery { variant })) = variant {
+        let file = file.find_variant(&variant).ok_or(StatusCode::NOT_FOUND)?;
         return Ok(file.serve(range).await);
-    } else {
-        return Err(StatusCode::NOT_FOUND);
-    };
+    }
+    return Ok(file.origin.serve(range).await);
 }
 
 pub async fn get_summary(State(state): State<AppState>) -> Json<Vec<Summary>> {
@@ -570,36 +545,28 @@ pub async fn get_video_by_id(
         (file.title(), file.source().clone())
     };
 
-    let variants = sqlx::query_as!(
-        DbVariant,
-        "SELECT * FROM variants WHERE video_id = ?",
-        query.id
-    )
-    .fetch_all(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
-
-    let detailed_variants = variants
-        .into_iter()
+    let detailed_variants = source
+        .variants
+        .iter()
         .map(|v| {
-            let variant = source.find_variant(&v.path).unwrap();
+            let id = v
+                .path
+                .file_stem()
+                .expect("file to have stem like {size}.{hash}");
             DetailedVariant {
-                id: v.id.unwrap(),
-                video_id: v.video_id,
-                path: v.path.into(),
-                hash: v.hash,
-                size: v.size,
-                duration: std::time::Duration::from_secs(v.duration as u64),
-                video_tracks: variant
+                id: id.to_string_lossy().to_string(),
+                video_id: query.id,
+                path: v.path.clone(),
+                // TODO: cache hash
+                hash: "".to_string(),
+                size: v.file_size() as i64,
+                duration: v.duration(),
+                video_tracks: v
                     .video_streams()
                     .into_iter()
-                    .map(|s| DetailedVideoTrack::from_video_stream(s, variant.bitrate()))
+                    .map(|s| DetailedVideoTrack::from_video_stream(s, v.bitrate()))
                     .collect(),
-                audio_tracks: variant
-                    .audio_streams()
-                    .into_iter()
-                    .map(|s| s.into())
-                    .collect(),
+                audio_tracks: v.audio_streams().into_iter().map(|s| s.into()).collect(),
             }
         })
         .collect();

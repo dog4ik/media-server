@@ -85,7 +85,6 @@ async fn main() {
         .layer(Extension(log_channel))
         .route("/summary", get(public_api::get_summary))
         .route("/api/watch", get(public_api::watch))
-        .route("/api/watch/variant", get(public_api::watch_variant))
         .route("/api/get_all_shows", get(public_api::get_all_shows))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
