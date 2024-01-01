@@ -1,4 +1,3 @@
-use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
 use std::str::FromStr;
@@ -7,8 +6,6 @@ use std::{path::Path, str::from_utf8};
 
 use base64::engine::general_purpose;
 use base64::Engine;
-use image::imageops::FilterType;
-use image::GenericImageView;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
@@ -659,41 +656,11 @@ pub async fn resize_image_ffmpeg(
     }
 }
 
-pub fn resize_image_crate(
-    bytes: Vec<u8>,
-    width: u32,
-    height: Option<u32>,
-) -> Result<String, anyhow::Error> {
-    let image = image::load_from_memory(&bytes)?;
-    let (img_width, img_height) = image.dimensions();
-    let img_aspect_ratio: f64 = img_width as f64 / img_height as f64;
-    let resized_image = image.resize(
-        width as u32,
-        height.unwrap_or((width as f64 / img_aspect_ratio).floor() as u32),
-        FilterType::Triangle,
-    );
-    let mut image_data = Vec::new();
-    resized_image.write_to(
-        &mut Cursor::new(&mut image_data),
-        image::ImageOutputFormat::Jpeg(80),
-    )?;
-    Ok(general_purpose::STANDARD_NO_PAD.encode(image_data))
-}
-
 #[tokio::test]
 async fn resize_image_ffmpeg_test() {
     use tokio::fs;
     let bytes = fs::read("test-dir/test.jpeg").await.unwrap();
     let base64 = resize_image_ffmpeg(bytes.into(), 16, None).await.unwrap();
-    dbg!(&base64);
-    assert!(base64.len() > 100);
-}
-
-#[tokio::test]
-async fn resize_image_crate_test() {
-    use tokio::fs;
-    let bytes = fs::read("test-dir/test.jpeg").await.unwrap();
-    let base64 = resize_image_crate(bytes, 16, None).unwrap();
     dbg!(&base64);
     assert!(base64.len() > 100);
 }
