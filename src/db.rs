@@ -73,13 +73,7 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
                                     hash TEXT NOT NULL,
-                                    local_title TEXT NOT NULL,
                                     size INTEGER NOT NULL,
-                                    duration INTEGER NOT NULL,
-                                    video_codec TEXT,
-                                    audio_codec TEXT,
-                                    resolution TEXT,
-                                    bitrate INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,
@@ -245,16 +239,11 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_video(&self, db_video: DbVideo) -> Result<i64, Error> {
         let video_query = sqlx::query!(
             "INSERT INTO videos
-            (path, hash, local_title, size, duration, video_codec, audio_codec, bitrate)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            (path, hash, size)
+            VALUES (?, ?, ?) RETURNING id;",
             db_video.path,
             db_video.hash,
-            db_video.local_title,
             db_video.size,
-            db_video.duration,
-            db_video.video_codec,
-            db_video.audio_codec,
-            db_video.bitrate
         );
         video_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
@@ -534,13 +523,7 @@ pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
     pub hash: String,
-    pub local_title: String,
     pub size: i64,
-    pub duration: i64,
-    pub video_codec: Option<String>,
-    pub audio_codec: Option<String>,
-    pub resolution: Option<String>,
-    pub bitrate: i64,
     pub scan_date: String,
 }
 

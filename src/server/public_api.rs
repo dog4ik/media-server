@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::time::Duration;
 
 use axum::extract::{Query, State};
 use axum::http::StatusCode;
@@ -54,7 +55,7 @@ pub struct DetailedSeason {
 
 #[derive(Debug, Serialize, FromRow)]
 pub struct DetailedEpisode {
-    pub duration: i64,
+    pub duration: Duration,
     #[sqlx(default)]
     pub previews_amount: i64,
     pub subtitles_amount: i32,
@@ -336,7 +337,7 @@ pub async fn get_episodes(
         r#"SELECT episodes.id as "id!", episodes.title as "title!", episodes.release_date as "release_date!", 
         episodes.poster as "poster!", episodes.blur_data, episodes.number as "number!", episodes.video_id as "video_id!",
         episodes.season_id as "season_id!", episodes.rating as "rating!",
-        episodes.plot as "plot!", videos.duration as "duration!", videos.path as "path!",
+        episodes.plot as "plot!", videos.path as "path!",
         (SELECT COUNT(*) FROM subtitles WHERE subtitles.video_id = episodes.video_id) as "subtitles_amount!: i32"
         FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
@@ -356,7 +357,7 @@ pub async fn get_episodes(
             if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
                 let previews_amount = file.previews_count();
                 Some(DetailedEpisode {
-                    duration: db_episode.duration,
+                    duration: file.duration(),
                     previews_amount: previews_amount as i64,
                     subtitles_amount: db_episode.subtitles_amount,
                     id: db_episode.id,
@@ -388,7 +389,7 @@ pub async fn get_season_episodes_by_id(
         r#"SELECT episodes.id as "id!", episodes.title as "title!", episodes.release_date as "release_date!", 
         episodes.poster as "poster!", episodes.blur_data, episodes.number as "number!", episodes.video_id as "video_id!",
         episodes.season_id as "season_id!",  episodes.rating as "rating!",
-        episodes.plot as "plot!", videos.duration as "duration!", videos.path as "path!",
+        episodes.plot as "plot!", videos.path as "path!",
         (SELECT COUNT(*) FROM subtitles WHERE subtitles.video_id = episodes.video_id) as "subtitles_amount!: i32"
         FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
@@ -408,7 +409,7 @@ pub async fn get_season_episodes_by_id(
             if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
                 let previews_amount = file.previews_count();
                 Some(DetailedEpisode {
-                    duration: db_episode.duration,
+                    duration: file.duration(),
                     previews_amount: previews_amount as i64,
                     subtitles_amount: db_episode.subtitles_amount,
                     id: db_episode.id,
@@ -441,7 +442,7 @@ pub async fn get_episode(
         r#"SELECT episodes.id as "id!", episodes.title as "title!", episodes.release_date as "release_date!", 
         episodes.poster as "poster!", episodes.blur_data, episodes.number as "number!", episodes.video_id as "video_id!",
         episodes.season_id as "season_id!", episodes.rating as "rating!",
-        episodes.plot as "plot!", videos.duration as "duration!", videos.path as "path!",
+        episodes.plot as "plot!", videos.path as "path!",
         COUNT(subtitles.id) as "subtitles_amount!"
         FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
@@ -461,7 +462,7 @@ pub async fn get_episode(
     if let Some(file) = library.find_source(&PathBuf::from(db_episode.path.clone())) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
-            duration: db_episode.duration,
+            duration: file.duration(),
             previews_amount: previews_amount as i64,
             subtitles_amount: db_episode.subtitles_amount,
             id: db_episode.id,
@@ -490,7 +491,7 @@ pub async fn get_episode_by_id(
         r#"SELECT episodes.id as "id!", episodes.title as "title!", episodes.release_date as "release_date!", 
         episodes.poster as "poster!", episodes.blur_data, episodes.number as "number!", episodes.video_id as "video_id!",
         episodes.season_id as "season_id!", episodes.rating as "rating!",
-        episodes.plot as "plot!", videos.duration as "duration!", videos.path as "path!",
+        episodes.plot as "plot!", videos.path as "path!",
         COUNT(subtitles.id) as "subtitles_amount!"
         FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
@@ -507,7 +508,7 @@ pub async fn get_episode_by_id(
     if let Some(file) = library.find_source(&PathBuf::from(db_episode.path)) {
         let previews_amount = file.previews_count();
         let episode = DetailedEpisode {
-            duration: db_episode.duration,
+            duration: file.duration(),
             previews_amount: previews_amount as i64,
             subtitles_amount: db_episode.subtitles_amount,
             id: db_episode.id,

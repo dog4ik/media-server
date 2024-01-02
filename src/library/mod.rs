@@ -490,9 +490,8 @@ impl Source {
     }
 
     /// Returns struct compatible with database Video table
-    pub fn into_db_video(&self, local_title: String) -> DbVideo {
+    pub fn into_db_video(&self) -> DbVideo {
         let origin = &self.origin;
-        let metadata = &origin.metadata;
         let now = time::OffsetDateTime::now_utc();
         let hash = origin.calculate_video_hash().unwrap();
 
@@ -500,13 +499,7 @@ impl Source {
             id: None,
             path: self.source_path().to_str().unwrap().to_string(),
             hash: hash.to_string(),
-            local_title,
             size: origin.file_size() as i64,
-            duration: metadata.format.duration.parse::<f64>().unwrap() as i64,
-            audio_codec: origin.default_audio().map(|c| c.codec_name.to_string()),
-            video_codec: origin.default_video().map(|c| c.codec_name.to_string()),
-            resolution: origin.default_video().map(|c| c.resoultion().to_string()),
-            bitrate: origin.bitrate() as i64,
             scan_date: now.to_string(),
         }
     }
@@ -523,6 +516,7 @@ impl Video {
 
     /// Calculate hash for the video
     pub fn calculate_video_hash(&self) -> Result<u32, std::io::Error> {
+        tracing::trace!("Calculation hash for file: {}", self.path.display());
         let path = &self.path;
         let mut file = std::fs::File::open(path)?;
         let hash = utils::file_hash(&mut file)?;
@@ -543,7 +537,7 @@ impl Video {
 
     /// Get file size in bytes
     pub fn file_size(&self) -> u64 {
-        std::fs::metadata(&self.path).expect("exist").len()
+        std::fs::metadata(&self.path).expect("to have access").len()
     }
 
     /// Get video duration

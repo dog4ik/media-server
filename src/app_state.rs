@@ -4,6 +4,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use anyhow::Context;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, sync::Semaphore};
 
@@ -346,13 +347,21 @@ impl AppState {
         // BUG: what happens if local title changes? Duplicate shows in db.
         // We'll be fine if we avoid dublicate and insert video with different title.
         // After failure it will lookup title in provider and match it again
+        let size = show.source.origin.file_size() as i64;
+        let hash = show
+            .source
+            .origin
+            .calculate_video_hash()
+            .context("failed to calculate show hash")?
+            .to_string();
         let show_query = sqlx::query!(
             r#"SELECT shows.id, shows.metadata_id as "metadata_id!", shows.metadata_provider FROM episodes 
                     JOIN videos ON videos.id = episodes.video_id
                     JOIN seasons ON seasons.id = episodes.season_id
                     JOIN shows ON shows.id = seasons.show_id
-                    WHERE videos.local_title = ?;"#,
-            show.local_title
+                    WHERE videos.size = ? AND videos.hash = ?;"#,
+            size,
+            hash
         )
         .fetch_one(&self.db.pool)
         .await
@@ -443,7 +452,7 @@ impl AppState {
                         show.episode as usize,
                     )
                     .await?;
-                let db_video = show.source.into_db_video(show.local_title.clone());
+                let db_video = show.source.into_db_video();
                 let video_id = self.db.insert_video(db_video).await?;
                 let db_episode = metadata.into_db_episode(season_id, video_id).await;
                 self.db.insert_episode(db_episode).await?;
@@ -460,11 +469,18 @@ impl AppState {
         movie: MovieFile,
         metadata_provider: &impl MovieMetadataProvider,
     ) -> Result<(), AppError> {
+        let size = movie.source.origin.file_size().to_string();
+        let hash = movie
+            .source
+            .origin
+            .calculate_video_hash()
+            .context("Failed to calculate hash for movie")?;
         let movie_query = sqlx::query!(
             r#"SELECT movies.id as "id!", movies.metadata_id, movies.metadata_provider FROM movies 
                     JOIN videos ON videos.id = movies.video_id
-                    WHERE videos.local_title = ?;"#,
-            movie.local_title
+                    WHERE videos.size = ? AND videos.hash = ?;"#,
+            size,
+            hash
         )
         .fetch_one(&self.db.pool)
         .await
@@ -479,9 +495,9 @@ impl AppState {
                         metadata_provider.provider_identifier()
                     );
                     let metadata = metadata_provider.movie(&movie).await.unwrap();
-                    let db_video = movie.source.into_db_video(movie.local_title);
+                    let db_video = movie.source.into_db_video();
                     let video_id = self.db.insert_video(db_video).await?;
-                    let provider = metadata.metadata_provider.to_string();
+                    let provider = metadata.metadata_provider;
                     let metadata_id = metadata.metadata_id.clone().unwrap();
                     let db_movie = metadata.into_db_movie(video_id).await;
                     (self.db.insert_movie(db_movie).await?, metadata_id, provider);
