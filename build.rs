@@ -1,15 +1,11 @@
-use std::{env, fs, path::PathBuf, str::FromStr};
+use std::{fs, path::PathBuf, str::FromStr};
 
 use sqlx::{sqlite::SqliteConnectOptions, ConnectOptions};
 
 const APP_NAME: &str = "media_server";
 
 fn init_prod_storage() -> PathBuf {
-    let home = PathBuf::from(env::var("HOME").unwrap_or("~".into()));
-    let mut store_path = home.join(".local");
-    store_path.push("share");
-    store_path.push(APP_NAME);
-    store_path
+    dirs::data_dir().unwrap().join(APP_NAME)
 }
 
 fn init_debug_storage() -> PathBuf {
