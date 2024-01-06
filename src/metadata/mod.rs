@@ -2,7 +2,8 @@ use std::{sync::Arc, time::Duration};
 
 use crate::{
     db::{DbEpisode, DbMovie, DbSeason, DbShow},
-    ffmpeg, library::{movie::MovieFile, show::ShowFile},
+    ffmpeg,
+    library::{movie::MovieIdentifier, show::ShowIdentifier, LibraryFile},
 };
 use anyhow::Result;
 use reqwest::{Client, Request, Response, Url};
@@ -49,7 +50,7 @@ pub trait MovieMetadataProvider {
     #[allow(async_fn_in_trait)]
     fn movie(
         &self,
-        movie: &MovieFile,
+        movie: &LibraryFile<MovieIdentifier>,
     ) -> impl std::future::Future<Output = Result<MovieMetadata>> + Send;
 
     /// Provider identifier
@@ -61,7 +62,7 @@ pub trait ShowMetadataProvider {
     #[allow(async_fn_in_trait)]
     fn show(
         &self,
-        show: &ShowFile,
+        show: &LibraryFile<ShowIdentifier>,
     ) -> impl std::future::Future<Output = Result<ShowMetadata>> + Send;
 
     /// Query for season

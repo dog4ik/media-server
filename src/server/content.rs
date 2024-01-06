@@ -7,7 +7,7 @@ use axum_extra::{
 };
 use bytes::Bytes;
 
-use crate::library::LibraryItem;
+use crate::library::Source;
 
 pub trait ServeContent {
     /// Serve video file
@@ -26,16 +26,16 @@ pub trait ServeContent {
     async fn serve_subs(&self, lang: Option<String>) -> Result<String, StatusCode>;
 }
 
-impl<T: LibraryItem> ServeContent for T {
+impl ServeContent for Source {
     async fn serve_video(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
-        self.source().origin.serve(range).await
+        self.origin.serve(range).await
     }
 
     async fn serve_previews(
         &self,
         number: i32,
     ) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode> {
-        let path = PathBuf::from(self.source().previews_path().to_str().unwrap());
+        let path = PathBuf::from(self.previews_path().to_str().unwrap());
         let mut previews_dir = tokio::fs::read_dir(path).await.unwrap();
 
         while let Some(file) = previews_dir.next_entry().await.unwrap() {
@@ -57,7 +57,7 @@ impl<T: LibraryItem> ServeContent for T {
     }
 
     async fn serve_subs(&self, lang: Option<String>) -> Result<String, StatusCode> {
-        get_subtitles(self.source().subtitles_path(), lang)
+        get_subtitles(self.subtitles_path(), lang)
             .await
             .ok_or(StatusCode::NO_CONTENT)
     }
@@ -89,4 +89,3 @@ async fn get_subtitles(path: PathBuf, lang: Option<String>) -> Option<String> {
     }
     return subs;
 }
-pub trait ServePreviews {}

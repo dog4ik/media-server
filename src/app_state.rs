@@ -4,7 +4,6 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::Context;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, sync::Semaphore};
 
@@ -12,7 +11,8 @@ use crate::{
     config::ServerConfiguration,
     db::{Db, DbSubtitles},
     library::{
-        movie::MovieFile, show::ShowFile, Library, LibraryItem, Source, TranscodePayload, Video,
+        movie::MovieIdentifier, show::ShowIdentifier, LibraryFile, Library, Source,
+        TranscodePayload, Video,
     },
     metadata::{MovieMetadataProvider, ShowMetadataProvider},
     progress::{TaskError, TaskKind, TaskResource},
@@ -271,7 +271,7 @@ impl AppState {
         .await?;
         let mut common_paths: HashSet<&str> = HashSet::new();
 
-        let local_episodes: HashMap<String, &ShowFile> = local_episodes
+        let local_episodes: HashMap<String, &LibraryFile<ShowIdentifier>> = local_episodes
             .iter()
             .map(|ep| (ep.source.source_path().to_string_lossy().to_string(), ep))
             .collect();
@@ -311,7 +311,7 @@ impl AppState {
             let handle = tokio::spawn(async move {
                 let permit = semaphore.acquire().await.unwrap();
                 let task_id = app_state.tasks.start_task(
-                    local_ep.source_path().clone(),
+                    local_ep.source.source_path().to_path_buf(),
                     TaskKind::Scan,
                     None,
                 );
@@ -341,27 +341,20 @@ impl AppState {
 
     pub async fn handle_show(
         &self,
-        show: ShowFile,
+        show: LibraryFile<ShowIdentifier>,
         metadata_provider: &impl ShowMetadataProvider,
     ) -> Result<(), AppError> {
         // BUG: what happens if local title changes? Duplicate shows in db.
         // We'll be fine if we avoid dublicate and insert video with different title.
         // After failure it will lookup title in provider and match it again
-        let size = show.source.origin.file_size() as i64;
-        let hash = show
-            .source
-            .origin
-            .calculate_video_hash()
-            .context("failed to calculate show hash")?
-            .to_string();
+        let resources_folder = show.source.resources_folder_name();
         let show_query = sqlx::query!(
             r#"SELECT shows.id, shows.metadata_id as "metadata_id!", shows.metadata_provider FROM episodes 
                     JOIN videos ON videos.id = episodes.video_id
                     JOIN seasons ON seasons.id = episodes.season_id
                     JOIN shows ON shows.id = seasons.show_id
-                    WHERE videos.size = ? AND videos.hash = ?;"#,
-            size,
-            hash
+                    WHERE videos.resources_folder = ?;"#,
+            resources_folder
         )
         .fetch_one(&self.db.pool)
         .await
@@ -373,13 +366,13 @@ impl AppState {
                 sqlx::Error::RowNotFound => {
                     tracing::debug!(
                         "Show {} is not found in local DB, fetching metadata from {}",
-                        show.local_title,
+                        show.identifier.title,
                         metadata_provider.provider_identifier()
                     );
                     let metadata = metadata_provider.show(&show).await.map_err(|err| {
                         tracing::error!(
                             "Metadata lookup failed for file with local title: {}",
-                            show.local_title
+                            show.identifier.title
                         );
                         err
                     })?;
@@ -398,7 +391,7 @@ impl AppState {
         let season_id = sqlx::query!(
             "SELECT id FROM seasons WHERE show_id = ? AND number = ?",
             show_id,
-            show.season
+            show.identifier.season
         )
         .fetch_one(&self.db.pool)
         .await
@@ -410,12 +403,12 @@ impl AppState {
                 sqlx::Error::RowNotFound => {
                     tracing::debug!(
                         "Season {} of show {} is not found in local DB, fetching metadata from {}",
-                        show.season,
-                        show.local_title,
+                        show.identifier.season,
+                        show.identifier.title,
                         metadata_provider.provider_identifier()
                     );
                     let metadata = metadata_provider
-                        .season(&show_metadata_id, show.season.into())
+                        .season(&show_metadata_id, show.identifier.season.into())
                         .await?;
                     let db_season = metadata.into_db_season(show_id).await;
                     self.db.insert_season(db_season).await?
@@ -430,7 +423,7 @@ impl AppState {
         let episode_id = sqlx::query!(
             "SELECT id FROM episodes WHERE season_id = ? AND number = ?;",
             season_id,
-            show.episode
+            show.identifier.episode
         )
         .fetch_one(&self.db.pool)
         .await
@@ -440,16 +433,16 @@ impl AppState {
             if let sqlx::Error::RowNotFound = e {
                 tracing::debug!(
                     "Episode {} of show {}(season {}) is not found in local DB, fetching metadata from {}",
-                    show.episode,
-                    show.local_title,
-                    show.season,
+                    show.identifier.episode,
+                    show.identifier.title,
+                    show.identifier.season,
                     metadata_provider.provider_identifier()
                 );
                 let metadata = metadata_provider
                     .episode(
                         &show_metadata_id,
-                        show.season as usize,
-                        show.episode as usize,
+                        show.identifier.season as usize,
+                        show.identifier.episode as usize,
                     )
                     .await?;
                 let db_video = show.source.into_db_video();
@@ -466,21 +459,15 @@ impl AppState {
 
     pub async fn handle_movie(
         &self,
-        movie: MovieFile,
+        movie: LibraryFile<MovieIdentifier>,
         metadata_provider: &impl MovieMetadataProvider,
     ) -> Result<(), AppError> {
-        let size = movie.source.origin.file_size().to_string();
-        let hash = movie
-            .source
-            .origin
-            .calculate_video_hash()
-            .context("Failed to calculate hash for movie")?;
+        let resources_folder = movie.source.resources_folder_name();
         let movie_query = sqlx::query!(
             r#"SELECT movies.id as "id!", movies.metadata_id, movies.metadata_provider FROM movies 
                     JOIN videos ON videos.id = movies.video_id
-                    WHERE videos.size = ? AND videos.hash = ?;"#,
-            size,
-            hash
+                    WHERE videos.resources_folder = ?;"#,
+            resources_folder
         )
         .fetch_one(&self.db.pool)
         .await
@@ -491,7 +478,7 @@ impl AppState {
                 if let sqlx::Error::RowNotFound = e {
                     tracing::debug!(
                         "Movie {} is not found in local DB, fetching metadata from {}",
-                        movie.local_title,
+                        movie.identifier.title,
                         metadata_provider.provider_identifier()
                     );
                     let metadata = metadata_provider.movie(&movie).await.unwrap();

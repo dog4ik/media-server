@@ -3,13 +3,15 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::{library::{show::ShowFile, movie::MovieFile, Source}, utils};
-
+use crate::{
+    library::{movie::MovieIdentifier, show::ShowIdentifier, DataFolder, LibraryFile, Source},
+    utils,
+};
 
 pub struct TestResource {
     pub temp_dir: PathBuf,
-    pub test_show: ShowFile,
-    pub test_movie: MovieFile,
+    pub test_show: LibraryFile<ShowIdentifier>,
+    pub test_movie: LibraryFile<MovieIdentifier>,
     clean_on_drop: bool,
 }
 
@@ -23,26 +25,33 @@ impl TestResource {
         let show_video_path = temp_dir.join("Episode.S01E01.mkv");
 
         let resource_path = temp_dir.join("resources");
-
-        let show_resource_path = resource_path.join("episode").join("1").join("1");
+        let show_metadata = show_video_path.metadata().unwrap();
+        let show_data_folder = DataFolder::from_metadata(&show_metadata);
+        let show_resource_path = resource_path.join(show_data_folder.to_string());
         let movie_resource_path = resource_path.join("movie");
         dbg!(&show_resource_path, &movie_resource_path);
 
         utils::generate_resources(&show_resource_path).unwrap();
         utils::generate_resources(&movie_resource_path).unwrap();
 
-        let show_file = ShowFile {
-            local_title: "episode".into(),
-            episode: 1,
-            season: 1,
+        let show_file = LibraryFile {
+            identifier: ShowIdentifier {
+                title: "episode".into(),
+                episode: 1,
+                season: 1,
+            },
+            data_folder: show_data_folder.clone(),
             source: Source::new(&show_video_path, &show_resource_path).unwrap(),
         };
 
-        let movie_file = MovieFile {
+        let movie_file = LibraryFile {
+            identifier: MovieIdentifier {
+                year: None,
+                title: "movie".into(),
+            },
+            data_folder: show_data_folder,
             source: Source::new(show_video_path, movie_resource_path).unwrap(),
-            local_title: "movie".into(),
         };
-
         Self {
             temp_dir,
             clean_on_drop,

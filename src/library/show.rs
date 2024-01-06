@@ -1,36 +1,16 @@
-use std::path::{Path, PathBuf};
+use serde::Serialize;
 
-use anyhow::anyhow;
-use serde::{Deserialize, Serialize};
-
-use crate::utils;
-
-use super::{LibraryItem, Source};
-
-pub struct ShowExtractor(pub ShowFile);
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ShowParams {
-    pub show_name: String,
-    pub season: usize,
-    pub episode: usize,
-}
+use super::Media;
 
 #[derive(Debug, Clone, Serialize)]
-pub struct ShowFile {
-    pub local_title: String,
+pub struct ShowIdentifier {
     pub episode: u8,
     pub season: u8,
-    pub source: Source,
+    pub title: String,
 }
 
-impl ShowFile {
-    pub fn new(path: PathBuf) -> Result<Self, anyhow::Error> {
-        let file_name = path
-            .file_name()
-            .and_then(|n| n.to_os_string().into_string().ok())
-            .ok_or(anyhow!("Failed to get file name:{}", path.display()))?;
-        let tokens = utils::tokenize_filename(file_name);
+impl Media for ShowIdentifier {
+    fn identify(tokens: Vec<String>) -> Option<Self> {
         let mut name: Option<String> = None;
         let mut season: Option<u8> = None;
         let mut episode: Option<u8> = None;
@@ -43,7 +23,8 @@ impl ShowFile {
                 && chars[2].is_ascii_digit()
                 && chars[3].is_ascii_digit()
                 && chars[4].is_ascii_digit()
-                && chars[5] == ')';
+                && chars[5] == ')'
+                && (chars[1] == '1' || chars[1] == '2');
             if is_year && season.is_none() && episode.is_none() {
                 continue;
             }
@@ -70,54 +51,17 @@ impl ShowFile {
             }
         }
         if let (Some(name), Some(season), Some(episode)) = (name.clone(), season, episode) {
-            let resources_path = generate_resources_path(&name, season, episode);
-            utils::generate_resources(&resources_path)?;
-            let source = Source::new(path, resources_path)?;
             let show_file = Self {
-                local_title: name,
                 episode,
                 season,
-                source,
+                title: name,
             };
-            Ok(show_file)
+            Some(show_file)
         } else {
-            return Err(anyhow::anyhow!(
-                "Failed to construct a show name ({:?}, {:?}, {:?})",
-                name,
-                season,
-                episode
-            ));
+            None
         }
     }
-}
-
-impl LibraryItem for ShowFile {
-    fn resources_path(&self) -> &Path {
-        &self.source.resources_path
+    fn title(&self) -> &str {
+        &self.title
     }
-    fn source(&self) -> &Source {
-        &self.source
-    }
-    fn title(&self) -> String {
-        self.local_title.clone()
-    }
-    fn url(&self) -> String {
-        format!("/{}/{}/{}", self.local_title, self.season, self.episode)
-    }
-
-    fn from_path(path: PathBuf) -> Result<Self, anyhow::Error>
-    where
-        Self: Sized,
-    {
-        Self::new(path)
-    }
-}
-
-fn generate_resources_path(title: &str, season: u8, episode: u8) -> PathBuf {
-    let mut episode_dir_path =
-        PathBuf::from(std::env::var("RESOURCES_PATH").expect("env to be set"));
-    episode_dir_path.push(title);
-    episode_dir_path.push(season.to_string());
-    episode_dir_path.push(episode.to_string());
-    episode_dir_path
 }

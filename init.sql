@@ -53,7 +53,7 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
-                                    hash TEXT NOT NULL,
+                                    resources_folder TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,

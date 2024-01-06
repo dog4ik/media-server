@@ -66,6 +66,7 @@ pub fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Er
     fs::create_dir_all(resources_path.join("subs"))?;
     fs::create_dir_all(resources_path.join("previews"))?;
     fs::create_dir_all(resources_path.join("variants"))?;
+    fs::create_dir_all(resources_path.join("chapters"))?;
     Ok(())
 }
 

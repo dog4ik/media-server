@@ -14,6 +14,7 @@ use crate::ffmpeg::{FFprobeAudioStream, FFprobeVideoStream};
 use crate::library::{AudioCodec, Resolution, Summary, VideoCodec};
 use crate::{app_state::AppState, db::Db};
 
+use super::content::ServeContent;
 use super::{
     EpisodeQuery, IdQuery, LanguageQuery, NumberQuery, PageQuery, SeasonQuery, VariantQuery,
 };
@@ -75,8 +76,7 @@ pub struct DetailedEpisode {
 pub struct DetailedVideo {
     pub id: i64,
     pub path: PathBuf,
-    pub hash: String,
-    pub local_title: String,
+    pub resources_folder: String,
     pub size: u64,
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
@@ -156,7 +156,7 @@ pub async fn previews(
     let video_path = PathBuf::from(video.path);
     let file = {
         let library = library.lock().unwrap();
-        library.find_library_file(&video_path)
+        library.find_source(&video_path).cloned()
     };
     if let Some(file) = file {
         return Ok(file.serve_previews(number.number).await);
@@ -178,7 +178,7 @@ pub async fn subtitles(
     let video_path = PathBuf::from(video.path);
     let file = {
         let library = library.lock().unwrap();
-        library.find_library_file(&video_path)
+        library.find_source(&video_path).cloned()
     };
     if let Some(file) = file {
         return Ok(file.serve_subs(lang.lang).await);
@@ -533,17 +533,16 @@ pub async fn get_video_by_id(
     State(state): State<AppState>,
 ) -> Result<Json<DetailedVideo>, StatusCode> {
     let AppState { library, db, .. } = state;
-    let db_video = sqlx::query!(
-        "SELECT hash, scan_date, path FROM videos WHERE id = ?",
-        query.id
-    )
-    .fetch_one(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
-    let (title, source) = {
+    let db_video = sqlx::query!("SELECT scan_date, path, resources_folder FROM videos WHERE id = ?", query.id)
+        .fetch_one(&db.pool)
+        .await
+        .map_err(sqlx_err_wrap)?;
+    let source = {
         let library = library.lock().unwrap();
-        let file = library.find(db_video.path).ok_or(StatusCode::NOT_FOUND)?;
-        (file.title(), file.source().clone())
+        let file = library
+            .find_source(db_video.path)
+            .ok_or(StatusCode::NOT_FOUND)?;
+        file.clone()
     };
 
     let detailed_variants = source
@@ -576,8 +575,7 @@ pub async fn get_video_by_id(
     let detailed_episode = DetailedVideo {
         id: query.id,
         path: source.source_path().to_path_buf(),
-        hash: db_video.hash,
-        local_title: title,
+        resources_folder: source.resources_folder_name(),
         size: source.origin.file_size(),
         duration: source.duration(),
         variants: detailed_variants,

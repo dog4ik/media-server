@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
-                                    hash TEXT NOT NULL,
+                                    resources_folder TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -239,10 +239,10 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_video(&self, db_video: DbVideo) -> Result<i64, Error> {
         let video_query = sqlx::query!(
             "INSERT INTO videos
-            (path, hash, size)
+            (path, resources_folder, size)
             VALUES (?, ?, ?) RETURNING id;",
             db_video.path,
-            db_video.hash,
+            db_video.resources_folder,
             db_video.size,
         );
         video_query.fetch_one(&self.pool).await.map(|x| x.id)
@@ -522,7 +522,7 @@ pub struct DbEpisode {
 pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
-    pub hash: String,
+    pub resources_folder: String,
     pub size: i64,
     pub scan_date: String,
 }

@@ -7,8 +7,8 @@ use reqwest::{
 };
 use serde::Deserialize;
 
-use crate::library::movie::MovieFile;
-use crate::library::show::ShowFile;
+use crate::library::show::ShowIdentifier;
+use crate::library::{movie::MovieIdentifier, LibraryFile};
 
 use super::{
     EpisodeMetadata, LimitedRequestClient, MetadataImage, MovieMetadata, MovieMetadataProvider,
@@ -274,8 +274,11 @@ impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
 }
 
 impl MovieMetadataProvider for TmdbApi {
-    async fn movie(&self, movie: &MovieFile) -> Result<MovieMetadata, anyhow::Error> {
-        let movies = self.search_movie(&movie.local_title).await?;
+    async fn movie(
+        &self,
+        movie: &LibraryFile<MovieIdentifier>,
+    ) -> Result<MovieMetadata, anyhow::Error> {
+        let movies = self.search_movie(&movie.identifier.title).await?;
         movies
             .results
             .into_iter()
@@ -290,20 +293,23 @@ impl MovieMetadataProvider for TmdbApi {
 }
 
 impl ShowMetadataProvider for TmdbApi {
-    async fn show(&self, show: &ShowFile) -> Result<ShowMetadata, anyhow::Error> {
+    async fn show(
+        &self,
+        show: &LibraryFile<ShowIdentifier>,
+    ) -> Result<ShowMetadata, anyhow::Error> {
         let contains = |parts: &Vec<&str>, name: &str| parts.iter().any(|p| name.contains(p));
-        let shows = self.search_tv_show(&show.local_title).await?;
+        let shows = self.search_tv_show(&show.identifier.title).await?;
         for result in shows.results.iter().take(5) {
             let name = result.original_name.to_lowercase();
             let name_parts: Vec<&str> = name.split_whitespace().collect();
             // basic check
-            if contains(&name_parts, &show.local_title) {
+            if contains(&name_parts, &show.identifier.title) {
                 return Ok(result.clone().into());
             }
             tracing::debug!(
                 "Show name ({}) does not contain local name ({}). Doing metadata check",
                 name,
-                show.local_title
+                show.identifier.title
             );
 
             // metadata title check
@@ -314,13 +320,17 @@ impl ShowMetadataProvider for TmdbApi {
 
             tracing::debug!(
                 "Show name does not contain file metadata title ({}). Doing duration check",
-                show.local_title
+                show.identifier.title
             );
 
             // duration check
             let duration = show.source.origin.duration();
             let duration_match = self
-                .tv_show_episode(result.id, show.season.into(), show.episode.into())
+                .tv_show_episode(
+                    result.id,
+                    show.identifier.season.into(),
+                    show.identifier.episode.into(),
+                )
                 .await
                 .map_or(false, |e| {
                     let threshold = time::Duration::minutes(2);
@@ -333,7 +343,7 @@ impl ShowMetadataProvider for TmdbApi {
                 return Ok(result.clone().into());
             }
         }
-        tracing::warn!("Failed to verify match for {}", show.local_title);
+        tracing::warn!("Failed to verify match for {}", show.identifier.title);
         Err(anyhow::anyhow!("failed to find show"))
     }
 
