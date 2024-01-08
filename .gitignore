@@ -5,5 +5,5 @@
 /db
 /test-dir
 .env
-server-configuration.json
+configuration.toml
 /*.log
