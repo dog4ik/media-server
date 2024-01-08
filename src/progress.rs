@@ -4,11 +4,15 @@ use std::{
 };
 
 use serde::Serialize;
+use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot};
 use tracing::error;
 use uuid::Uuid;
 
-use crate::{ffmpeg::{FFmpegRunningJob, FFmpegTask}, app_state::AppError};
+use crate::{
+    app_state::AppError,
+    ffmpeg::{FFmpegRunningJob, FFmpegTask},
+};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
@@ -25,6 +29,7 @@ pub struct Task {
     pub target: PathBuf,
     pub id: Uuid,
     pub kind: TaskKind,
+    pub created: OffsetDateTime,
     pub cancel: Option<oneshot::Sender<()>>,
 }
 
@@ -51,8 +56,10 @@ impl Task {
         cancel_channel: Option<oneshot::Sender<()>>,
     ) -> Self {
         let id = Uuid::new_v4();
+        let now = time::OffsetDateTime::now_utc();
         Self {
             target,
+            created: now,
             id,
             kind,
             cancel: cancel_channel,
