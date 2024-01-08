@@ -3,7 +3,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{self, Args, ServerConfiguration};
+use media_server::config::{AppResources, Args, ServerConfiguration};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
@@ -18,9 +18,6 @@ use tracing::{info, Level};
 
 #[tokio::main]
 async fn main() {
-    if let Err(error) = config::initiate_resources() {
-        tracing::error!("Failed to initiate resources: {}", error);
-    };
     let log_channel = init_tracer(Level::TRACE);
     if let Ok(path) = dotenv() {
         info!("Loaded env variables from: {}", path.display());
@@ -37,8 +34,16 @@ async fn main() {
         .expect("database to be found");
 
     let args = Args::parse();
-    let mut configuration = ServerConfiguration::from_file("server-configuration.json").unwrap();
+
+    let mut configuration =
+        ServerConfiguration::from_file(AppResources::default_config_path()).unwrap();
     configuration.apply_args(args);
+
+    if let Err(err) = configuration.resources.initiate() {
+        tracing::error!("Failed to initiate resources {}", err);
+        panic!("Could not initate app resources");
+    };
+
     let port = configuration.port;
 
     let shows_dirs: Vec<PathBuf> = configuration

@@ -3,10 +3,13 @@ use std::{
     io::{BufRead, ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
+    str::FromStr,
 };
 
 use clap::Parser;
 use serde::{Deserialize, Serialize};
+
+use crate::ffmpeg::H264Preset;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -17,6 +20,21 @@ pub enum ConfigLogLevel {
     Debug,
     Error,
     Info,
+}
+
+impl FromStr for ConfigLogLevel {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Trace" => Ok(Self::Trace),
+            "Warn" => Ok(Self::Warn),
+            "Debug" => Ok(Self::Debug),
+            "Error" => Ok(Self::Error),
+            "Info" => Ok(Self::Info),
+            _ => Err(anyhow::anyhow!("{} does not match any log level", s)),
+        }
+    }
 }
 
 impl From<tracing::Level> for ConfigLogLevel {
@@ -39,26 +57,28 @@ pub struct ServerConfiguration {
     pub log_path: PathBuf,
     pub movie_folders: Vec<PathBuf>,
     pub show_folders: Vec<PathBuf>,
-    pub resources_folder: PathBuf,
+    pub resources: AppResources,
     #[serde(skip_serializing)]
     pub config_file: ConfigFile,
     pub scan_max_concurrency: usize,
     pub is_setup: bool,
+    pub h264_preset: H264Preset,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct JsonConfig {
+struct TomlConfig {
     port: u16,
     log_level: ConfigLogLevel,
     log_path: PathBuf,
     movie_folders: Vec<PathBuf>,
     show_folders: Vec<PathBuf>,
-    resources_folder: PathBuf,
+    resources: AppResources,
     scan_max_concurrency: usize,
+    h264_preset: H264Preset,
     is_setup: bool,
 }
 
-impl Default for JsonConfig {
+impl Default for TomlConfig {
     fn default() -> Self {
         Self {
             show_folders: Vec::new(),
@@ -66,8 +86,9 @@ impl Default for JsonConfig {
             port: 6969,
             log_level: ConfigLogLevel::Trace,
             log_path: PathBuf::from("log.log"),
-            resources_folder: PathBuf::from("resources"),
+            resources: AppResources::default(),
             scan_max_concurrency: 10,
+            h264_preset: H264Preset::default(),
             is_setup: false,
         }
     }
@@ -86,9 +107,9 @@ impl ConfigFile {
             .map_err(|e| e.kind())
         {
             Err(ErrorKind::NotFound) => {
-                let default_config = JsonConfig::default();
+                let default_config = TomlConfig::default();
                 let mut file = fs::File::create_new(&config_path)?;
-                let _ = file.write_all(&serde_json::to_vec_pretty(&default_config)?);
+                let _ = file.write_all(&toml::to_string_pretty(&default_config)?.as_bytes());
                 tracing::info!(
                     "Created configuration file with defaults: {}",
                     config_path.as_ref().display()
@@ -103,102 +124,158 @@ impl ConfigFile {
     }
 
     /// Reads contents of config and resets it to defaults in case of parse error
-    fn read(&self) -> Result<JsonConfig, anyhow::Error> {
+    fn read(&self) -> Result<TomlConfig, anyhow::Error> {
         tracing::info!("reading file");
         let buf = fs::read_to_string(&self.0)?;
-        Ok(serde_json::from_str(&buf).unwrap_or_else(|e| {
+        Ok(toml::from_str(&buf).unwrap_or_else(|e| {
             tracing::error!("Failed to read config: {}", e);
-            tracing::info!("Resetting broken configc");
+            tracing::info!("Resetting broken config");
             if let Ok(repaired_config) = repair_config(&buf) {
                 tracing::info!("Successfuly repaired config");
-                let _ = fs::write(
-                    &self.0,
-                    &serde_json::to_vec_pretty(&repaired_config).unwrap(),
-                );
+                let _ = fs::write(&self.0, &toml::to_string_pretty(&repaired_config).unwrap());
                 repaired_config
             } else {
-                tracing::error!("Failed to repair config");
-                let default_config = JsonConfig::default();
-                let _ = fs::write(
-                    &self.0,
-                    &serde_json::to_vec_pretty(&default_config).unwrap(),
-                );
+                tracing::error!("Failed to repair config, creating default one");
+                let default_config = TomlConfig::default();
+                let _ = fs::write(&self.0, &toml::to_string_pretty(&default_config).unwrap());
                 default_config
             }
         }))
     }
 
-    fn flush(&self, json: JsonConfig) -> Result<(), anyhow::Error> {
-        let json = serde_json::to_vec_pretty(&json)?;
-        fs::write(&self.0, &json)?;
+    fn flush(&self, config: TomlConfig) -> Result<(), anyhow::Error> {
+        let config_text = toml::to_string_pretty(&config)?;
+        fs::write(&self.0, &config_text)?;
         Ok(())
     }
 }
 
 //NOTE: I hope to find solution to this mess
-fn repair_config(raw: &str) -> Result<JsonConfig, anyhow::Error> {
-    #[derive(Deserialize)]
-    struct ShadowConfig {
-        port: Option<u16>,
-        log_level: Option<ConfigLogLevel>,
-        log_path: Option<PathBuf>,
-        movie_folders: Option<Vec<PathBuf>>,
-        show_folders: Option<Vec<PathBuf>>,
-        resources_folder: Option<PathBuf>,
-        scan_max_concurrency: Option<usize>,
-        is_setup: Option<bool>,
-    }
-
+fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
     tracing::trace!("Trying to repair config");
-    let json: ShadowConfig = serde_json::from_str(raw)?;
-    let default = JsonConfig::default();
+    let default = TomlConfig::default();
+    let parsed: toml::Table = toml::from_str(raw)?;
+    let port: u16 = parsed
+        .get("port")
+        .and_then(|v| v.as_integer())
+        .map_or(default.port, |v| v as u16);
+    let log_level = parsed
+        .get("log_level")
+        .and_then(|v| v.as_str())
+        .and_then(|s| ConfigLogLevel::from_str(s).ok())
+        .unwrap_or(default.log_level);
+    let log_path = parsed
+        .get("log_path")
+        .and_then(|v| v.as_str())
+        .map_or(default.log_path, |x| x.into());
+    let movie_folders = parsed
+        .get("movie_folders")
+        .and_then(|v| v.as_array())
+        .map(|v| {
+            v.iter()
+                .filter_map(|v| v.as_str())
+                .map(|x| x.into())
+                .collect()
+        })
+        .unwrap_or(default.movie_folders);
+    let show_folders = parsed
+        .get("show_folders")
+        .and_then(|v| v.as_array())
+        .map(|v| {
+            v.iter()
+                .filter_map(|v| v.as_str())
+                .map(|x| x.into())
+                .collect()
+        })
+        .unwrap_or(default.show_folders);
+    let resources =
+        parsed
+            .get("resources")
+            .and_then(|x| x.as_table())
+            .map_or(default.resources.clone(), |x| {
+                let database_path = x
+                    .get("database_path")
+                    .and_then(|f| f.as_str())
+                    .map_or(default.resources.database_path, |x| x.into());
+                let config_path = x
+                    .get("config_path")
+                    .and_then(|f| f.as_str())
+                    .map_or(default.resources.config_path, |x| x.into());
+                let resources_path = x
+                    .get("resources_path")
+                    .and_then(|f| f.as_str())
+                    .map_or(default.resources.resources_path, |x| x.into());
+                let cache_path = x
+                    .get("cache_path")
+                    .and_then(|f| f.as_str())
+                    .map_or(default.resources.cache_path, |x| x.into());
+                AppResources {
+                    database_path,
+                    config_path,
+                    resources_path,
+                    cache_path,
+                }
+            });
+    let scan_max_concurrency = parsed
+        .get("scan_max_concurrency")
+        .and_then(|v| v.as_integer())
+        .map_or(default.scan_max_concurrency, |v| v as usize);
+    let is_setup = parsed
+        .get("is_setup")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default.is_setup);
+    let h264_preset = parsed
+        .get("h264_preset")
+        .and_then(|v| v.as_str())
+        .and_then(|v| H264Preset::from_str(v).ok())
+        .unwrap_or(default.h264_preset);
 
-    let repaired_config = JsonConfig {
-        port: json.port.unwrap_or(default.port),
-        log_level: json.log_level.unwrap_or(default.log_level),
-        log_path: json.log_path.unwrap_or(default.log_path),
-        movie_folders: json.movie_folders.unwrap_or(default.movie_folders),
-        show_folders: json.show_folders.unwrap_or(default.show_folders),
-        resources_folder: json.resources_folder.unwrap_or(default.resources_folder),
-        scan_max_concurrency: json
-            .scan_max_concurrency
-            .unwrap_or(default.scan_max_concurrency),
-        is_setup: json.is_setup.unwrap_or(default.is_setup),
-        ..Default::default()
+    let repaired_config = TomlConfig {
+        port,
+        log_level,
+        log_path,
+        movie_folders,
+        show_folders,
+        resources,
+        scan_max_concurrency,
+        is_setup,
+        h264_preset,
     };
     Ok(repaired_config)
 }
 
 impl ServerConfiguration {
     /// Into Json Config
-    fn into_json(&self) -> JsonConfig {
-        JsonConfig {
+    fn into_toml(&self) -> TomlConfig {
+        TomlConfig {
             port: self.port,
             log_level: self.log_level.clone(),
             log_path: self.log_path.clone(),
             movie_folders: self.movie_folders.clone(),
             show_folders: self.show_folders.clone(),
-            resources_folder: self.resources_folder.clone(),
+            resources: self.resources.clone(),
             scan_max_concurrency: self.scan_max_concurrency,
+            h264_preset: self.h264_preset,
             is_setup: self.is_setup,
         }
     }
     /// Tries to load config or creates default config file
     /// Errors when cant create or read file
     pub fn from_file(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
-        let json_config = ConfigFile::open(&config_path)?.read()?;
+        let file_config = ConfigFile::open(&config_path)?.read()?;
 
         let config = ServerConfiguration {
-            resources_folder: json_config.resources_folder,
-            port: json_config.port,
-            log_level: json_config.log_level,
+            resources: file_config.resources,
+            port: file_config.port,
+            log_level: file_config.log_level,
             capabilities: Capabilities::new()?,
-            log_path: json_config.log_path,
-            movie_folders: json_config.movie_folders,
-            show_folders: json_config.show_folders,
+            log_path: file_config.log_path,
+            movie_folders: file_config.movie_folders,
+            show_folders: file_config.show_folders,
             config_file: ConfigFile::open(config_path)?,
-            scan_max_concurrency: json_config.scan_max_concurrency,
-            is_setup: json_config.is_setup,
+            scan_max_concurrency: file_config.scan_max_concurrency,
+            h264_preset: H264Preset::default(),
+            is_setup: file_config.is_setup,
         };
         Ok(config)
     }
@@ -245,16 +322,18 @@ impl ServerConfiguration {
         self.flush()
     }
 
-    pub fn set_resources_folder(
-        &mut self,
-        resources_folder: impl AsRef<Path>,
-    ) -> Result<(), anyhow::Error> {
-        self.resources_folder = resources_folder.as_ref().to_path_buf();
+    pub fn set_resources_folder(&mut self, resources: AppResources) -> Result<(), anyhow::Error> {
+        self.resources = resources;
         self.flush()
     }
 
     pub fn set_port(&mut self, port: u16) -> Result<(), anyhow::Error> {
         self.port = port;
+        self.flush()
+    }
+
+    pub fn set_h264_preset(&mut self, preset: H264Preset) -> Result<(), anyhow::Error> {
+        self.h264_preset = preset;
         self.flush()
     }
 
@@ -265,7 +344,7 @@ impl ServerConfiguration {
 
     /// Flush current configuration in config file
     pub fn flush(&mut self) -> Result<(), anyhow::Error> {
-        self.config_file.flush(self.into_json())?;
+        self.config_file.flush(self.into_toml())?;
         Ok(())
     }
 }
@@ -371,37 +450,71 @@ impl Capabilities {
     }
 }
 
-pub fn initiate_resources() -> Result<(), anyhow::Error> {
-    const APP_NAME: &str = "media-server";
-    fn init_prod_storage() -> PathBuf {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppResources {
+    pub database_path: PathBuf,
+    pub config_path: PathBuf,
+    pub resources_path: PathBuf,
+    pub cache_path: PathBuf,
+}
+
+impl AppResources {
+    const APP_NAME: &'static str = "media-server";
+
+    fn prod_storage() -> PathBuf {
         dirs::data_dir()
             .expect("target to have data directory")
-            .join(APP_NAME)
+            .join(Self::APP_NAME)
     }
 
-    fn init_debug_storage() -> PathBuf {
+    fn debug_storage() -> PathBuf {
         PathBuf::from(".").canonicalize().unwrap()
     }
 
-    let is_prod = !cfg!(debug_assertions);
-    let store_path = if is_prod {
-        init_prod_storage()
-    } else {
-        init_debug_storage()
-    };
-    let db_folder = store_path.join("db");
+    fn data_storage() -> PathBuf {
+        let is_prod = !cfg!(debug_assertions);
+        if is_prod {
+            Self::prod_storage()
+        } else {
+            Self::debug_storage()
+        }
+    }
 
-    fs::create_dir_all(&db_folder)?;
-    fs::create_dir_all(store_path.join("resources"))?;
-    let db_path = db_folder.join("database.sqlite");
+    pub fn default_config_path() -> PathBuf {
+        Self::data_storage().join("configuration.toml")
+    }
 
-    fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&db_path)?;
+    fn cache_storage() -> PathBuf {
+        std::env::temp_dir().join(Self::APP_NAME)
+    }
 
-    Ok(())
+    pub fn initiate(&self) -> Result<(), anyhow::Error> {
+        fs::create_dir_all(&self.resources_path)?;
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&self.database_path)?;
+        Ok(())
+    }
+}
+
+impl Default for AppResources {
+    fn default() -> Self {
+        let store_path = Self::data_storage();
+        let config_path = Self::default_config_path();
+        let db_folder = store_path.join("db");
+        let resources_path = store_path.join("resources");
+        let database_path = db_folder.join("database.sqlite");
+        let cache_path = Self::cache_storage();
+
+        Self {
+            config_path,
+            database_path,
+            resources_path,
+            cache_path,
+        }
+    }
 }
 
 #[test]
