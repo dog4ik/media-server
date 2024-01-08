@@ -3,7 +3,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{Args, ServerConfiguration};
+use media_server::config::{self, Args, ServerConfiguration};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
@@ -18,6 +18,9 @@ use tracing::{info, Level};
 
 #[tokio::main]
 async fn main() {
+    if let Err(error) = config::initiate_resources() {
+        tracing::error!("Failed to initiate resources: {}", error);
+    };
     let log_channel = init_tracer(Level::TRACE);
     if let Ok(path) = dotenv() {
         info!("Loaded env variables from: {}", path.display());

@@ -371,6 +371,39 @@ impl Capabilities {
     }
 }
 
+pub fn initiate_resources() -> Result<(), anyhow::Error> {
+    const APP_NAME: &str = "media-server";
+    fn init_prod_storage() -> PathBuf {
+        dirs::data_dir()
+            .expect("target to have data directory")
+            .join(APP_NAME)
+    }
+
+    fn init_debug_storage() -> PathBuf {
+        PathBuf::from(".").canonicalize().unwrap()
+    }
+
+    let is_prod = !cfg!(debug_assertions);
+    let store_path = if is_prod {
+        init_prod_storage()
+    } else {
+        init_debug_storage()
+    };
+    let db_folder = store_path.join("db");
+
+    fs::create_dir_all(&db_folder)?;
+    fs::create_dir_all(store_path.join("resources"))?;
+    let db_path = db_folder.join("database.sqlite");
+
+    fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .open(&db_path)?;
+
+    Ok(())
+}
+
 #[test]
 fn parse_capabilities() {
     let capabilities = Capabilities::new();
