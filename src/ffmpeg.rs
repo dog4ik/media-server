@@ -311,6 +311,42 @@ impl FFprobeStream {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum H264Preset {
+    Ultrafast,
+    Superfast,
+    Veryfast,
+    Faster,
+    Fast,
+    #[default]
+    Medium,
+    Slow,
+    Slower,
+    Veryslow,
+    Placebo,
+}
+
+impl FromStr for H264Preset {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ultrafast" => Ok(H264Preset::Ultrafast),
+            "superfast" => Ok(H264Preset::Superfast),
+            "veryfast" => Ok(H264Preset::Veryfast),
+            "faster" => Ok(H264Preset::Faster),
+            "fast" => Ok(H264Preset::Fast),
+            "medium" => Ok(H264Preset::Medium),
+            "slow" => Ok(H264Preset::Slow),
+            "slower" => Ok(H264Preset::Slower),
+            "veryslow" => Ok(H264Preset::Veryslow),
+            "placebo" => Ok(H264Preset::Placebo),
+            _ => Err(anyhow::anyhow!("{} is not valid h264 preset", s)),
+        }
+    }
+}
+
 pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Error> {
     let path = path.as_ref();
     tracing::trace!(
