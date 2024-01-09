@@ -11,7 +11,7 @@ use crate::{
     config::ServerConfiguration,
     db::{Db, DbSubtitles},
     library::{
-        movie::MovieIdentifier, show::ShowIdentifier, LibraryFile, Library, Source,
+        movie::MovieIdentifier, show::ShowIdentifier, Library, LibraryFile, Source,
         TranscodePayload, Video,
     },
     metadata::{MovieMetadataProvider, ShowMetadataProvider},
@@ -128,6 +128,19 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> Result<(), AppError> {
+        let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
+            .fetch_one(&self.db.pool)
+            .await?
+            .path;
+        let mut library = self.library.lock().unwrap();
+        let source = library
+            .find_source_mut(&video_path)
+            .ok_or(AppError::not_found("file with path from db is not found"))?;
+        source.delete_variant(&variant_id);
+        Ok(())
+    }
+
     pub async fn add_show(
         &self,
         video_path: PathBuf,
@@ -240,9 +253,6 @@ impl AppState {
             .await;
 
         if let Err(err) = run_result {
-            if let TaskError::Canceled = err {
-                let _ = utils::clear_directory(file.previews_path()).await;
-            }
             return Err(err);
         }
         Ok(())

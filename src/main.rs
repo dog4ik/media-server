@@ -103,6 +103,7 @@ async fn main() {
         .route("/api/get_episodes", get(public_api::get_episodes))
         .route("/api/get_episode", get(public_api::get_episode))
         .route("/api/get_episode_by_id", get(public_api::get_episode_by_id))
+        .route("/api/get_all_variants", get(public_api::get_all_variants))
         .route("/api/get_video_by_id", get(public_api::get_video_by_id))
         .route(
             "/admin/alter_show_metadata",
@@ -128,6 +129,7 @@ async fn main() {
         .route("/admin/scan", post(admin_api::reconciliate_lib))
         .route("/admin/clear_db", delete(admin_api::clear_db))
         .route("/admin/remove_video", delete(admin_api::remove_video))
+        .route("/admin/remove_variant", delete(admin_api::remove_variant))
         .route("/admin/transcode", post(admin_api::transcode_video))
         .route("/admin/configuration", get(admin_api::server_configuration))
         .layer(cors)

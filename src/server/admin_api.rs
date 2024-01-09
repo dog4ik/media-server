@@ -148,6 +148,22 @@ pub async fn remove_video(
     state.remove_video(id).await
 }
 
+#[derive(Deserialize)]
+pub struct RemoveVariantPayload {
+    pub video_id: i64,
+    pub variant_id: String,
+}
+
+pub async fn remove_variant(
+    State(state): State<AppState>,
+    Json(payload): Json<RemoveVariantPayload>,
+) -> Result<(), AppError> {
+    state
+        .remove_variant(payload.video_id, &payload.variant_id)
+        .await?;
+    Ok(())
+}
+
 pub async fn alter_show_metadata(
     State(db): State<Db>,
     json: JsonExtractor,

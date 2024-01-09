@@ -229,6 +229,11 @@ impl Library {
         item.add_variant(video)
     }
 
+    pub fn remove_variant(&mut self, video_path: impl AsRef<Path>, variant_id: &str) {
+        let item = self.find_source_mut(video_path).unwrap();
+        item.delete_variant(variant_id);
+    }
+
     pub fn remove_show(&mut self, path: impl AsRef<Path>) {
         self.shows
             .iter()
@@ -431,6 +436,21 @@ impl Source {
     /// Add variant
     pub fn add_variant(&mut self, video: Video) {
         self.variants.push(video);
+    }
+
+    /// Delete variant
+    pub fn delete_variant(&mut self, variant_id: &str) {
+        let position = self.variants.iter().position(|v| {
+            v.path
+                .file_stem()
+                .map(|stem| stem.to_string_lossy().to_string() == variant_id)
+                .unwrap_or(false)
+        });
+        if let Some(position) = position {
+            if std::fs::remove_file(&self.variants[position].path).is_ok() {
+                self.variants.remove(position);
+            };
+        }
     }
 
     /// Remove all files that belong to source
