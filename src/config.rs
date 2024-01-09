@@ -100,6 +100,9 @@ pub struct ConfigFile(pub PathBuf);
 impl ConfigFile {
     pub fn open(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
         let path = config_path.as_ref().to_path_buf();
+        fs::create_dir_all(config_path.as_ref().parent().ok_or(anyhow::anyhow!(
+            "config path does not have parent directory"
+        ))?)?;
         match fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -125,7 +128,7 @@ impl ConfigFile {
 
     /// Reads contents of config and resets it to defaults in case of parse error
     fn read(&self) -> Result<TomlConfig, anyhow::Error> {
-        tracing::info!("reading file");
+        tracing::info!("Reading config file {}", self.0.display());
         let buf = fs::read_to_string(&self.0)?;
         Ok(toml::from_str(&buf).unwrap_or_else(|e| {
             tracing::error!("Failed to read config: {}", e);
@@ -197,10 +200,6 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
                     .get("database_path")
                     .and_then(|f| f.as_str())
                     .map_or(default.resources.database_path, |x| x.into());
-                let config_path = x
-                    .get("config_path")
-                    .and_then(|f| f.as_str())
-                    .map_or(default.resources.config_path, |x| x.into());
                 let resources_path = x
                     .get("resources_path")
                     .and_then(|f| f.as_str())
@@ -211,7 +210,7 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
                     .map_or(default.resources.cache_path, |x| x.into());
                 AppResources {
                     database_path,
-                    config_path,
+                    config_path: default.resources.config_path,
                     resources_path,
                     cache_path,
                 }
@@ -261,8 +260,8 @@ impl ServerConfiguration {
     }
     /// Tries to load config or creates default config file
     /// Errors when cant create or read file
-    pub fn from_file(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
-        let file_config = ConfigFile::open(&config_path)?.read()?;
+    pub fn new(config: ConfigFile) -> Result<Self, anyhow::Error> {
+        let file_config = config.read()?;
 
         let config = ServerConfiguration {
             resources: file_config.resources,
@@ -272,7 +271,7 @@ impl ServerConfiguration {
             log_path: file_config.log_path,
             movie_folders: file_config.movie_folders,
             show_folders: file_config.show_folders,
-            config_file: ConfigFile::open(config_path)?,
+            config_file: config,
             scan_max_concurrency: file_config.scan_max_concurrency,
             h264_preset: H264Preset::default(),
             is_setup: file_config.is_setup,
@@ -353,16 +352,16 @@ impl ServerConfiguration {
 pub struct Args {
     /// Override port
     #[arg(short, long)]
-    port: Option<u16>,
+    pub port: Option<u16>,
     /// Override log level
     #[arg(short, long)]
-    log_level: Option<tracing::Level>,
+    pub log_level: Option<tracing::Level>,
     /// Override log location
     #[arg(long)]
-    log_path: Option<PathBuf>,
+    pub log_path: Option<PathBuf>,
     /// Provide custom config location
     #[arg(short, long)]
-    config_path: Option<PathBuf>,
+    pub config_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -453,6 +452,7 @@ impl Capabilities {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppResources {
     pub database_path: PathBuf,
+    #[serde(skip)]
     pub config_path: PathBuf,
     pub resources_path: PathBuf,
     pub cache_path: PathBuf,
@@ -490,6 +490,7 @@ impl AppResources {
 
     pub fn initiate(&self) -> Result<(), anyhow::Error> {
         fs::create_dir_all(&self.resources_path)?;
+        fs::create_dir_all(&self.database_path.parent().unwrap())?;
         fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -497,23 +498,26 @@ impl AppResources {
             .open(&self.database_path)?;
         Ok(())
     }
-}
 
-impl Default for AppResources {
-    fn default() -> Self {
+    pub fn new(config_path: PathBuf) -> Self {
         let store_path = Self::data_storage();
-        let config_path = Self::default_config_path();
         let db_folder = store_path.join("db");
         let resources_path = store_path.join("resources");
         let database_path = db_folder.join("database.sqlite");
         let cache_path = Self::cache_storage();
-
         Self {
             config_path,
             database_path,
             resources_path,
             cache_path,
         }
+    }
+}
+
+impl Default for AppResources {
+    fn default() -> Self {
+        let config_path = Self::default_config_path();
+        Self::new(config_path)
     }
 }
 

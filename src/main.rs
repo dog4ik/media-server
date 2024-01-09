@@ -3,7 +3,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{AppResources, Args, ServerConfiguration};
+use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
@@ -35,8 +35,13 @@ async fn main() {
 
     let args = Args::parse();
 
-    let mut configuration =
-        ServerConfiguration::from_file(AppResources::default_config_path()).unwrap();
+    let config_path = args
+        .config_path
+        .clone()
+        .unwrap_or(AppResources::default_config_path());
+    tracing::debug!("Selected config path: {}", &config_path.display());
+    let config = ConfigFile::open(config_path).unwrap();
+    let mut configuration = ServerConfiguration::new(config).unwrap();
     configuration.apply_args(args);
 
     if let Err(err) = configuration.resources.initiate() {
