@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id as \"id!\", release_date as \"release_date!\", \n        poster, blur_data, number as \"number!\", show_id as \"show_id!\",\n        rating as \"rating!\", plot as \"plot!\",\n        (SELECT COUNT(*) as episodes_count FROM episodes WHERE episodes.season_id = seasons.id) as \"episodes_count!: i64\"\n        FROM seasons\n        WHERE show_id = ? ORDER BY number ASC;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "release_date!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "blur_data",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "number!",
+        "ordinal": 4,
+        "type_info": "Int64"
+      },
+      {
+        "name": "show_id!",
+        "ordinal": 5,
+        "type_info": "Int64"
+      },
+      {
+        "name": "rating!",
+        "ordinal": 6,
+        "type_info": "Float"
+      },
+      {
+        "name": "plot!",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "episodes_count!: i64",
+        "ordinal": 8,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      false,
+      null
+    ]
+  },
+  "hash": "d9293a5b75dc2aa1a708fb2367a9c740eeac73dbdcb85d3327bc1e425d1a609b"
+}

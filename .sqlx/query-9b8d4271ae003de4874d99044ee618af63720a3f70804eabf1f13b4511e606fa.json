@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.id as \"id!\", movies.metadata_id, movies.metadata_provider FROM movies \n                    JOIN videos ON videos.id = movies.video_id\n                    WHERE videos.resources_folder = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_provider",
+        "ordinal": 2,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "9b8d4271ae003de4874d99044ee618af63720a3f70804eabf1f13b4511e606fa"
+}

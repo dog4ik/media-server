@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT videos.*, episodes.id as \"episode_id!\" FROM videos\n        JOIN episodes ON videos.id = episodes.video_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "resources_folder",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "size",
+        "ordinal": 3,
+        "type_info": "Int64"
+      },
+      {
+        "name": "scan_date",
+        "ordinal": 4,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "episode_id!",
+        "ordinal": 5,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c3ae3ac7e3d460378790d24d089f025a4f64584fe232939b471dae2a78c5a5f2"
+}

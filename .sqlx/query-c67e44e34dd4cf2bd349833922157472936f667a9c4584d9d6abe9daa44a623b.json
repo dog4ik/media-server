@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE episodes SET title = ?, plot = ? WHERE id = ?;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c67e44e34dd4cf2bd349833922157472936f667a9c4584d9d6abe9daa44a623b"
+}

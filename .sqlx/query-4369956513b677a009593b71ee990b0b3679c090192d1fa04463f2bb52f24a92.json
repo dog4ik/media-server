@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM episodes WHERE id = ? RETURNING season_id, video_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "season_id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "video_id",
+        "ordinal": 1,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "4369956513b677a009593b71ee990b0b3679c090192d1fa04463f2bb52f24a92"
+}

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.* FROM movies\n        JOIN videos ON videos.id = movies.video_id\n        WHERE videos.path = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "video_id",
+        "ordinal": 1,
+        "type_info": "Int64"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_provider",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "blur_data",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "plot",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating",
+        "ordinal": 8,
+        "type_info": "Float"
+      },
+      {
+        "name": "poster",
+        "ordinal": 9,
+        "type_info": "Text"
+      },
+      {
+        "name": "original_language",
+        "ordinal": 10,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date",
+        "ordinal": 11,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "325e05567bd5f8d10daed5ee2c5bb12cd34d717bb653d2b6ff9e7aa6f341e508"
+}

@@ -1,0 +1,80 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT shows.id as \"id!\", shows.title as \"title!\", shows.release_date as \"release_date!\", shows.poster,\n        shows.blur_data, shows.backdrop,\n        shows.rating as \"rating!\", shows.plot as \"plot!\", shows.original_language as \"original_language!\",\n        (SELECT COUNT(*) as seasons_count FROM seasons WHERE seasons.show_id = shows.id) as \"seasons_count!: i64\",\n        (SELECT COUNT(*) as episodes_count FROM episodes\n            WHERE episodes.season_id IN ( SELECT id FROM seasons WHERE seasons.show_id = shows.id)\n        ) as \"episodes_count!: i64\"\n        FROM shows WHERE shows.id = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Int64"
+      },
+      {
+        "name": "title!",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "blur_data",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "backdrop",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "rating!",
+        "ordinal": 6,
+        "type_info": "Float"
+      },
+      {
+        "name": "plot!",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "original_language!",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "seasons_count!: i64",
+        "ordinal": 9,
+        "type_info": "Null"
+      },
+      {
+        "name": "episodes_count!: i64",
+        "ordinal": 10,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      null,
+      null
+    ]
+  },
+  "hash": "f0a676a04ebdb007fe7e12d6fcbd1beb60e58479bd9d8553b073cbee7f2e1c9f"
+}
