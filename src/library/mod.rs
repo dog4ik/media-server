@@ -19,6 +19,7 @@ use tokio::io::{AsyncReadExt, AsyncSeekExt};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
+    config::APP_RESOURCES,
     db::DbVideo,
     ffmpeg::{get_metadata, FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream},
     ffmpeg::{FFmpegRunningJob, FFprobeOutput, PreviewsJob, SubtitlesJob, TranscodeJob},
@@ -133,8 +134,12 @@ impl DataFolder {
     }
 
     pub fn verify_existance(&self) -> bool {
-        let mut episode_dir_path =
-            PathBuf::from(std::env::var("RESOURCES_PATH").expect("env to be set"));
+        let mut episode_dir_path = APP_RESOURCES
+            .get()
+            .expect("resources to be initiated")
+            .resources_path
+            .clone();
+
         episode_dir_path.push("content");
         episode_dir_path.push(self.to_string());
         episode_dir_path.try_exists().unwrap_or(false)
@@ -182,8 +187,11 @@ impl<T: Media> LibraryFile<T> {
 }
 
 fn generate_resources_path(folder: &DataFolder) -> PathBuf {
-    let mut episode_dir_path =
-        PathBuf::from(std::env::var("RESOURCES_PATH").expect("env to be set"));
+    let mut episode_dir_path = APP_RESOURCES
+        .get()
+        .expect("resources to be initated")
+        .resources_path
+        .clone();
     episode_dir_path.push("content");
     episode_dir_path.push(folder.to_string());
     episode_dir_path

@@ -4,6 +4,7 @@ use std::{
     path::{Path, PathBuf},
     process::Command,
     str::FromStr,
+    sync::OnceLock,
 };
 
 use clap::Parser;
@@ -61,7 +62,6 @@ pub struct ServerConfiguration {
     #[serde(skip_serializing)]
     pub config_file: ConfigFile,
     pub scan_max_concurrency: usize,
-    pub is_setup: bool,
     pub h264_preset: H264Preset,
 }
 
@@ -72,10 +72,8 @@ struct TomlConfig {
     log_path: PathBuf,
     movie_folders: Vec<PathBuf>,
     show_folders: Vec<PathBuf>,
-    resources: AppResources,
     scan_max_concurrency: usize,
     h264_preset: H264Preset,
-    is_setup: bool,
 }
 
 impl Default for TomlConfig {
@@ -86,10 +84,8 @@ impl Default for TomlConfig {
             port: 6969,
             log_level: ConfigLogLevel::Trace,
             log_path: PathBuf::from("log.log"),
-            resources: AppResources::default(),
             scan_max_concurrency: 10,
             h264_preset: H264Preset::default(),
-            is_setup: false,
         }
     }
 }
@@ -191,38 +187,10 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
                 .collect()
         })
         .unwrap_or(default.show_folders);
-    let resources =
-        parsed
-            .get("resources")
-            .and_then(|x| x.as_table())
-            .map_or(default.resources.clone(), |x| {
-                let database_path = x
-                    .get("database_path")
-                    .and_then(|f| f.as_str())
-                    .map_or(default.resources.database_path, |x| x.into());
-                let resources_path = x
-                    .get("resources_path")
-                    .and_then(|f| f.as_str())
-                    .map_or(default.resources.resources_path, |x| x.into());
-                let cache_path = x
-                    .get("cache_path")
-                    .and_then(|f| f.as_str())
-                    .map_or(default.resources.cache_path, |x| x.into());
-                AppResources {
-                    database_path,
-                    config_path: default.resources.config_path,
-                    resources_path,
-                    cache_path,
-                }
-            });
     let scan_max_concurrency = parsed
         .get("scan_max_concurrency")
         .and_then(|v| v.as_integer())
         .map_or(default.scan_max_concurrency, |v| v as usize);
-    let is_setup = parsed
-        .get("is_setup")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default.is_setup);
     let h264_preset = parsed
         .get("h264_preset")
         .and_then(|v| v.as_str())
@@ -235,9 +203,7 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         log_path,
         movie_folders,
         show_folders,
-        resources,
         scan_max_concurrency,
-        is_setup,
         h264_preset,
     };
     Ok(repaired_config)
@@ -252,10 +218,8 @@ impl ServerConfiguration {
             log_path: self.log_path.clone(),
             movie_folders: self.movie_folders.clone(),
             show_folders: self.show_folders.clone(),
-            resources: self.resources.clone(),
             scan_max_concurrency: self.scan_max_concurrency,
             h264_preset: self.h264_preset,
-            is_setup: self.is_setup,
         }
     }
     /// Tries to load config or creates default config file
@@ -264,7 +228,7 @@ impl ServerConfiguration {
         let file_config = config.read()?;
 
         let config = ServerConfiguration {
-            resources: file_config.resources,
+            resources: AppResources::default(),
             port: file_config.port,
             log_level: file_config.log_level,
             capabilities: Capabilities::new()?,
@@ -274,7 +238,6 @@ impl ServerConfiguration {
             config_file: config,
             scan_max_concurrency: file_config.scan_max_concurrency,
             h264_preset: H264Preset::default(),
-            is_setup: file_config.is_setup,
         };
         Ok(config)
     }
@@ -457,6 +420,8 @@ pub struct AppResources {
     pub resources_path: PathBuf,
     pub cache_path: PathBuf,
 }
+
+pub static APP_RESOURCES: OnceLock<AppResources> = OnceLock::new();
 
 impl AppResources {
     const APP_NAME: &'static str = "media-server";

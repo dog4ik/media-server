@@ -3,7 +3,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration};
+use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::progress::TaskResource;
@@ -43,11 +43,11 @@ async fn main() {
     let config = ConfigFile::open(config_path).unwrap();
     let mut configuration = ServerConfiguration::new(config).unwrap();
     configuration.apply_args(args);
-
     if let Err(err) = configuration.resources.initiate() {
         tracing::error!("Failed to initiate resources {}", err);
         panic!("Could not initate app resources");
     };
+    let _ = APP_RESOURCES.set(configuration.resources.clone());
 
     let port = configuration.port;
 
