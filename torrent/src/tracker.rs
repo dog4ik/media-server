@@ -1,0 +1,394 @@
+use std::{
+    io::Write,
+    mem,
+    net::{Ipv4Addr, SocketAddrV4},
+    str::FromStr,
+};
+
+use anyhow::{anyhow, Context};
+use bytes::BufMut;
+use serde::{Deserialize, Serialize};
+use tokio::net::UdpSocket;
+
+use crate::file::TorrentFile;
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(rename_all = "lowercase")]
+pub enum TrackerEvent {
+    Started,
+    Completed,
+    Stopped,
+    Empty,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnounceResult {
+    pub interval: u32,
+    pub leeachs: u32,
+    pub seeds: u32,
+    pub peers: Vec<SocketAddrV4>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnouncePayload {
+    pub announce: reqwest::Url,
+    pub announce_list: Option<Vec<reqwest::Url>>,
+    pub info_hash: [u8; 20],
+    pub peer_id: [u8; 20],
+    pub ip: Option<Ipv4Addr>,
+    pub port: u16,
+    pub uploaded: u64,
+    pub downloaded: u64,
+    pub left: u64,
+    pub event: Option<TrackerEvent>,
+}
+
+impl AnnouncePayload {
+    pub fn from_torrent(torrent: &TorrentFile) -> anyhow::Result<Self> {
+        Ok(Self {
+            announce: reqwest::Url::parse(&torrent.announce).context("parse announce url")?,
+            announce_list: torrent.announce_list.as_ref().map(|announce_list| {
+                announce_list
+                    .iter()
+                    .flatten()
+                    .filter_map(|link| reqwest::Url::parse(link).ok())
+                    .collect()
+            }),
+            info_hash: torrent.info.hash(),
+            peer_id: *b"00112233445566778899",
+            ip: None,
+            port: 6881,
+            uploaded: 0,
+            downloaded: 0,
+            left: torrent.info.total_size(),
+            event: Some(TrackerEvent::Started),
+        })
+    }
+
+    pub async fn annouce_http(&self) -> anyhow::Result<AnnounceResult> {
+        let url_params = HttpAnnounceUrlParams {
+            peer_id: String::from_utf8(self.peer_id.to_vec())?,
+            ip: self.ip,
+            port: self.port,
+            uploaded: self.uploaded,
+            downloaded: self.downloaded,
+            left: self.left,
+        };
+        let tracker_url = format!(
+            "{}?{}&info_hash={}",
+            self.announce,
+            serde_urlencoded::to_string(&url_params)?,
+            &urlencode(&self.info_hash)
+        );
+        let response = reqwest::get(tracker_url).await?;
+        let announce_bytes = response.bytes().await?;
+        let response: HttpAnnounceResponse = serde_bencode::from_bytes(&announce_bytes)?;
+        Ok(response.into())
+    }
+
+    pub async fn announce_udp(&self, socket: UdpSocket) -> anyhow::Result<AnnounceResult> {
+        let announce_url = format!(
+            "{}:{}",
+            self.announce
+                .domain()
+                .ok_or(anyhow!("url domain missing {}", self.announce))?,
+            self.announce
+                .port()
+                .ok_or(anyhow!("url port misisng {}", self.announce))?
+        );
+
+        socket.connect(announce_url).await?;
+        let connect_payload = UdpConnectRequest::new();
+        let connect_payload_bytes = connect_payload.as_bytes();
+
+        socket.send(&connect_payload_bytes).await?;
+        let mut connect_response_buffer = [0u8; mem::size_of::<UdpConnectResponse>()];
+        socket.recv(&mut connect_response_buffer).await?;
+        let connect_response = UdpConnectResponse::from_bytes(&connect_response_buffer)
+            .context("construct connect response from peer")?;
+        let peers_request = UdpAnnounce::new(connect_response.connection_id, &self);
+        let peers_request_bytes = peers_request.as_bytes();
+        socket.send(&peers_request_bytes).await?;
+
+        let mut announce_response_buffer = Vec::with_capacity(10240);
+        socket.recv_buf(&mut announce_response_buffer).await?;
+        let announce_response = UdpAnnounceResponse::from_bytes(&announce_response_buffer)?;
+        Ok(announce_response.into())
+    }
+
+    pub async fn announce(&self) -> anyhow::Result<AnnounceResult> {
+        let scheme = self.announce.scheme();
+        match scheme {
+            "http" | "https" => self.annouce_http().await,
+            "udp" => {
+                let local_ip = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 6881);
+                let connection = UdpSocket::bind(local_ip).await?;
+                self.announce_udp(connection).await
+            }
+            scheme => return Err(anyhow!("Unsupproted url scheme: {}", scheme)),
+        }
+    }
+}
+
+fn urlencode(t: &[u8; 20]) -> String {
+    let mut encoded = String::with_capacity(3 * t.len());
+    for &byte in t {
+        encoded.push('%');
+        encoded.push_str(&hex::encode(&[byte]));
+    }
+    encoded
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct HttpAnnounceUrlParams {
+    pub peer_id: String,
+    pub ip: Option<Ipv4Addr>,
+    pub port: u16,
+    pub uploaded: u64,
+    pub downloaded: u64,
+    pub left: u64,
+}
+
+impl HttpAnnounceUrlParams {
+    pub fn new(announce: &AnnouncePayload) -> Self {
+        Self {
+            peer_id: "00112233445566778899".into(),
+            ip: None,
+            port: announce.port,
+            uploaded: announce.uploaded,
+            downloaded: announce.downloaded,
+            left: announce.left,
+        }
+    }
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub struct HttpAnnounceFullPeer {
+    #[serde(rename = "peer id")]
+    peer_id: bytes::Bytes,
+    ip: String,
+    port: u16,
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum HttpPeerList {
+    Full(Vec<HttpAnnounceFullPeer>),
+    Compact(bytes::Bytes),
+}
+
+#[derive(Deserialize, Serialize, Debug, Clone)]
+struct HttpAnnounceResponse {
+    interval: u32,
+    peers: HttpPeerList,
+}
+
+impl Into<AnnounceResult> for HttpAnnounceResponse {
+    fn into(self) -> AnnounceResult {
+        AnnounceResult {
+            interval: self.interval,
+            leeachs: 0,
+            seeds: 0,
+            peers: self.peers(),
+        }
+    }
+}
+
+impl HttpAnnounceResponse {
+    pub fn peers(&self) -> Vec<SocketAddrV4> {
+        let mut result = Vec::new();
+        match &self.peers {
+            HttpPeerList::Full(peers) => {
+                for peer in peers {
+                    let Ok(ip) = Ipv4Addr::from_str(&peer.ip) else {
+                        continue;
+                    };
+                    result.push(SocketAddrV4::new(ip, peer.port));
+                }
+            }
+            HttpPeerList::Compact(bytes) => {
+                for slice in bytes.array_chunks::<6>() {
+                    let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
+                    let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
+                    let ip = Ipv4Addr::from_bits(ip);
+                    result.push(SocketAddrV4::new(ip, port));
+                }
+            }
+        };
+        result
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UdpAnnounce {
+    connection_id: u64,
+    action: u32,
+    transaction_id: u32,
+    info_hash: [u8; 20],
+    peer_id: [u8; 20],
+    downloaded: u64,
+    left: u64,
+    uploaded: u64,
+    event: u32,
+    ip: u32,
+    key: u32,
+    num_want: i32,
+    port: u16,
+}
+
+impl UdpAnnounce {
+    pub fn new(connection_id: u64, announce: &AnnouncePayload) -> Self {
+        let transaction_id = 2;
+        Self {
+            connection_id,
+            action: 1,
+            transaction_id,
+            info_hash: announce.info_hash,
+            peer_id: announce.peer_id,
+            downloaded: announce.downloaded,
+            left: announce.left,
+            uploaded: announce.uploaded,
+            event: 1,
+            ip: 0,
+            key: 1,
+            num_want: -1,
+            port: announce.port,
+        }
+    }
+
+    pub fn as_bytes(&self) -> [u8; 98] {
+        let mut bytes: [u8; 98] = [0_u8; 98];
+        let mut writer = bytes.writer();
+        writer.write(&self.connection_id.to_be_bytes()).unwrap();
+        writer.write(&self.action.to_be_bytes()).unwrap();
+        writer.write(&self.transaction_id.to_be_bytes()).unwrap();
+        writer.write(&self.info_hash).unwrap();
+        writer.write(&self.peer_id).unwrap();
+        writer.write(&self.downloaded.to_be_bytes()).unwrap();
+        writer.write(&self.left.to_be_bytes()).unwrap();
+        writer.write(&self.uploaded.to_be_bytes()).unwrap();
+        writer.write(&self.event.to_be_bytes()).unwrap();
+        writer.write(&self.ip.to_be_bytes()).unwrap();
+        writer.write(&self.key.to_be_bytes()).unwrap();
+        writer.write(&self.num_want.to_be_bytes()).unwrap();
+        writer.write(&self.port.to_be_bytes()).unwrap();
+        bytes
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UdpAnnounceResponse {
+    action: u32,
+    transaction_id: u32,
+    interval: u32,
+    leechers: u32,
+    seeders: u32,
+    ips: Vec<SocketAddrV4>,
+}
+
+impl Into<AnnounceResult> for UdpAnnounceResponse {
+    fn into(self) -> AnnounceResult {
+        AnnounceResult {
+            interval: self.interval,
+            leeachs: self.leechers,
+            seeds: self.seeders,
+            peers: self.ips,
+        }
+    }
+}
+
+impl UdpAnnounceResponse {
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        let action = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
+        let transaction_id = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
+        let interval = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
+        let leechers = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
+        let seeders = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+
+        let mut ips = Vec::new();
+        for slice in bytes[20..].array_chunks::<6>() {
+            let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
+            let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
+            let ip = Ipv4Addr::from_bits(ip);
+            ips.push(SocketAddrV4::new(ip, port));
+        }
+        Ok(Self {
+            action,
+            transaction_id,
+            interval,
+            leechers,
+            seeders,
+            ips,
+        })
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UdpConnectRequest {
+    pub protocol_id: u64,
+    pub action: u32,
+    pub transaction_id: u32,
+}
+
+impl UdpConnectRequest {
+    pub fn new() -> Self {
+        let transaction_id = rand::random();
+        let protocol_id = 0x41727101980;
+        Self {
+            protocol_id,
+            action: 0,
+            transaction_id,
+        }
+    }
+
+    pub fn as_bytes(&self) -> [u8; 16] {
+        let mut bytes: [u8; 16] = [0; 16];
+        let mut writer = bytes.writer();
+        writer.write(&self.protocol_id.to_be_bytes()).unwrap();
+        writer.write(&self.action.to_be_bytes()).unwrap();
+        writer.write(&self.transaction_id.to_be_bytes()).unwrap();
+        bytes
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct UdpConnectResponse {
+    pub action: u32,
+    pub transaction_id: u32,
+    pub connection_id: u64,
+}
+
+impl UdpConnectResponse {
+    pub fn from_bytes(mut bytes: &[u8]) -> anyhow::Result<Self> {
+        let action: u32 = u32::from_be_bytes(bytes[0..4].try_into()?);
+        let transaction_id: u32 = u32::from_be_bytes(bytes[4..8].try_into()?);
+        let connection_id: u64 = u64::from_be_bytes(bytes[8..16].try_into()?);
+        Ok(Self {
+            action,
+            transaction_id,
+            connection_id,
+        })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::{file::TorrentFile, tracker::AnnouncePayload};
+
+    #[tokio::test]
+    async fn http_announce_tracker() {
+        let torrent = TorrentFile::from_path("torrents/codecrafters.torrent").unwrap();
+        let announce = AnnouncePayload::from_torrent(&torrent).unwrap();
+        let announce = announce.announce().await.unwrap();
+        dbg!(announce.peers);
+    }
+
+    #[tokio::test]
+    async fn udp_announce_tracker() {
+        let torrent = TorrentFile::from_path("torrents/yts.torrent").unwrap();
+        let announce = AnnouncePayload::from_torrent(&torrent).unwrap();
+        let announce = announce.announce().await.unwrap();
+        dbg!(announce.peers);
+    }
+}

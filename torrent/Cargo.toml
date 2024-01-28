@@ -1,0 +1,25 @@
+[package]
+name = "torrent"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde_bencode = "0.2.4"
+serde_urlencoded = "0.7.1"
+serde_json = "1.0.111"
+serde = { version = "1.0.195", features = ["serde_derive"] }
+anyhow = "1.0.79"
+bytes = { version = "1.5.0", features = ["serde"] }
+sha1 = "0.10.6"
+hex = "0.4.3"
+tokio = { version = "1.35.1", features = ["full"] }
+tokio-util = { version = "0.7.10", features = ["full"] }
+tokio-stream = { version = "0.1.14", features = ["full"] }
+reqwest = "0.11.23"
+rand = "0.8.5"
+tracing = "0.1.40"
+test-log = "0.2.14"
+tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
