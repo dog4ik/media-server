@@ -17,9 +17,8 @@ use tokio::{
 use uuid::Uuid;
 
 use crate::{
-    file::Hashes,
+    file::{Hashes, TorrentFile},
     peers::{BitField, Peer, PeerError, PeerErrorCause, PeerIPC, PeerMessage},
-    torrent::Torrent,
     utils::verify_sha1,
 };
 
@@ -132,10 +131,9 @@ pub struct TorrentStorage {
 }
 
 impl TorrentStorage {
-    pub fn new(output_path: impl AsRef<Path>, torrent: &Torrent) -> Self {
+    pub fn new(output_path: impl AsRef<Path>, torrent: &TorrentFile) -> Self {
         use std::fs;
-        let torrent_file = &torrent.file;
-        let output_path = output_path.as_ref().join(&torrent.file.info.name);
+        let output_path = output_path.as_ref().join(&torrent.info.name);
 
         let output_file = fs::OpenOptions::new()
             .read(true)
@@ -144,24 +142,24 @@ impl TorrentStorage {
             .open(output_path)
             .expect("file can be opened");
 
-        let bitfield = BitField::empty(torrent_file.info.pieces.len());
+        let bitfield = BitField::empty(torrent.info.pieces.len());
 
         let assignment = LinearAssignment {
             block_queue: Vec::new(),
             current_piece: 0,
-            piece_length: torrent_file.info.piece_length,
-            pieces: torrent_file.info.pieces.clone(),
-            total_length: torrent_file.info.total_size(),
+            piece_length: torrent.info.piece_length,
+            pieces: torrent.info.pieces.clone(),
+            total_length: torrent.info.total_size(),
             block_size: BLOCK_SIZE,
         };
 
         Self {
             pending_pieces: HashMap::new(),
-            pieces: torrent_file.info.pieces.clone(),
+            pieces: torrent.info.pieces.clone(),
             file: output_file,
-            piece_size: torrent_file.info.piece_length,
+            piece_size: torrent.info.piece_length,
             bitfield,
-            total_length: torrent_file.info.total_size(),
+            total_length: torrent.info.total_size(),
             assignment,
             failed_blocks: Vec::new(),
         }
@@ -384,9 +382,13 @@ pub struct Download {
 }
 
 impl Download {
-    pub async fn new(t: Torrent, max_peers: usize) -> anyhow::Result<Self> {
-        let info_hash = t.file.info.hash();
-        let piece_length = t.file.info.piece_length;
+    pub async fn new(
+        t: TorrentFile,
+        peers_list: Vec<SocketAddrV4>,
+        max_peers: usize,
+    ) -> anyhow::Result<Self> {
+        let info_hash = t.info.hash();
+        let piece_length = t.info.piece_length;
         let listen_addr = SocketAddr::new(
             std::net::IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)),
             LISTENER_PORT,
@@ -398,7 +400,7 @@ impl Download {
 
         let storage = TorrentStorage::new("", &t);
 
-        for ip in t.peers_list {
+        for ip in peers_list {
             if active_peers.len() > max_peers {
                 available_peers.push(ip);
                 continue;
@@ -593,8 +595,7 @@ mod tests {
 
     use crate::{
         download::{Assignment, Download, LinearAssignment},
-        file::Hashes,
-        torrent::Torrent,
+        file::{Hashes, TorrentFile},
     };
 
     use super::Piece;
@@ -622,9 +623,10 @@ mod tests {
 
     #[tokio::test]
     async fn download_all() {
-        let torrent = Torrent::new("torrents/codecrafters.torrent").await.unwrap();
-        dbg!(torrent.file.info.pieces.len());
-        let mut download = Download::new(torrent, 5).await.unwrap();
+        let torrent = TorrentFile::from_path("torrents/codecrafters.torrent").unwrap();
+        dbg!(torrent.info.pieces.len());
+        let peers = torrent.announce().await.unwrap().peers;
+        let mut download = Download::new(torrent, peers, 5).await.unwrap();
         download.concurrent_download().await.unwrap();
         let downloaded = std::fs::read("sample.txt").unwrap();
         let original = std::fs::read("codecrafters_original.txt").unwrap();
