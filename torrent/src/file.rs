@@ -1,18 +1,12 @@
 use std::{
     ops::Deref,
     path::{Path, PathBuf},
-    str::FromStr,
 };
 
-use anyhow::{anyhow, ensure};
-use reqwest::Url;
 use serde::{de::Visitor, Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
-use crate::{
-    peers::Peer,
-    tracker::{AnnouncePayload, AnnounceResult},
-};
+use crate::tracker::{AnnouncePayload, AnnounceResult};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {
@@ -64,7 +58,7 @@ pub struct Info {
     pub name: String,
     pub pieces: Hashes,
     #[serde(rename = "piece length")]
-    pub piece_length: u32,
+    pub piece_length: u64,
     #[serde(flatten)]
     pub file_descriptor: SizeDescriptor,
 }
@@ -82,10 +76,16 @@ impl Info {
         match &self.file_descriptor {
             SizeDescriptor::Files(files) => files
                 .iter()
-                .map(|f| OutputFile::new(f.length, base.join(PathBuf::from_iter(f.path.iter()))))
+                .map(|f| OutputFile {
+                    length: f.length,
+                    path: PathBuf::from_iter(f.path.iter()),
+                })
                 .collect(),
             SizeDescriptor::Length(length) => {
-                vec![OutputFile::new(*length, base)]
+                vec![OutputFile {
+                    length: *length,
+                    path: self.name.clone().into(),
+                }]
             }
         }
     }
@@ -104,34 +104,6 @@ impl Info {
 
     pub fn hex_peices_hashes(&self) -> Vec<String> {
         self.pieces.0.iter().map(|x| hex::encode(x)).collect()
-    }
-
-    pub async fn from_magnet_link(magnet_link: MagnetLink) -> anyhow::Result<Self> {
-        use std::time::Duration;
-        use tokio::net::TcpStream;
-        use tokio::time::timeout;
-
-        let hash = magnet_link.hash();
-        let announce = AnnouncePayload::from_magnet_link(magnet_link)?;
-        let announce_result = announce.announce().await?;
-        for peer_ip in announce_result.peers {
-            let Ok(Ok(socket)) =
-                timeout(Duration::from_millis(800), TcpStream::connect(peer_ip)).await
-            else {
-                continue;
-            };
-
-            let Ok(peer) = Peer::new(socket, hash).await else {
-                continue;
-            };
-            return Ok(Self {
-                name: todo!(),
-                pieces: todo!(),
-                piece_length: todo!(),
-                file_descriptor: todo!(),
-            });
-        }
-        Err(anyhow!("No one gave us metadata"))
     }
 }
 
@@ -344,12 +316,7 @@ fn sanitize_path(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-
-    use std::str::FromStr;
-
-    use tracing_test::traced_test;
-
-    use crate::file::{MagnetLink, TorrentFile};
+    use crate::file::TorrentFile;
 
     pub const TORRENTS_LIST: &[&str] = &[
         //UDP announce
@@ -363,7 +330,6 @@ mod tests {
     ];
 
     #[test]
-    #[traced_test]
     fn info_hash() {
         use std::fs;
         let contents = fs::read(TORRENTS_LIST[0]).unwrap();
@@ -373,7 +339,6 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn piece_hashes() {
         use std::fs;
         let contents = fs::read(TORRENTS_LIST[0]).unwrap();
@@ -383,29 +348,16 @@ mod tests {
     }
 
     #[test]
-    #[traced_test]
     fn parse_torrent_file() {
         use std::fs;
-        let contents = fs::read("torrents/book.torrent").unwrap();
+        let contents = fs::read(TORRENTS_LIST[0]).unwrap();
         let torrent_file = TorrentFile::from_bytes(&contents).unwrap();
-        tracing::debug!("Announce list: {:?}", torrent_file.announce_list);
-        tracing::debug!("File descriptor: {:?}", torrent_file.info.file_descriptor);
         assert_eq!(
             torrent_file.announce,
             "udp://tracker.opentrackr.org:1337/announce"
         );
+        dbg!(torrent_file.announce_list);
+        dbg!(&torrent_file.info.file_descriptor);
         assert_eq!(torrent_file.info.total_size(), 3144327239);
-    }
-
-    #[test]
-    #[traced_test]
-    fn parse_magnet_link() {
-        use std::fs;
-        let contents = fs::read_to_string("torrents/hazbinhotel.magnet").unwrap();
-        let magnet_link = MagnetLink::from_str(&contents).unwrap();
-        let info_hash = "29B1F5DC4DCC9A53FFED7E9ECB0670DC5F61D7BF";
-        let name = "Hazbin Hotel S01E05 1080p WEB H264-LAZYCUNTS";
-        assert_eq!(magnet_link.info_hash, info_hash);
-        assert_eq!(magnet_link.name.unwrap(), name);
     }
 }
