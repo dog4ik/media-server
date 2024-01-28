@@ -1,3 +1,6 @@
+[workspace]
+members = ["torrent"]
+
 [package]
 name = "media-server"
 version = "0.1.0"
@@ -31,3 +34,4 @@ tower-http = { version = "0.5.0", features = ["cors"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
+torrent = {path = "./torrent"}
