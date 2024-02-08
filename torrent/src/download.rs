@@ -1,6 +1,5 @@
 use std::{
     collections::HashMap,
-    fs::File,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     path::{Path, PathBuf},
@@ -11,8 +10,9 @@ use anyhow::{anyhow, bail, ensure};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc, oneshot},
+    sync::{mpsc, oneshot, Semaphore},
     task::JoinSet,
+    time::{timeout, Instant},
 };
 use uuid::Uuid;
 
@@ -27,8 +27,10 @@ const BLOCK_SIZE: u32 = 1024 * 16;
 
 const LISTENER_PORT: u16 = 6881;
 
+const MAX_UPLOAD_PEERS: usize = 5;
+
 /// Piece representation where all blocks are sorted
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Piece {
     pub index: u32,
     pub length: u32,
@@ -259,19 +261,36 @@ pub trait Assignment {
 pub struct ActivePeer {
     pub command: mpsc::Sender<PeerCommand>,
     pub bitfield: BitField,
+    pub choke_status: ChokeStatus,
+    pub peer_choke_status: ChokeStatus,
+    /// Pending blocks are used if peer panics or chokes, also it indicates that peer is busy
+    pub pending_blocks: Vec<Block>,
+}
+
+impl ActivePeer {
+    pub fn new(command: mpsc::Sender<PeerCommand>, bitfield: BitField) -> Self {
+        let choke_status = ChokeStatus::default();
+        Self {
+            command,
+            bitfield,
+            peer_choke_status: choke_status.clone(),
+            choke_status,
+            pending_blocks: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct LinearAssignment {
     current_piece: u32,
-    piece_length: u64,
+    piece_length: u32,
     block_queue: Vec<Block>,
     total_length: u64,
     pieces: Hashes,
     block_size: u32,
 }
 
-fn piece_size(piece_i: u32, piece_length: u32, total_pieces: u32, total_length: u32) -> u32 {
+pub fn piece_size(piece_i: u32, piece_length: u32, total_pieces: u32, total_length: u32) -> u32 {
     if piece_i == total_pieces - 1 {
         let md = total_length % piece_length;
         if md == 0 {
@@ -327,6 +346,52 @@ impl Assignment for LinearAssignment {
 }
 
 #[derive(Debug, Clone, Copy)]
+pub enum BlockLength {
+    Small,
+    Medium,
+    Long,
+}
+
+#[derive(Debug, Clone)]
+pub struct PeerStats {
+    last_update: Instant,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChokeStatus {
+    choked: bool,
+    choked_time: Instant,
+}
+
+impl Default for ChokeStatus {
+    fn default() -> Self {
+        Self {
+            choked: true,
+            choked_time: Instant::now(),
+        }
+    }
+}
+
+impl ChokeStatus {
+    pub fn choke(&mut self) {
+        self.choked = true;
+        self.choked_time = Instant::now();
+    }
+
+    pub fn unchoke(&mut self) {
+        self.choked = false;
+    }
+
+    pub fn is_choked(&self) -> bool {
+        self.choked
+    }
+
+    pub fn choke_duration(&self) -> Duration {
+        self.choked_time.elapsed()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Block {
     pub piece: u32,
     pub offset: u32,
@@ -373,14 +438,13 @@ impl Block {
 pub struct Download {
     pub info_hash: [u8; 20],
     pub max_peers: usize,
-    pub piece_length: u64,
+    pub piece_length: u32,
     pub available_peers: Vec<SocketAddrV4>,
-    pub active_peers: JoinSet<Result<(), PeerError>>,
-    pub commands: HashMap<Uuid, ActivePeer>,
+    pub peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     pub status_rx: mpsc::Receiver<PeerStatus>,
     pub status_tx: mpsc::Sender<PeerStatus>,
     pub listener: TcpListener,
-    pub storage: TorrentStorage,
+    pub scheduler: Scheduler,
 }
 
 impl Download {
@@ -405,12 +469,11 @@ impl Download {
             info_hash,
             piece_length,
             available_peers,
-            active_peers,
+            peers_handles: active_peers,
             status_rx,
             status_tx,
             listener,
-            commands,
-            storage,
+            scheduler,
         })
     }
 
@@ -426,13 +489,15 @@ impl Download {
 
         loop {
             tokio::select! {
-                peer = self.active_peers.join_next() => self.handle_peer_join(peer),
+                peer = self.peers_handles.join_next() => self.handle_peer_join(peer),
                 Some(status) = self.status_rx.recv() => {
-                         if self.handle_peer_status(status).await {
-                            return Ok(())
-                        };
-                    },
-                Ok((socket, ip)) = self.listener.accept() =>  self.handle_new_peer(socket, ip).await.unwrap(),
+                    if self.handle_peer_status(status).await {
+                        return Ok(())
+                    };
+                },
+                Ok((socket, ip)) = self.listener.accept() => self.handle_new_peer(socket, ip).await.unwrap(),
+                    _ = optimistic_unchoke_interval.tick() => {
+                },
             }
         }
     }
@@ -449,14 +514,11 @@ impl Download {
         };
         if let Ok(mut peer) = Peer::new(socket, self.info_hash, ipc).await {
             peer.send_peer_msg(PeerMessage::Bitfield {
-                payload: self.storage.bitfield.clone(),
+                payload: self.scheduler.bitfield.clone(),
             })
             .await?;
-            let active_peer = ActivePeer {
-                command: tx,
-                bitfield: peer.bitfield,
-            };
-            self.commands.insert(peer.uuid, active_peer);
+            let active_peer = ActivePeer::new(tx, peer.bitfield);
+            self.scheduler.active_peers.insert(peer.uuid, active_peer);
         };
         Ok(())
     }
@@ -464,50 +526,31 @@ impl Download {
     async fn handle_peer_status(&mut self, status: PeerStatus) -> bool {
         match status.message_type {
             MessageType::Request { response, block } => {
-                let _ = response.send(self.storage.retrieve_piece(block.piece as usize));
+                let _ = response.send(self.scheduler.retrieve_piece(block.piece as usize).await);
             }
             MessageType::Choked => {
-                todo!("remove peer from available list")
+                self.scheduler.choke_peer(status.peer_id);
             }
-            MessageType::Unchoked => {
-                todo!("add peer to available list")
-            }
+            MessageType::Unchoked => self.scheduler.handle_peer_unchoke(status.peer_id).await,
             MessageType::Data { bytes, block } => {
-                let full_piece = self.storage.store_block(block, bytes).unwrap();
-                if let Some(full_piece) = full_piece {
-                    for (peer_id, peer) in &mut self.commands {
-                        if *peer_id == status.peer_id {
-                            continue;
-                        }
-                        peer.command
-                            .send(PeerCommand::Have { piece: full_piece })
-                            .await
-                            .unwrap();
-                    }
-                }
-                let peer = self.commands.get(&status.peer_id).unwrap();
-                if let Some(new_block) = self.storage.get_work(&peer.bitfield) {
-                    peer.command
-                        .send(PeerCommand::Start { block: new_block })
-                        .await
-                        .unwrap();
-                    // if we got piece then announce it to everyone
-                    // let _ = value.command.send(PeerCommand::Have { piece });
-                }
-                if self.storage.bitfield.pieces().count() == self.storage.pieces.len() {
+                let _ = self
+                    .scheduler
+                    .save_block(status.peer_id, block, bytes)
+                    .await;
+                let _ = self.scheduler.schedule_next_block().await;
+                if self.scheduler.is_torrent_finished() {
                     return true;
                 };
             }
             MessageType::Have { piece } => {
-                if let Some(peer) = self.commands.get_mut(&status.peer_id) {
+                if let Some(peer) = self.scheduler.active_peers.get_mut(&status.peer_id) {
                     peer.bitfield.add(piece as usize).unwrap();
                 }
             }
             MessageType::UnknownFailure => {
-                let peer = self.commands.get(&status.peer_id).unwrap();
-                let _ = peer.command.send(PeerCommand::Abort);
-                self.commands.remove(&status.peer_id);
-                todo!("remove peer from global peer list")
+                let peer = self.scheduler.active_peers.get(&status.peer_id).unwrap();
+                // scheduler will handle this peer after it exits
+                peer.command.send(PeerCommand::Abort).await.unwrap();
             }
         }
         false
@@ -515,19 +558,26 @@ impl Download {
 
     fn handle_peer_join(
         &mut self,
-        join_res: Option<Result<Result<(), PeerError>, tokio::task::JoinError>>,
+        join_res: Option<Result<(Uuid, Result<(), PeerError>), tokio::task::JoinError>>,
     ) {
         let Some(join_res) = join_res else {
             // active_peers are empty
-            todo!("handle empy active peers")
+            todo!("handle empty active peers")
         };
-        if let Ok(Err(peer_err)) = join_res {
-            match peer_err.error_type {
-                PeerErrorCause::Timeout => todo!(),
-                PeerErrorCause::Connection => todo!(),
-                PeerErrorCause::PeerLogic => todo!(),
-                PeerErrorCause::Unhandled => todo!(),
-            }
+        if let Ok((peer_id, Err(peer_err))) = &join_res {
+            tracing::warn!(
+                "Peer with id: {} joined with error: {:?} {}",
+                peer_id,
+                peer_err.error_type,
+                peer_err.msg
+            );
+        }
+
+        // remove peer from scheduler or propagate panic
+        if let Ok((peer_id, _)) = join_res {
+            self.scheduler.remove_peer(peer_id);
+        } else {
+            panic!("Peer process paniced");
         }
     }
 }
@@ -536,6 +586,7 @@ impl Download {
 pub enum PeerCommand {
     Start { block: Block },
     Have { piece: u32 },
+    Interested,
     Abort,
 }
 
@@ -566,6 +617,7 @@ pub enum MessageType {
 #[cfg(test)]
 mod tests {
     use bytes::Bytes;
+    use tracing_test::traced_test;
 
     use crate::{
         download::{Assignment, Download, LinearAssignment},
@@ -575,25 +627,14 @@ mod tests {
 
     use super::Piece;
 
-    #[test]
-    fn assignment_liniar() {
-        let block_size = 4;
-        let piece_length = 6;
-        let mut assignment = LinearAssignment {
-            current_piece: 0,
-            block_queue: Vec::new(),
-            piece_length: piece_length as u64,
-            total_length: 18,
-            pieces: Hashes(vec![[0; 20], [1; 20], [2; 20]]),
-            block_size,
-        };
-        assert_eq!(Some(0), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(Some(0), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(Some(1), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(Some(1), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(Some(2), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(Some(2), assignment.assign_next().map(|p| p.piece));
-        assert_eq!(None, assignment.assign_next().map(|p| p.piece));
+    #[tokio::test]
+    #[traced_test]
+    async fn download_all() {
+        let torrent = TorrentFile::from_path("torrents/book.torrent").unwrap();
+        tracing::debug!("Tested torrent have {} pieces", torrent.info.pieces.len());
+        let peers = torrent.announce().await.unwrap().peers;
+        let mut download = Download::new(torrent, peers, 5).await.unwrap();
+        download.concurrent_download().await.unwrap();
     }
 
     #[tokio::test]
@@ -604,11 +645,16 @@ mod tests {
         download.concurrent_download().await.unwrap();
         let downloaded = std::fs::read("sample.txt").unwrap();
         let original = std::fs::read("codecrafters_original.txt").unwrap();
-        dbg!(downloaded.len(), original.len());
+        tracing::debug!(
+            "downloaded/original len: {}/{}",
+            downloaded.len(),
+            original.len()
+        );
         assert!(downloaded.len().abs_diff(original.len()) <= 1);
     }
 
     #[test]
+    #[traced_test]
     fn piece_state() {
         let mut piece = Piece {
             index: 0,
@@ -621,7 +667,6 @@ mod tests {
         // [0, _, _, _, _]
         assert!(!piece.is_full());
         let missing = piece.get_missing_block(2).unwrap();
-        dbg!(missing);
         assert_eq!(missing.offset, 1);
         assert_eq!(missing.length, 2);
         assert!(piece.add_block(0, Bytes::from_static(&[1; 2])).is_err());
@@ -640,5 +685,11 @@ mod tests {
         assert!(piece.get_missing_block(2).is_none());
         assert!(piece.is_full());
         assert_eq!(&[0, 1, 2, 2, 3], piece.as_bytes().unwrap().as_ref());
+    }
+
+    #[test]
+    #[traced_test]
+    fn tracing_test() {
+        tracing::info!("Tracing is working");
     }
 }

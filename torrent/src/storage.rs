@@ -1,6 +1,5 @@
 use std::{io::SeekFrom, path::Path};
 
-use anyhow::ensure;
 use bytes::{Bytes, BytesMut};
 use tokio::{
     fs,
@@ -9,13 +8,39 @@ use tokio::{
 };
 
 use crate::{
-    file::{Hashes, Info, OutputFile},
+    download::piece_size,
+    file::{Hashes, OutputFile, TorrentFile},
     peers::BitField,
     utils::verify_sha1,
 };
 
 trait SyncBitfield {
     async fn save(&mut self, bitfield: BitField) -> anyhow::Result<()>;
+}
+
+#[derive(Debug)]
+pub struct FileBitfield {
+    file: fs::File,
+}
+
+impl FileBitfield {
+    pub async fn from_hex_hash(hash: &str) -> anyhow::Result<Self> {
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .read(true)
+            .create(true)
+            .open(format!(".{}", hash))
+            .await?;
+        Ok(Self { file })
+    }
+}
+
+impl SyncBitfield for FileBitfield {
+    async fn save(&mut self, bitfield: BitField) -> anyhow::Result<()> {
+        self.file.set_len(0).await?;
+        self.file.write_all(&bitfield.0).await?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -38,11 +63,12 @@ impl TorrentStorage {
 
     /// Helper function to get piece length with consideration of the last piece
     fn piece_length(&self, piece_i: usize) -> u32 {
-        crate::utils::piece_size(
-            piece_i,
-            self.piece_size as usize,
-            self.total_length as usize,
-        ) as u32
+        piece_size(
+            piece_i as u32,
+            self.piece_size as u32,
+            self.pieces.len() as u32,
+            self.total_length as u32,
+        )
     }
 
     pub async fn save_piece(
@@ -58,14 +84,15 @@ impl TorrentStorage {
         let piece_end = piece_start + piece_length as u64;
 
         let hash = self.pieces.get_hash(piece_i).unwrap();
+        // BUG: for some unknown reason piece with index 0 is always fail
+        // be careful of race condition when writing the file
         if verify_sha1(hash, &bytes) {
             tracing::trace!("Successfuly verified hash of piece {}", piece_i);
         } else {
             let msg = format!("Failed to verify hash of piece {}", piece_i);
-            tracing::error!("{}", msg);
-            return Err(anyhow::anyhow!("{}", msg));
+            tracing::trace!("{}", msg);
+            panic!("{}", msg);
         };
-        dbg!(piece_i);
 
         let mut file_offset = 0;
         for file in &self.output_files {
@@ -73,7 +100,7 @@ impl TorrentStorage {
             let file_end = (file_offset + file.length()) as u64;
             let file_range = file_start..file_end;
             if file_start > piece_end || file_end < piece_start {
-                file_offset += file.length();
+                file_offset += file.length;
                 continue;
             }
 
@@ -87,19 +114,21 @@ impl TorrentStorage {
                 let contains_start = file_range.contains(&p_start);
                 let contains_end = file_range.contains(&p_end);
                 if contains_start && contains_end {
-                    acc + p_len
+                    return acc + p_len;
                 } else if contains_start {
-                    acc + file_start - p_end
+                    return acc + (file_start - p_end) as u32;
                 } else if contains_end {
-                    acc + p_end - file_start
+                    unreachable!(
+                        "contains_end is not possible without contains_start, iterated piece must be ahead of saved piece"
+                    );
                 } else {
-                    acc
+                    return acc
                 }
             });
             tracing::debug!(
                 "Saving piece {} in file {} with offset {}",
                 piece_i,
-                &file.path().display(),
+                &file.path.display(),
                 insert_offset
             );
 
@@ -107,6 +136,14 @@ impl TorrentStorage {
             if let Some(parent) = &file.path().parent() {
                 fs::create_dir_all(parent).await?;
             }
+            let mut file_handle = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(&file.path)
+                .await?;
+            file_handle
+                .seek(SeekFrom::Start(insert_offset.into()))
+                .await?;
 
             let relative_start = file_start as isize - piece_start as isize;
             let relative_end = file_end as isize - piece_end as isize;
@@ -120,7 +157,7 @@ impl TorrentStorage {
             } as usize;
 
             let end = if relative_end < 0 {
-                // end is beyond file
+                // end is beyound file
                 piece_length - relative_end.abs() as u32
             } else {
                 // end is behind file
@@ -151,96 +188,69 @@ impl TorrentStorage {
 
             file_offset += file.length();
         }
-
         Ok(())
     }
 
     pub async fn retrieve_piece(&self, bitfield: &BitField, piece_i: usize) -> Option<Bytes> {
         let piece_length = self.piece_length(piece_i);
-        println!("Piece {} was requested by peer", piece_i);
-
         let piece_start = piece_i as u32 * self.piece_size;
         let piece_end = piece_start + piece_length;
-
-        let hash = self.pieces.get_hash(piece_i).unwrap();
-
         let mut file_offset = 0;
         let mut out = BytesMut::with_capacity(piece_length as usize);
         for file in &self.output_files {
             let file_start = file_offset as u32;
-            let file_end = (file_offset + file.length()) as u32;
+            let file_end = (file_offset + file.length) as u32;
             let file_range = file_start..file_end;
             if file_start > piece_end || file_end < piece_start {
-                file_offset += file.length();
+                file_offset += file.length;
                 continue;
             }
 
             let read_offset = bitfield.pieces().fold(0, |acc, p| {
-                if p > piece_i {
-                    return acc;
-                }
                 let p_len = self.piece_length(p);
                 let p_start = self.piece_size * p as u32;
                 let p_end = p_start + p_len;
+                if p > piece_i {
+                    return acc;
+                }
                 let contains_start = file_range.contains(&p_start);
                 let contains_end = file_range.contains(&p_end);
                 if contains_start && contains_end {
-                    acc + p_len
+                    return acc + p_len;
                 } else if contains_start {
-                    acc + file_start - p_end
+                    return acc + (file_range.start - p_end) as u32;
                 } else if contains_end {
-                    acc + p_end - file_start
+                    unreachable!(
+                        "contains_end is not possible without contains_start, iterated piece must be ahead of saved piece"
+                    );
                 } else {
-                    acc
+                    return acc;
                 }
             });
-            tracing::debug!(
-                "Reading piece {} in file {} with offset {}",
-                piece_i,
-                &file.path().display(),
-                read_offset
-            );
-
-            let relative_start = file_start as isize - piece_start as isize;
-            let relative_end = file_end as isize - piece_end as isize;
-
-            let start = if relative_start > 0 {
-                // start is behind file
-                relative_start.abs()
-            } else {
-                // start is beyond file
-                0
-            } as usize;
-
-            let end = if relative_end < 0 {
-                // end is beyond file
-                piece_length - relative_end.abs() as u32
-            } else {
-                // end is behind file
-                piece_length
-            } as usize;
-
             let mut file_handle = fs::OpenOptions::new()
-                .create(true)
-                .read(true)
-                .open(&file.path())
+                .write(true)
+                .open(&file.path)
                 .await
                 .ok()?;
-
-            file_handle
+            let file_size = file_handle.metadata().await.unwrap().len();
+            let cursor_position = file_handle
                 .seek(SeekFrom::Start(read_offset.into()))
                 .await
                 .ok()?;
-
-            file_handle.read_exact(&mut out[start..end]).await.unwrap();
-
-            file_offset += file.length();
+            let mut buf = BytesMut::with_capacity(std::cmp::min(
+                piece_length.into(),
+                file_size - cursor_position,
+            ) as usize);
+            file_handle.read_exact(&mut buf).await.ok()?;
+            out.extend_from_slice(&buf);
+            file_offset += file.length;
         }
-        let out: Bytes = out.into();
-        if verify_sha1(hash, &out) {
-            return Some(out);
+        if out.len() == piece_length as usize {
+            tracing::debug!("Retrieved piece {}", piece_i);
+            return Some(out.into());
+        } else {
+            None
         }
-        panic!("Failed to verify hash of downloaded piece {}", piece_i);
     }
 }
 
