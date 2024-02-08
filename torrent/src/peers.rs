@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     io::{BufRead, Read, Write},
     net::SocketAddr,
 };
@@ -45,6 +46,47 @@ pub enum PeerMessage {
         begin: u32,
         length: u32,
     },
+}
+
+impl Display for PeerMessage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PeerMessage::HeatBeat => write!(f, "HeatBeat"),
+            PeerMessage::Choke => write!(f, "Choke"),
+            PeerMessage::Unchoke => write!(f, "Unchoke"),
+            PeerMessage::Interested => write!(f, "Interested"),
+            PeerMessage::NotInterested => write!(f, "NotInterested"),
+            PeerMessage::Have { index } => write!(f, "Have {}", index),
+            PeerMessage::Bitfield { payload } => {
+                write!(f, "Bitfield with length {}", payload.0.len())
+            }
+            PeerMessage::Request {
+                index,
+                begin,
+                length,
+            } => write!(
+                f,
+                "Request for piece {index} with offset {begin} and length {length}"
+            ),
+            PeerMessage::Piece {
+                index,
+                begin,
+                block,
+            } => write!(
+                f,
+                "Block for piece {index} with offset {begin} and length {}",
+                block.len()
+            ),
+            PeerMessage::Cancel {
+                index,
+                begin,
+                length,
+            } => write!(
+                f,
+                "Cancel for piece {index} with offset {begin} and length {length}",
+            ),
+        }
+    }
 }
 
 impl PeerMessage {
@@ -179,7 +221,7 @@ impl PeerMessage {
         }
     }
 
-    pub fn block_request(piece: Block) -> Self {
+    pub fn request(piece: Block) -> Self {
         Self::Request {
             index: piece.piece,
             begin: piece.offset,
@@ -208,9 +250,10 @@ impl Decoder for MessageFramer {
         length_bytes.copy_from_slice(&src[..4]);
         let length = u32::from_be_bytes(length_bytes) as usize;
 
-        if length == 0 {
-            return Ok(Some(PeerMessage::HeatBeat));
-        }
+        // TODO: heartbeat
+        // if length == 0 {
+        //     return Ok(Some(PeerMessage::HeatBeat));
+        // }
 
         if src.len() < 5 {
             // Not enough data to read tag marker.
@@ -280,21 +323,6 @@ impl Encoder<PeerMessage> for MessageFramer {
     }
 }
 
-#[derive(Debug)]
-pub struct Peer {
-    pub uuid: Uuid,
-    pub peer_ip: SocketAddr,
-    pub stream: Framed<TcpStream, MessageFramer>,
-    pub bitfield: BitField,
-    pub handshake: HandShake,
-    pub choked: bool,
-    pub interested: bool,
-    pub download_rate: isize,
-    pub last_alive: Instant,
-    pub ipc: PeerIPC,
-    pub current_piece: Option<u32>,
-}
-
 const CONNECTION_TIMEOUT_MS: u64 = 350;
 const BLOCK_SIZE: u64 = 1 << 14;
 
@@ -355,6 +383,20 @@ impl PeerError {
     }
 }
 
+#[derive(Debug)]
+pub struct Peer {
+    pub uuid: Uuid,
+    pub peer_ip: SocketAddr,
+    pub stream: Framed<TcpStream, MessageFramer>,
+    pub bitfield: BitField,
+    pub handshake: HandShake,
+    pub choked: bool,
+    pub interested: bool,
+    pub download_rate: isize,
+    pub last_alive: Instant,
+    pub ipc: PeerIPC,
+}
+
 impl Peer {
     /// Connect to peer and perform the handshake
     pub async fn new(
@@ -402,14 +444,10 @@ impl Peer {
             download_rate: 0,
             last_alive: Instant::now(),
             ipc,
-            current_piece: None,
         })
     }
 
     pub async fn show_interest(&mut self) -> Result<(), PeerError> {
-        if self.interested {
-            return Ok(());
-        }
         let mut msg_bytes = BytesMut::with_capacity(2);
         let mut msg_framer = MessageFramer;
         let interested_message = PeerMessage::Interested;
@@ -422,13 +460,6 @@ impl Peer {
             .await
             .context("send interested")
             .map_err(|_| PeerError::connection("failed to send intereseted"))?;
-        let Some(Ok(unchoke)) = self.stream.next().await else {
-            return Err(PeerError::logic("failed to get unchoke"));
-        };
-        if PeerMessage::Unchoke != unchoke {
-            return Err(PeerError::logic("provided message is not unchoke"));
-        };
-        self.choked = false;
         self.interested = true;
         Ok(())
     }
@@ -437,29 +468,14 @@ impl Peer {
         todo!()
     }
 
-    /// Add peice to bitfield and notify peer about it
-    pub async fn announce_piece(&mut self, piece: u32) -> Result<(), PeerError> {
-        self.send_peer_msg(PeerMessage::Have { index: piece }).await
-    }
-
-    pub async fn download(mut self) -> Result<(), PeerError> {
+    pub async fn download(mut self) -> (Uuid, Result<(), PeerError>) {
         loop {
             tokio::select! {
                 Some(command_msg) = self.ipc.commands_rx.recv() => {
-                    match command_msg {
-                        PeerCommand::Start { block } => {
-                            if !self.interested {
-                                self.show_interest().await?;
-                            }
-                            let msg = PeerMessage::block_request(block);
-                            self.send_peer_msg(msg).await?;
-                        },
-                        PeerCommand::Have { piece } => {
-                            let msg = PeerMessage::Have { index: piece };
-                            self.send_peer_msg(msg).await?;
-                       }
-                        PeerCommand::Abort => { break; },
-                    };
+                    match self.handle_peer_command(command_msg).await {
+                        Ok(should_break) => if should_break { break; },
+                        Err(e) => return (self.uuid, Err(e)),
+                    }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
                     if let PeerMessage::Piece { .. } = peer_msg {
@@ -603,6 +619,125 @@ impl Peer {
                 },
             };
         }
+        (self.uuid, Ok(()))
+    }
+
+    pub async fn handle_peer_command(
+        &mut self,
+        peer_command: PeerCommand,
+    ) -> Result<bool, PeerError> {
+        match peer_command {
+            PeerCommand::Start { block } => {
+                if !self.interested {
+                    self.show_interest().await?;
+                }
+                self.send_peer_msg(PeerMessage::request(block)).await?;
+            }
+            PeerCommand::Have { piece } => {
+                let have_msg = PeerMessage::Have { index: piece };
+                self.send_peer_msg(have_msg).await?;
+            }
+            PeerCommand::Abort => return Ok(true),
+            PeerCommand::Interested => self.show_interest().await?,
+        };
+        Ok(false)
+    }
+
+    pub async fn handle_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
+        tracing::debug!("Peer sent {} message", peer_msg);
+        match peer_msg {
+            PeerMessage::HeatBeat => {}
+            PeerMessage::Choke => {
+                self.choked = true;
+                let _ = self
+                    .ipc
+                    .status_tx
+                    .send(PeerStatus {
+                        peer_id: self.uuid,
+                        message_type: MessageType::Choked,
+                    })
+                    .await;
+            }
+            PeerMessage::Unchoke => {
+                self.choked = false;
+                let _ = self
+                    .ipc
+                    .status_tx
+                    .send(PeerStatus {
+                        peer_id: self.uuid,
+                        message_type: MessageType::Unchoked,
+                    })
+                    .await;
+            }
+            PeerMessage::Interested => todo!(),
+            PeerMessage::NotInterested => todo!(),
+            PeerMessage::Have { index } => {
+                let _ = self.bitfield.add(index as usize);
+                self.send_status(MessageType::Have { piece: index }).await?;
+            }
+            PeerMessage::Bitfield { .. } => {
+                return Err(PeerError::logic("Peer is sending bitfield"));
+            }
+            PeerMessage::Request {
+                index,
+                begin,
+                length,
+            } => {
+                let (tx, rx) = oneshot::channel();
+                self.ipc
+                    .status_tx
+                    .send(PeerStatus {
+                        peer_id: self.uuid,
+                        message_type: MessageType::Request {
+                            response: tx,
+                            block: Block {
+                                piece: index,
+                                offset: begin,
+                                length,
+                            },
+                        },
+                    })
+                    .await
+                    .unwrap();
+                if let Ok(Some(bytes)) = rx.await {
+                    let _ = self
+                        .send_peer_msg(PeerMessage::Piece {
+                            index,
+                            begin,
+                            block: bytes,
+                        })
+                        .await;
+                }
+            }
+            PeerMessage::Piece {
+                index,
+                begin,
+                block,
+            } => {
+                tracing::trace!(
+                    "Got piece {} with offset {} with size({})",
+                    index,
+                    begin,
+                    block.len()
+                );
+                self.ipc
+                    .status_tx
+                    .send(PeerStatus {
+                        peer_id: self.uuid,
+                        message_type: MessageType::Data {
+                            block: Block {
+                                piece: index,
+                                offset: begin,
+                                length: block.len() as u32,
+                            },
+                            bytes: block,
+                        },
+                    })
+                    .await
+                    .unwrap();
+            }
+            PeerMessage::Cancel { .. } => {}
+        }
         Ok(())
     }
 
@@ -654,7 +789,7 @@ impl BitField {
         let mut bytes = BytesMut::with_capacity(self.0.len());
         bytes.extend_from_slice(&self.0);
         let Some(block) = bytes.get_mut(piece / 8) else {
-            return Err(anyhow!("block does not exist"));
+            return Err(anyhow!("piece {piece} does not exist"));
         };
         let position = (piece % 8) as u32;
         let new_value = *block | 1u8.rotate_right(position + 1);
@@ -674,7 +809,7 @@ impl BitField {
     }
 
     pub fn empty(pieces_amount: usize) -> Self {
-        let mut bytes = vec![0; std::cmp::max(pieces_amount / 8, 1)];
+        let mut bytes = vec![0; std::cmp::max((pieces_amount + 8 - 1) / 8, 1)];
         bytes.fill(0);
         Self(bytes.into())
     }

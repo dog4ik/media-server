@@ -5,8 +5,8 @@ use bytes::{Bytes, BytesMut};
 use uuid::Uuid;
 
 use crate::{
-    download::{ActivePeer, Block, PeerCommand},
-    file::{Hashes, Info},
+    download::{piece_size, ActivePeer, Block, PeerCommand},
+    file::{Hashes, TorrentFile},
     peers::BitField,
     storage::TorrentStorage,
 };
@@ -17,11 +17,20 @@ pub struct Assignment {
     pub blocks: Vec<Block>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub enum ScheduleStrategy {
-    #[default]
     Linear,
     RareFirst,
+}
+
+pub trait Schedule {
+    fn assign_next(&mut self, bitfield: BitField) -> Option<usize>;
+}
+
+#[derive(Debug)]
+pub struct LinearAssignment {
+    pub current_piece: usize,
+    pub total_pieces: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -39,7 +48,6 @@ impl PendingBlock {
             bytes: None,
         }
     }
-}
 
 pub const MAX_PENDING_BLOCKS: usize = 40;
 
@@ -47,15 +55,12 @@ pub const MAX_PENDING_BLOCKS: usize = 40;
 pub struct Scheduler {
     piece_size: usize,
     max_pending_pieces: usize,
-    max_connections: usize,
     total_length: u64,
     pieces: Hashes,
-    failed_blocks: Vec<Block>,
     pub bitfield: BitField,
     pending_pieces: HashMap<usize, Vec<PendingBlock>>,
     pub active_peers: HashMap<Uuid, ActivePeer>,
     pub storage: TorrentStorage,
-    schedule_stategy: ScheduleStrategy,
 }
 
 const BLOCK_LENGTH: u32 = 16 * 1024;
@@ -70,9 +75,9 @@ impl Scheduler {
         let storage = TorrentStorage::new(&t, output_dir);
         let bitfield = BitField::empty(total_pieces);
         Self {
-            piece_size: t.piece_length as usize,
-            total_length: t.total_size(),
-            pieces: t.pieces.clone(),
+            piece_size: t.info.piece_length as usize,
+            total_length: t.info.total_size(),
+            pieces: t.info.pieces.clone(),
             pending_pieces: HashMap::new(),
             failed_blocks: Vec::new(),
             max_pending_pieces: 100,
@@ -80,50 +85,29 @@ impl Scheduler {
             active_peers,
             storage,
             bitfield,
-            schedule_stategy: ScheduleStrategy::default(),
         }
     }
 
     /// Helper function to get piece length with consideration of the last piece
     fn piece_length(&self, piece_i: usize) -> u32 {
-        crate::utils::piece_size(piece_i, self.piece_size, self.total_length as usize) as u32
+        piece_size(
+            piece_i as u32,
+            self.piece_size as u32,
+            self.pieces.len() as u32,
+            self.total_length as u32,
+        )
     }
 
     /// Schedules next piece linearly (the next missing piece from start)
     /// returing `None` if no more pieces left
-    fn linear_next(&mut self) -> Option<usize> {
+    pub fn linear_next(&mut self) -> Option<usize> {
         for i in 0..self.pieces.len() {
             if !self.bitfield.has(i) && self.pending_pieces.get(&i).is_none() {
-                tracing::debug!("Assigning next linear piece {i}");
                 self.pending_pieces.insert(i, Vec::new());
                 return Some(i);
             }
         }
         None
-    }
-
-    fn rare_first_next(&mut self) -> Option<usize> {
-        todo!()
-    }
-
-    fn schedule_next(&mut self) -> Option<usize> {
-        match self.schedule_stategy {
-            ScheduleStrategy::Linear => self.linear_next(),
-            ScheduleStrategy::RareFirst => self.rare_first_next(),
-        }
-    }
-
-    fn most_performant_available_peer(&self) -> Option<Uuid> {
-        let mut max = 0;
-        let mut peer_id = None;
-        for (id, peer) in self.available_peers() {
-            let download_speed = peer.download_speed();
-            if download_speed > max && peer.pending_blocks.len() <= MAX_PENDING_BLOCKS {
-                max = download_speed;
-                peer_id = Some(*id);
-            }
-        }
-        peer_id
     }
 
     /// Save block
@@ -134,10 +118,9 @@ impl Scheduler {
         data: Bytes,
     ) -> anyhow::Result<()> {
         let piece_length = self.piece_length(insert_block.piece as usize);
-        let blocks = self
-            .pending_pieces
-            .get_mut(&(insert_block.piece as usize))
-            .ok_or(anyhow!("pending piece {} is not found", insert_block.piece))?;
+        let Some(blocks) = self.pending_pieces.get_mut(&(insert_block.piece as usize)) else {
+            return Err(anyhow!("piece is not found in pending pieces"));
+        };
 
         if let Some(idx) = blocks
             .iter()
@@ -150,22 +133,14 @@ impl Scheduler {
         let sender = self
             .active_peers
             .get_mut(&sender_id)
-            .expect("block sender channel to be open");
-
-        if sender.out_status.is_choked() {
-            tracing::warn!("Choked peer ({}) is sending blocks", sender_id);
-        }
-
-        let downloaded_block = sender
+            .expect("block sender to be here");
+        dbg!(&sender_id, &sender.pending_blocks, &insert_block);
+        sender
             .pending_blocks
             .iter()
             .position(|b| b.offset == insert_block.offset)
             .map(|idx| sender.pending_blocks.swap_remove(idx))
-            .ok_or(anyhow!(
-                "could not found downloaded block, it might be reassigned"
-            ))?;
-        sender.downloaded += downloaded_block.length as u64;
-        sender.update_performance();
+            .unwrap();
 
         if piece_is_full(blocks, piece_length) {
             let bytes = blocks.drain(..).fold(
@@ -190,84 +165,95 @@ impl Scheduler {
                     piece: insert_block.piece,
                 });
             }
-            self.schedule_next().ok_or(anyhow!("no more work"))?;
+            let next = self.linear_next().ok_or(anyhow!("no more work"))?;
+            tracing::debug!("Assigning next piece {}", next);
         }
 
         Ok(())
     }
 
-    /// Schedules next block for peer returing `None` if peer cant help in download
-    pub async fn schedule(&mut self, peer_id: &Uuid) {
-        let available_pieces = self.available_pieces();
-        let peer = self.active_peers.get_mut(peer_id).unwrap();
-
-        if peer.pending_blocks.len() != 0 {
-            tracing::warn!("Scheduling is not required");
-            return;
-        };
-
-        'outer: for _ in 0..MAX_PENDING_BLOCKS {
-            for (i, block) in self.failed_blocks.iter().enumerate() {
-                if peer.bitfield.has(block.piece as usize) {
-                    let block = self.failed_blocks.remove(i);
-                    if !peer.out_status.is_interested() {
-                        peer.out_status.interest();
-                        peer.command.try_send(PeerCommand::Interested).unwrap();
-                    }
-                    peer.pending_blocks.push(block);
-                    tracing::trace!("Scheduling FAILED block: {:?} to peer {}", block, peer_id,);
-                    peer.command.try_send(PeerCommand::Start { block }).unwrap();
-                    continue 'outer;
-                };
-            }
-
-            for piece in available_pieces.clone() {
-                if peer.bitfield.has(piece) {
-                    if !peer.out_status.is_interested() {
-                        peer.out_status.interest();
-                        peer.command.try_send(PeerCommand::Interested).unwrap();
-                    }
-                    let p_length = crate::utils::piece_size(
-                        piece,
-                        self.piece_size,
-                        self.total_length as usize,
-                    );
-                    let pending_blocks = self.pending_pieces.get_mut(&piece).unwrap();
-                    let Some(new_block) =
-                        pend_block(pending_blocks, piece, p_length as u32, BLOCK_LENGTH)
-                    else {
-                        continue;
-                    };
-                    peer.pending_blocks.push(new_block);
-                    tracing::trace!("Scheduling block: {:?} to peer {}", new_block, peer_id,);
-                    peer.command
-                        .try_send(PeerCommand::Start { block: new_block })
-                        .unwrap();
-                    continue 'outer;
-                }
+    /// Schedule next block
+    fn pend_block(&mut self, piece: usize, recommended_length: u32) -> Option<Block> {
+        let piece_length = self.piece_length(piece);
+        let blocks = self.pending_pieces.get_mut(&piece).unwrap();
+        let mut insert_idx = 0;
+        let mut insert_offset = 0;
+        for pending_block in blocks.iter() {
+            if pending_block.offset + pending_block.length > insert_offset {
+                insert_idx += 1;
+                insert_offset = pending_block.offset + pending_block.length;
+            } else {
+                break;
             }
         }
+        let prev_block_end = blocks
+            .get(std::cmp::max(insert_idx as isize - 1, 0) as usize)
+            .map_or(0, |last_block| last_block.offset + last_block.length);
+        let next_block_start = blocks
+            .get(insert_idx + 1)
+            .map_or(piece_length, |next_block| next_block.offset);
+        let length = std::cmp::min(next_block_start - prev_block_end, recommended_length);
+        if insert_offset + length > piece_length || length == 0 {
+            return None;
+        }
+
+        blocks.insert(insert_idx, PendingBlock::new(insert_offset, length));
+        let block = Block {
+            piece: piece as u32,
+            offset: insert_offset,
+            length,
+        };
+        Some(block)
     }
 
-    /// Resets unfinished blocks of the peer and appends them to failed blocks
+    pub async fn schedule_next_block(&mut self) -> anyhow::Result<()> {
+        'outer: for piece in self.available_pieces() {
+            let Some(compatible_peer) = self
+                .available_peers()
+                .find(|(_, peer)| peer.bitfield.has(piece))
+                .map(|(peer_id, _)| *peer_id)
+            else {
+                continue;
+            };
+            for _ in 0..5 {
+                let Some(new_block) = self.pend_block(piece, BLOCK_LENGTH) else {
+                    break 'outer;
+                };
+                let peer = self.get_peer_mut(&compatible_peer).unwrap();
+                peer.pending_blocks.push(new_block);
+                tracing::debug!(
+                    "Scheduling block: {:?} to peer {}",
+                    new_block,
+                    compatible_peer
+                );
+                peer.command
+                    .send(PeerCommand::Start { block: new_block })
+                    .await
+                    .unwrap();
+            }
+        }
+        Ok(())
+    }
+
+    /// Resets unfinished blocks of the peer with given id
     pub fn cancel_peer(&mut self, peer_id: Uuid) {
         let peer = self.active_peers.get_mut(&peer_id).expect("peer to exist");
         tracing::debug!("Canceling peer with id {}", peer_id);
-        self.failed_blocks.extend(peer.pending_blocks.drain(..));
-    }
-
-    pub async fn handle_peer_choke(&mut self, peer_id: Uuid) {
-        let peer = self.active_peers.get_mut(&peer_id).unwrap();
-        peer.in_status.choke();
+        for block in peer.pending_blocks.drain(..) {
+            if let Some(pending_piece) = self.pending_pieces.get_mut(&(block.piece as usize)) {
+                pending_piece
+                    .iter()
+                    .position(|x| x.offset == block.offset && x.bytes.is_none())
+                    .map(|idx| pending_piece.remove(idx));
+            };
+        }
     }
 
     pub async fn handle_peer_unchoke(&mut self, peer_id: Uuid) {
-        dbg!(self.available_pieces().len());
         let peer = self.active_peers.get_mut(&peer_id).unwrap();
-        peer.in_status.unchoke();
-        if peer.pending_blocks.len() < MAX_PENDING_BLOCKS {
-            self.schedule(&peer_id).await;
-        }
+        peer.choke_status.unchoke();
+
+        self.schedule_next_block().await.unwrap();
     }
 
     pub fn remove_peer(&mut self, peer_id: Uuid) {
@@ -275,56 +261,30 @@ impl Scheduler {
         self.active_peers.remove(&peer_id).unwrap();
     }
 
-    pub async fn choke_peer(&mut self, peer_id: Uuid) {
-        self.cancel_peer(peer_id);
-        let peers: Vec<_> = self
-            .active_peers
-            .iter()
-            .map(|(id, peer)| (*id, peer.pending_blocks.len()))
-            .collect();
-
-        for (peer, pending_blocks) in peers {
-            if peer == peer_id || pending_blocks == MAX_PENDING_BLOCKS {
-                continue;
-            }
-            self.schedule(&peer).await;
-        }
-
+    pub fn choke_peer(&mut self, peer_id: Uuid) {
+        // BUG: this shit breaks shit
+        // self.cancel_peer(peer_id);
         let peer = self.active_peers.get_mut(&peer_id).unwrap();
-        peer.out_status.choke();
-    }
-
-    pub async fn add_peer(&mut self, mut peer: ActivePeer, uuid: Uuid) {
-        peer.out_status.unchoke();
-        peer.out_status.interest();
-        peer.command.try_send(PeerCommand::Unchoke).unwrap();
-        peer.command.try_send(PeerCommand::Interested).unwrap();
-        self.active_peers.insert(uuid, peer);
+        peer.choke_status.choke();
     }
 
     pub async fn start(&mut self) {
-        for _ in 0..self.max_pending_pieces {
-            self.schedule_next();
+        for (_, peer) in self.active_peers.iter_mut() {
+            peer.command.send(PeerCommand::Interested).await.unwrap();
+            break;
         }
-        tracing::info!("Started scheduler");
+        self.linear_next();
     }
 
     /// Iterator over peers that are ready for work
-    fn available_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
-        self.active_peers.iter().filter(|(_, peer)| {
-            !peer.in_status.is_choked() && peer.pending_blocks.len() < MAX_PENDING_BLOCKS
-        })
-    }
-
-    /// Iterator over peers that have pending blocks
-    fn busy_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
+    pub fn available_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
         self.active_peers
             .iter()
-            .filter(|(_, peer)| !peer.pending_blocks.is_empty())
+            .filter(|(_, peer)| !peer.choke_status.is_choked() && peer.pending_blocks.is_empty())
     }
 
     /// Pending pieces that are not filled
-    fn available_pieces(&self) -> Vec<usize> {
+    pub fn available_pieces(&self) -> Vec<usize> {
         self.pending_pieces
             .iter()
             .filter(|(piece_i, blocks)| {
@@ -336,10 +296,10 @@ impl Scheduler {
     }
 
     /// Iterator over peers that are choked
-    fn choked_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
+    pub fn choked_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
         self.active_peers
             .iter()
-            .filter(|(_, peer)| peer.out_status.is_choked())
+            .filter(|(_, peer)| peer.choke_status.is_choked())
     }
 
     pub async fn retrieve_piece(&mut self, piece_i: usize) -> Option<Bytes> {
@@ -379,54 +339,13 @@ fn piece_is_filled(blocks: &Vec<PendingBlock>, piece_len: u32) -> bool {
     total_len == piece_len
 }
 
-fn pend_block(
-    blocks: &mut Vec<PendingBlock>,
-    piece: usize,
-    piece_length: u32,
-    recommended_length: u32,
-) -> Option<Block> {
-    let mut insert_idx = 0;
-    let mut insert_offset = 0;
-    for pending_block in blocks.iter() {
-        if pending_block.offset + pending_block.length > insert_offset {
-            insert_idx += 1;
-            insert_offset = pending_block.offset + pending_block.length;
-        } else {
-            break;
-        }
-    }
-    let prev_block_end = blocks
-        .get(std::cmp::max(insert_idx as isize - 1, 0) as usize)
-        .map_or(0, |last_block| last_block.offset + last_block.length);
-    let next_block_start = blocks
-        .get(insert_idx + 1)
-        .map_or(piece_length, |next_block| next_block.offset);
-    let length = std::cmp::min(next_block_start - prev_block_end, recommended_length);
-    if insert_offset + length > piece_length || length == 0 {
-        return None;
-    }
-
-    blocks.insert(insert_idx, PendingBlock::new(insert_offset, length));
-    let block = Block {
-        piece: piece as u32,
-        offset: insert_offset,
-        length,
-    };
-    Some(block)
-}
-
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
     use tracing_test::traced_test;
 
-    use crate::{
-        file::Hashes,
-        peers::BitField,
-        scheduler::{pend_block, ScheduleStrategy, Scheduler},
-        storage::TorrentStorage,
-    };
+    use crate::{file::Hashes, peers::BitField, scheduler::Scheduler, storage::TorrentStorage};
 
     #[test]
     #[traced_test]
@@ -438,8 +357,6 @@ mod tests {
         let mut scheduler = Scheduler {
             piece_size: 2,
             max_pending_pieces: 20,
-            max_connections: 10,
-            failed_blocks: Vec::new(),
             total_length: 10,
             pieces: hashes.clone(),
             pending_pieces: HashMap::new(),
@@ -451,7 +368,6 @@ mod tests {
                 pieces: hashes,
             },
             bitfield,
-            schedule_stategy: ScheduleStrategy::default(),
         };
         assert!(scheduler.linear_next().is_some());
         assert!(scheduler.linear_next().is_some());
@@ -469,8 +385,6 @@ mod tests {
         let mut scheduler = Scheduler {
             piece_size: 10,
             max_pending_pieces: 20,
-            failed_blocks: Vec::new(),
-            max_connections: 10,
             total_length: 10,
             pieces: hashes.clone(),
             pending_pieces: HashMap::new(),
@@ -482,18 +396,12 @@ mod tests {
                 pieces: hashes,
             },
             bitfield,
-            schedule_stategy: ScheduleStrategy::default(),
         };
-        let p_len = 10;
         scheduler.linear_next();
-        let blocks = scheduler.pending_pieces.get_mut(&0).unwrap();
-        assert!(pend_block(blocks, 0, p_len, 3).is_some());
-        assert!(pend_block(blocks, 0, p_len, 3).is_some());
-        assert!(pend_block(blocks, 0, p_len, 4).is_some());
-        let blocks = scheduler.pending_pieces.get_mut(&0).unwrap();
-        blocks.remove(1);
-        dbg!(&blocks);
-        assert!(pend_block(blocks, 0, p_len, 2).is_none());
-        assert!(pend_block(blocks, 0, p_len, 3).is_none());
+        assert!(dbg!(scheduler.pend_block(0, 3)).is_some());
+        assert!(dbg!(scheduler.pend_block(0, 3)).is_some());
+        assert!(dbg!(scheduler.pend_block(0, 4)).is_some());
+        assert!(dbg!(scheduler.pend_block(0, 2)).is_none());
+        assert!(dbg!(scheduler.pend_block(0, 3)).is_none());
     }
 }

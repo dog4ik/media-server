@@ -33,8 +33,8 @@ impl SizeDescriptor {
 /// Torrent output file that is normalized and safe against path attack
 #[derive(Clone, Debug)]
 pub struct OutputFile {
-    length: u64,
-    path: PathBuf,
+    pub length: u64,
+    pub path: PathBuf,
 }
 
 impl OutputFile {
@@ -58,7 +58,7 @@ pub struct Info {
     pub name: String,
     pub pieces: Hashes,
     #[serde(rename = "piece length")]
-    pub piece_length: u64,
+    pub piece_length: u32,
     #[serde(flatten)]
     pub file_descriptor: SizeDescriptor,
 }
@@ -78,13 +78,13 @@ impl Info {
                 .iter()
                 .map(|f| OutputFile {
                     length: f.length,
-                    path: PathBuf::from_iter(f.path.iter()),
+                    path: base.join(PathBuf::from_iter(f.path.iter())),
                 })
                 .collect(),
             SizeDescriptor::Length(length) => {
                 vec![OutputFile {
                     length: *length,
-                    path: self.name.clone().into(),
+                    path: base,
                 }]
             }
         }
@@ -316,6 +316,8 @@ fn sanitize_path(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+    use tracing_test::traced_test;
+
     use crate::file::TorrentFile;
 
     pub const TORRENTS_LIST: &[&str] = &[
@@ -330,6 +332,7 @@ mod tests {
     ];
 
     #[test]
+    #[traced_test]
     fn info_hash() {
         use std::fs;
         let contents = fs::read(TORRENTS_LIST[0]).unwrap();
@@ -339,6 +342,7 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn piece_hashes() {
         use std::fs;
         let contents = fs::read(TORRENTS_LIST[0]).unwrap();
@@ -348,16 +352,17 @@ mod tests {
     }
 
     #[test]
+    #[traced_test]
     fn parse_torrent_file() {
         use std::fs;
-        let contents = fs::read(TORRENTS_LIST[0]).unwrap();
+        let contents = fs::read("torrents/book.torrent").unwrap();
         let torrent_file = TorrentFile::from_bytes(&contents).unwrap();
+        tracing::debug!("Announce list: {:?}", torrent_file.announce_list);
+        tracing::debug!("File descriptor: {:?}", torrent_file.info.file_descriptor);
         assert_eq!(
             torrent_file.announce,
             "udp://tracker.opentrackr.org:1337/announce"
         );
-        dbg!(torrent_file.announce_list);
-        dbg!(&torrent_file.info.file_descriptor);
         assert_eq!(torrent_file.info.total_size(), 3144327239);
     }
 }
