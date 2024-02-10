@@ -167,20 +167,20 @@ impl PeerMessage {
             bytes
         };
         match self {
-            PeerMessage::HeatBeat => return Bytes::from_static(&[0]),
+            PeerMessage::HeatBeat => return Bytes::from_static(&[]),
             PeerMessage::Choke => return Bytes::from_static(&[0]),
             PeerMessage::Unchoke => return Bytes::from_static(&[1]),
             PeerMessage::Interested => return Bytes::from_static(&[2]),
             PeerMessage::NotInterested => return Bytes::from_static(&[3]),
             PeerMessage::Have { index } => {
                 let mut bytes = BytesMut::with_capacity(5);
-                bytes.extend_from_slice(&[4]);
+                bytes.extend_from_slice(&4_u8.to_be_bytes());
                 bytes.extend_from_slice(&index.to_be_bytes());
                 return bytes.into();
             }
             PeerMessage::Bitfield { payload } => {
                 let mut bytes = BytesMut::with_capacity(1 + payload.0.len());
-                bytes.extend_from_slice(&[4]);
+                bytes.extend_from_slice(&5_u8.to_be_bytes());
                 bytes.extend_from_slice(&payload.0);
                 return bytes.into();
             }
@@ -191,7 +191,7 @@ impl PeerMessage {
             } => {
                 let request = request_to_bytes(*index, *begin, *length);
                 let mut bytes = BytesMut::with_capacity(request.len() + 1);
-                bytes.extend_from_slice(&[6]);
+                bytes.extend_from_slice(&6_u8.to_be_bytes());
                 bytes.extend_from_slice(&request);
                 bytes.into()
             }
@@ -201,7 +201,7 @@ impl PeerMessage {
                 block: piece,
             } => {
                 let mut bytes = BytesMut::with_capacity(8 + 1 + piece.len());
-                bytes.extend_from_slice(&6_u32.to_be_bytes());
+                bytes.extend_from_slice(&7_u8.to_be_bytes());
                 bytes.extend_from_slice(&index.to_be_bytes());
                 bytes.extend_from_slice(&begin.to_be_bytes());
                 bytes.extend_from_slice(&piece);
@@ -214,7 +214,7 @@ impl PeerMessage {
             } => {
                 let request = request_to_bytes(*index, *begin, *length);
                 let mut bytes = BytesMut::with_capacity(request.len() + 1);
-                bytes.extend_from_slice(&8_u32.to_be_bytes());
+                bytes.extend_from_slice(&8_u8.to_be_bytes());
                 bytes.extend_from_slice(&request);
                 bytes.into()
             }
