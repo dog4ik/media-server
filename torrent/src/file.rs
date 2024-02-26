@@ -1,12 +1,18 @@
 use std::{
     ops::Deref,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
+use anyhow::{anyhow, ensure};
+use reqwest::Url;
 use serde::{de::Visitor, Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
-use crate::tracker::{AnnouncePayload, AnnounceResult};
+use crate::{
+    peers::Peer,
+    tracker::{AnnouncePayload, AnnounceResult},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct File {
@@ -89,6 +95,34 @@ impl Info {
 
     pub fn hex_peices_hashes(&self) -> Vec<String> {
         self.pieces.0.iter().map(|x| hex::encode(x)).collect()
+    }
+
+    pub async fn from_magnet_link(magnet_link: MagnetLink) -> anyhow::Result<Self> {
+        use std::time::Duration;
+        use tokio::net::TcpStream;
+        use tokio::time::timeout;
+
+        let hash = magnet_link.hash();
+        let announce = AnnouncePayload::from_magnet_link(magnet_link)?;
+        let announce_result = announce.announce().await?;
+        for peer_ip in announce_result.peers {
+            let Ok(Ok(socket)) =
+                timeout(Duration::from_millis(800), TcpStream::connect(peer_ip)).await
+            else {
+                continue;
+            };
+
+            let Ok(peer) = Peer::new(socket, hash).await else {
+                continue;
+            };
+            return Ok(Self {
+                name: todo!(),
+                pieces: todo!(),
+                piece_length: todo!(),
+                file_descriptor: todo!(),
+            });
+        }
+        Err(anyhow!("No one gave us metadata"))
     }
 }
 
@@ -191,13 +225,101 @@ impl TorrentFile {
         let announce_payload = AnnouncePayload::from_torrent(self)?;
         announce_payload.announce().await
     }
+
+    /// Get all trackers contained in file
+    pub fn all_trackers(&self) -> Vec<Url> {
+        let mut trackers =
+            Vec::with_capacity(1 + self.announce_list.as_ref().map_or(0, |l| l.len()));
+        if let Ok(url) = Url::parse(&self.announce) {
+            trackers.push(url);
+        } else {
+            tracing::error!(
+                self.announce,
+                "failed to parce announce url in .torrent file"
+            );
+        }
+        if let Some(list) = &self.announce_list {
+            trackers.extend(
+                list.into_iter()
+                    .flatten()
+                    .filter_map(|url| Url::parse(url).ok()),
+            );
+        };
+        trackers
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct MagnetLink {
+    pub announce_list: Option<Vec<Url>>,
+    pub name: Option<String>,
+    pub info_hash: String,
+}
+
+impl FromStr for MagnetLink {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let url = reqwest::Url::from_str(s)?;
+        ensure!(url.scheme() == "magnet");
+        let mut info_hash = None;
+        let mut name = None;
+        let mut trackers = Vec::new();
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                // info_hash
+                "xt" => {
+                    let mut split = value.splitn(3, ':');
+                    let urn = split
+                        .next()
+                        .ok_or(anyhow!("urn string is not found in xt"))?;
+                    let hash_indicator = split
+                        .next()
+                        .ok_or(anyhow!("hash indicator is not found in xt"))?;
+                    ensure!(urn == "urn");
+                    ensure!(hash_indicator == "btih");
+                    let hash = split.next().ok_or(anyhow!("hash is not found in xt"))?;
+                    ensure!(hash.len() == 40);
+                    info_hash = Some(hash.to_string());
+                }
+                // torrent name
+                "dn" => {
+                    name = Some(value.to_string());
+                }
+                // tracker
+                "tr" => {
+                    if let Ok(url) = Url::from_str(&value) {
+                        trackers.push(url)
+                    } else {
+                        tracing::warn!("Failed to parse magnet tracker: {}", value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let trackers = (!trackers.is_empty()).then_some(trackers);
+        Ok(Self {
+            info_hash: info_hash.ok_or(anyhow!("magnet link does not contain info_hash"))?,
+            name,
+            announce_list: trackers,
+        })
+    }
+}
+
+impl MagnetLink {
+    pub fn hash(&self) -> [u8; 20] {
+        hex::decode(&self.info_hash).unwrap().try_into().unwrap()
+    }
 }
 
 #[cfg(test)]
 mod tests {
+
+    use std::str::FromStr;
+
     use tracing_test::traced_test;
 
-    use crate::file::TorrentFile;
+    use crate::file::{MagnetLink, TorrentFile};
 
     pub const TORRENTS_LIST: &[&str] = &[
         //UDP announce
@@ -243,5 +365,17 @@ mod tests {
             "udp://tracker.opentrackr.org:1337/announce"
         );
         assert_eq!(torrent_file.info.total_size(), 3144327239);
+    }
+
+    #[test]
+    #[traced_test]
+    fn parse_magnet_link() {
+        use std::fs;
+        let contents = fs::read_to_string("torrents/hazbinhotel.magnet").unwrap();
+        let magnet_link = MagnetLink::from_str(&contents).unwrap();
+        let info_hash = "29B1F5DC4DCC9A53FFED7E9ECB0670DC5F61D7BF";
+        let name = "Hazbin Hotel S01E05 1080p WEB H264-LAZYCUNTS";
+        assert_eq!(magnet_link.info_hash, info_hash);
+        assert_eq!(magnet_link.name.unwrap(), name);
     }
 }
