@@ -39,8 +39,23 @@ impl SizeDescriptor {
 /// Torrent output file that is normalized and safe against path attack
 #[derive(Clone, Debug)]
 pub struct OutputFile {
-    pub length: u64,
-    pub path: PathBuf,
+    length: u64,
+    path: PathBuf,
+}
+
+impl OutputFile {
+    pub fn new(length: u64, path: PathBuf) -> Self {
+        let path = sanitize_path(path);
+        Self { length, path }
+    }
+
+    pub fn length(&self) -> u64 {
+        self.length
+    }
+
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -67,16 +82,10 @@ impl Info {
         match &self.file_descriptor {
             SizeDescriptor::Files(files) => files
                 .iter()
-                .map(|f| OutputFile {
-                    length: f.length,
-                    path: base.join(PathBuf::from_iter(f.path.iter())),
-                })
+                .map(|f| OutputFile::new(f.length, base.join(PathBuf::from_iter(f.path.iter()))))
                 .collect(),
             SizeDescriptor::Length(length) => {
-                vec![OutputFile {
-                    length: *length,
-                    path: base,
-                }]
+                vec![OutputFile::new(*length, base)]
             }
         }
     }
@@ -310,6 +319,27 @@ impl MagnetLink {
     pub fn hash(&self) -> [u8; 20] {
         hex::decode(&self.info_hash).unwrap().try_into().unwrap()
     }
+}
+
+/// Prevent traversal attack on path by ignoring suspicious components
+fn sanitize_path(path: PathBuf) -> PathBuf {
+    use std::path::Component;
+    let mut normalized_path = PathBuf::new();
+    for component in path.canonicalize().unwrap().components() {
+        match component {
+            Component::Prefix(_) => {
+                tracing::warn!("Path starts with prefix component");
+            }
+            Component::RootDir => {
+                tracing::warn!("Path starts with root directory component");
+            }
+            Component::CurDir | Component::ParentDir => {
+                tracing::warn!("Path contains relative directory component");
+            }
+            Component::Normal(component) => normalized_path.push(component),
+        }
+    }
+    normalized_path
 }
 
 #[cfg(test)]

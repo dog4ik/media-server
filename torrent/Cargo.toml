@@ -8,18 +8,21 @@ edition = "2021"
 [dependencies]
 serde_bencode = "0.2.4"
 serde_urlencoded = "0.7.1"
-serde_json = "1.0.111"
-serde = { version = "1.0.195", features = ["serde_derive"] }
-anyhow = "1.0.79"
+serde_json = "1.0.114"
+serde = { version = "1.0.197", features = ["serde_derive"] }
+anyhow = "1.0.80"
 bytes = { version = "1.5.0", features = ["serde"] }
 sha1 = "0.10.6"
 hex = "0.4.3"
-tokio = { version = "1.35.1", features = ["full"] }
+tokio = { version = "1.36.0", features = ["full"] }
 tokio-util = { version = "0.7.10", features = ["full"] }
 tokio-stream = { version = "0.1.14", features = ["full"] }
-reqwest = "0.11.23"
+reqwest = "0.11.24"
 rand = "0.8.5"
 tracing = "0.1.40"
 tracing-test = "0.2.4"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
-uuid = { version = "1.6.1", features = ["v4", "serde"] }
+uuid = { version = "1.7.0", features = ["v4", "serde"] }
+
+[[bin]]
+name = "simple_download"
