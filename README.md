@@ -11,4 +11,5 @@
 
 ### Supported metadata providers
 
-- [TMDB](https://www.themoviedb.org/) 
+- [TMDB](https://www.themoviedb.org/)
+- [TVDB](https://thetvdb.com/)
