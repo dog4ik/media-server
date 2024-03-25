@@ -1,4 +1,4 @@
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
@@ -6,8 +6,11 @@ use media_server::app_state::AppState;
 use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
+use media_server::metadata::tmdb_api::TmdbApi;
+use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api};
+use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -32,6 +35,7 @@ async fn main() {
     let db = Db::connect(&database_url)
         .await
         .expect("database to be found");
+    let db = Box::leak(Box::new(db));
 
     let args = Args::parse();
 
@@ -81,6 +85,19 @@ async fn main() {
     let library = Library::new(media_folders.clone(), shows, movies);
     let library = Box::leak(Box::new(Mutex::new(library)));
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
+    let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
+    let tmdb_api = Box::leak(Box::new(tmdb_api));
+    let tpb_api = TpbApi::new();
+    let tpb_api = Box::leak(Box::new(tpb_api));
+
+    let providers_stack = MetadataProvidersStack {
+        discover_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        show_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        movie_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        torrent_indexes_stack: Mutex::new(vec![tpb_api]),
+    };
+
+    let providers_stack = Box::leak(Box::new(providers_stack));
 
     let tasks = TaskResource::new();
 
@@ -89,6 +106,9 @@ async fn main() {
         configuration,
         db,
         tasks,
+        tmdb_api,
+        tpb_api,
+        providers_stack,
     };
 
     monitor_library(app_state.clone(), media_folders).await;
