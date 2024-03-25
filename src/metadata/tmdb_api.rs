@@ -1,18 +1,20 @@
-use std::collections::HashMap;
 use std::sync::Mutex;
+use std::{collections::HashMap, time::Duration};
 
+use anyhow::anyhow;
 use reqwest::{
     header::{HeaderMap, HeaderValue, ACCEPT_ENCODING},
     Client, Method, Request, Url,
 };
 use serde::Deserialize;
+use time::{Date, OffsetDateTime};
 
-use crate::library::show::ShowIdentifier;
-use crate::library::{movie::MovieIdentifier, LibraryFile};
+use crate::app_state::AppError;
 
 use super::{
-    EpisodeMetadata, LimitedRequestClient, MetadataImage, MovieMetadata, MovieMetadataProvider,
-    SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata,
+    LimitedRequestClient, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
+    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
 
 #[derive(Debug)]
@@ -63,6 +65,10 @@ impl TmdbImage {
             .push(appendix);
         Self { url }
     }
+
+    pub fn url(&self) -> &str {
+        self.url.as_ref()
+    }
 }
 
 impl Into<MetadataImage> for TmdbImage {
@@ -97,7 +103,7 @@ impl TmdbApi {
     pub async fn search_movie(
         &self,
         query: &str,
-    ) -> Result<TmdbSearch<TmdbSearchMovieResult>, anyhow::Error> {
+    ) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("search").push("tv");
@@ -109,10 +115,22 @@ impl TmdbApi {
     pub async fn search_tv_show(
         &self,
         query: &str,
-    ) -> Result<TmdbSearch<TmdbSearchShowResult>, anyhow::Error> {
+    ) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("search").push("tv");
+        url.query_pairs_mut().extend_pairs(query);
+        let req = Request::new(Method::GET, url);
+        self.client.request(req).await
+    }
+
+    async fn search_multi(&self, query: &str) -> Result<TmdbSearch<TmdbFindMultiResult>, AppError> {
+        let query = [("query", query)];
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("search")
+            .push("multi");
         url.query_pairs_mut().extend_pairs(query);
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
@@ -122,7 +140,7 @@ impl TmdbApi {
         &self,
         tmdb_show_id: usize,
         season: usize,
-    ) -> anyhow::Result<TmdbShowSeason> {
+    ) -> Result<TmdbShowSeason, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -143,7 +161,7 @@ impl TmdbApi {
         tmdb_show_id: usize,
         season: usize,
         episode: usize,
-    ) -> anyhow::Result<TmdbSeasonEpisode> {
+    ) -> Result<TmdbSeasonEpisode, AppError> {
         //FIX: case when episode cant be found by metadata provider while we have its siblings in
         //cache
         if let Some(cache_episode) = self.get_from_cache(tmdb_show_id, season, episode) {
@@ -158,10 +176,64 @@ impl TmdbApi {
             let response = self.tv_show_season(tmdb_show_id, season).await?;
             self.update_cache(tmdb_show_id, season, response.episodes);
             self.get_from_cache(tmdb_show_id, season, episode)
-                .ok_or(anyhow::anyhow!(
-                    "episode does not exist in metadata provider"
-                ))
+                .ok_or(AppError::not_found("Could not found episode in cache"))
         }
+    }
+
+    pub async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut().unwrap().push("find").push(imdb_id);
+        url.query_pairs_mut()
+            .append_pair("external_source", "imdb_id");
+        let req = Request::new(Method::GET, url);
+        let res = self.client.request(req).await?;
+        Ok(res)
+    }
+
+    pub async fn movie_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("movie")
+            .push(&id.to_string())
+            .push("external_ids");
+        let req = Request::new(Method::GET, url);
+        let res = self.client.request(req).await?;
+        Ok(res)
+    }
+
+    pub async fn show_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("tv")
+            .push(&id.to_string())
+            .push("external_ids");
+        let req = Request::new(Method::GET, url);
+        let res = self.client.request(req).await?;
+        Ok(res)
+    }
+
+    pub async fn movie_details(&self, movie_id: usize) -> Result<TmdbMovieDetails, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("movie")
+            .push(&movie_id.to_string());
+        let req = Request::new(Method::GET, url);
+        let res = self.client.request(req).await?;
+        Ok(res)
+    }
+
+    pub async fn show_details(&self, show_id: usize) -> Result<TmdbShowDetails, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("tv")
+            .push(&show_id.to_string());
+        let req = Request::new(Method::GET, url);
+        let res = self.client.request(req).await?;
+        Ok(res)
     }
 
     fn update_cache(&self, tmdb_show_id: usize, season: usize, episodes: Vec<TmdbSeasonEpisode>) {
@@ -201,15 +273,13 @@ impl Into<MovieMetadata> for TmdbSearchMovieResult {
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
         MovieMetadata {
-            metadata_id: Some(self.id.to_string()),
-            metadata_provider: "tmdb",
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            rating: self.vote_average,
-            plot: self.overview,
-            release_date: self.first_air_date,
-            language: self.original_language,
-            title: self.original_title,
+            plot: Some(self.overview),
+            release_date: Some(self.release_date),
+            title: self.title,
         }
     }
 }
@@ -224,15 +294,14 @@ impl Into<ShowMetadata> for TmdbSearchShowResult {
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
 
         ShowMetadata {
-            metadata_id: Some(self.id.to_string()),
-            metadata_provider: "tmdb",
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            rating: self.vote_average,
-            plot: self.overview,
-            release_date: self.first_air_date,
-            language: self.original_language,
+            plot: Some(self.overview),
+            release_date: Some(self.first_air_date),
             title: self.name,
+            ..Default::default()
         }
     }
 }
@@ -243,48 +312,41 @@ impl Into<SeasonMetadata> for TmdbShowSeason {
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         SeasonMetadata {
-            metadata_id: Some(self.id.to_string()),
-            metadata_provider: "tmdb",
-            release_date: self.air_date,
-            episodes_amount: self.episodes.len(),
-            title: self.name,
-            plot: self.overview,
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            release_date: Some(self.air_date),
+            plot: Some(self.overview),
+            episodes: self.episodes.into_iter().map(|e| e.into()).collect(),
             poster,
             number: self.season_number,
-            rating: self.vote_average,
         }
     }
 }
 
 impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
     fn into(self) -> EpisodeMetadata {
-        let poster = TmdbImage::new(&self.still_path, PosterSizes::W342);
+        let poster = self
+            .still_path
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         EpisodeMetadata {
-            metadata_id: Some(self.id.to_string()),
-            metadata_provider: "tmdb",
-            release_date: self.air_date,
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            release_date: Some(self.air_date),
             number: self.episode_number,
             title: self.name,
-            plot: self.overview,
+            runtime: self.runtime.map(|t| Duration::from_mins(t as u64)),
+            plot: Some(self.overview),
             season_number: self.season_number,
-            poster: poster.into(),
-            rating: self.vote_average,
+            poster,
         }
     }
 }
 
+#[axum::async_trait]
 impl MovieMetadataProvider for TmdbApi {
-    async fn movie(
-        &self,
-        movie: &LibraryFile<MovieIdentifier>,
-    ) -> Result<MovieMetadata, anyhow::Error> {
-        let movies = self.search_movie(&movie.identifier.title).await?;
-        movies
-            .results
-            .into_iter()
-            .next()
-            .ok_or(anyhow::anyhow!("results are empty"))
-            .map(|s| s.into())
+    async fn movie(&self, metadata_id: &str) -> Result<MovieMetadata, AppError> {
+        let movie = self.movie_details(metadata_id.parse()?).await?;
+        Ok(movie.into())
     }
 
     fn provider_identifier(&self) -> &'static str {
@@ -292,66 +354,19 @@ impl MovieMetadataProvider for TmdbApi {
     }
 }
 
+#[axum::async_trait]
 impl ShowMetadataProvider for TmdbApi {
-    async fn show(
-        &self,
-        show: &LibraryFile<ShowIdentifier>,
-    ) -> Result<ShowMetadata, anyhow::Error> {
-        let contains = |parts: &Vec<&str>, name: &str| parts.iter().any(|p| name.contains(p));
-        let shows = self.search_tv_show(&show.identifier.title).await?;
-        for result in shows.results.iter().take(5) {
-            let name = result.original_name.to_lowercase();
-            let name_parts: Vec<&str> = name.split_whitespace().collect();
-            // basic check
-            if contains(&name_parts, &show.identifier.title) {
-                return Ok(result.clone().into());
-            }
-            tracing::debug!(
-                "Show name ({}) does not contain local name ({}). Doing metadata check",
-                name,
-                show.identifier.title
-            );
-
-            // metadata title check
-            let metadata_title = show.source.metadata_title().to_lowercase();
-            if contains(&name_parts, &metadata_title) {
-                return Ok(result.clone().into());
-            }
-
-            tracing::debug!(
-                "Show name does not contain file metadata title ({}). Doing duration check",
-                show.identifier.title
-            );
-
-            // duration check
-            let duration = show.source.origin.duration();
-            let duration_match = self
-                .tv_show_episode(
-                    result.id,
-                    show.identifier.season.into(),
-                    show.identifier.episode.into(),
-                )
-                .await
-                .map_or(false, |e| {
-                    let threshold = time::Duration::minutes(2);
-                    let local_duration: time::Duration = duration.try_into().unwrap();
-                    let tmdb_duration = time::Duration::minutes(e.runtime as i64);
-                    let difference = (local_duration - tmdb_duration).abs();
-                    difference <= threshold
-                });
-            if duration_match {
-                return Ok(result.clone().into());
-            }
-        }
-        tracing::warn!("Failed to verify match for {}", show.identifier.title);
-        Err(anyhow::anyhow!("failed to find show"))
+    async fn show(&self, metadata_show_id: &str) -> Result<ShowMetadata, AppError> {
+        self.show_details(metadata_show_id.parse()?)
+            .await
+            .map(|r| r.into())
     }
 
     async fn season(
         &self,
         metadata_show_id: &str,
         season: usize,
-    ) -> Result<SeasonMetadata, anyhow::Error> {
+    ) -> Result<SeasonMetadata, AppError> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_season(show_id, season).await.map(|s| s.into())
     }
@@ -361,7 +376,7 @@ impl ShowMetadataProvider for TmdbApi {
         metadata_show_id: &str,
         season: usize,
         episode: usize,
-    ) -> Result<EpisodeMetadata, anyhow::Error> {
+    ) -> Result<EpisodeMetadata, AppError> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_episode(show_id, season, episode)
             .await
@@ -373,7 +388,255 @@ impl ShowMetadataProvider for TmdbApi {
     }
 }
 
+#[axum::async_trait]
+impl DiscoverMetadataProvider for TmdbApi {
+    async fn multi_search(&self, query: &str) -> Result<Vec<MetadataSearchResult>, AppError> {
+        let content = self.search_multi(query).await?;
+        Ok(content
+            .results
+            .into_iter()
+            .filter_map(|x| x.try_into().ok())
+            .collect())
+    }
+
+    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError> {
+        let shows = self.search_tv_show(query).await?;
+        Ok(shows.results.into_iter().map(|x| x.into()).collect())
+    }
+
+    async fn movie_search(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError> {
+        let content = self.search_movie(query).await?;
+        Ok(content.results.into_iter().map(|x| x.into()).collect())
+    }
+
+    async fn external_ids(
+        &self,
+        content_id: &str,
+        content_hint: ContentType,
+    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+        let id = content_id.parse()?;
+
+        let ids = match content_hint {
+            ContentType::Movie => self.movie_external_ids(id).await,
+            ContentType::Show => self.show_external_ids(id).await,
+        }?;
+        let mut out = Vec::new();
+
+        if let Some(tvdb_id) = ids.tvdb_id {
+            out.push(ExternalIdMetadata {
+                provider: MetadataProvider::Tvdb,
+                id: tvdb_id.to_string(),
+            });
+        }
+        if let Some(imdb_id) = ids.imdb_id {
+            out.push(ExternalIdMetadata {
+                provider: MetadataProvider::Imdb,
+                id: imdb_id,
+            });
+        }
+
+        Ok(out)
+    }
+
+    fn provider_identifier(&self) -> &'static str {
+        "tmdb"
+    }
+}
+
+impl Into<MovieMetadata> for TmdbMovieDetails {
+    fn into(self) -> MovieMetadata {
+        let poster = self
+            .poster_path
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+        let backdrop = self
+            .backdrop_path
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+        MovieMetadata {
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            poster,
+            backdrop,
+            plot: Some(self.overview),
+            release_date: Some(self.release_date),
+            title: self.title,
+        }
+    }
+}
+
+impl Into<ShowMetadata> for TmdbShowDetails {
+    fn into(self) -> ShowMetadata {
+        let poster = self
+            .poster_path
+            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+        let backdrop = self
+            .backdrop_path
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+        ShowMetadata {
+            metadata_id: self.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            poster,
+            backdrop,
+            plot: Some(self.overview),
+            release_date: self.first_air_date,
+            title: self.name,
+            seasons: Some((1..=self.number_of_seasons).collect()),
+            episodes_amount: Some(self.number_of_episodes),
+        }
+    }
+}
+
+impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
+    type Error = anyhow::Error;
+    fn try_into(self) -> Result<MetadataSearchResult, Self::Error> {
+        let title;
+        let poster;
+        let tmdb_id;
+        let plot;
+        let content_type;
+        match self {
+            Self::Movie(movie) => {
+                title = movie.title;
+                poster = movie
+                    .poster_path
+                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::W342).url));
+                tmdb_id = movie.id;
+                plot = movie.overview;
+                content_type = ContentType::Movie;
+            }
+            Self::Show(show) => {
+                title = show.name;
+                poster = show
+                    .poster_path
+                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::W342).url));
+                tmdb_id = show.id;
+                plot = show.overview;
+                content_type = ContentType::Show;
+            }
+            Self::Episode(_) => return Err(anyhow!("Episode is not implemented")),
+            Self::Person(_) => return Err(anyhow!("Person is not implemented")),
+            Self::Other {} => return Err(anyhow!("Other is not implemented")),
+        };
+        Ok(MetadataSearchResult {
+            title,
+            poster,
+            plot: Some(plot),
+            metadata_id: tmdb_id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            content_type,
+        })
+    }
+}
+
+fn parse_tmdb_date(input: &str) -> anyhow::Result<OffsetDateTime> {
+    use time::format_description::parse_borrowed;
+    let parsed = parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
+    let date = Date::parse(input, &parsed)?;
+    Ok(OffsetDateTime::new_utc(date, time::Time::MIDNIGHT))
+}
+
 // Types
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TmdbFindByIdResult {
+    pub movie_results: Vec<TmdbSearchMovieResult>,
+    pub tv_results: Vec<TmdbSearchShowResult>,
+}
+
+// possible bug: media_type field is not checked. if semantics of different content types are the same
+// wrong content type might be selected
+// consider manual deserialize implementation
+#[derive(Deserialize, Debug, Clone)]
+#[serde(untagged)]
+pub enum TmdbFindMultiResult {
+    Movie(TmdbSearchMovieResult),
+    Show(TmdbSearchShowResult),
+    Person(TmdbPerson),
+    Episode(TmdbSeasonEpisode),
+    Other {},
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbExternalIds {
+    pub id: Option<usize>,
+    pub imdb_id: Option<String>,
+    pub freebase_mid: Option<String>,
+    pub freebase_id: Option<String>,
+    pub tvdb_id: Option<usize>,
+    pub tvrage_id: Option<usize>,
+    pub wikidata_id: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbShowDetails {
+    pub adult: bool,
+    pub backdrop_path: Option<String>,
+    pub first_air_date: Option<String>,
+    pub genres: Option<Vec<TmdbGenre>>,
+    pub id: usize,
+    pub in_production: bool,
+    pub languages: Option<Vec<String>>,
+    pub last_air_date: Option<String>,
+    pub last_episode_to_air: Option<TmdbEpisodeToAir>,
+    pub name: String,
+    pub next_episode_to_air: Option<TmdbEpisodeToAir>,
+    pub number_of_episodes: usize,
+    pub number_of_seasons: usize,
+    pub origin_country: Option<Vec<String>>,
+    pub original_language: Option<String>,
+    pub original_name: String,
+    pub overview: String,
+    pub popularity: f64,
+    pub poster_path: Option<String>,
+    pub tagline: Option<String>,
+    pub vote_average: f64,
+    pub vote_count: usize,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbMovieDetails {
+    pub adult: bool,
+    pub backdrop_path: Option<String>,
+    pub budget: Option<usize>,
+    pub genres: Option<Vec<TmdbGenre>>,
+    pub homepage: Option<String>,
+    pub id: usize,
+    pub imdb_id: Option<String>,
+    pub original_language: Option<String>,
+    pub original_title: Option<String>,
+    pub overview: String,
+    pub popularity: f64,
+    pub poster_path: Option<String>,
+    pub release_date: String,
+    pub revenue: Option<isize>,
+    pub runtime: Option<usize>,
+    pub status: Option<String>,
+    pub tagline: Option<String>,
+    pub title: String,
+    pub vote_average: f64,
+    pub vote_count: usize,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbGenre {
+    pub id: usize,
+    pub name: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbEpisodeToAir {
+    pub id: usize,
+    pub name: String,
+    pub overview: String,
+    pub vote_average: f64,
+    pub vote_count: usize,
+    pub air_date: String,
+    pub episode_number: usize,
+    pub episode_type: Option<String>,
+    pub runtime: Option<usize>,
+    pub season_number: usize,
+    pub show_id: usize,
+    pub still_path: Option<String>,
+}
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbCrew {
@@ -414,9 +677,9 @@ pub struct TmdbSeasonEpisode {
     pub id: usize,
     pub production_code: Option<String>,
     /// Duration in minutes
-    pub runtime: usize,
+    pub runtime: Option<usize>,
     pub season_number: usize,
-    pub still_path: String,
+    pub still_path: Option<String>,
     pub vote_average: f64,
     pub vote_count: usize,
 }
@@ -466,11 +729,16 @@ pub struct TmdbSearchMovieResult {
     pub id: usize,
     pub vote_average: f64,
     pub overview: String,
-    pub first_air_date: String,
-    pub origin_country: Vec<String>,
+    pub release_date: String,
+    pub origin_country: Option<Vec<String>>,
     pub genre_ids: Vec<usize>,
     pub original_language: String,
     pub vote_count: usize,
-    pub name: String,
-    pub original_title: String,
+    pub title: String,
+    pub original_title: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct TmdbPerson {
+    // todo
 }
