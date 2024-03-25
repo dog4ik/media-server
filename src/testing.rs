@@ -16,7 +16,7 @@ pub struct TestResource {
 }
 
 impl TestResource {
-    pub fn new(clean_on_drop: bool) -> Self {
+    pub async fn new(clean_on_drop: bool) -> Self {
         let test_folder: PathBuf = "test-dir".into();
         let temp_dir = generate_temp_dir_path();
         fs::create_dir_all(&temp_dir).unwrap();
@@ -31,8 +31,8 @@ impl TestResource {
         let movie_resource_path = resource_path.join("movie");
         dbg!(&show_resource_path, &movie_resource_path);
 
-        utils::generate_resources(&show_resource_path).unwrap();
-        utils::generate_resources(&movie_resource_path).unwrap();
+        utils::generate_resources(&show_resource_path).await.unwrap();
+        utils::generate_resources(&movie_resource_path).await.unwrap();
 
         let show_file = LibraryFile {
             identifier: ShowIdentifier {
@@ -41,7 +41,7 @@ impl TestResource {
                 season: 1,
             },
             data_folder: show_data_folder.clone(),
-            source: Source::new(&show_video_path, &show_resource_path).unwrap(),
+            source: Source::new(&show_video_path, &show_resource_path).await.unwrap(),
         };
 
         let movie_file = LibraryFile {
@@ -50,7 +50,7 @@ impl TestResource {
                 title: "movie".into(),
             },
             data_folder: show_data_folder,
-            source: Source::new(show_video_path, movie_resource_path).unwrap(),
+            source: Source::new(show_video_path, movie_resource_path).await.unwrap(),
         };
         Self {
             temp_dir,
