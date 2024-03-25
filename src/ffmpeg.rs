@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use std::process::{Command, ExitStatus, Stdio};
+use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
 use std::{path::Path, str::from_utf8};
@@ -91,7 +91,7 @@ pub struct FFprobeFormat {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FormatTags {
-    pub title: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -347,7 +347,8 @@ impl FromStr for H264Preset {
     }
 }
 
-pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Error> {
+pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Error> {
+    use tokio::process::Command;
     let path = path.as_ref();
     tracing::trace!(
         "Getting metadata for a file: {}",
@@ -365,6 +366,7 @@ pub fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Err
             path.to_str().unwrap(),
         ])
         .output()
+        .await
         .unwrap();
     let output = from_utf8(&output.stdout)?;
     let metadata: FFprobeOutput = serde_json::from_str(output)?;
