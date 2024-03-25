@@ -1,30 +1,31 @@
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr, sync::Mutex};
 
+use anyhow::anyhow;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
-use tokio::{fs, sync::Semaphore};
+use tokio::{fs, task::JoinSet};
 
 use crate::{
     config::ServerConfiguration,
-    db::{Db, DbSubtitles},
-    library::{
-        movie::MovieIdentifier, show::ShowIdentifier, Library, LibraryFile, Source,
-        TranscodePayload, Video,
+    db::{Db, DbExternalId, DbSubtitles},
+    library::{movie::MovieIdentifier, Library, LibraryFile, Source, TranscodePayload, Video},
+    metadata::{
+        tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
+        MetadataProvider, MetadataProvidersStack, ShowMetadataProvider,
     },
-    metadata::{MovieMetadataProvider, ShowMetadataProvider},
     progress::{TaskError, TaskKind, TaskResource},
+    torrent_index::tpb::TpbApi,
     utils,
 };
 
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub library: &'static Mutex<Library>,
-    pub db: Db,
+    pub db: &'static Db,
     pub tasks: TaskResource,
     pub configuration: &'static Mutex<ServerConfiguration>,
+    pub tmdb_api: &'static TmdbApi,
+    pub tpb_api: &'static TpbApi,
+    pub providers_stack: &'static MetadataProvidersStack,
 }
 
 #[derive(Debug, Clone)]
@@ -37,8 +38,19 @@ pub struct AppError {
 pub enum AppErrorKind {
     InternalError,
     NotFound,
-    Dubplicate,
+    Duplicate,
     BadRequest,
+}
+
+impl Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.kind {
+            AppErrorKind::InternalError => write!(f, "Internal Error: {}", self.message),
+            AppErrorKind::NotFound => write!(f, "Not Found Error: {}", self.message),
+            AppErrorKind::Duplicate => write!(f, "Dublicate Error: {}", self.message),
+            AppErrorKind::BadRequest => write!(f, "Bad Request: {}", self.message),
+        }
+    }
 }
 
 impl Into<StatusCode> for AppErrorKind {
@@ -46,20 +58,56 @@ impl Into<StatusCode> for AppErrorKind {
         match self {
             AppErrorKind::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             AppErrorKind::NotFound => StatusCode::NOT_FOUND,
-            AppErrorKind::Dubplicate => StatusCode::BAD_REQUEST,
+            AppErrorKind::Duplicate => StatusCode::BAD_REQUEST,
             AppErrorKind::BadRequest => StatusCode::BAD_REQUEST,
         }
     }
 }
 
-impl<E> From<E> for AppError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
         Self {
-            message: err.into().to_string(),
+            message: err.to_string(),
             kind: AppErrorKind::InternalError,
+        }
+    }
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(value: sqlx::Error) -> Self {
+        match value {
+            sqlx::Error::RowNotFound => AppError {
+                message: format!("Database row not found"),
+                kind: AppErrorKind::NotFound,
+            },
+            rest => AppError {
+                message: format!("{}", rest),
+                kind: AppErrorKind::InternalError,
+            },
+        }
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        match value.kind() {
+            std::io::ErrorKind::NotFound => AppError {
+                message: value.to_string(),
+                kind: AppErrorKind::NotFound,
+            },
+            _ => AppError {
+                message: value.to_string(),
+                kind: AppErrorKind::InternalError,
+            },
+        }
+    }
+}
+
+impl From<ParseIntError> for AppError {
+    fn from(value: ParseIntError) -> Self {
+        AppError {
+            message: value.to_string(),
+            kind: AppErrorKind::BadRequest,
         }
     }
 }
@@ -141,26 +189,34 @@ impl AppState {
         Ok(())
     }
 
-    pub async fn add_show(
+    pub async fn add_show<T>(
         &self,
         video_path: PathBuf,
-        metadata_provider: &impl ShowMetadataProvider,
-    ) -> Result<(), AppError> {
-        let show = {
+        metadata_provider: &T,
+    ) -> Result<(), AppError>
+    where
+        T: DiscoverMetadataProvider + ShowMetadataProvider,
+    {
+        let show = LibraryFile::from_path(video_path).await?;
+        {
             let mut library = self.library.lock().unwrap();
-            library.add_show(video_path)?
-        };
-        self.handle_show(show, metadata_provider).await
+            library.add_show(show);
+        }
+        // self.handle_show(show, metadata_provider).await
+        todo!();
+        Ok(())
     }
 
     pub async fn add_movie(
         &self,
         video_path: PathBuf,
-        metadata_provider: &impl MovieMetadataProvider,
+        metadata_provider: &impl DiscoverMetadataProvider,
     ) -> Result<(), AppError> {
-        let movie = {
+        let movie = LibraryFile::from_path(video_path).await?;
+        // the heck is going on here
+        {
             let mut library = self.library.lock().unwrap();
-            library.add_movie(video_path)?
+            library.add_movie(movie.clone());
         };
         self.handle_movie(movie, metadata_provider).await
     }
@@ -226,7 +282,9 @@ impl AppState {
         self.tasks
             .observe_ffmpeg_task(job, TaskKind::Transcode)
             .await?;
-        let variant_video = Video::from_path(output_path).expect("file to be done transcoding");
+        let variant_video = Video::from_path(output_path)
+            .await
+            .expect("file to be done transcoding");
 
         let mut library = self.library.lock().unwrap();
         library.add_variant(source.source_path(), variant_video);
@@ -259,19 +317,10 @@ impl AppState {
     }
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
-        // TODO: Custom metadata provider
-        use crate::metadata::tmdb_api::TmdbApi;
-        let tmdb_api = TmdbApi::new(
-            std::env::var("TMDB_TOKEN")
-                .map_err(|_| AppError::internal_error("tmdb token not found"))?,
-        );
-
         let local_episodes = {
             let library = self.library.lock().unwrap();
             library.shows.clone()
         };
-
-        let metadata_provider = Arc::new(tmdb_api);
 
         let db_episodes_videos = sqlx::query!(
             r#"SELECT videos.*, episodes.id as "episode_id!" FROM videos
@@ -279,209 +328,119 @@ impl AppState {
         )
         .fetch_all(&self.db.pool)
         .await?;
-        let mut common_paths: HashSet<&str> = HashSet::new();
 
-        let local_episodes: HashMap<String, &LibraryFile<ShowIdentifier>> = local_episodes
+        let missing_episodes: Vec<_> = db_episodes_videos
             .iter()
-            .map(|ep| (ep.source.source_path().to_string_lossy().to_string(), ep))
+            .filter(|d| {
+                local_episodes
+                    .iter()
+                    .find(|l| d.path == l.source.source_path().to_string_lossy().to_string())
+                    .is_none()
+            })
             .collect();
 
-        //TODO: add hashsum check
-        for db_episode_video in &db_episodes_videos {
-            if let Some(local_eqivalent) = local_episodes.get(&db_episode_video.path) {
-                if local_eqivalent.source.origin.file_size() == db_episode_video.size as u64 {
-                    common_paths.insert(db_episode_video.path.as_str());
-                }
-            }
-        }
+        let mut new: Vec<_> = local_episodes
+            .into_iter()
+            .filter(|l| {
+                db_episodes_videos
+                    .iter()
+                    .find(|d| d.path == l.source.source_path().to_string_lossy().to_string())
+                    .is_none()
+            })
+            .collect();
+        new.sort_unstable_by_key(|x| x.identifier.title.clone());
 
-        // clean up variants and resources
+        let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
 
-        // clean up db
-        for db_episode_video in &db_episodes_videos {
-            if !common_paths.contains(db_episode_video.path.as_str()) {
-                tracing::info!("Removing not existing episode: {}", db_episode_video.path);
-                self.db.remove_episode(db_episode_video.episode_id).await?;
-            }
-        }
+        for mut new_episodes in new
+            .chunk_by(|a, b| a.identifier.title == b.identifier.title)
+            .map(Vec::from)
+        {
+            new_episodes.sort_unstable_by_key(|x| x.identifier.season);
+            let db = self.db.clone();
+            let providers_stack = self.providers_stack;
+            let title = new_episodes.first().unwrap().identifier.title.clone();
+            let discover_providers = providers_stack.discover_providers();
+            let show_providers = providers_stack.show_providers();
+            show_scan_handles.spawn(async move {
+                let local_id = handle_series(&title, &db, discover_providers).await?;
+                let external_ids = db.external_ids(&local_id, ContentType::Show).await.unwrap();
+                for new_seasons_episodes in new_episodes
+                    .chunk_by(|a, b| a.identifier.season == b.identifier.season)
+                    .map(Vec::from)
+                {
+                    let season = new_seasons_episodes.first().unwrap().identifier.season;
+                    let local_season_id = handle_season(
+                        &local_id,
+                        external_ids.clone(),
+                        season.into(),
+                        &db,
+                        &show_providers,
+                    )
+                    .await
+                    .unwrap();
 
-        let mut handles = Vec::new();
-        let show_semaphore = Arc::new(Semaphore::new(10));
-
-        for (local_ep_path, local_ep) in local_episodes {
-            // skip existing media
-            if common_paths.contains(local_ep_path.as_str()) {
-                continue;
-            }
-
-            let local_ep = local_ep.clone();
-            let metadata_provider = metadata_provider.clone();
-            let app_state = self.clone();
-            let semaphore = show_semaphore.clone();
-            let handle = tokio::spawn(async move {
-                let permit = semaphore.acquire().await.unwrap();
-                let task_id = app_state.tasks.start_task(
-                    local_ep.source.source_path().to_path_buf(),
-                    TaskKind::Scan,
-                    None,
-                );
-                if let Ok(task_id) = task_id {
-                    let scan_result = app_state.handle_show(local_ep, &*metadata_provider).await;
-                    match scan_result {
-                        Err(_err) => {
-                            app_state.tasks.error_task(task_id);
+                    for episode in new_seasons_episodes {
+                        dbg!(episode.source.source_path());
+                        let db_video = episode.source.into_db_video();
+                        let Ok(video_id) = db.insert_video(db_video).await else {
+                            continue;
+                        };
+                        if let Err(_) = handle_episode(
+                            &local_id,
+                            external_ids.clone(),
+                            video_id,
+                            local_season_id,
+                            season.into(),
+                            episode.identifier.episode.into(),
+                            &db,
+                            &show_providers,
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "Failed to fetch metadata for episode: {}",
+                                episode.source.source_path().display()
+                            );
                         }
-                        Ok(_) => {
-                            app_state.tasks.finish_task(task_id);
-                        }
-                    };
+                    }
                 }
-                drop(permit);
+
+                Ok(())
             });
-            handles.push(handle);
         }
 
-        for handle in handles {
-            let _ = handle.await;
+        for missing_episode in missing_episodes {
+            let _ = self.db.remove_episode(missing_episode.id).await;
+        }
+
+        while let Some(result) = show_scan_handles.join_next().await {
+            match result {
+                Ok(Err(e)) => tracing::error!("Reconciliation task failed with err {}", e),
+                Err(_) => tracing::error!("Reconciliation task paniced"),
+                Ok(Ok(res)) => tracing::trace!("Joined reconciliation task"),
+            }
         }
 
         tracing::info!("Finished library reconciliation");
         Ok(())
     }
 
-    pub async fn handle_show(
-        &self,
-        show: LibraryFile<ShowIdentifier>,
-        metadata_provider: &impl ShowMetadataProvider,
-    ) -> Result<(), AppError> {
-        // BUG: what happens if local title changes? Duplicate shows in db.
-        // We'll be fine if we avoid dublicate and insert video with different title.
-        // After failure it will lookup title in provider and match it again
-        let resources_folder = show.source.resources_folder_name();
-        let show_query = sqlx::query!(
-            r#"SELECT shows.id, shows.metadata_id as "metadata_id!", shows.metadata_provider FROM episodes 
-                    JOIN videos ON videos.id = episodes.video_id
-                    JOIN seasons ON seasons.id = episodes.season_id
-                    JOIN shows ON shows.id = seasons.show_id
-                    WHERE videos.resources_folder = ?;"#,
-            resources_folder
-        )
-        .fetch_one(&self.db.pool)
-        .await
-        .map(|x| (x.id, x.metadata_id, x.metadata_provider));
-
-        let (show_id, show_metadata_id, _show_metadata_provider) = match show_query {
-            Ok(data) => data,
-            Err(e) => match e {
-                sqlx::Error::RowNotFound => {
-                    tracing::debug!(
-                        "Show {} is not found in local DB, fetching metadata from {}",
-                        show.identifier.title,
-                        metadata_provider.provider_identifier()
-                    );
-                    let metadata = metadata_provider.show(&show).await.map_err(|err| {
-                        tracing::error!(
-                            "Metadata lookup failed for file with local title: {}",
-                            show.identifier.title
-                        );
-                        err
-                    })?;
-                    let provider = metadata.metadata_provider.to_string();
-                    let metadata_id = metadata.metadata_id.clone().unwrap();
-                    let db_show = metadata.into_db_show().await;
-                    (self.db.insert_show(db_show).await?, metadata_id, provider)
-                }
-                _ => {
-                    tracing::error!("Unexpected database error when fetching show: {}", e);
-                    return Err(e)?;
-                }
-            },
-        };
-
-        let season_id = sqlx::query!(
-            "SELECT id FROM seasons WHERE show_id = ? AND number = ?",
-            show_id,
-            show.identifier.season
-        )
-        .fetch_one(&self.db.pool)
-        .await
-        .map(|x| x.id);
-
-        let season_id = match season_id {
-            Ok(season_id) => season_id,
-            Err(e) => match e {
-                sqlx::Error::RowNotFound => {
-                    tracing::debug!(
-                        "Season {} of show {} is not found in local DB, fetching metadata from {}",
-                        show.identifier.season,
-                        show.identifier.title,
-                        metadata_provider.provider_identifier()
-                    );
-                    let metadata = metadata_provider
-                        .season(&show_metadata_id, show.identifier.season.into())
-                        .await?;
-                    let db_season = metadata.into_db_season(show_id).await;
-                    self.db.insert_season(db_season).await?
-                }
-                _ => {
-                    tracing::error!("Unexpected database error when fetching season: {}", e);
-                    return Err(e)?;
-                }
-            },
-        };
-
-        let episode_id = sqlx::query!(
-            "SELECT id FROM episodes WHERE season_id = ? AND number = ?;",
-            season_id,
-            show.identifier.episode
-        )
-        .fetch_one(&self.db.pool)
-        .await
-        .map(|x| x.id);
-
-        if let Err(e) = episode_id {
-            if let sqlx::Error::RowNotFound = e {
-                tracing::debug!(
-                    "Episode {} of show {}(season {}) is not found in local DB, fetching metadata from {}",
-                    show.identifier.episode,
-                    show.identifier.title,
-                    show.identifier.season,
-                    metadata_provider.provider_identifier()
-                );
-                let metadata = metadata_provider
-                    .episode(
-                        &show_metadata_id,
-                        show.identifier.season as usize,
-                        show.identifier.episode as usize,
-                    )
-                    .await?;
-                let db_video = show.source.into_db_video();
-                let video_id = self.db.insert_video(db_video).await?;
-                let db_episode = metadata.into_db_episode(season_id, video_id).await;
-                self.db.insert_episode(db_episode).await?;
-            } else {
-                tracing::error!("Unexpected database error when fetching episode: {}", e);
-                return Err(e)?;
-            }
-        };
-        Ok(())
-    }
-
     pub async fn handle_movie(
         &self,
         movie: LibraryFile<MovieIdentifier>,
-        metadata_provider: &impl MovieMetadataProvider,
+        metadata_provider: &impl DiscoverMetadataProvider,
     ) -> Result<(), AppError> {
         let resources_folder = movie.source.resources_folder_name();
         let movie_query = sqlx::query!(
-            r#"SELECT movies.id as "id!", movies.metadata_id, movies.metadata_provider FROM movies 
+            r#"SELECT movies.id as "id!" FROM movies 
                     JOIN videos ON videos.id = movies.video_id
                     WHERE videos.resources_folder = ?;"#,
             resources_folder
         )
         .fetch_one(&self.db.pool)
         .await
-        .map(|x| (x.id, x.metadata_id.unwrap(), x.metadata_provider));
+        .map(|x| (x.id));
 
         match movie_query {
             Err(e) => {
@@ -491,11 +450,17 @@ impl AppState {
                         movie.identifier.title,
                         metadata_provider.provider_identifier()
                     );
-                    let metadata = metadata_provider.movie(&movie).await.unwrap();
+                    let metadata = metadata_provider
+                        .movie_search(&movie.identifier.title)
+                        .await
+                        .unwrap()
+                        .into_iter()
+                        .next()
+                        .ok_or(anyhow!("results are empty"))?;
                     let db_video = movie.source.into_db_video();
                     let video_id = self.db.insert_video(db_video).await?;
-                    let provider = metadata.metadata_provider;
-                    let metadata_id = metadata.metadata_id.clone().unwrap();
+                    let provider = metadata.metadata_provider.clone();
+                    let metadata_id = metadata.metadata_id.clone();
                     let db_movie = metadata.into_db_movie(video_id).await;
                     (self.db.insert_movie(db_movie).await?, metadata_id, provider);
                 } else {
@@ -508,6 +473,110 @@ impl AppState {
 
         Ok(())
     }
+}
+
+async fn handle_series(
+    title: &str,
+    db: &Db,
+    providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
+) -> Result<String, AppError> {
+    let shows = db.search_show(&title).await.unwrap();
+
+    if shows.is_empty() {
+        for provider in providers {
+            if let Ok(show) = provider.show_search(&title).await {
+                let Some(first) = show.into_iter().next() else {
+                    continue;
+                };
+                let external_ids = provider
+                    .external_ids(&first.metadata_id, ContentType::Show)
+                    .await?;
+                let metadata_id = first.metadata_id.clone();
+                let metadata_provider = first.metadata_provider;
+                let local_id = db.insert_show(first.into_db_show().await).await.unwrap();
+                db.insert_external_id(DbExternalId {
+                    metadata_provider: metadata_provider.to_string(),
+                    metadata_id: metadata_id.clone(),
+                    show_id: Some(local_id),
+                    is_prime: true.into(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+
+                for external_id in external_ids {
+                    let db_external_id = DbExternalId {
+                        metadata_provider: external_id.provider.to_string(),
+                        metadata_id: external_id.id,
+                        show_id: Some(local_id),
+                        is_prime: false.into(),
+                        ..Default::default()
+                    };
+                    let _ = db.insert_external_id(db_external_id).await;
+                }
+                return Ok(local_id.to_string());
+            }
+        }
+        return Err(AppError::not_found("providers could not find the show"));
+    }
+    let top_search = shows.into_iter().next().expect("shows not empty");
+    Ok(top_search.metadata_id)
+}
+
+async fn handle_season(
+    local_show_id: &str,
+    external_shows_ids: Vec<ExternalIdMetadata>,
+    season: usize,
+    db: &Db,
+    providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
+) -> anyhow::Result<i64> {
+    let Ok(local_season) = db.season(local_show_id, season).await else {
+        for provider in providers {
+            let p = MetadataProvider::from_str(provider.provider_identifier())
+                .expect("all providers are known");
+            if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
+                let Ok(season) = provider.season(&id.id, season).await else {
+                    continue;
+                };
+                let id = db
+                    .insert_season(season.into_db_season(local_show_id.parse().unwrap()).await)
+                    .await
+                    .unwrap();
+                return Ok(id);
+            }
+        }
+        return Err(anyhow!("all providers failed to find season"));
+    };
+    Ok(local_season.metadata_id.parse().unwrap())
+}
+
+async fn handle_episode(
+    local_show_id: &str,
+    external_shows_ids: Vec<ExternalIdMetadata>,
+    db_video_id: i64,
+    local_season_id: i64,
+    season: usize,
+    episode: usize,
+    db: &Db,
+    providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
+) -> anyhow::Result<()> {
+    let Ok(_) = db.episode(local_show_id, season, episode).await else {
+        for provider in providers {
+            let p = MetadataProvider::from_str(provider.provider_identifier())
+                .expect("all providers are known");
+            if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
+                let Ok(episode) = provider.episode(&id.id, season, episode).await else {
+                    continue;
+                };
+                db.insert_episode(episode.into_db_episode(local_season_id, db_video_id).await)
+                    .await
+                    .unwrap();
+                return Ok(());
+            }
+        }
+        return Err(anyhow!("all providers failed to find episode"));
+    };
+    Ok(())
 }
 
 impl FromRef<AppState> for &'static Mutex<Library> {
@@ -531,5 +600,23 @@ impl FromRef<AppState> for TaskResource {
 impl FromRef<AppState> for &'static Mutex<ServerConfiguration> {
     fn from_ref(app_state: &AppState) -> &'static Mutex<ServerConfiguration> {
         app_state.configuration
+    }
+}
+
+impl FromRef<AppState> for &'static TmdbApi {
+    fn from_ref(app_state: &AppState) -> &'static TmdbApi {
+        app_state.tmdb_api
+    }
+}
+
+impl FromRef<AppState> for &'static TpbApi {
+    fn from_ref(app_state: &AppState) -> &'static TpbApi {
+        app_state.tpb_api
+    }
+}
+
+impl FromRef<AppState> for &'static MetadataProvidersStack {
+    fn from_ref(app_state: &AppState) -> &'static MetadataProvidersStack {
+        app_state.providers_stack
     }
 }
