@@ -98,37 +98,40 @@ async fn main() {
         .layer(Extension(log_channel))
         .route("/summary", get(public_api::get_summary))
         .route("/api/watch", get(public_api::watch))
-        .route("/api/get_all_shows", get(public_api::get_all_shows))
+        .route("/api/local_shows", get(public_api::all_local_shows))
+        .route("/api/external_id/:id", get(public_api::external_id))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
-        .route("/api/get_show_by_id", get(public_api::get_show_by_id))
-        .route("/api/get_seasons", get(public_api::get_seasons))
-        .route("/api/get_season", get(public_api::get_season))
-        .route("/api/get_season_by_id", get(public_api::get_season_by_id))
-        .route("/api/get_episodes", get(public_api::get_episodes))
-        .route("/api/get_episode", get(public_api::get_episode))
-        .route("/api/get_episode_by_id", get(public_api::get_episode_by_id))
-        .route("/api/get_all_variants", get(public_api::get_all_variants))
-        .route("/api/get_video_by_id", get(public_api::get_video_by_id))
+        .route("/api/show/:show_id", get(public_api::get_show))
+        .route("/api/show/:show_id/:season", get(public_api::get_season))
+        .route(
+            "/api/show/:show_id/:season/:episode",
+            get(public_api::get_episode),
+        )
+        .route("/api/variants", get(public_api::get_all_variants))
+        .route("/api/video/:id", get(public_api::get_video_by_id))
+        .route("/api/contents_video/:id", get(public_api::contents_video))
+        .route("/api/search_torrent", get(public_api::search_torrent))
+        .route("/api/search_content", get(public_api::search_content))
         .route(
             "/admin/alter_show_metadata",
-            post(admin_api::alter_show_metadata),
+            put(admin_api::alter_show_metadata),
         )
         .route(
             "/admin/alter_season_metadata",
-            post(admin_api::alter_season_metadata),
+            put(admin_api::alter_season_metadata),
         )
         .route(
             "/admin/alter_episode_metadata",
-            post(admin_api::alter_episode_metadata),
+            put(admin_api::alter_episode_metadata),
         )
         .route(
             "/admin/alter_movie_metadata",
-            post(admin_api::alter_movie_metadata),
+            put(admin_api::alter_movie_metadata),
         )
         .route("/admin/latest_log", get(admin_api::latest_log))
         .route("/admin/progress", get(admin_api::progress))
-        .route("/admin/get_tasks", get(admin_api::get_tasks))
+        .route("/admin/tasks", get(admin_api::get_tasks))
         .route("/admin/mock_progress", post(admin_api::mock_progress))
         .route("/admin/cancel_task", post(admin_api::cancel_task))
         .route("/admin/scan", post(admin_api::reconciliate_lib))
