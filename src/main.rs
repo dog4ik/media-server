@@ -1,4 +1,4 @@
-use axum::routing::{delete, get, post};
+use axum::routing::{delete, get, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
@@ -6,8 +6,11 @@ use media_server::app_state::AppState;
 use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::{explore_folder, Library, MediaFolders};
+use media_server::metadata::tmdb_api::TmdbApi;
+use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api};
+use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -32,6 +35,7 @@ async fn main() {
     let db = Db::connect(&database_url)
         .await
         .expect("database to be found");
+    let db = Box::leak(Box::new(db));
 
     let args = Args::parse();
 
@@ -81,6 +85,19 @@ async fn main() {
     let library = Library::new(media_folders.clone(), shows, movies);
     let library = Box::leak(Box::new(Mutex::new(library)));
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
+    let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
+    let tmdb_api = Box::leak(Box::new(tmdb_api));
+    let tpb_api = TpbApi::new();
+    let tpb_api = Box::leak(Box::new(tpb_api));
+
+    let providers_stack = MetadataProvidersStack {
+        discover_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        show_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        movie_providers_stack: Mutex::new(vec![db, tmdb_api]),
+        torrent_indexes_stack: Mutex::new(vec![tpb_api]),
+    };
+
+    let providers_stack = Box::leak(Box::new(providers_stack));
 
     let tasks = TaskResource::new();
 
@@ -89,6 +106,9 @@ async fn main() {
         configuration,
         db,
         tasks,
+        tmdb_api,
+        tpb_api,
+        providers_stack,
     };
 
     monitor_library(app_state.clone(), media_folders).await;
@@ -98,37 +118,40 @@ async fn main() {
         .layer(Extension(log_channel))
         .route("/summary", get(public_api::get_summary))
         .route("/api/watch", get(public_api::watch))
-        .route("/api/get_all_shows", get(public_api::get_all_shows))
+        .route("/api/local_shows", get(public_api::all_local_shows))
+        .route("/api/external_id/:id", get(public_api::external_id))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
-        .route("/api/get_show_by_id", get(public_api::get_show_by_id))
-        .route("/api/get_seasons", get(public_api::get_seasons))
-        .route("/api/get_season", get(public_api::get_season))
-        .route("/api/get_season_by_id", get(public_api::get_season_by_id))
-        .route("/api/get_episodes", get(public_api::get_episodes))
-        .route("/api/get_episode", get(public_api::get_episode))
-        .route("/api/get_episode_by_id", get(public_api::get_episode_by_id))
-        .route("/api/get_all_variants", get(public_api::get_all_variants))
-        .route("/api/get_video_by_id", get(public_api::get_video_by_id))
+        .route("/api/show/:show_id", get(public_api::get_show))
+        .route("/api/show/:show_id/:season", get(public_api::get_season))
+        .route(
+            "/api/show/:show_id/:season/:episode",
+            get(public_api::get_episode),
+        )
+        .route("/api/variants", get(public_api::get_all_variants))
+        .route("/api/video/:id", get(public_api::get_video_by_id))
+        .route("/api/contents_video/:id", get(public_api::contents_video))
+        .route("/api/search_torrent", get(public_api::search_torrent))
+        .route("/api/search_content", get(public_api::search_content))
         .route(
             "/admin/alter_show_metadata",
-            post(admin_api::alter_show_metadata),
+            put(admin_api::alter_show_metadata),
         )
         .route(
             "/admin/alter_season_metadata",
-            post(admin_api::alter_season_metadata),
+            put(admin_api::alter_season_metadata),
         )
         .route(
             "/admin/alter_episode_metadata",
-            post(admin_api::alter_episode_metadata),
+            put(admin_api::alter_episode_metadata),
         )
         .route(
             "/admin/alter_movie_metadata",
-            post(admin_api::alter_movie_metadata),
+            put(admin_api::alter_movie_metadata),
         )
         .route("/admin/latest_log", get(admin_api::latest_log))
         .route("/admin/progress", get(admin_api::progress))
-        .route("/admin/get_tasks", get(admin_api::get_tasks))
+        .route("/admin/tasks", get(admin_api::get_tasks))
         .route("/admin/mock_progress", post(admin_api::mock_progress))
         .route("/admin/cancel_task", post(admin_api::cancel_task))
         .route("/admin/scan", post(admin_api::reconciliate_lib))

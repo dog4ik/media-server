@@ -1,5 +1,7 @@
 use serde::Deserialize;
 
+use crate::metadata::{ContentType, MetadataProvider};
+
 pub mod admin_api;
 pub mod content;
 pub mod public_api;
@@ -15,6 +17,21 @@ pub struct IdQuery {
 }
 
 #[derive(Deserialize)]
+pub struct SearchQuery {
+    pub search: String,
+}
+
+#[derive(Deserialize)]
+pub struct ContentTypeQuery {
+    pub content_type: ContentType,
+}
+
+#[derive(Deserialize)]
+pub struct ProviderQuery {
+    pub provider: MetadataProvider,
+}
+
+#[derive(Deserialize)]
 pub struct VariantQuery {
     pub variant: String,
 }
@@ -26,12 +43,12 @@ pub struct StringIdQuery {
 
 #[derive(Deserialize)]
 pub struct SeasonQuery {
-    pub season: i32,
+    pub season: usize,
 }
 
 #[derive(Deserialize)]
 pub struct EpisodeQuery {
-    pub episode: i32,
+    pub episode: usize,
 }
 
 #[derive(Deserialize)]
@@ -42,4 +59,9 @@ pub struct NumberQuery {
 #[derive(Deserialize)]
 pub struct LanguageQuery {
     pub lang: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct TakeParam {
+    pub take: Option<usize>,
 }

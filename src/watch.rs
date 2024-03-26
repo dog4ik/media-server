@@ -91,8 +91,7 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
 }
 
 pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> JoinHandle<()> {
-    let metadata_provider =
-        crate::metadata::tmdb_api::TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
+    let metadata_provider = app_state.tmdb_api;
     tokio::spawn(async move {
         let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
         while let Some(event) = rx.recv().await {
@@ -103,13 +102,13 @@ pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> Join
                             MediaType::Show => {
                                 let files_paths = flatten_path(&event.path).unwrap();
                                 for path in files_paths {
-                                    let _ = app_state.add_show(path, &metadata_provider).await;
+                                    let _ = app_state.add_show(path, metadata_provider).await;
                                 }
                             }
                             MediaType::Movie => {
                                 let files_paths = flatten_path(&event.path).unwrap();
                                 for path in files_paths {
-                                    let _ = app_state.add_movie(path, &metadata_provider).await;
+                                    let _ = app_state.add_movie(path, metadata_provider).await;
                                 }
                             }
                         };

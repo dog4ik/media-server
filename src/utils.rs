@@ -41,10 +41,10 @@ where
                 local_paths.push(path);
             }
         } else if path.is_dir() {
-            local_paths.append(walk_recursive(&path.to_path_buf(), filter_fn)?.as_mut());
+            local_paths.append(walk_recursive(&path, filter_fn)?.as_mut());
         }
     }
-    return Ok(local_paths);
+    Ok(local_paths)
 }
 
 pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> {
@@ -61,12 +61,13 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
     Ok(removed_files)
 }
 
-pub fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Error> {
+pub async fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Error> {
+    use tokio::fs;
     let resources_path = resources_path.as_ref();
-    fs::create_dir_all(resources_path.join("subs"))?;
-    fs::create_dir_all(resources_path.join("previews"))?;
-    fs::create_dir_all(resources_path.join("variants"))?;
-    fs::create_dir_all(resources_path.join("chapters"))?;
+    fs::create_dir_all(resources_path.join("subs")).await?;
+    fs::create_dir_all(resources_path.join("previews")).await?;
+    fs::create_dir_all(resources_path.join("variants")).await?;
+    fs::create_dir_all(resources_path.join("chapters")).await?;
     Ok(())
 }
 

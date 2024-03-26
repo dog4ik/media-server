@@ -1,17 +1,185 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    fmt::Display,
+    str::FromStr,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use crate::{
+    app_state::AppError,
     db::{DbEpisode, DbMovie, DbSeason, DbShow},
     ffmpeg,
-    library::{movie::MovieIdentifier, show::ShowIdentifier, LibraryFile},
+    torrent_index::{Torrent, TorrentIndex},
 };
-use anyhow::Result;
+use anyhow::{anyhow, Context};
 use reqwest::{Client, Request, Response, Url};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, Semaphore};
 use tracing::instrument;
 
 pub mod tmdb_api;
+#[allow(dead_code)]
+pub mod tvdb_api;
+
+#[derive(Debug)]
+pub struct MetadataProvidersStack {
+    pub discover_providers_stack: Mutex<Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)>>,
+    pub movie_providers_stack: Mutex<Vec<&'static (dyn MovieMetadataProvider + Send + Sync)>>,
+    pub show_providers_stack: Mutex<Vec<&'static (dyn ShowMetadataProvider + Send + Sync)>>,
+    pub torrent_indexes_stack: Mutex<Vec<&'static (dyn TorrentIndex + Send + Sync)>>,
+}
+
+impl std::fmt::Debug for dyn DiscoverMetadataProvider + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DiscoverMetadataProvider")
+    }
+}
+
+impl std::fmt::Debug for dyn MovieMetadataProvider + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "MovieMetadataProvider")
+    }
+}
+
+impl std::fmt::Debug for dyn ShowMetadataProvider + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "ShowMetadataProvider")
+    }
+}
+
+impl std::fmt::Debug for dyn TorrentIndex + Send + Sync {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TorrentIndex")
+    }
+}
+
+impl MetadataProvidersStack {
+    pub async fn search_movie(&self, query: &str) -> anyhow::Result<Vec<MovieMetadata>> {
+        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let mut out = Vec::new();
+        let handles: Vec<_> = discover_providers
+            .into_iter()
+            .map(|p| {
+                let query = query.to_string();
+                tokio::spawn(async move { p.movie_search(&query).await })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Ok(res)) = handle.await {
+                out.extend(res);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn search_show(&self, query: &str) -> anyhow::Result<Vec<ShowMetadata>> {
+        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let mut out = Vec::new();
+        let handles: Vec<_> = discover_providers
+            .into_iter()
+            .map(|p| {
+                let query = query.to_string();
+                tokio::spawn(async move { p.show_search(&query).await })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Ok(res)) = handle.await {
+                out.extend(res);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn multi_search(&self, query: &str) -> anyhow::Result<Vec<MetadataSearchResult>> {
+        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let mut out = Vec::new();
+        let handles: Vec<_> = discover_providers
+            .into_iter()
+            .map(|p| {
+                let query = query.to_string();
+                tokio::spawn(async move { p.multi_search(&query).await })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Ok(res)) = handle.await {
+                out.extend(res);
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn get_show(
+        &self,
+        show_id: &str,
+        provider: MetadataProvider,
+    ) -> Result<ShowMetadata, AppError> {
+        let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
+        let provider = show_providers
+            .into_iter()
+            .find(|p| p.provider_identifier() == provider.to_string())
+            .ok_or(anyhow!("provider is not supported"))?;
+        provider.show(show_id).await
+    }
+
+    pub async fn get_season(
+        &self,
+        show_id: &str,
+        season: usize,
+        provider: MetadataProvider,
+    ) -> Result<SeasonMetadata, AppError> {
+        let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
+        let provider = show_providers
+            .into_iter()
+            .find(|p| p.provider_identifier() == provider.to_string())
+            .ok_or(anyhow!("provider is not supported"))?;
+        provider.season(show_id, season).await
+    }
+
+    pub async fn get_episode(
+        &self,
+        show_id: &str,
+        season: usize,
+        episode: usize,
+        provider: MetadataProvider,
+    ) -> Result<EpisodeMetadata, AppError> {
+        let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
+        let provider = show_providers
+            .into_iter()
+            .find(|p| p.provider_identifier() == provider.to_string())
+            .ok_or(anyhow!("provider is not supported"))?;
+        provider.episode(show_id, season, episode).await
+    }
+
+    pub async fn get_torrents(&self, query: &str) -> anyhow::Result<Vec<Torrent>> {
+        let show_providers = { self.torrent_indexes_stack.lock().unwrap().clone() };
+        let mut out = Vec::new();
+        let handles: Vec<_> = show_providers
+            .into_iter()
+            .map(|p| {
+                let query = query.to_string();
+                tokio::spawn(async move { p.search_torrent(&query).await })
+            })
+            .collect();
+
+        for handle in handles {
+            if let Ok(Ok(res)) = handle.await {
+                out.extend(res);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn discover_providers(&self) -> Vec<&(dyn DiscoverMetadataProvider + Send + Sync)> {
+        self.discover_providers_stack.lock().unwrap().clone()
+    }
+
+    pub fn show_providers(&self) -> Vec<&(dyn ShowMetadataProvider + Send + Sync)> {
+        self.show_providers_stack.lock().unwrap().clone()
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct MetadataImage(pub Url);
@@ -45,42 +213,56 @@ impl MetadataImage {
     }
 }
 
+#[axum::async_trait]
 pub trait MovieMetadataProvider {
     /// Query for movie
     #[allow(async_fn_in_trait)]
-    fn movie(
-        &self,
-        movie: &LibraryFile<MovieIdentifier>,
-    ) -> impl std::future::Future<Output = Result<MovieMetadata>> + Send;
+    async fn movie(&self, movie_metadata_id: &str) -> Result<MovieMetadata, AppError>;
 
     /// Provider identifier
     fn provider_identifier(&self) -> &'static str;
 }
 
+#[axum::async_trait]
 pub trait ShowMetadataProvider {
     /// Query for show
     #[allow(async_fn_in_trait)]
-    fn show(
-        &self,
-        show: &LibraryFile<ShowIdentifier>,
-    ) -> impl std::future::Future<Output = Result<ShowMetadata>> + Send;
+    async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError>;
 
     /// Query for season
     #[allow(async_fn_in_trait)]
-    fn season(
-        &self,
-        metadata_show_id: &str,
-        season: usize,
-    ) -> impl std::future::Future<Output = Result<SeasonMetadata>> + Send;
+    async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError>;
 
     /// Query for episode
     #[allow(async_fn_in_trait)]
-    fn episode(
+    async fn episode(
         &self,
-        metadata_show_id: &str,
+        show_id: &str,
         season: usize,
         episode: usize,
-    ) -> impl std::future::Future<Output = Result<EpisodeMetadata>> + Send;
+    ) -> Result<EpisodeMetadata, AppError>;
+
+    /// Provider identifier
+    fn provider_identifier(&self) -> &'static str;
+}
+
+#[axum::async_trait]
+pub trait DiscoverMetadataProvider {
+    /// Multi search
+    async fn multi_search(&self, query: &str) -> Result<Vec<MetadataSearchResult>, AppError>;
+
+    /// Show search
+    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError>;
+
+    /// Movie search
+    async fn movie_search(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError>;
+
+    /// External ids without self
+    async fn external_ids(
+        &self,
+        content_id: &str,
+        content_hint: ContentType,
+    ) -> Result<Vec<ExternalIdMetadata>, AppError>;
 
     /// Provider identifier
     fn provider_identifier(&self) -> &'static str;
@@ -115,94 +297,192 @@ impl LimitedRequestClient {
         Self { request_tx: tx }
     }
 
-    pub async fn request<T>(&self, req: Request) -> anyhow::Result<T>
+    pub async fn request<T>(&self, req: Request) -> Result<T, AppError>
     where
         T: DeserializeOwned,
     {
         let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
-        let url = req.url().clone();
-        self.request_tx.clone().send((req, tx)).await?;
+        let url = req.url().to_string();
+        self.request_tx
+            .send((req, tx))
+            .await
+            .context("Failed to send request")?;
         let response = rx
             .await
             .map_err(|_| anyhow::anyhow!("failed to receive response: channel closed"))?
             .map_err(|e| {
                 tracing::error!("Request in {} failed: {}", url, e);
-                return anyhow::anyhow!("Request failed: {}", e);
+                anyhow::anyhow!("Request failed: {}", e)
             })?;
         tracing::trace!("Succeded request: {}", url);
-        Ok(response.json().await?)
+        match response.status().as_u16() {
+            200 => Ok(response.json().await.context("Parse response in json")?),
+            404 => Err(AppError::not_found("Provider responded with 404")),
+            rest => Err(anyhow!("provider responded with status {}", rest).into()),
+        }
     }
 }
 
 // types
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MetadataProvider {
+    #[default]
+    Local,
+    Tmdb,
+    Tvdb,
+    Imdb,
+}
+
+impl FromStr for MetadataProvider {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> std::prelude::v1::Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(Self::Local),
+            "tmdb" => Ok(Self::Tmdb),
+            "tvdb" => Ok(Self::Tvdb),
+            "imdb" => Ok(Self::Imdb),
+            rest => Err(anyhow::anyhow!(
+                "{rest} is not recognized as metadata provider"
+            )),
+        }
+    }
+}
+
+impl Display for MetadataProvider {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            MetadataProvider::Local => write!(f, "local"),
+            MetadataProvider::Tmdb => write!(f, "tmdb"),
+            MetadataProvider::Tvdb => write!(f, "tvdb"),
+            MetadataProvider::Imdb => write!(f, "imdb"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentType {
+    Movie,
+    Show,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MetadataSearchResult {
+    pub title: String,
+    pub poster: Option<MetadataImage>,
+    pub plot: Option<String>,
+    pub metadata_provider: MetadataProvider,
+    pub content_type: ContentType,
+    pub metadata_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct MovieMetadata {
-    pub metadata_id: Option<String>,
-    pub metadata_provider: &'static str,
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
     pub poster: Option<MetadataImage>,
     pub backdrop: Option<MetadataImage>,
-    pub rating: f64,
-    pub plot: String,
-    pub release_date: String,
-    pub language: String,
+    pub plot: Option<String>,
+    pub release_date: Option<String>,
     pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct ShowMetadata {
-    pub metadata_id: Option<String>,
-    pub metadata_provider: &'static str,
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
     pub poster: Option<MetadataImage>,
     pub backdrop: Option<MetadataImage>,
-    pub rating: f64,
-    pub plot: String,
-    pub release_date: String,
-    pub language: String,
+    pub plot: Option<String>,
+    /// Array of available season numbers
+    pub seasons: Option<Vec<usize>>,
+    pub episodes_amount: Option<usize>,
+    pub release_date: Option<String>,
     pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct SeasonMetadata {
-    pub metadata_id: Option<String>,
-    pub metadata_provider: &'static str,
-    pub release_date: String,
-    pub episodes_amount: usize,
-    pub title: String,
-    pub plot: String,
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
+    pub release_date: Option<String>,
+    pub episodes: Vec<EpisodeMetadata>,
+    pub plot: Option<String>,
     pub poster: Option<MetadataImage>,
     pub number: usize,
-    pub rating: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
+pub struct EpisodeMetadata {
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
+    pub release_date: Option<String>,
+    pub number: usize,
+    pub title: String,
+    pub plot: Option<String>,
+    pub season_number: usize,
+    pub runtime: Option<Duration>,
+    pub poster: Option<MetadataImage>,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct EpisodeMetadata {
-    pub metadata_id: Option<String>,
-    pub metadata_provider: &'static str,
-    pub release_date: String,
-    pub number: usize,
-    pub title: String,
-    pub plot: String,
-    pub season_number: usize,
-    pub poster: MetadataImage,
-    pub rating: f64,
+pub struct CharacterMetadata {
+    pub actor: String,
+    pub character: String,
+    pub image: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ExternalIdMetadata {
+    pub provider: MetadataProvider,
+    pub id: String,
+}
+
+impl Into<MetadataSearchResult> for MovieMetadata {
+    fn into(self) -> MetadataSearchResult {
+        MetadataSearchResult {
+            title: self.title,
+            poster: self.poster,
+            plot: self.plot,
+            metadata_provider: self.metadata_provider,
+            content_type: ContentType::Movie,
+            metadata_id: self.metadata_id,
+        }
+    }
+}
+
+impl Into<MetadataSearchResult> for ShowMetadata {
+    fn into(self) -> MetadataSearchResult {
+        MetadataSearchResult {
+            title: self.title,
+            poster: self.poster,
+            plot: self.plot,
+            metadata_provider: self.metadata_provider,
+            content_type: ContentType::Show,
+            metadata_id: self.metadata_id,
+        }
+    }
 }
 
 impl EpisodeMetadata {
     pub async fn into_db_episode(self, season_id: i64, video_id: i64) -> DbEpisode {
-        let blur_data = self.poster.generate_blur_data().await.ok();
+        let blur_data = if let Some(poster) = &self.poster {
+            poster.generate_blur_data().await.ok()
+        } else {
+            None
+        };
         DbEpisode {
             id: None,
             video_id,
-            metadata_id: self.metadata_id,
-            metadata_provider: self.metadata_provider.to_string(),
             season_id: season_id as i64,
             title: self.title,
             number: self.number as i64,
             plot: self.plot,
             release_date: self.release_date,
-            rating: self.rating,
-            poster: self.poster.as_str().to_owned(),
+            poster: self.poster.map(|x| x.as_str().to_owned()),
             blur_data,
         }
     }
@@ -221,14 +501,11 @@ impl SeasonMetadata {
         }
         DbSeason {
             id: None,
-            metadata_id: self.metadata_id,
-            metadata_provider: self.metadata_provider.to_string(),
             show_id,
             number: self.number as i64,
             release_date: self.release_date,
             plot: self.plot,
             poster,
-            rating: self.rating,
             blur_data,
         }
     }
@@ -249,16 +526,12 @@ impl ShowMetadata {
 
         DbShow {
             id: None,
-            metadata_id: self.metadata_id,
-            metadata_provider: self.metadata_provider.to_string(),
             title: self.title,
             release_date: self.release_date,
             poster,
             blur_data,
             backdrop,
-            rating: self.rating,
             plot: self.plot,
-            original_language: self.language,
         }
     }
 }
@@ -279,16 +552,12 @@ impl MovieMetadata {
         DbMovie {
             id: None,
             video_id,
-            metadata_id: self.metadata_id,
-            metadata_provider: self.metadata_provider.to_string(),
             title: self.title,
             release_date: self.release_date,
             poster,
             blur_data,
             backdrop,
-            rating: self.rating,
             plot: self.plot,
-            original_language: self.language,
         }
     }
 }

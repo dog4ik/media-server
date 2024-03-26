@@ -4,6 +4,7 @@ use std::{
     io::SeekFrom,
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::{Duration, SystemTime},
 };
 
@@ -15,7 +16,10 @@ use axum::{
 };
 use axum_extra::{headers::Range, TypedHeader};
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::{
+    io::{AsyncReadExt, AsyncSeekExt},
+    sync::Semaphore,
+};
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
@@ -48,18 +52,17 @@ pub struct Library {
     pub shows: Vec<LibraryFile<ShowIdentifier>>,
     pub movies: Vec<LibraryFile<MovieIdentifier>>,
     pub media_folders: MediaFolders,
-    summary: Vec<Summary>,
 }
 
 fn extract_summary(file: &LibraryFile<impl Media>) -> Summary {
     let source = &file.source;
-    return Summary {
+    Summary {
         previews: source.previews_count(),
         subs: source.get_subs(),
         duration: source.origin.duration(),
-        title: source.metadata_title(),
+        title: file.identifier.title().to_string(),
         chapters: source.origin.chapters(),
-    };
+    }
 }
 
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
@@ -73,19 +76,23 @@ pub async fn explore_folder<T: Media + Send + 'static>(
     folder: &PathBuf,
 ) -> Result<Vec<LibraryFile<T>>, anyhow::Error> {
     let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
-    let mut handles = Vec::new();
-
+    let mut handles = Vec::with_capacity(paths.len());
+    let semaphore = Arc::new(Semaphore::new(100));
     for path in paths {
-        handles.push(tokio::spawn(async move { LibraryFile::from_path(path) }));
+        let semaphore = semaphore.clone();
+        handles.push(tokio::spawn(async move {
+            let _permit = semaphore.acquire().await;
+            LibraryFile::from_path(path).await
+        }));
     }
 
-    let mut result = Vec::new();
+    let mut result = Vec::with_capacity(handles.len());
 
     for handle in handles {
-        if let Ok(item) = handle.await {
-            let _ = item.map(|x| result.push(x));
-        } else {
-            tracing::error!("One of the metadata collectors paniced");
+        match handle.await {
+            Ok(Ok(item)) => result.push(item),
+            Ok(Err(e)) => tracing::warn!("One of the metadata collectors errored: {}", e),
+            Err(e) => tracing::error!("One of the metadata collectors paniced: {}", e),
         }
     }
 
@@ -153,8 +160,8 @@ impl Display for DataFolder {
 }
 
 impl<T: Media> LibraryFile<T> {
-    pub fn from_path(path: PathBuf) -> Result<Self, anyhow::Error> {
-        let video = Video::from_path(&path)?;
+    pub async fn from_path(path: PathBuf) -> Result<Self, anyhow::Error> {
+        let video = Video::from_path(&path).await?;
         let metadata = path.metadata()?;
         let file_name = path
             .file_name()
@@ -163,21 +170,25 @@ impl<T: Media> LibraryFile<T> {
             .to_string();
         let data_folder = DataFolder::from_metadata(&metadata);
         let resources_path = generate_resources_path(&data_folder);
-        utils::generate_resources(&resources_path)?;
+        utils::generate_resources(&resources_path).await?;
         let metadata_title = video.metadata.format.tags.title.clone();
-        let source = Source::from_video(video, &resources_path)?;
+        let source = Source::from_video(video, &resources_path).await?;
         let path_tokens = utils::tokenize_filename(file_name);
         let identifier = T::identify(path_tokens)
             .or_else(|| {
-                let video_metadata_title = metadata_title;
-                T::identify(
-                    video_metadata_title
-                        .split_whitespace()
-                        .map(|x| x.to_string())
-                        .collect(),
-                )
+                metadata_title.and_then(|video_metadata_title| {
+                    T::identify(
+                        video_metadata_title
+                            .split_whitespace()
+                            .map(|x| x.to_string())
+                            .collect(),
+                    )
+                })
             })
-            .ok_or(anyhow::anyhow!("Could not identify file"))?;
+            .ok_or(anyhow::anyhow!(
+                "Could not identify file: {}",
+                path.file_name().unwrap_or_default().display()
+            ))?;
         Ok(Self {
             identifier,
             source,
@@ -203,33 +214,19 @@ impl Library {
         shows: Vec<LibraryFile<ShowIdentifier>>,
         movies: Vec<LibraryFile<MovieIdentifier>>,
     ) -> Self {
-        let mut summary = Vec::new();
-        for item in &shows {
-            summary.push(extract_summary(item));
-        }
-        for item in &movies {
-            summary.push(extract_summary(item));
-        }
         Self {
             media_folders,
             shows,
             movies,
-            summary,
         }
     }
 
-    pub fn add_show(&mut self, path: PathBuf) -> anyhow::Result<LibraryFile<ShowIdentifier>> {
-        LibraryFile::from_path(path).map(|show| {
-            self.shows.push(show.clone());
-            show
-        })
+    pub fn add_show(&mut self, show: LibraryFile<ShowIdentifier>) {
+        self.shows.push(show);
     }
 
-    pub fn add_movie(&mut self, path: PathBuf) -> anyhow::Result<LibraryFile<MovieIdentifier>> {
-        LibraryFile::from_path(path).map(|movie| {
-            self.movies.push(movie.clone());
-            movie
-        })
+    pub fn add_movie(&mut self, movie: LibraryFile<MovieIdentifier>) {
+        self.movies.push(movie);
     }
 
     pub fn add_variant(&mut self, path: impl AsRef<Path>, video: Video) {
@@ -262,7 +259,10 @@ impl Library {
     }
 
     pub fn get_summary(&self) -> Vec<Summary> {
-        self.summary.clone()
+        let mut out = Vec::new();
+        out.extend(self.shows.iter().map(|s| extract_summary(s)));
+        out.extend(self.movies.iter().map(|s| extract_summary(s)));
+        out
     }
 
     pub fn find_source(&self, path: impl AsRef<Path>) -> Option<&Source> {
@@ -378,32 +378,38 @@ pub struct Video {
 }
 
 /// Ignores failed Video::new results
-fn get_variants(folder: impl AsRef<Path>) -> anyhow::Result<Vec<Video>> {
-    let dir = std::fs::read_dir(folder).context("failed to read dir")?;
-    let vec = dir
-        .into_iter()
-        .filter_map(|f| {
-            let file = f.ok()?;
-            let filetype = file.file_type().ok()?;
-            if filetype.is_file() {
-                Some(Video::from_path(file.path()).ok()?)
-            } else {
-                None
+async fn get_variants(folder: impl AsRef<Path>) -> anyhow::Result<Vec<Video>> {
+    let dir = std::fs::read_dir(&folder).context("failed to read dir")?;
+    let mut out = Vec::new();
+    for entry in dir {
+        let Ok(file) = entry else {
+            tracing::error!("Could not read file in dir {}", folder.as_ref().display());
+            continue;
+        };
+        let Ok(file_type) = file.file_type() else {
+            tracing::error!("Could not get filetype for file {}", file.path().display());
+            continue;
+        };
+        // expect all files to be videos
+        if file_type.is_file() {
+            if let Ok(video) = Video::from_path(file.path()).await {
+                out.push(video);
             }
-        })
-        .collect();
-    Ok(vec)
+        }
+    }
+    Ok(out)
 }
 
 impl Source {
-    pub fn new(
+    pub async fn new(
         source_path: impl AsRef<Path>,
         resources_path: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         let resources_path = resources_path.as_ref().to_path_buf();
-        let origin = Video::from_path(source_path)?;
-        let variants =
-            get_variants(&resources_path.join("variants")).context("failed to get variants")?;
+        let origin = Video::from_path(source_path).await?;
+        let variants = get_variants(&resources_path.join("variants"))
+            .await
+            .context("failed to get variants")?;
         Ok(Self {
             origin,
             variants,
@@ -411,13 +417,14 @@ impl Source {
         })
     }
 
-    pub fn from_video(
+    pub async fn from_video(
         source_video: Video,
         resources_path: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         let resources_path = resources_path.as_ref().to_path_buf();
-        let variants =
-            get_variants(&resources_path.join("variants")).context("failed to get variants")?;
+        let variants = get_variants(&resources_path.join("variants"))
+            .await
+            .context("failed to get variants")?;
         Ok(Self {
             origin: source_video,
             variants,
@@ -494,7 +501,7 @@ impl Source {
 
     /// Get prewies count
     pub fn previews_count(&self) -> usize {
-        return std::fs::read_dir(self.previews_path()).unwrap().count();
+        std::fs::read_dir(self.previews_path()).unwrap().count()
     }
 
     /// Clean all generated resources
@@ -503,7 +510,7 @@ impl Source {
     }
 
     /// Get title included in file metadata
-    pub fn metadata_title(&self) -> String {
+    pub fn metadata_title(&self) -> Option<String> {
         self.origin.metadata.format.tags.title.clone()
     }
 
@@ -553,12 +560,14 @@ impl Source {
     pub fn into_db_video(&self) -> DbVideo {
         let origin = &self.origin;
         let now = time::OffsetDateTime::now_utc();
+        let duration = origin.duration().as_secs() as i64;
 
         DbVideo {
             id: None,
             path: self.source_path().to_string_lossy().to_string(),
             resources_folder: self.resources_folder_name(),
             size: origin.file_size() as i64,
+            duration,
             scan_date: now.to_string(),
         }
     }
@@ -566,8 +575,8 @@ impl Source {
 
 impl Video {
     /// Create self from path
-    pub fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        get_metadata(&path).map(|metadata| Self {
+    pub async fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        get_metadata(&path).await.map(|metadata| Self {
             path: path.as_ref().to_path_buf(),
             metadata,
         })
@@ -579,7 +588,7 @@ impl Video {
         let path = &self.path;
         let mut file = std::fs::File::open(path)?;
         let hash = utils::file_hash(&mut file)?;
-        return Ok(hash);
+        Ok(hash)
     }
 
     /// Chapters
@@ -1080,7 +1089,7 @@ async fn cancel_transcode() {
     use tokio::fs;
     use tokio::time;
 
-    let testing_resource = TestResource::new(true);
+    let testing_resource = TestResource::new(true).await;
     let subject = testing_resource.test_show.clone();
     let task_resource = TaskResource::new();
     let size_before = fs::metadata(&subject.source.origin.path)
@@ -1123,7 +1132,7 @@ async fn cancel_transcode() {
 async fn transcode_video() {
     use crate::testing::TestResource;
 
-    let testing_resource = TestResource::new(false);
+    let testing_resource = TestResource::new(false).await;
     let subject = testing_resource.test_show.clone();
     let source = subject.source;
     let default_audio_idx = source.origin.default_audio().unwrap().index as usize;
