@@ -13,3 +13,7 @@
 
 - [TMDB](https://www.themoviedb.org/)
 - [TVDB](https://thetvdb.com/)
+
+### Supported torrent indexes
+
+- TPB
