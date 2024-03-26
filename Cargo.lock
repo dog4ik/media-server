@@ -289,7 +289,11 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 name = "bytes"
 version = "1.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
+<<<<<<< HEAD
 checksum = "a2bd12c1caf447e69cd4528f47f94d203fd2582878ecb9e9465484c4148a8223"
+=======
+checksum = "514de17de45fdb8dc022b1a7975556c53c86f9f0aa5f534b98977b171857c2c9"
+>>>>>>> master
 dependencies = [
  "serde",
 ]
@@ -1828,6 +1832,7 @@ dependencies = [
 [[package]]
 name = "serde_bencode"
 version = "0.2.4"
+<<<<<<< HEAD
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a70dfc7b7438b99896e7f8992363ab8e2c4ba26aa5ec675d32d1c3c2c33d413e"
 dependencies = [
@@ -1847,6 +1852,8 @@ dependencies = [
 [[package]]
 name = "serde_derive"
 version = "1.0.195"
+=======
+>>>>>>> master
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a70dfc7b7438b99896e7f8992363ab8e2c4ba26aa5ec675d32d1c3c2c33d413e"
 dependencies = [
@@ -2507,7 +2514,11 @@ dependencies = [
  "bytes",
  "hex",
  "rand",
+<<<<<<< HEAD
  "reqwest",
+=======
+ "reqwest 0.11.27",
+>>>>>>> master
  "serde",
  "serde_bencode",
  "serde_json",
