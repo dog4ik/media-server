@@ -10,6 +10,6 @@ async fn main() {
         .init();
     let client = Client::new(ClientConfig::default()).await.unwrap();
     let codecrafters = Torrent::from_file("codecrafters.torrent").unwrap();
-    let handle = client.download("directory/testing/", codecrafters).await.unwrap();
+    let handle = client.download(".", codecrafters).await.unwrap();
     handle.await.unwrap().unwrap();
 }
