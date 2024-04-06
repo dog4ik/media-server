@@ -171,28 +171,37 @@ impl TaskResource {
         kind: TaskKind,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         let mut progress = job.progress();
         let id = self.start_task(job.target.clone(), kind, Some(tx))?;
-        let job_result = tokio::select! {
-            _ = async {
-                while let Some(percent) = progress.recv().await {
+        loop {
+            tokio::select! {
+                Some(percent) = progress.recv() => {
                     let _ = channel.send(ProgressChunk::pending(id,percent));
-                };
-            } => {
-                if let Err(_) = job.wait().await{
-                    let _ = self.error_task(id);
-                } else {
-                    let _ = self.finish_task(id);
+                },
+                res = job.wait() => {
+                    match res {
+                        Err(_) => {
+                            let _ = self.error_task(id);
+                            return Err(TaskError::Failure)
+                        }
+                        Ok(status) => {
+                            if status.success() {
+                                let _ = self.finish_task(id);
+                                return Ok(());
+                            } else {
+                                let _ = self.error_task(id);
+                                return Err(TaskError::Failure);
+                            }
+                        }
+                    }
                 }
-                Ok(())
-            },
-            _ = rx => {
-                let _ = job.cancel().await;
-                Err(TaskError::Canceled)
-            }
-        };
-        return job_result;
+                _ = &mut rx => {
+                    let _ = job.cancel().await;
+                    return Err(TaskError::Canceled)
+                }
+            };
+        }
     }
 
     fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
