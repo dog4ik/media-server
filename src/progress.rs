@@ -139,6 +139,7 @@ pub struct TaskResource {
 
 #[derive(Debug, Clone)]
 pub enum TaskError {
+    Failure,
     Duplicate,
     NotCancelable,
     Canceled,
@@ -152,6 +153,7 @@ impl From<TaskError> for AppError {
             TaskError::NotCancelable => Self::bad_request("Task can not be canceled"),
             TaskError::Canceled => Self::bad_request("Task was canceled"),
             TaskError::NotFound => Self::not_found("Task was not found"),
+            TaskError::Failure => Self::internal_error("Task failed"),
         }
     }
 }
