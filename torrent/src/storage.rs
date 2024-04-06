@@ -1,4 +1,4 @@
-use std::io::SeekFrom;
+use std::{io::SeekFrom, path::Path};
 
 use anyhow::ensure;
 use bytes::{Bytes, BytesMut};
@@ -26,9 +26,9 @@ pub struct TorrentStorage {
 }
 
 impl TorrentStorage {
-    pub fn new(torrent: &Info) -> Self {
+    pub fn new(torrent: &Info, output_dir: impl AsRef<Path>) -> Self {
         Self {
-            output_files: torrent.all_files(),
+            output_files: torrent.output_files(output_dir),
             piece_size: torrent.piece_length,
             total_length: torrent.total_size(),
             pieces: torrent.pieces.clone(),

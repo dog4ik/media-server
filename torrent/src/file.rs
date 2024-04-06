@@ -14,13 +14,13 @@ use crate::{
     tracker::{AnnouncePayload, AnnounceResult},
 };
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {
     pub path: Vec<String>,
     pub length: u64,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SizeDescriptor {
     Files(Vec<File>),
@@ -58,7 +58,7 @@ impl OutputFile {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Info {
     /// In the single file case is the name of a file, in the muliple file case, it's the name of a directory.
     pub name: String,
@@ -77,8 +77,8 @@ impl Info {
         }
     }
 
-    pub fn all_files(&self) -> Vec<OutputFile> {
-        let base = PathBuf::from(self.name.clone());
+    pub fn output_files(&self, output_dir: impl AsRef<Path>) -> Vec<OutputFile> {
+        let base = output_dir.as_ref().join(&self.name);
         match &self.file_descriptor {
             SizeDescriptor::Files(files) => files
                 .iter()

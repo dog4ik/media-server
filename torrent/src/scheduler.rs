@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
@@ -41,7 +41,7 @@ impl PendingBlock {
     }
 }
 
-pub const MAX_PENDING_BLOCKS: usize = 15;
+pub const MAX_PENDING_BLOCKS: usize = 40;
 
 #[derive(Debug)]
 pub struct Scheduler {
@@ -61,9 +61,13 @@ pub struct Scheduler {
 const BLOCK_LENGTH: u32 = 16 * 1024;
 
 impl Scheduler {
-    pub fn new(t: Info, active_peers: HashMap<Uuid, ActivePeer>) -> Scheduler {
+    pub fn new(
+        output_dir: impl AsRef<Path>,
+        t: Info,
+        active_peers: HashMap<Uuid, ActivePeer>,
+    ) -> Scheduler {
         let total_pieces = t.pieces.len();
-        let storage = TorrentStorage::new(&t);
+        let storage = TorrentStorage::new(&t, output_dir);
         let bitfield = BitField::empty(total_pieces);
         Self {
             piece_size: t.piece_length as usize,
