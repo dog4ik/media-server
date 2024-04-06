@@ -1,16 +1,29 @@
 use std::{
+    collections::HashSet,
     io::Write,
     mem,
     net::{Ipv4Addr, SocketAddrV4},
     str::FromStr,
+    time::Duration,
 };
 
 use anyhow::{anyhow, Context};
 use bytes::BufMut;
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tokio::net::UdpSocket;
+use tokio::{
+    net::UdpSocket,
+    sync::{broadcast, mpsc},
+};
 
-use crate::file::TorrentFile;
+use crate::{
+    file::{MagnetLink, TorrentFile},
+    peers::Peer,
+    NewPeer,
+};
+
+pub const ID: [u8; 20] = *b"00112233445566778899";
+pub const PORT: u16 = 6881;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "lowercase")]
@@ -32,10 +45,8 @@ pub struct AnnounceResult {
 #[derive(Debug, Clone)]
 pub struct AnnouncePayload {
     pub announce: reqwest::Url,
-    pub announce_list: Option<Vec<reqwest::Url>>,
     pub info_hash: [u8; 20],
     pub peer_id: [u8; 20],
-    pub ip: Option<Ipv4Addr>,
     pub port: u16,
     pub uploaded: u64,
     pub downloaded: u64,
@@ -47,17 +58,9 @@ impl AnnouncePayload {
     pub fn from_torrent(torrent: &TorrentFile) -> anyhow::Result<Self> {
         Ok(Self {
             announce: reqwest::Url::parse(&torrent.announce).context("parse announce url")?,
-            announce_list: torrent.announce_list.as_ref().map(|announce_list| {
-                announce_list
-                    .iter()
-                    .flatten()
-                    .filter_map(|link| reqwest::Url::parse(link).ok())
-                    .collect()
-            }),
             info_hash: torrent.info.hash(),
-            peer_id: *b"00112233445566778899",
-            ip: None,
-            port: 6881,
+            peer_id: ID,
+            port: PORT,
             uploaded: 0,
             downloaded: 0,
             left: torrent.info.total_size(),
@@ -65,10 +68,28 @@ impl AnnouncePayload {
         })
     }
 
-    pub async fn annouce_http(&self) -> anyhow::Result<AnnounceResult> {
+    pub fn from_magnet_link(magnet_link: MagnetLink) -> anyhow::Result<Self> {
+        Ok(Self {
+            announce: magnet_link
+                .announce_list
+                .as_ref()
+                .unwrap()
+                .first()
+                .unwrap()
+                .clone(),
+            info_hash: hex::decode(magnet_link.info_hash)?.try_into().unwrap(),
+            peer_id: ID,
+            port: PORT,
+            uploaded: 0,
+            downloaded: 0,
+            left: 0,
+            event: Some(TrackerEvent::Started),
+        })
+    }
+
+    async fn announce_http(&self) -> anyhow::Result<HttpAnnounceResponse> {
         let url_params = HttpAnnounceUrlParams {
             peer_id: String::from_utf8(self.peer_id.to_vec())?,
-            ip: self.ip,
             port: self.port,
             uploaded: self.uploaded,
             downloaded: self.downloaded,
@@ -83,10 +104,10 @@ impl AnnouncePayload {
         let response = reqwest::get(tracker_url).await?;
         let announce_bytes = response.bytes().await?;
         let response: HttpAnnounceResponse = serde_bencode::from_bytes(&announce_bytes)?;
-        Ok(response.into())
+        Ok(response)
     }
 
-    pub async fn announce_udp(&self, socket: UdpSocket) -> anyhow::Result<AnnounceResult> {
+    async fn announce_udp(&self, socket: UdpSocket) -> anyhow::Result<UdpAnnounceResponse> {
         let announce_url = format!(
             "{}:{}",
             self.announce
@@ -113,17 +134,18 @@ impl AnnouncePayload {
         let mut announce_response_buffer = Vec::with_capacity(10240);
         socket.recv_buf(&mut announce_response_buffer).await?;
         let announce_response = UdpAnnounceResponse::from_bytes(&announce_response_buffer)?;
-        Ok(announce_response.into())
+        Ok(announce_response)
     }
 
     pub async fn announce(&self) -> anyhow::Result<AnnounceResult> {
         let scheme = self.announce.scheme();
         match scheme {
-            "http" | "https" => self.annouce_http().await,
+            "http" | "https" => self.announce_http().await.map(|x| x.into()),
             "udp" => {
-                let local_ip = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), 6881);
-                let connection = UdpSocket::bind(local_ip).await?;
-                self.announce_udp(connection).await
+                let local_ip = SocketAddrV4::new(Ipv4Addr::new(0, 0, 0, 0), PORT);
+                // TODO: bind single udp socket and communicate over it
+                let connection = crate::utils::bind_udp_socket(local_ip).await?;
+                self.announce_udp(connection).await.map(|x| x.into())
             }
             scheme => return Err(anyhow!("Unsupproted url scheme: {}", scheme)),
         }
@@ -142,7 +164,6 @@ fn urlencode(t: &[u8; 20]) -> String {
 #[derive(Serialize, Debug, Clone)]
 pub struct HttpAnnounceUrlParams {
     pub peer_id: String,
-    pub ip: Option<Ipv4Addr>,
     pub port: u16,
     pub uploaded: u64,
     pub downloaded: u64,
@@ -152,8 +173,7 @@ pub struct HttpAnnounceUrlParams {
 impl HttpAnnounceUrlParams {
     pub fn new(announce: &AnnouncePayload) -> Self {
         Self {
-            peer_id: "00112233445566778899".into(),
-            ip: None,
+            peer_id: String::from_utf8(ID.to_vec()).unwrap(),
             port: announce.port,
             uploaded: announce.uploaded,
             downloaded: announce.downloaded,

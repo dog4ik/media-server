@@ -1,12 +1,18 @@
 use std::{
     ops::Deref,
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
+use anyhow::{anyhow, ensure};
+use reqwest::Url;
 use serde::{de::Visitor, Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
-use crate::tracker::{AnnouncePayload, AnnounceResult};
+use crate::{
+    peers::Peer,
+    tracker::{AnnouncePayload, AnnounceResult},
+};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {
@@ -33,8 +39,8 @@ impl SizeDescriptor {
 /// Torrent output file that is normalized and safe against path attack
 #[derive(Clone, Debug)]
 pub struct OutputFile {
-    pub length: u64,
-    pub path: PathBuf,
+    length: u64,
+    path: PathBuf,
 }
 
 impl OutputFile {
@@ -76,16 +82,10 @@ impl Info {
         match &self.file_descriptor {
             SizeDescriptor::Files(files) => files
                 .iter()
-                .map(|f| OutputFile {
-                    length: f.length,
-                    path: base.join(PathBuf::from_iter(f.path.iter())),
-                })
+                .map(|f| OutputFile::new(f.length, base.join(PathBuf::from_iter(f.path.iter()))))
                 .collect(),
             SizeDescriptor::Length(length) => {
-                vec![OutputFile {
-                    length: *length,
-                    path: base,
-                }]
+                vec![OutputFile::new(*length, base)]
             }
         }
     }
@@ -104,6 +104,34 @@ impl Info {
 
     pub fn hex_peices_hashes(&self) -> Vec<String> {
         self.pieces.0.iter().map(|x| hex::encode(x)).collect()
+    }
+
+    pub async fn from_magnet_link(magnet_link: MagnetLink) -> anyhow::Result<Self> {
+        use std::time::Duration;
+        use tokio::net::TcpStream;
+        use tokio::time::timeout;
+
+        let hash = magnet_link.hash();
+        let announce = AnnouncePayload::from_magnet_link(magnet_link)?;
+        let announce_result = announce.announce().await?;
+        for peer_ip in announce_result.peers {
+            let Ok(Ok(socket)) =
+                timeout(Duration::from_millis(800), TcpStream::connect(peer_ip)).await
+            else {
+                continue;
+            };
+
+            let Ok(peer) = Peer::new(socket, hash).await else {
+                continue;
+            };
+            return Ok(Self {
+                name: todo!(),
+                pieces: todo!(),
+                piece_length: todo!(),
+                file_descriptor: todo!(),
+            });
+        }
+        Err(anyhow!("No one gave us metadata"))
     }
 }
 
@@ -316,9 +344,12 @@ fn sanitize_path(path: PathBuf) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
+
+    use std::str::FromStr;
+
     use tracing_test::traced_test;
 
-    use crate::file::TorrentFile;
+    use crate::file::{MagnetLink, TorrentFile};
 
     pub const TORRENTS_LIST: &[&str] = &[
         //UDP announce
@@ -364,5 +395,17 @@ mod tests {
             "udp://tracker.opentrackr.org:1337/announce"
         );
         assert_eq!(torrent_file.info.total_size(), 3144327239);
+    }
+
+    #[test]
+    #[traced_test]
+    fn parse_magnet_link() {
+        use std::fs;
+        let contents = fs::read_to_string("torrents/hazbinhotel.magnet").unwrap();
+        let magnet_link = MagnetLink::from_str(&contents).unwrap();
+        let info_hash = "29B1F5DC4DCC9A53FFED7E9ECB0670DC5F61D7BF";
+        let name = "Hazbin Hotel S01E05 1080p WEB H264-LAZYCUNTS";
+        assert_eq!(magnet_link.info_hash, info_hash);
+        assert_eq!(magnet_link.name.unwrap(), name);
     }
 }
