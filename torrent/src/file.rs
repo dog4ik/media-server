@@ -325,7 +325,7 @@ impl MagnetLink {
 fn sanitize_path(path: PathBuf) -> PathBuf {
     use std::path::Component;
     let mut normalized_path = PathBuf::new();
-    for component in path.canonicalize().unwrap().components() {
+    for component in path.components() {
         match component {
             Component::Prefix(_) => {
                 tracing::warn!("Path starts with prefix component");

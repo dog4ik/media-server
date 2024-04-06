@@ -71,7 +71,7 @@ impl Scheduler {
             pieces: t.pieces.clone(),
             pending_pieces: HashMap::new(),
             failed_blocks: Vec::new(),
-            max_pending_pieces: 20,
+            max_pending_pieces: 100,
             max_connections: 10,
             active_peers,
             storage,
@@ -182,11 +182,9 @@ impl Scheduler {
                 if *peer_id == sender_id {
                     continue;
                 }
-                peer.command
-                    .try_send(PeerCommand::Have {
-                        piece: insert_block.piece,
-                    })
-                    .unwrap();
+                let _ = peer.command.try_send(PeerCommand::Have {
+                    piece: insert_block.piece,
+                });
             }
             self.schedule_next().ok_or(anyhow!("no more work"))?;
         }

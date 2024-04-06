@@ -53,8 +53,8 @@ impl TorrentStorage {
         let piece_length = bytes.len() as u32;
         ensure!(piece_length == self.piece_length(piece_i));
 
-        let piece_start = piece_i as u32 * self.piece_size;
-        let piece_end = piece_start + piece_length;
+        let piece_start = piece_i as u64 * self.piece_size as u64;
+        let piece_end = piece_start + piece_length as u64;
 
         let hash = self.pieces.get_hash(piece_i).unwrap();
         if verify_sha1(hash, &bytes) {
@@ -68,8 +68,8 @@ impl TorrentStorage {
 
         let mut file_offset = 0;
         for file in &self.output_files {
-            let file_start = file_offset as u32;
-            let file_end = (file_offset + file.length()) as u32;
+            let file_start = file_offset as u64;
+            let file_end = (file_offset + file.length()) as u64;
             let file_range = file_start..file_end;
             if file_start > piece_end || file_end < piece_start {
                 file_offset += file.length();
@@ -80,8 +80,8 @@ impl TorrentStorage {
                 if p > piece_i {
                     return acc;
                 }
-                let p_len = self.piece_length(p);
-                let p_start = self.piece_size * p as u32;
+                let p_len = self.piece_length(p) as u64;
+                let p_start = self.piece_size as u64 * p as u64;
                 let p_end = p_start + p_len;
                 let contains_start = file_range.contains(&p_start);
                 let contains_end = file_range.contains(&p_end);
@@ -102,6 +102,7 @@ impl TorrentStorage {
                 insert_offset
             );
 
+            // NOTE: Not cool
             if let Some(parent) = &file.path().parent() {
                 fs::create_dir_all(parent).await?;
             }
@@ -125,7 +126,6 @@ impl TorrentStorage {
                 piece_length
             } as usize;
 
-            println!();
             let mut file_handle = fs::OpenOptions::new()
                 .create(true)
                 .read(true)
@@ -133,7 +133,6 @@ impl TorrentStorage {
                 .open(&file.path())
                 .await?;
 
-            println!();
             file_handle
                 .seek(SeekFrom::Start(insert_offset.into()))
                 .await?;

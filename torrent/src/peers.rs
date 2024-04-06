@@ -115,9 +115,9 @@ impl PeerMessage {
             let mut begin_buffer = [0; 4];
             let mut length_buffer = [0; 4];
             let mut reader = b.reader();
-            reader.read(&mut index_buffer).context("index buffer")?;
-            reader.read(&mut begin_buffer).context("begin buffer")?;
-            reader.read(&mut length_buffer).context("length buffer")?;
+            reader.read_exact(&mut index_buffer).context("index buffer")?;
+            reader.read_exact(&mut begin_buffer).context("begin buffer")?;
+            reader.read_exact(&mut length_buffer).context("length buffer")?;
             Ok((
                 u32::from_be_bytes(index_buffer),
                 u32::from_be_bytes(begin_buffer),
@@ -1015,6 +1015,7 @@ impl Peer {
                 begin,
                 length,
             } => {
+                println!("peer requesting block, it will block peer exectution");
                 let (tx, rx) = oneshot::channel();
                 self.send_status(
                     PeerStatusMessage::Request {

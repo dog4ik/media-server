@@ -446,33 +446,31 @@ impl Tracker {
         })
     }
 
-    pub fn work(mut self) {
-        tokio::spawn(async move {
-            let announce_result = self.announce_payload.announce().await.unwrap();
-            dbg!("announced");
-            let reannounce_duration = std::cmp::max(
-                Duration::from_secs(2 * 60),
-                Duration::from_secs(u64::from(announce_result.interval)),
-            );
+    pub async fn work(mut self) {
+        let announce_result = self.announce_payload.announce().await.unwrap();
+        dbg!("announced");
+        let reannounce_duration = std::cmp::max(
+            Duration::from_secs(2 * 60),
+            Duration::from_secs(u64::from(announce_result.interval)),
+        );
 
-            self.handle_reannounce(announce_result).await;
+        self.handle_reannounce(announce_result).await;
 
-            let mut reannounce_interval = tokio::time::interval(reannounce_duration);
-            // immediate tick
-            reannounce_interval.tick().await;
+        let mut reannounce_interval = tokio::time::interval(reannounce_duration);
+        // immediate tick
+        reannounce_interval.tick().await;
 
-            loop {
-                tokio::select! {
-                    _ = reannounce_interval.tick() => {
-                        let announce_result = self.announce_payload.announce().await.unwrap();
-                        self.handle_reannounce(announce_result).await;
-                    }
-                    Ok(update) = self.update.recv() => self.handle_update(update),
-                    else => break
+        loop {
+            tokio::select! {
+                _ = reannounce_interval.tick() => {
+                    let announce_result = self.announce_payload.announce().await.unwrap();
+                    self.handle_reannounce(announce_result).await;
                 }
+                Ok(update) = self.update.recv() => self.handle_update(update),
+                else => break
             }
-            dbg!("tracker finished");
-        });
+        }
+        dbg!("tracker finished");
     }
 
     pub async fn handle_reannounce(&mut self, announce_result: AnnounceResult) {
