@@ -16,6 +16,7 @@ use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::{info, Level};
 
@@ -126,7 +127,11 @@ async fn main() {
         .route("/summary", get(public_api::get_summary))
         .route("/api/watch", get(public_api::watch))
         .route("/api/local_shows", get(public_api::all_local_shows))
-        .route("/api/external_id/:id", get(public_api::external_id))
+        .route(
+            "/api/external_to_local/:id",
+            get(public_api::external_to_local_id),
+        )
+        .route("/api/external_ids/:id", get(public_api::external_ids))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
         .route("/api/show/:show_id", get(public_api::get_show))

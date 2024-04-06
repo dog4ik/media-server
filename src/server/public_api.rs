@@ -14,8 +14,8 @@ use crate::db::DbExternalId;
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeVideoStream};
 use crate::library::{AudioCodec, Resolution, Source, Summary, VideoCodec};
 use crate::metadata::{
-    EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MetadataSearchResult,
-    SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
+    MetadataSearchResult, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
 use crate::torrent_index::Torrent;
 use crate::{app_state::AppState, db::Db};
@@ -237,7 +237,7 @@ pub async fn local_show(
     Ok(Json(db.show(&local_id.to_string()).await?))
 }
 
-pub async fn external_id(
+pub async fn external_to_local_id(
     Path(id): Path<String>,
     Query(provider): Query<ProviderQuery>,
     State(db): State<Db>,
@@ -253,6 +253,18 @@ pub async fn external_id(
     .await?;
 
     Ok(Json(local_id))
+}
+
+pub async fn external_ids(
+    State(providers): State<&'static MetadataProvidersStack>,
+    Path(id): Path<String>,
+    Query(ProviderQuery { provider }): Query<ProviderQuery>,
+    Query(ContentTypeQuery { content_type }): Query<ContentTypeQuery>,
+) -> Result<Json<Vec<ExternalIdMetadata>>, AppError> {
+    let res = providers
+        .get_external_ids(&id, content_type, provider)
+        .await?;
+    Ok(Json(res))
 }
 
 pub async fn contents_video(
@@ -447,7 +459,7 @@ pub async fn search_torrent(
     Query(query): Query<StringIdQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<Torrent>>, AppError> {
-    let out = providers.get_torrents(&query.id).await?;
+    let out = providers.get_torrents(&query.id).await;
     Ok(Json(out))
 }
 

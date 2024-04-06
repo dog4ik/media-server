@@ -153,13 +153,27 @@ impl MetadataProvidersStack {
         provider.episode(show_id, season, episode).await
     }
 
-    pub async fn get_torrents(&self, query: &str) -> anyhow::Result<Vec<Torrent>> {
+    pub async fn get_external_ids(
+        &self,
+        id: &str,
+        content_type: ContentType,
+        provider: MetadataProvider,
+    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let provider = discover_providers
+            .into_iter()
+            .find(|p| p.provider_identifier() == provider.to_string())
+            .ok_or(anyhow!("provider is not supported"))?;
+        provider.external_ids(id, content_type).await
+    }
+
+    pub async fn get_torrents(&self, query: &str) -> Vec<Torrent> {
         let show_providers = { self.torrent_indexes_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
         let handles: Vec<_> = show_providers
             .into_iter()
             .map(|p| {
-                let query = query.to_string();
+                let query = query.to_owned();
                 tokio::spawn(async move { p.search_torrent(&query).await })
             })
             .collect();
@@ -169,7 +183,7 @@ impl MetadataProvidersStack {
                 out.extend(res);
             }
         }
-        Ok(out)
+        out
     }
 
     pub fn discover_providers(&self) -> Vec<&(dyn DiscoverMetadataProvider + Send + Sync)> {
@@ -199,8 +213,6 @@ impl MetadataImage {
     }
     const BLUR_DATA_IMG_WIDTH: i32 = 30;
 
-    //NOTE: This is slow (image crate)
-    #[instrument(name = "Blur data", level = "trace")]
     pub async fn generate_blur_data(&self) -> Result<String, anyhow::Error> {
         tracing::trace!("Generating blur data for: {}", self.0);
         let MetadataImage(url) = self;
