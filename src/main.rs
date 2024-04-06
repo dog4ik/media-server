@@ -51,7 +51,9 @@ async fn main() {
         tracing::error!("Failed to initiate resources {}", err);
         panic!("Could not initate app resources");
     };
-    let _ = APP_RESOURCES.set(configuration.resources.clone());
+    APP_RESOURCES
+        .set(configuration.resources.clone())
+        .expect("resources are not initiated yet");
 
     let port = configuration.port;
 

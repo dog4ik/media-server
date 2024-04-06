@@ -1,5 +1,6 @@
 use std::{
-    fs::{self},
+    ffi::OsStr,
+    fs,
     io::{BufRead, ErrorKind, Write},
     path::{Path, PathBuf},
     process::Command,
@@ -10,7 +11,7 @@ use std::{
 use clap::Parser;
 use serde::{Deserialize, Serialize};
 
-use crate::ffmpeg::H264Preset;
+use crate::ffmpeg::{self, H264Preset};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
@@ -63,6 +64,8 @@ pub struct ServerConfiguration {
     pub config_file: ConfigFile,
     pub scan_max_concurrency: usize,
     pub h264_preset: H264Preset,
+    pub ffprobe_path: Option<PathBuf>,
+    pub ffmpeg_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -74,6 +77,8 @@ struct TomlConfig {
     show_folders: Vec<PathBuf>,
     scan_max_concurrency: usize,
     h264_preset: H264Preset,
+    ffprobe_path: PathBuf,
+    ffmpeg_path: PathBuf,
 }
 
 impl Default for TomlConfig {
@@ -86,6 +91,9 @@ impl Default for TomlConfig {
             log_path: PathBuf::from("log.log"),
             scan_max_concurrency: 10,
             h264_preset: H264Preset::default(),
+            // TODO: move to full path to local dependency
+            ffprobe_path: "ffprobe".into(),
+            ffmpeg_path: "ffmpeg".into(),
         }
     }
 }
@@ -196,6 +204,16 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         .and_then(|v| v.as_str())
         .and_then(|v| H264Preset::from_str(v).ok())
         .unwrap_or(default.h264_preset);
+    let ffmpeg_path = parsed
+        .get("ffmpeg_path")
+        .and_then(|v| v.as_str())
+        .and_then(|v| PathBuf::from_str(v).ok())
+        .unwrap_or(default.ffmpeg_path);
+    let ffprobe_path = parsed
+        .get("ffprobe_path")
+        .and_then(|v| v.as_str())
+        .and_then(|v| PathBuf::from_str(v).ok())
+        .unwrap_or(default.ffprobe_path);
 
     let repaired_config = TomlConfig {
         port,
@@ -205,6 +223,8 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         show_folders,
         scan_max_concurrency,
         h264_preset,
+        ffmpeg_path,
+        ffprobe_path,
     };
     Ok(repaired_config)
 }
@@ -220,24 +240,55 @@ impl ServerConfiguration {
             show_folders: self.show_folders.clone(),
             scan_max_concurrency: self.scan_max_concurrency,
             h264_preset: self.h264_preset,
+            ffmpeg_path: self.ffmpeg_path.clone().unwrap_or("ffmpeg".into()),
+            ffprobe_path: self.ffprobe_path.clone().unwrap_or("ffprobe".into()),
         }
     }
-    /// Tries to load config or creates default config file
-    /// Errors when cant create or read file
+    /// Try to load config or creates default config file
+    /// Errors when can't create or read file
     pub fn new(config: ConfigFile) -> Result<Self, anyhow::Error> {
         let file_config = config.read()?;
+        let ffmpeg_path = ffmpeg::healthcheck_ffmpeg_command(&file_config.ffmpeg_path)
+            .map(|version| {
+                tracing::info!(version, "Found ffmpeg");
+                file_config.ffmpeg_path
+            })
+            .map_err(|e| {
+                tracing::warn!("Could not find ffmpeg: {}", e);
+                e
+            })
+            .ok();
+        let ffprobe_path = ffmpeg::healthcheck_ffmpeg_command(&file_config.ffprobe_path)
+            .map(|version| {
+                tracing::info!(version, "Found ffprobe");
+                file_config.ffprobe_path
+            })
+            .map_err(|e| {
+                tracing::error!("Could not find ffprobe: {}", e);
+                e
+            })
+            .ok();
 
         let config = ServerConfiguration {
-            resources: AppResources::default(),
+            resources: AppResources::new(
+                config.0.clone(),
+                ffmpeg_path.clone(),
+                ffprobe_path.clone(),
+            ),
             port: file_config.port,
             log_level: file_config.log_level,
-            capabilities: Capabilities::new()?,
+            capabilities: ffprobe_path
+                .as_ref()
+                .and_then(|x| Capabilities::parse(&x).ok())
+                .unwrap_or_default(),
             log_path: file_config.log_path,
             movie_folders: file_config.movie_folders,
             show_folders: file_config.show_folders,
             config_file: config,
             scan_max_concurrency: file_config.scan_max_concurrency,
             h264_preset: H264Preset::default(),
+            ffprobe_path,
+            ffmpeg_path,
         };
         Ok(config)
     }
@@ -378,14 +429,14 @@ impl Codec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Capabilities {
     pub codecs: Vec<Codec>,
 }
 
 impl Capabilities {
-    pub fn new() -> Result<Self, anyhow::Error> {
-        let output = Command::new("ffmpeg")
+    pub fn parse(ffmpeg_path: impl AsRef<OsStr>) -> Result<Self, anyhow::Error> {
+        let output = Command::new(ffmpeg_path)
             .args(["-hide_banner", "-codecs"])
             .output()?;
         let lines = if output.status.code().unwrap_or(1) != 0 {
@@ -419,6 +470,8 @@ pub struct AppResources {
     pub config_path: PathBuf,
     pub resources_path: PathBuf,
     pub cache_path: PathBuf,
+    pub ffmpeg_path: Option<PathBuf>,
+    pub ffprobe_path: Option<PathBuf>,
 }
 
 pub static APP_RESOURCES: OnceLock<AppResources> = OnceLock::new();
@@ -464,7 +517,11 @@ impl AppResources {
         Ok(())
     }
 
-    pub fn new(config_path: PathBuf) -> Self {
+    pub fn new(
+        config_path: PathBuf,
+        ffmpeg_path: Option<PathBuf>,
+        ffprobe_path: Option<PathBuf>,
+    ) -> Self {
         let store_path = Self::data_storage();
         let db_folder = store_path.join("db");
         let resources_path = store_path.join("resources");
@@ -475,6 +532,16 @@ impl AppResources {
             database_path,
             resources_path,
             cache_path,
+            ffmpeg_path,
+            ffprobe_path,
+        }
+    }
+    pub fn ffmpeg(&self) -> &PathBuf {
+        if let Some(path) = &self.ffmpeg_path {
+            path
+        } else {
+            tracing::error!("Cannot operate without ffmpeg");
+            panic!("ffmpeg required");
         }
     }
 }
@@ -482,12 +549,12 @@ impl AppResources {
 impl Default for AppResources {
     fn default() -> Self {
         let config_path = Self::default_config_path();
-        Self::new(config_path)
+        Self::new(config_path, None, None)
     }
 }
 
 #[test]
 fn parse_capabilities() {
-    let capabilities = Capabilities::new();
+    let capabilities = Capabilities::parse("ffpmeg");
     assert!(capabilities.is_ok())
 }

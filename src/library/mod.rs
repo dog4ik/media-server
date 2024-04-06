@@ -531,9 +531,9 @@ impl Source {
     }
 
     /// Generate previews for file
-    pub fn generate_previews(&self) -> FFmpegRunningJob<PreviewsJob> {
+    pub fn generate_previews(&self) -> anyhow::Result<FFmpegRunningJob<PreviewsJob>> {
         let job = PreviewsJob::from_source(&self);
-        FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
+        Ok(FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())?)
     }
 
     /// Generate subtitles for file
@@ -543,7 +543,7 @@ impl Source {
     ) -> Result<FFmpegRunningJob<SubtitlesJob>, anyhow::Error> {
         SubtitlesJob::from_source(&self, track as usize).map(|job| {
             FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
-        })
+        })?
     }
 
     /// Transcode file
@@ -553,7 +553,7 @@ impl Source {
     ) -> Result<FFmpegRunningJob<TranscodeJob>, anyhow::Error> {
         TranscodeJob::from_source(&self, payload).map(|job| {
             FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
-        })
+        })?
     }
 
     /// Returns struct compatible with database Video table

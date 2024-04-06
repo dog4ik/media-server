@@ -1,3 +1,4 @@
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
@@ -11,6 +12,7 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
 use tokio::sync::mpsc;
 
+use crate::config::APP_RESOURCES;
 use crate::library::{
     AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, VideoCodec,
 };
@@ -354,7 +356,13 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
         "Getting metadata for a file: {}",
         path.iter().last().unwrap().to_str().unwrap()
     );
-    let output = Command::new("ffprobe")
+    let ffprobe = &APP_RESOURCES
+        .get()
+        .unwrap()
+        .ffprobe_path
+        .as_ref()
+        .ok_or(anyhow!("ffprobe is missing in resources"))?;
+    let output = Command::new(ffprobe)
         .args(&[
             "-v",
             "quiet",
@@ -566,30 +574,39 @@ pub struct FFmpegRunningJob<T: FFmpegTask> {
 }
 
 impl<T: FFmpegTask> FFmpegRunningJob<T> {
-    pub fn new_running(job: T, source_path: PathBuf, duration: Duration) -> FFmpegRunningJob<T> {
-        let process = Self::run(&job.args());
-        Self {
+    pub fn new_running(
+        job: T,
+        source_path: PathBuf,
+        duration: Duration,
+    ) -> anyhow::Result<FFmpegRunningJob<T>> {
+        let process = Self::run(&job.args())?;
+        Ok(Self {
             process,
             target: source_path,
             duration,
             job,
-        }
+        })
     }
 
     /// Run ffmpeg command. Returns handle to process
-    fn run<I, S>(args: I) -> Child
+    fn run<I, S>(args: I) -> anyhow::Result<Child>
     where
         I: IntoIterator<Item = S> + Copy,
         S: AsRef<std::ffi::OsStr>,
     {
-        tokio::process::Command::new("ffmpeg")
+        let ffmpeg = &APP_RESOURCES
+            .get()
+            .unwrap()
+            .ffmpeg_path
+            .as_ref()
+            .ok_or(anyhow!("ffmpeg is missing in resources"))?;
+        Ok(tokio::process::Command::new(ffmpeg)
             .kill_on_drop(true)
             .args(["-progress", "pipe:1", "-nostats"])
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
-            .expect("process to spawn")
+            .spawn()?)
     }
 
     /// Kill the job
@@ -663,7 +680,13 @@ pub async fn resize_image_ffmpeg(
     height: Option<i32>,
 ) -> Result<String, anyhow::Error> {
     let scale = format!("scale={}:{}", width, height.unwrap_or(-1));
-    let mut child = tokio::process::Command::new("ffmpeg")
+    let ffmpeg = &APP_RESOURCES
+        .get()
+        .unwrap()
+        .ffmpeg_path
+        .as_ref()
+        .ok_or(anyhow!("ffmpeg is missing in resources"))?;
+    let mut child = tokio::process::Command::new(ffmpeg)
         .args(&[
             "-hide_banner",
             "-loglevel",
@@ -692,6 +715,27 @@ pub async fn resize_image_ffmpeg(
             "resize process was unexpectedly terminated"
         ))
     }
+}
+
+pub fn healthcheck_ffmpeg_command(path: impl AsRef<OsStr>) -> anyhow::Result<String> {
+    let output = std::process::Command::new(&path)
+        .args(&["-version"])
+        .output()?;
+    if output.status.success() {
+        parse_version(std::str::from_utf8(&output.stdout).expect("output to be valid utf-8"))
+    } else {
+        Err(anyhow::anyhow!(
+            "{} errored with {} status code",
+            path.as_ref().to_string_lossy(),
+            output.status.code().expect("status code")
+        ))
+    }
+}
+
+fn parse_version(output: &str) -> anyhow::Result<String> {
+    let first_line = output.lines().next().expect("at least one line");
+    let version = first_line.split_ascii_whitespace().nth(2).unwrap();
+    Ok(version.to_string())
 }
 
 #[tokio::test]
