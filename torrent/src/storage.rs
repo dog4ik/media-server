@@ -4,7 +4,8 @@ use anyhow::ensure;
 use bytes::{Bytes, BytesMut};
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
+    task::JoinSet,
 };
 
 use crate::{
@@ -241,4 +242,83 @@ impl TorrentStorage {
         }
         panic!("Failed to verify hash of downloaded piece {}", piece_i);
     }
+}
+
+pub async fn verify_integrety(path: impl AsRef<Path>, info: &Info) -> anyhow::Result<()> {
+    let workers_amount = 5;
+    let chunk_size = std::cmp::max(info.pieces.len() / workers_amount, 1);
+
+    let mut worker_set = JoinSet::new();
+    for (i, hashes) in info.pieces.chunks(chunk_size).map(Vec::from).enumerate() {
+        worker_set.spawn(verify_worker(
+            i,
+            hashes,
+            info.output_files(&path),
+            info.piece_length as usize,
+            chunk_size,
+        ));
+    }
+    while let Some(result) = worker_set.join_next().await {
+        match result {
+            Ok(Err(e)) => return Err(anyhow::anyhow!("failed to verify file: {e}")),
+            Ok(_) => continue,
+            Err(e) => return Err(anyhow::anyhow!("worker paniced: {e}")),
+        }
+    }
+    Ok(())
+}
+
+async fn verify_worker(
+    idx: usize,
+    hashes: Vec<[u8; 20]>,
+    output_files: Vec<OutputFile>,
+    piece_length: usize,
+    chunk_size: usize,
+) -> anyhow::Result<()> {
+    let start_piece = idx * chunk_size;
+    let start_byte = start_piece as u64 * piece_length as u64;
+    let end_byte = start_byte + piece_length as u64;
+    let mut file_offset = 0;
+    let mut hashes = hashes.into_iter();
+    let mut buffer = BytesMut::with_capacity(piece_length);
+    let Some(mut current_hash) = hashes.next() else {
+        return Ok(());
+    };
+    for file in output_files {
+        let file_start = file_offset;
+        let file_end = file_offset + file.length();
+        if file_start > end_byte || file_end < start_byte {
+            file_offset += file.length();
+            continue;
+        }
+
+        let handle = fs::File::open(file.path()).await?;
+        let mut buf_reader = BufReader::new(handle);
+        if file_start < start_byte {
+            buf_reader
+                .seek(SeekFrom::Start(start_byte - file_start))
+                .await
+                .unwrap();
+        }
+
+        while buf_reader.read_buf(&mut buffer).await? != 0 {
+            if buffer.len() == buffer.capacity() {
+                dbg!(&current_hash);
+                if !verify_sha1(current_hash, &buffer) {
+                    println!("{:?}", buffer.as_ref());
+                    return Err(anyhow::anyhow!("Hash verification failed"));
+                };
+                let Some(next_hash) = hashes.next() else {
+                    return Ok(());
+                };
+                current_hash = next_hash;
+                buffer.clear();
+            }
+        }
+        file_offset += file.length();
+        println!("EOF");
+        continue;
+    }
+
+    Ok(())
 }

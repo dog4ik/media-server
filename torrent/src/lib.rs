@@ -229,9 +229,8 @@ impl Torrent {
         Err(anyhow!("Could not fetch ut_metadata"))
     }
 
-    pub async fn download(self, output_path: impl AsRef<Path>, new_peers: mpsc::Receiver<NewPeer>) {
-        let mut download = Download::new(self.info, new_peers, self.config.max_connections).await;
-        download.concurrent_download().await.unwrap();
+    pub async fn verify_integrity(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        verify_integrety(path, &self.info).await
     }
 }
 
