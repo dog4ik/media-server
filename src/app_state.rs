@@ -26,6 +26,7 @@ pub struct AppState {
     pub tmdb_api: &'static TmdbApi,
     pub tpb_api: &'static TpbApi,
     pub providers_stack: &'static MetadataProvidersStack,
+    pub torrent_client: &'static torrent::Client,
 }
 
 #[derive(Debug, Clone)]
@@ -293,17 +294,14 @@ impl AppState {
     }
 
     #[tracing::instrument]
-    pub async fn generate_previews(&self, video_id: i64) -> Result<(), TaskError> {
-        let file = self
-            .get_file_by_id(video_id)
-            .await
-            .map_err(|_| TaskError::NotFound)?;
+    pub async fn generate_previews(&self, video_id: i64) -> Result<(), AppError> {
+        let file = self.get_file_by_id(video_id).await?;
 
         if (file.previews_count() as f64) < (file.duration().as_secs() as f64 / 10.0).round() {
             tracing::warn!("Rewriting existing previews")
         }
 
-        let job = file.generate_previews();
+        let job = file.generate_previews()?;
 
         let run_result = self
             .tasks
@@ -311,7 +309,7 @@ impl AppState {
             .await;
 
         if let Err(err) = run_result {
-            return Err(err);
+            return Err(err.into());
         }
         Ok(())
     }
@@ -582,6 +580,12 @@ async fn handle_episode(
 impl FromRef<AppState> for &'static Mutex<Library> {
     fn from_ref(app_state: &AppState) -> &'static Mutex<Library> {
         app_state.library
+    }
+}
+
+impl FromRef<AppState> for &'static torrent::Client {
+    fn from_ref(app_state: &AppState) -> &'static torrent::Client {
+        app_state.torrent_client
     }
 }
 

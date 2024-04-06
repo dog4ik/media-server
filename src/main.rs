@@ -37,6 +37,9 @@ async fn main() {
         .expect("database to be found");
     let db = Box::leak(Box::new(db));
 
+    let torrent_config = ClientConfig::default();
+    let torrent_client = torrent::Client::new(torrent_config).await.unwrap();
+
     let args = Args::parse();
 
     let config_path = args
@@ -91,6 +94,7 @@ async fn main() {
     let tmdb_api = Box::leak(Box::new(tmdb_api));
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
+    let torrent_client = Box::leak(Box::new(torrent_client));
 
     let providers_stack = MetadataProvidersStack {
         discover_providers_stack: Mutex::new(vec![db, tmdb_api]),
@@ -111,6 +115,7 @@ async fn main() {
         tmdb_api,
         tpb_api,
         providers_stack,
+        torrent_client,
     };
 
     monitor_library(app_state.clone(), media_folders).await;
