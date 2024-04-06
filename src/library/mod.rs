@@ -38,6 +38,20 @@ pub mod show;
 
 const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
 
+const EXTRAS_FOLDERS: &[&str] = &[
+    "behind the scenes",
+    "deleted scenes",
+    "interviews",
+    "scenes",
+    "samples",
+    "shorts",
+    "featurettes",
+    "clips",
+    "other ",
+    "extras",
+    "trailers",
+];
+
 #[derive(Debug, Serialize, Clone)]
 pub struct Summary {
     pub subs: Vec<String>,
@@ -66,9 +80,15 @@ fn extract_summary(file: &LibraryFile<impl Media>) -> Summary {
 }
 
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
-    path.as_ref()
+    let path = path.as_ref().to_path_buf();
+    let is_extra = path
+        .components()
+        .into_iter()
+        .any(|c| EXTRAS_FOLDERS.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_ref()));
+    let supports_extension = path
         .extension()
-        .map_or(false, |ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()))
+        .map_or(false, |ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()));
+    !is_extra && supports_extension
 }
 
 #[tracing::instrument(level = "trace", name = "explore library folder")]
