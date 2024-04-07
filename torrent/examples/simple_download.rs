@@ -1,5 +1,3 @@
-use std::fs;
-
 use torrent::{Client, ClientConfig, Torrent};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -10,10 +8,8 @@ async fn main() {
         .with_max_level(Level::TRACE)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
-    let mut client = Client::new(ClientConfig::default()).await.unwrap();
-    let codecrafters = Torrent::from_file("torrents/codecrafters.torrent").unwrap();
-    let orig = fs::read("codecrafters_original.txt").unwrap();
-    client.download(codecrafters).await;
-    let downloaded = fs::read("sample.txt").unwrap();
-    assert_eq!(orig, downloaded);
+    let client = Client::new(ClientConfig::default()).await.unwrap();
+    let codecrafters = Torrent::from_file("codecrafters.torrent").unwrap();
+    let handle = client.download(".", codecrafters).await.unwrap();
+    handle.await.unwrap().unwrap();
 }

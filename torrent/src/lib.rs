@@ -15,9 +15,10 @@ use anyhow::anyhow;
 use file::{Info, MagnetLink, TorrentFile};
 use peers::Peer;
 use reqwest::Url;
+use storage::verify_integrety;
 use tokio::{
     sync::{broadcast, mpsc},
-    task::JoinSet,
+    task::{JoinHandle, JoinSet},
     time::timeout,
 };
 use tracker::AnnouncePayload;
@@ -109,7 +110,7 @@ impl PeerListener {
         })
     }
 
-    pub async fn subscribe(&mut self, info_hash: [u8; 20], sender: mpsc::Sender<NewPeer>) {
+    pub async fn subscribe(&self, info_hash: [u8; 20], sender: mpsc::Sender<NewPeer>) {
         self.new_torrent_channel
             .send((info_hash, sender))
             .await
@@ -146,7 +147,11 @@ impl Client {
         })
     }
 
-    pub async fn download(&mut self, torrent: Torrent) {
+    pub async fn download(
+        &self,
+        save_location: impl AsRef<Path>,
+        torrent: Torrent,
+    ) -> anyhow::Result<JoinHandle<Result<(), anyhow::Error>>> {
         let (tx, rx) = mpsc::channel(100);
         let hash = torrent.info.hash();
         self.peer_listener.subscribe(hash, tx.clone()).await;
@@ -161,9 +166,18 @@ impl Client {
                 DownloadStat::empty(torrent.info.total_size()),
             )
             .unwrap();
-            tracker.work();
+            tokio::spawn(tracker.work());
         }
-        torrent.download("", rx).await;
+        let save_location = save_location.as_ref().to_path_buf();
+        let save_location_metadata = save_location.metadata()?;
+        if !save_location_metadata.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Save directory must be a directory, got {:?}",
+                save_location_metadata.file_type()
+            ));
+        }
+        let download = Download::new(save_location, torrent.info, rx).await;
+        Ok(tokio::spawn(download.start()))
     }
 }
 
@@ -215,9 +229,8 @@ impl Torrent {
         Err(anyhow!("Could not fetch ut_metadata"))
     }
 
-    pub async fn download(self, output_path: impl AsRef<Path>, new_peers: mpsc::Receiver<NewPeer>) {
-        let mut download = Download::new(self.info, new_peers, self.config.max_connections).await;
-        download.concurrent_download().await.unwrap();
+    pub async fn verify_integrity(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
+        verify_integrety(path, &self.info).await
     }
 }
 
@@ -233,9 +246,9 @@ mod tests {
     #[tokio::test]
     #[traced_test]
     async fn test_download() {
-        let mut client = Client::new(ClientConfig::default()).await.unwrap();
+        let client = Client::new(ClientConfig::default()).await.unwrap();
         let content = fs::read_to_string("torrents/halo.magnet").unwrap();
         let torrent = Torrent::from_mangnet_link(&content).await.unwrap();
-        client.download(torrent).await;
+        client.download(".", torrent).await;
     }
 }

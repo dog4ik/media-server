@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     net::SocketAddrV4,
     ops::Range,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -263,18 +264,22 @@ pub struct Download {
 }
 
 impl Download {
-    pub async fn new(t: Info, peers_sender: mpsc::Receiver<NewPeer>, max_peers: usize) -> Self {
+    pub async fn new(
+        output: impl AsRef<Path>,
+        t: Info,
+        new_peers: mpsc::Receiver<NewPeer>,
+    ) -> Self {
         let info_hash = t.hash();
         let piece_length = t.piece_length;
         let active_peers = JoinSet::new();
         let (status_tx, status_rx) = mpsc::channel(1000);
         let commands = HashMap::new();
 
-        let scheduler = Scheduler::new(t, commands);
+        let scheduler = Scheduler::new(output, t, commands);
 
         Self {
-            max_peers,
-            new_peers: peers_sender,
+            max_peers: 200,
+            new_peers,
             new_peers_join_set: JoinSet::new(),
             pending_new_peers_ips: HashSet::new(),
             info_hash,
@@ -286,7 +291,7 @@ impl Download {
         }
     }
 
-    pub async fn concurrent_download(&mut self) -> anyhow::Result<()> {
+    pub async fn start(mut self) -> anyhow::Result<()> {
         let mut optimistic_unchoke_interval = tokio::time::interval(Duration::from_secs(30));
         let mut choke_interval = tokio::time::interval(Duration::from_secs(10));
 

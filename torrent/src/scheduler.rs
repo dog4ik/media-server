@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, path::Path};
 
 use anyhow::anyhow;
 use bytes::{Bytes, BytesMut};
@@ -41,7 +41,7 @@ impl PendingBlock {
     }
 }
 
-pub const MAX_PENDING_BLOCKS: usize = 15;
+pub const MAX_PENDING_BLOCKS: usize = 40;
 
 #[derive(Debug)]
 pub struct Scheduler {
@@ -61,9 +61,13 @@ pub struct Scheduler {
 const BLOCK_LENGTH: u32 = 16 * 1024;
 
 impl Scheduler {
-    pub fn new(t: Info, active_peers: HashMap<Uuid, ActivePeer>) -> Scheduler {
+    pub fn new(
+        output_dir: impl AsRef<Path>,
+        t: Info,
+        active_peers: HashMap<Uuid, ActivePeer>,
+    ) -> Scheduler {
         let total_pieces = t.pieces.len();
-        let storage = TorrentStorage::new(&t);
+        let storage = TorrentStorage::new(&t, output_dir);
         let bitfield = BitField::empty(total_pieces);
         Self {
             piece_size: t.piece_length as usize,
@@ -71,7 +75,7 @@ impl Scheduler {
             pieces: t.pieces.clone(),
             pending_pieces: HashMap::new(),
             failed_blocks: Vec::new(),
-            max_pending_pieces: 20,
+            max_pending_pieces: 100,
             max_connections: 10,
             active_peers,
             storage,
@@ -182,11 +186,9 @@ impl Scheduler {
                 if *peer_id == sender_id {
                     continue;
                 }
-                peer.command
-                    .try_send(PeerCommand::Have {
-                        piece: insert_block.piece,
-                    })
-                    .unwrap();
+                let _ = peer.command.try_send(PeerCommand::Have {
+                    piece: insert_block.piece,
+                });
             }
             self.schedule_next().ok_or(anyhow!("no more work"))?;
         }
