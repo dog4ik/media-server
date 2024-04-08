@@ -249,6 +249,10 @@ impl Torrent {
         Err(anyhow!("Could not fetch ut_metadata"))
     }
 
+    pub fn info_hash(&self) -> [u8; 20] {
+        self.info.hash()
+    }
+
     pub async fn verify_integrity(&self, path: impl AsRef<Path>) -> anyhow::Result<()> {
         verify_integrety(path, &self.info).await
     }
