@@ -3,6 +3,7 @@ use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr, sync::M
 use anyhow::anyhow;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, task::JoinSet};
+use torrent::Torrent;
 
 use crate::{
     config::ServerConfiguration,
@@ -12,7 +13,7 @@ use crate::{
         tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
         MetadataProvider, MetadataProvidersStack, ShowMetadataProvider,
     },
-    progress::{TaskError, TaskKind, TaskResource},
+    progress::{TaskKind, TaskResource},
     torrent_index::tpb::TpbApi,
     utils,
 };
@@ -229,8 +230,9 @@ impl AppState {
         let task_id = self
             .tasks
             .start_task(
-                source.source_path().to_path_buf(),
-                TaskKind::Subtitles,
+                TaskKind::Subtitles {
+                    target: source.source_path().to_path_buf(),
+                },
                 None,
             )
             .unwrap();
@@ -269,6 +271,18 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn download_torrent(
+        &self,
+        torrent: Torrent,
+        output: PathBuf,
+    ) -> Result<(), AppError> {
+        let _ = self
+            .tasks
+            .observe_torrent_download(self.torrent_client, torrent, output)
+            .await;
+        Ok(())
+    }
+
     #[tracing::instrument]
     pub async fn transcode_video(
         &self,
@@ -281,7 +295,12 @@ impl AppState {
         let output_path = job.job.output_path.clone();
 
         self.tasks
-            .observe_ffmpeg_task(job, TaskKind::Transcode)
+            .observe_ffmpeg_task(
+                job,
+                TaskKind::Transcode {
+                    target: source.source_path().to_path_buf(),
+                },
+            )
             .await?;
         let variant_video = Video::from_path(output_path)
             .await
@@ -305,7 +324,12 @@ impl AppState {
 
         let run_result = self
             .tasks
-            .observe_ffmpeg_task(job, TaskKind::Previews)
+            .observe_ffmpeg_task(
+                job,
+                TaskKind::Previews {
+                    target: file.source_path().to_path_buf(),
+                },
+            )
             .await;
 
         if let Err(err) = run_result {

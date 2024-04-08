@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     path::PathBuf,
     sync::{Arc, Mutex},
 };
@@ -6,6 +7,7 @@ use std::{
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use torrent::Torrent;
 use tracing::error;
 use uuid::Uuid;
 
@@ -17,16 +19,33 @@ use crate::{
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 pub enum TaskKind {
-    Transcode,
-    Scan,
+    Transcode { target: PathBuf },
+    Scan { target: PathBuf },
     FullScan,
-    Previews,
-    Subtitles,
+    Previews { target: PathBuf },
+    Subtitles { target: PathBuf },
+    Torrent { info_hash: [u8; 20] },
+}
+
+fn display_info_hash(hash: &[u8; 20]) -> String {
+    hash.into_iter().map(|x| format!("{:x}", x)).collect()
+}
+
+impl Display for TaskKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TaskKind::Transcode { target } => write!(f, "transcode: {}", target.display()),
+            TaskKind::Scan { target } => write!(f, "file scan: {}", target.display()),
+            TaskKind::FullScan => write!(f, "library scan"),
+            TaskKind::Previews { target } => write!(f, "previews: {}", target.display()),
+            TaskKind::Subtitles { target } => write!(f, "subtitles: {}", target.display()),
+            TaskKind::Torrent { info_hash } => write!(f, "{}", display_info_hash(info_hash)),
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct Task {
-    pub target: PathBuf,
     pub id: Uuid,
     pub kind: TaskKind,
     pub created: OffsetDateTime,
@@ -40,8 +59,7 @@ impl Serialize for Task {
     {
         use serde::ser::SerializeStruct;
 
-        let mut task = serializer.serialize_struct("task", 4)?;
-        task.serialize_field("target", &self.target)?;
+        let mut task = serializer.serialize_struct("task", 3)?;
         task.serialize_field("id", &self.id)?;
         task.serialize_field("kind", &self.kind)?;
         task.serialize_field("cancelable", &self.cancel.is_some())?;
@@ -50,15 +68,10 @@ impl Serialize for Task {
 }
 
 impl Task {
-    pub fn new(
-        target: PathBuf,
-        kind: TaskKind,
-        cancel_channel: Option<oneshot::Sender<()>>,
-    ) -> Self {
+    pub fn new(kind: TaskKind, cancel_channel: Option<oneshot::Sender<()>>) -> Self {
         let id = Uuid::new_v4();
         let now = time::OffsetDateTime::now_utc();
         Self {
-            target,
             created: now,
             id,
             kind,
@@ -175,7 +188,7 @@ impl TaskResource {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let (tx, mut rx) = oneshot::channel();
         let mut progress = job.progress();
-        let id = self.start_task(job.target.clone(), kind, Some(tx))?;
+        let id = self.start_task(kind, Some(tx))?;
         loop {
             tokio::select! {
                 Some(percent) = progress.recv() => {
@@ -185,7 +198,7 @@ impl TaskResource {
                     match res {
                         Err(_) => {
                             let _ = self.error_task(id);
-                            return Err(TaskError::Failure)
+                            return Err(TaskError::Failure);
                         }
                         Ok(status) => {
                             if status.success() {
@@ -206,16 +219,55 @@ impl TaskResource {
         }
     }
 
+    /// Wait until task is over while dispatching progress
+    pub async fn observe_torrent_download(
+        &self,
+        client: &'static torrent::Client,
+        torrent: Torrent,
+        output_path: PathBuf,
+    ) -> Result<(), TaskError> {
+        let info_hash = torrent.info_hash();
+        let ProgressChannel(channel) = self.progress_channel.clone();
+        let (tx, mut rx) = oneshot::channel();
+        let (progress_tx, mut progress_rx) = mpsc::channel(100);
+        let mut job = client
+            .download(output_path, torrent, progress_tx)
+            .await
+            .map_err(|_| TaskError::Failure)?;
+        let kind = TaskKind::Torrent { info_hash };
+        let id = self.start_task(kind, Some(tx))?;
+        loop {
+            tokio::select! {
+                Some(progress) = progress_rx.recv() => {
+                    let _ = channel.send(ProgressChunk::pending(id, progress.percent as usize));
+                },
+                res = &mut job.handle => {
+                    match res {
+                        Ok(Ok(_)) => {
+                            let _ = self.finish_task(id);
+                            return Ok(());
+                        }
+                        _ => {
+                            let _ = self.error_task(id);
+                            return Err(TaskError::Failure);
+                        }
+                    }
+                }
+                _ = &mut rx => {
+                    let _ = job.abort();
+                    return Err(TaskError::Canceled)
+                }
+            };
+        }
+    }
+
     fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
         let mut tasks = self.tasks.lock().unwrap();
-        let duplicate = tasks
-            .iter()
-            .find(|t| t.target == task.target && t.kind == task.kind);
+        let duplicate = tasks.iter().find(|t| t.kind == task.kind);
         if let Some(duplicate) = duplicate {
             error!(
-                "Failed to create task: dublicate {} ({})",
-                task.target.display(),
-                duplicate.id
+                "Failed to create task(): dublicate {} ({})",
+                task.kind, duplicate.id
             );
             return Err(TaskError::Duplicate);
         }
@@ -226,11 +278,10 @@ impl TaskResource {
 
     pub fn start_task(
         &self,
-        target: PathBuf,
         kind: TaskKind,
         cancel_channel: Option<oneshot::Sender<()>>,
     ) -> Result<Uuid, TaskError> {
-        let task = Task::new(target, kind, cancel_channel);
+        let task = Task::new(kind, cancel_channel);
         let id = self.add_task(task)?;
         let _ = self.progress_channel.0.send(ProgressChunk::start(id));
         Ok(id)

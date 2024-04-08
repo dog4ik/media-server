@@ -172,6 +172,7 @@ async fn main() {
         .route("/admin/remove_variant", delete(admin_api::remove_variant))
         .route("/admin/transcode", post(admin_api::transcode_video))
         .route("/admin/configuration", get(admin_api::server_configuration))
+        .route("/admin/download_torrent", post(admin_api::download_torrent))
         .layer(cors)
         .with_state(app_state);
 

@@ -274,7 +274,12 @@ pub async fn mock_progress(
     debug!("Emitting fake progress with target: {}", target);
     let (tx, rx) = oneshot::channel();
     let task_id = tasks
-        .start_task(PathBuf::from(target), TaskKind::Scan, Some(tx))
+        .start_task(
+            TaskKind::Scan {
+                target: target.into(),
+            },
+            Some(tx),
+        )
         .unwrap();
     let ProgressChannel(channel) = &tasks.progress_channel;
     let channel = channel.clone();
@@ -359,4 +364,24 @@ pub async fn server_configuration(
 ) -> Json<ServerConfiguration> {
     let configuration = configuration.lock().unwrap();
     Json(configuration.clone())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TorrentDownloadPayload {
+    save_location: String,
+    magnet: String,
+}
+
+pub async fn download_torrent(
+    State(app_state): State<AppState>,
+    Json(payload): Json<TorrentDownloadPayload>,
+) -> Result<(), AppError> {
+    use torrent::Torrent;
+    let torrent = Torrent::from_mangnet_link(&payload.magnet).await?;
+    tokio::spawn(async move {
+        let _ = app_state
+            .download_torrent(torrent, payload.save_location.into())
+            .await;
+    });
+    Ok(())
 }

@@ -1,13 +1,10 @@
 # Media server / Library manager
 
-### Features
+### Key Features
 
 - [x] Metadata fetching
-- [x] API layer
-- [x] File watching
-- [ ] Torrent client
+- [x] Torrent client
 - [x] Media transcoding
-- [x] Task cancelation
 
 ### Supported metadata providers
 
