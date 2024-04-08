@@ -629,7 +629,6 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
     }
 
     /// Channel with job progress in percents. Consumes stdout of process
-    /// Returns `None` if stdout is empty
     pub fn progress(&mut self) -> mpsc::Receiver<usize> {
         let (tx, rx) = mpsc::channel(100);
         let out = self.process.stdout.take().expect("ffmpeg to have stdout");

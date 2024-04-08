@@ -32,9 +32,9 @@ struct FileEvent {
 impl Display for FileEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.event_type {
-            EventType::Create => write!(f, "detected file creation: "),
-            EventType::Remove => write!(f, "detected file remove: "),
-            EventType::Modify => write!(f, "detected file modification: "),
+            EventType::Create => write!(f, "creation"),
+            EventType::Remove => write!(f, "remove"),
+            EventType::Modify => write!(f, "modification"),
         }?;
         f.write_str(&self.path.to_string_lossy())
     }
