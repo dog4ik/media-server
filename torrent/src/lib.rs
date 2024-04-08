@@ -128,16 +128,12 @@ enum WorkerCommand {
 // TODO: cancel, pause and other control
 #[derive(Debug)]
 pub struct DownloadHandle {
-    join_handle: JoinHandle<anyhow::Result<()>>,
+    pub handle: JoinHandle<anyhow::Result<()>>,
 }
 
 impl DownloadHandle {
-    pub async fn wait(self) -> anyhow::Result<()> {
-        self.join_handle.await?
-    }
-
-    pub fn abort(self) {
-        self.join_handle.abort()
+    pub fn abort(&self) {
+        self.handle.abort()
     }
 }
 
@@ -195,8 +191,8 @@ impl Client {
             ));
         }
         let download = Download::new(save_location, torrent.info, rx).await;
-        let join_handle = tokio::spawn(download.start(progress_consumer));
-        let download_handle = DownloadHandle { join_handle };
+        let handle = tokio::spawn(download.start(progress_consumer));
+        let download_handle = DownloadHandle { handle };
         Ok(download_handle)
     }
 }
