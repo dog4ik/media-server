@@ -14,5 +14,5 @@ async fn main() {
         .download(".", codecrafters, |p| println!("Progress: {}", p))
         .await
         .unwrap();
-    handle.await.unwrap().unwrap();
+    handle.wait().await.unwrap();
 }

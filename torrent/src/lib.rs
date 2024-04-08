@@ -12,7 +12,7 @@ use std::{
 };
 
 use anyhow::anyhow;
-pub use download::{ProgressConsumer, DownloadProgress};
+pub use download::{DownloadProgress, ProgressConsumer};
 use file::{Info, MagnetLink, TorrentFile};
 use peers::Peer;
 use reqwest::Url;
@@ -125,6 +125,22 @@ enum WorkerCommand {
     Cancel(Uuid),
 }
 
+// TODO: cancel, pause and other control
+#[derive(Debug)]
+pub struct DownloadHandle {
+    join_handle: JoinHandle<anyhow::Result<()>>,
+}
+
+impl DownloadHandle {
+    pub async fn wait(self) -> anyhow::Result<()> {
+        self.join_handle.await?
+    }
+
+    pub fn abort(self) {
+        self.join_handle.abort()
+    }
+}
+
 #[derive(Debug)]
 pub struct Client {
     config: ClientConfig,
@@ -153,7 +169,7 @@ impl Client {
         save_location: impl AsRef<Path>,
         torrent: Torrent,
         progress_consumer: impl ProgressConsumer,
-    ) -> anyhow::Result<JoinHandle<Result<(), anyhow::Error>>> {
+    ) -> anyhow::Result<DownloadHandle> {
         let (tx, rx) = mpsc::channel(100);
         let hash = torrent.info.hash();
         self.peer_listener.subscribe(hash, tx.clone()).await;
@@ -179,7 +195,9 @@ impl Client {
             ));
         }
         let download = Download::new(save_location, torrent.info, rx).await;
-        Ok(tokio::spawn(download.start(progress_consumer)))
+        let join_handle = tokio::spawn(download.start(progress_consumer));
+        let download_handle = DownloadHandle { join_handle };
+        Ok(download_handle)
     }
 }
 
