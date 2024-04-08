@@ -317,7 +317,7 @@ impl Scheduler {
     }
 
     /// Iterator over peers that have pending blocks
-    fn busy_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
+    pub fn busy_peers(&self) -> impl Iterator<Item = (&Uuid, &ActivePeer)> {
         self.active_peers
             .iter()
             .filter(|(_, peer)| !peer.pending_blocks.is_empty())
@@ -356,6 +356,10 @@ impl Scheduler {
 
     pub fn is_torrent_finished(&self) -> bool {
         self.bitfield.pieces().count() == self.storage.pieces.len()
+    }
+
+    pub fn total_pieces(&self) -> usize {
+        self.pieces.len()
     }
 }
 

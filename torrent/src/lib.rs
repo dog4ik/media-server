@@ -12,6 +12,7 @@ use std::{
 };
 
 use anyhow::anyhow;
+pub use download::{ProgressConsumer, DownloadProgress};
 use file::{Info, MagnetLink, TorrentFile};
 use peers::Peer;
 use reqwest::Url;
@@ -151,6 +152,7 @@ impl Client {
         &self,
         save_location: impl AsRef<Path>,
         torrent: Torrent,
+        progress_consumer: impl ProgressConsumer,
     ) -> anyhow::Result<JoinHandle<Result<(), anyhow::Error>>> {
         let (tx, rx) = mpsc::channel(100);
         let hash = torrent.info.hash();
@@ -177,7 +179,7 @@ impl Client {
             ));
         }
         let download = Download::new(save_location, torrent.info, rx).await;
-        Ok(tokio::spawn(download.start()))
+        Ok(tokio::spawn(download.start(progress_consumer)))
     }
 }
 
@@ -242,13 +244,12 @@ mod tests {
 
     use crate::{Client, ClientConfig, Torrent};
     // bug with storage
-    //"magnet:?xt=urn:btih:05ECEC0B8BE9110A70395A911018CC48C4071537&dn=Halo.S02E04.1080p.WEB.H264-SuccessfulCrab%5BTGx%5D&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.bittor.pw%3A1337%2Fannounce&tr=udp%3A%2F%2Fpublic.popcorn-tracker.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.dler.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969&tr=udp%3A%2F%2Fopentracker.i2p.rocks%3A6969%2Fannounce"
     #[tokio::test]
     #[traced_test]
     async fn test_download() {
         let client = Client::new(ClientConfig::default()).await.unwrap();
         let content = fs::read_to_string("torrents/halo.magnet").unwrap();
         let torrent = Torrent::from_mangnet_link(&content).await.unwrap();
-        client.download(".", torrent).await;
+        client.download(".", torrent, |_| {}).await.unwrap();
     }
 }

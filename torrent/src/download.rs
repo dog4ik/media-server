@@ -248,6 +248,50 @@ impl Block {
     }
 }
 
+#[derive(Debug, serde::Serialize)]
+pub struct DownloadProgress {
+    pub busy_peers: usize,
+    pub percent: f64,
+}
+
+impl Display for DownloadProgress {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "active peers: {}\n", self.busy_peers)?;
+        write!(f, "percent: {}\n", self.percent)
+    }
+}
+
+pub trait ProgressConsumer: Send + 'static {
+    fn consume_progress(&mut self, progress: DownloadProgress);
+}
+
+impl<F> ProgressConsumer for F
+where
+    F: FnMut(DownloadProgress) + Send + 'static,
+{
+    fn consume_progress(&mut self, progress: DownloadProgress) {
+        self(progress);
+    }
+}
+
+impl ProgressConsumer for std::sync::mpsc::Sender<DownloadProgress> {
+    fn consume_progress(&mut self, progress: DownloadProgress) {
+        let _ = self.send(progress);
+    }
+}
+
+impl ProgressConsumer for tokio::sync::mpsc::Sender<DownloadProgress> {
+    fn consume_progress(&mut self, progress: DownloadProgress) {
+        let _ = self.try_send(progress);
+    }
+}
+
+impl ProgressConsumer for tokio::sync::broadcast::Sender<DownloadProgress> {
+    fn consume_progress(&mut self, progress: DownloadProgress) {
+        let _ = self.send(progress);
+    }
+}
+
 /// Glue between active peers and scheduler
 #[derive(Debug)]
 pub struct Download {
@@ -291,9 +335,10 @@ impl Download {
         }
     }
 
-    pub async fn start(mut self) -> anyhow::Result<()> {
+    pub async fn start(mut self, mut progress: impl ProgressConsumer) -> anyhow::Result<()> {
         let mut optimistic_unchoke_interval = tokio::time::interval(Duration::from_secs(30));
         let mut choke_interval = tokio::time::interval(Duration::from_secs(10));
+        let mut progress_dispatch_interval = tokio::time::interval(Duration::from_secs(1));
 
         // immidiate tick
         optimistic_unchoke_interval.tick().await;
@@ -328,6 +373,7 @@ impl Download {
                 },
                 _ = optimistic_unchoke_interval.tick() => self.handle_optimistic_unchoke().await,
                 _ = choke_interval.tick() => self.handle_choke_interval().await,
+                _ = progress_dispatch_interval.tick() => self.handle_progress_dispatch(&mut progress).await,
                 else => {
                     break Err(anyhow!("Select branch"));
                 }
@@ -452,6 +498,18 @@ impl Download {
 
     async fn handle_optimistic_unchoke(&mut self) {
         println!("Optimistic unchoke interval");
+    }
+
+    async fn handle_progress_dispatch(&self, progress_consumer: &mut impl ProgressConsumer) {
+        let busy_peers = self.scheduler.busy_peers().count();
+        let downloaded_pieces = self.scheduler.bitfield.pieces().count() as f64;
+        let total_pieces = self.scheduler.total_pieces() as f64;
+        let percent = downloaded_pieces / total_pieces * 100.0;
+        let progress = DownloadProgress {
+            busy_peers,
+            percent,
+        };
+        progress_consumer.consume_progress(progress);
     }
 }
 
