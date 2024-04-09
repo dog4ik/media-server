@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT * FROM videos WHERE id = ?",
+  "query": "SELECT * FROM external_ids WHERE movie_id = ?",
   "describe": {
     "columns": [
       {
@@ -9,29 +9,39 @@
         "type_info": "Int64"
       },
       {
-        "name": "path",
+        "name": "metadata_provider",
         "ordinal": 1,
         "type_info": "Text"
       },
       {
-        "name": "resources_folder",
+        "name": "metadata_id",
         "ordinal": 2,
         "type_info": "Text"
       },
       {
-        "name": "size",
+        "name": "show_id",
         "ordinal": 3,
         "type_info": "Int64"
       },
       {
-        "name": "duration",
+        "name": "season_id",
         "ordinal": 4,
         "type_info": "Int64"
       },
       {
-        "name": "scan_date",
+        "name": "episode_id",
         "ordinal": 5,
-        "type_info": "Datetime"
+        "type_info": "Int64"
+      },
+      {
+        "name": "movie_id",
+        "ordinal": 6,
+        "type_info": "Int64"
+      },
+      {
+        "name": "is_prime",
+        "ordinal": 7,
+        "type_info": "Int64"
       }
     ],
     "parameters": {
@@ -41,10 +51,12 @@
       false,
       false,
       false,
-      false,
-      false,
-      true
+      true,
+      true,
+      true,
+      true,
+      false
     ]
   },
-  "hash": "cf65c0e4cedb74c6bbc0f9723e40b89a225a6f8e8fa3f81bdda36b026a470276"
+  "hash": "3518add257879f0869f4b98d7240ef2273ab49b0fe35eb1cd222a3ddb2a75857"
 }

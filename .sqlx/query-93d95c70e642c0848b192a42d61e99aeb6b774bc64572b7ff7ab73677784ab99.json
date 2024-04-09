@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO episodes\n            (video_id, season_id, title, number, plot, release_date, poster, blur_data)\n            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "93d95c70e642c0848b192a42d61e99aeb6b774bc64572b7ff7ab73677784ab99"
+}

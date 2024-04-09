@@ -1,20 +1,20 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id FROM episodes WHERE season_id = ? AND number = ?;",
+  "query": "SELECT video_id FROM movies WHERE id = ?",
   "describe": {
     "columns": [
       {
-        "name": "id",
+        "name": "video_id",
         "ordinal": 0,
         "type_info": "Int64"
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 1
     },
     "nullable": [
       false
     ]
   },
-  "hash": "4f4ab9007a610cf34d2ca2711233301336ef7efea68f977aa5909ff2cd2c5218"
+  "hash": "32409e44a0df655b919bd938e25c894862560d3749c8063017e5e1bd04ba04e8"
 }

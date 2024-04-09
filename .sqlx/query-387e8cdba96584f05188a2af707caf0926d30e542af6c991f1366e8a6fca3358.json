@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE episodes SET\n                                season_id = ?,\n                                title = ?, \n                                number = ?,\n                                plot = ?,\n                                poster = ?,\n                                blur_data = ?,\n                                release_date = ?\n            WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 8
+    },
+    "nullable": []
+  },
+  "hash": "387e8cdba96584f05188a2af707caf0926d30e542af6c991f1366e8a6fca3358"
+}

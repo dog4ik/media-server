@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT movies.* FROM movies\n        JOIN videos ON videos.id = movies.video_id\n        WHERE videos.path = ?",
+  "query": "SELECT movies.* FROM movies",
   "describe": {
     "columns": [
       {
@@ -45,10 +45,10 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
-      true,
+      false,
       false,
       false,
       true,
@@ -58,5 +58,5 @@
       true
     ]
   },
-  "hash": "325e05567bd5f8d10daed5ee2c5bb12cd34d717bb653d2b6ff9e7aa6f341e508"
+  "hash": "f7a286629fd5c8c9040f44e6db7851a924ce4ae5cf26ba8375fbc8b6f5e314af"
 }

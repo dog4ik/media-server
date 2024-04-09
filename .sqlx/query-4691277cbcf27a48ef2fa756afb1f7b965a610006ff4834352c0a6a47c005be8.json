@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO external_ids\n            (metadata_provider, metadata_id, show_id, season_id, episode_id, movie_id, is_prime)\n            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "4691277cbcf27a48ef2fa756afb1f7b965a610006ff4834352c0a6a47c005be8"
+}

@@ -1,10 +1,10 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id as \"id!\" FROM episodes WHERE metadata_id = ? AND metadata_provider = ?",
+  "query": "SELECT show_id FROM external_ids WHERE metadata_id = ? AND metadata_provider = ?",
   "describe": {
     "columns": [
       {
-        "name": "id!",
+        "name": "show_id",
         "ordinal": 0,
         "type_info": "Int64"
       }
@@ -16,5 +16,5 @@
       true
     ]
   },
-  "hash": "c0cfb1807f4e0c2ab7fae27d72d5aec920d9f953dc227ce2ae5ad285dc1bc20a"
+  "hash": "d04bafc6a4e4867eef6aba1434ce2e6494693a1eb5d1f65fb47fd5479a7fb662"
 }

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO movies \n            (title, release_date, poster,\n            blur_data, backdrop, plot, video_id)\n            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "2491a089e44483af934aa87e0f3bd39d89a23543a3297100d2379d79e1a3dd50"
+}

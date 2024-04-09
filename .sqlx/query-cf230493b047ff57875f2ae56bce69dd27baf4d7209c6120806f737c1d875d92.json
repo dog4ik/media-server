@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT movies.* FROM movies\n        JOIN videos ON videos.id = movies.video_id\n        WHERE videos.path = ?",
+  "query": "SELECT seasons.*\n            FROM seasons \n            JOIN shows ON shows.id = seasons.show_id\n            WHERE shows.id = ? AND seasons.number = ?",
   "describe": {
     "columns": [
       {
@@ -9,54 +9,48 @@
         "type_info": "Int64"
       },
       {
-        "name": "video_id",
+        "name": "show_id",
         "ordinal": 1,
         "type_info": "Int64"
       },
       {
-        "name": "title",
+        "name": "number",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Int64"
       },
       {
-        "name": "blur_data",
+        "name": "release_date",
         "ordinal": 3,
         "type_info": "Text"
       },
       {
-        "name": "backdrop",
+        "name": "plot",
         "ordinal": 4,
         "type_info": "Text"
       },
       {
-        "name": "plot",
+        "name": "poster",
         "ordinal": 5,
         "type_info": "Text"
       },
       {
-        "name": "poster",
+        "name": "blur_data",
         "ordinal": 6,
-        "type_info": "Text"
-      },
-      {
-        "name": "release_date",
-        "ordinal": 7,
         "type_info": "Text"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
-      true,
       false,
       false,
-      true,
+      false,
       true,
       true,
       true,
       true
     ]
   },
-  "hash": "325e05567bd5f8d10daed5ee2c5bb12cd34d717bb653d2b6ff9e7aa6f341e508"
+  "hash": "cf230493b047ff57875f2ae56bce69dd27baf4d7209c6120806f737c1d875d92"
 }
