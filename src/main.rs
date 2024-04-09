@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
+use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, Level};
 
 #[tokio::main]
@@ -173,6 +174,10 @@ async fn main() {
         .route("/admin/transcode", post(admin_api::transcode_video))
         .route("/admin/configuration", get(admin_api::server_configuration))
         .route("/admin/download_torrent", post(admin_api::download_torrent))
+        .nest_service(
+            "/",
+            ServeDir::new("dist").fallback(ServeFile::new("dist/index.html")),
+        )
         .layer(cors)
         .with_state(app_state);
 
