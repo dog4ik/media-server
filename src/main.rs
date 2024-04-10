@@ -17,17 +17,22 @@ use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::{info, Level};
+use tracing::Level;
 
 #[tokio::main]
 async fn main() {
     let log_channel = init_tracer(Level::TRACE);
     if let Ok(path) = dotenv() {
-        info!("Loaded env variables from: {}", path.display());
+        tracing::info!("Loaded env variables from: {}", path.display());
+    } else {
+        tracing::warn!("Could not load env variables from dotfile");
     }
+
+    let cancellation_token = CancellationToken::new();
 
     let cors = CorsLayer::new()
         .allow_methods(Any)
@@ -108,7 +113,8 @@ async fn main() {
 
     let providers_stack = Box::leak(Box::new(providers_stack));
 
-    let tasks = TaskResource::new();
+    let tasks = TaskResource::new(cancellation_token.clone());
+    let tracker = tasks.tracker.clone();
 
     let app_state = AppState {
         library,
@@ -119,6 +125,7 @@ async fn main() {
         tpb_api,
         providers_stack,
         torrent_client,
+        cancelation_token: cancellation_token.clone(),
     };
 
     tokio::spawn(spawn_tray_icon(app_state.clone()));
@@ -185,6 +192,25 @@ async fn main() {
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    info!("Starting server on port {}", port);
-    axum::serve(listener, app).await.unwrap();
+    tracing::info!("Starting server on port {}", port);
+
+    {
+        let cancellation_token = cancellation_token.clone();
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .with_graceful_shutdown(cancellation_token.cancelled_owned())
+                .await
+                .unwrap();
+        });
+    }
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            cancellation_token.cancel();
+        }
+        _ = cancellation_token.cancelled() => {}
+    }
+    tracing::trace!("Waiting all tasks to finish");
+    tracker.close();
+    tracker.wait().await;
+    tracing::info!("Gracefully shutted down");
 }

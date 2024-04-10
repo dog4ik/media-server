@@ -7,6 +7,7 @@ use std::{
 use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use torrent::Torrent;
 use tracing::error;
 use uuid::Uuid;
@@ -49,7 +50,7 @@ pub struct Task {
     pub id: Uuid,
     pub kind: TaskKind,
     pub created: OffsetDateTime,
-    pub cancel: Option<oneshot::Sender<()>>,
+    pub cancel: Option<CancellationToken>,
 }
 
 impl Serialize for Task {
@@ -68,14 +69,14 @@ impl Serialize for Task {
 }
 
 impl Task {
-    pub fn new(kind: TaskKind, cancel_channel: Option<oneshot::Sender<()>>) -> Self {
+    pub fn new(kind: TaskKind, cancel_token: Option<CancellationToken>) -> Self {
         let id = Uuid::new_v4();
         let now = time::OffsetDateTime::now_utc();
         Self {
             created: now,
             id,
             kind,
-            cancel: cancel_channel,
+            cancel: cancel_token,
         }
     }
 
@@ -147,6 +148,8 @@ impl ProgressChunk {
 #[derive(Debug, Clone)]
 pub struct TaskResource {
     pub progress_channel: ProgressChannel,
+    pub parent_cancellation_token: CancellationToken,
+    pub tracker: TaskTracker,
     pub tasks: Arc<Mutex<Vec<Task>>>,
 }
 
@@ -172,10 +175,12 @@ impl From<TaskError> for AppError {
 }
 
 impl TaskResource {
-    pub fn new() -> Self {
+    pub fn new(cancellation_token: CancellationToken) -> Self {
         TaskResource {
             progress_channel: ProgressChannel::new(),
+            parent_cancellation_token: cancellation_token,
             tasks: Arc::new(Mutex::new(Vec::new())),
+            tracker: TaskTracker::new(),
         }
     }
 
@@ -186,9 +191,9 @@ impl TaskResource {
         kind: TaskKind,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
-        let (tx, mut rx) = oneshot::channel();
+        let child_token = self.parent_cancellation_token.child_token();
         let mut progress = job.progress();
-        let id = self.start_task(kind, Some(tx))?;
+        let id = self.start_task(kind, Some(child_token.clone()))?;
         loop {
             tokio::select! {
                 Some(percent) = progress.recv() => {
@@ -211,7 +216,7 @@ impl TaskResource {
                         }
                     }
                 }
-                _ = &mut rx => {
+                _ = child_token.cancelled() => {
                     let _ = job.cancel().await;
                     return Err(TaskError::Canceled)
                 }
@@ -228,14 +233,14 @@ impl TaskResource {
     ) -> Result<(), TaskError> {
         let info_hash = torrent.info_hash();
         let ProgressChannel(channel) = self.progress_channel.clone();
-        let (tx, mut rx) = oneshot::channel();
+        let child_token = self.parent_cancellation_token.child_token();
         let (progress_tx, mut progress_rx) = mpsc::channel(100);
         let mut job = client
             .download(output_path, torrent, progress_tx)
             .await
             .map_err(|_| TaskError::Failure)?;
         let kind = TaskKind::Torrent { info_hash };
-        let id = self.start_task(kind, Some(tx))?;
+        let id = self.start_task(kind, Some(child_token.clone()))?;
         loop {
             tokio::select! {
                 Some(progress) = progress_rx.recv() => {
@@ -253,7 +258,7 @@ impl TaskResource {
                         }
                     }
                 }
-                _ = &mut rx => {
+                _ = child_token.cancelled() => {
                     let _ = job.abort();
                     return Err(TaskError::Canceled)
                 }
@@ -279,9 +284,9 @@ impl TaskResource {
     pub fn start_task(
         &self,
         kind: TaskKind,
-        cancel_channel: Option<oneshot::Sender<()>>,
+        cancellation_token: Option<CancellationToken>,
     ) -> Result<Uuid, TaskError> {
-        let task = Task::new(kind, cancel_channel);
+        let task = Task::new(kind, cancellation_token);
         let id = self.add_task(task)?;
         let _ = self.progress_channel.0.send(ProgressChunk::start(id));
         Ok(id)
@@ -308,7 +313,7 @@ impl TaskResource {
     pub fn cancel_task(&self, id: Uuid) -> Result<(), TaskError> {
         let mut task = self.remove_task(id).ok_or(TaskError::NotFound)?;
         let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
-        cancel.send(()).unwrap();
+        cancel.cancel();
         let _ = self.progress_channel.0.send(ProgressChunk::cancel(id));
         Ok(())
     }

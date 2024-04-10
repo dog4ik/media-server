@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Mutex;
 use std::{convert::Infallible, fmt::Display};
 
@@ -18,7 +17,6 @@ use axum_extra::headers::ContentType;
 use axum_extra::TypedHeader;
 use serde::Deserialize;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
-use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
@@ -272,13 +270,13 @@ pub async fn mock_progress(
     Query(StringIdQuery { id: target }): Query<StringIdQuery>,
 ) {
     debug!("Emitting fake progress with target: {}", target);
-    let (tx, rx) = oneshot::channel();
+    let child_token = tasks.parent_cancellation_token.child_token();
     let task_id = tasks
         .start_task(
             TaskKind::Scan {
                 target: target.into(),
             },
-            Some(tx),
+            Some(child_token.clone()),
         )
         .unwrap();
     let ProgressChannel(channel) = &tasks.progress_channel;
@@ -295,7 +293,7 @@ pub async fn mock_progress(
                 tasks.finish_task(task_id);
                 debug!("finished fake progress with id: {}", task_id);
             }=> {},
-            _ = rx => {
+            _ = child_token.cancelled() => {
                 tasks.cancel_task(task_id).expect("task to be canceleable");
                 debug!("Canceled fake progress with id: {}", task_id);
             }

@@ -3,6 +3,7 @@ use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr, sync::M
 use anyhow::anyhow;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, task::JoinSet};
+use tokio_util::sync::CancellationToken;
 use torrent::Torrent;
 
 use crate::{
@@ -28,6 +29,7 @@ pub struct AppState {
     pub tpb_api: &'static TpbApi,
     pub providers_stack: &'static MetadataProvidersStack,
     pub torrent_client: &'static torrent::Client,
+    pub cancelation_token: CancellationToken,
 }
 
 #[derive(Debug, Clone)]
@@ -278,7 +280,11 @@ impl AppState {
     ) -> Result<(), AppError> {
         let _ = self
             .tasks
-            .observe_torrent_download(self.torrent_client, torrent, output)
+            .tracker
+            .track_future(
+                self.tasks
+                    .observe_torrent_download(self.torrent_client, torrent, output),
+            )
             .await;
         Ok(())
     }
@@ -295,12 +301,13 @@ impl AppState {
         let output_path = job.job.output_path.clone();
 
         self.tasks
-            .observe_ffmpeg_task(
+            .tracker
+            .track_future(self.tasks.observe_ffmpeg_task(
                 job,
                 TaskKind::Transcode {
                     target: source.source_path().to_path_buf(),
                 },
-            )
+            ))
             .await?;
         let variant_video = Video::from_path(output_path)
             .await
@@ -324,12 +331,13 @@ impl AppState {
 
         let run_result = self
             .tasks
-            .observe_ffmpeg_task(
+            .tracker
+            .track_future(self.tasks.observe_ffmpeg_task(
                 job,
                 TaskKind::Previews {
                     target: file.source_path().to_path_buf(),
                 },
-            )
+            ))
             .await;
 
         if let Err(err) = run_result {
