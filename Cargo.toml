@@ -35,3 +35,9 @@ tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 uuid = { version = "1.6.1", features = ["v4", "serde"] }
 torrent = {path = "./torrent"}
+tray-icon = "0.13.4"
+open = "5.1.2"
+image = "0.25.1"
+
+[target.'cfg(windows)'.dependencies]
+winit = "0.29.15"

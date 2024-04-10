@@ -14,5 +14,6 @@ pub mod server;
 pub mod testing;
 pub mod torrent_index;
 pub mod tracing;
+pub mod tray;
 pub mod utils;
 pub mod watch;

@@ -12,6 +12,7 @@ use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api};
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
+use media_server::tray::spawn_tray_icon;
 use media_server::watch::monitor_library;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -120,6 +121,7 @@ async fn main() {
         torrent_client,
     };
 
+    tokio::spawn(spawn_tray_icon(app_state.clone()));
     monitor_library(app_state.clone(), media_folders).await;
 
     let app = Router::new()
