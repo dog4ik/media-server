@@ -56,7 +56,6 @@ fn windows_tray_icon(sender: mpsc::Sender<ButtonType>) {
         .build()
         .unwrap();
 
-    #[cfg(target_os = "windows")]
     let mut tray_icon = None;
 
     let menu_channel = MenuEvent::receiver();
