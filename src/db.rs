@@ -1,4 +1,8 @@
-use std::{path::PathBuf, str::FromStr, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
 
 use serde::Serialize;
 use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
@@ -12,16 +16,30 @@ use crate::{
     },
 };
 
+fn path_to_url(path: &Path) -> String {
+    let mut path = path.to_string_lossy().to_string();
+    #[cfg(target_os = "windows")]
+    {
+        let stupid_pattern = r#"\\?"#;
+        if path.starts_with(stupid_pattern) {
+            path = path.replace(stupid_pattern, "");
+        };
+        path = path.replace(r#"\"#, "/")
+    }
+    format!("sqlite://{}", path)
+}
+
 #[derive(Debug, Clone)]
 pub struct Db {
     pub pool: SqlitePool,
 }
 
 impl Db {
-    pub async fn connect(url: &str) -> Result<Self, sqlx::Error> {
+    pub async fn connect(path: impl AsRef<Path>) -> Result<Self, sqlx::Error> {
+        let url = path_to_url(path.as_ref());
         let pool = SqlitePoolOptions::new()
             .max_connections(5)
-            .connect(url)
+            .connect(&url)
             .await?;
         sqlx::query!(
 r#"CREATE TABLE IF NOT EXISTS shows (id INTEGER PRIMARY KEY AUTOINCREMENT, 
