@@ -11,8 +11,8 @@ use sqlx::FromRow;
 
 use crate::app_state::AppError;
 use crate::db::DbExternalId;
-use crate::ffmpeg::{FFprobeAudioStream, FFprobeVideoStream};
-use crate::library::{AudioCodec, Resolution, Source, Summary, VideoCodec};
+use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
+use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, Summary, VideoCodec};
 use crate::metadata::{
     EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
     MetadataSearchResult, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
@@ -48,11 +48,12 @@ pub struct DetailedVideo {
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
+    pub subtitle_tracks: Vec<DetailedSubtitleTrack>,
     pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DetailedVariant {
     pub id: String,
     pub path: PathBuf,
@@ -62,7 +63,7 @@ pub struct DetailedVariant {
     pub audio_tracks: Vec<DetailedAudioTrack>,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DetailedAudioTrack {
     pub is_default: bool,
     pub sample_rate: String,
@@ -71,7 +72,14 @@ pub struct DetailedAudioTrack {
     pub codec: AudioCodec,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, Serialize)]
+pub struct DetailedSubtitleTrack {
+    pub is_default: bool,
+    pub language: Option<String>,
+    pub codec: SubtitlesCodec,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DetailedVideoTrack {
     pub is_default: bool,
     pub resolution: Resolution,
@@ -103,6 +111,16 @@ impl Into<DetailedAudioTrack> for FFprobeAudioStream<'_> {
             sample_rate: self.sample_rate.to_string(),
             channels: self.channels,
             profile: self.profile.map(|x| x.to_string()),
+            codec: self.codec(),
+        }
+    }
+}
+
+impl Into<DetailedSubtitleTrack> for FFprobeSubtitleStream<'_> {
+    fn into(self) -> DetailedSubtitleTrack {
+        DetailedSubtitleTrack {
+            is_default: self.is_defalut(),
+            language: self.language.map(|x| x.to_string()),
             codec: self.codec(),
         }
     }
@@ -417,6 +435,12 @@ pub async fn get_video_by_id(
         audio_tracks: source
             .origin
             .audio_streams()
+            .into_iter()
+            .map(|s| s.into())
+            .collect(),
+        subtitle_tracks: source
+            .origin
+            .subtitle_streams()
             .into_iter()
             .map(|s| s.into())
             .collect(),

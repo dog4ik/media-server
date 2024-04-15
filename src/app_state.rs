@@ -251,14 +251,19 @@ impl AppState {
             if let Ok(status) = job.wait().await {
                 if status.success() {
                     let mut file_path = subtitles_path.clone();
-                    file_path.push(format!("{}.srt", stream.language));
+                    file_path.push(format!(
+                        "{}.srt",
+                        stream
+                            .language
+                            .map_or(uuid::Uuid::new_v4().to_string(), |x| x.to_string())
+                    ));
                     let mut file = std::fs::File::open(&file_path)?;
                     let metadata = fs::metadata(&file_path).await?;
                     let size = metadata.len();
                     let hash = utils::file_hash(&mut file)?;
                     let db_subtitles = DbSubtitles {
                         id: None,
-                        language: stream.language.to_string(),
+                        language: stream.language.map(|x| x.to_string()),
                         path: subtitles_path.to_str().unwrap().to_string(),
                         hash: hash.to_string(),
                         size: size as i64,

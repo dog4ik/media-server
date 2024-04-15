@@ -80,7 +80,7 @@ pub struct FFprobeSubtitleStream<'a> {
     pub codec_name: &'a str,
     pub codec_long_name: &'a str,
     pub disposition: &'a FFprobeDisposition,
-    pub language: &'a str,
+    pub language: Option<&'a str>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -303,10 +303,7 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
-            language: &tags
-                .language
-                .as_ref()
-                .ok_or(anyhow!("language tag is absent"))?,
+            language: tags.language.as_deref(),
             disposition: &self.disposition,
         };
         return Ok(video);
@@ -446,10 +443,13 @@ pub struct SubtitlesJob {
 
 impl SubtitlesJob {
     pub fn from_source(input: &Source, track: usize) -> Result<Self, anyhow::Error> {
-        let output_path = |lang: &str| {
-            input
-                .subtitles_path()
-                .join(PathBuf::new().with_file_name(lang).with_extension("srt"))
+        let output_path = |lang: Option<String>| {
+            let file_name = lang.unwrap_or(uuid::Uuid::new_v4().to_string());
+            input.subtitles_path().join(
+                PathBuf::new()
+                    .with_file_name(file_name)
+                    .with_extension("srt"),
+            )
         };
 
         input
@@ -460,7 +460,7 @@ impl SubtitlesJob {
             .map(|s| Self {
                 source_path: input.source_path().to_path_buf(),
                 track: s.index as usize,
-                output_file_path: output_path(s.language),
+                output_file_path: output_path(s.language.map(|x| x.to_string())),
             })
             .ok_or(anyhow::anyhow!("cant find track in file"))
     }
@@ -656,8 +656,7 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
                         let Ok(value) = value.parse() else {
                             continue;
                         };
-                        let current_duration =
-                            Duration::from_micros(value).as_secs();
+                        let current_duration = Duration::from_micros(value).as_secs();
                         let percent =
                             (current_duration as f64 / duration.as_secs() as f64) as f64 * 100.0;
                         let percent = percent.floor() as usize;

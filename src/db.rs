@@ -882,7 +882,7 @@ pub struct DbVideo {
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbSubtitles {
     pub id: Option<i64>,
-    pub language: String,
+    pub language: Option<String>,
     pub path: String,
     pub hash: String,
     pub size: i64,
