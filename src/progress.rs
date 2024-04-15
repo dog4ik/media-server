@@ -6,7 +6,7 @@ use std::{
 
 use serde::Serialize;
 use time::OffsetDateTime;
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, mpsc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use torrent::Torrent;
 use tracing::error;
@@ -18,7 +18,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", tag = "task_kind")]
 pub enum TaskKind {
     Transcode { target: PathBuf },
     Scan { target: PathBuf },
@@ -45,27 +45,20 @@ impl Display for TaskKind {
     }
 }
 
-#[derive(Debug)]
-pub struct Task {
-    pub id: Uuid,
-    pub kind: TaskKind,
-    pub created: OffsetDateTime,
-    pub cancel: Option<CancellationToken>,
+fn ser_bool_option<S>(option: &Option<CancellationToken>, ser: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    ser.serialize_bool(option.is_some())
 }
 
-impl Serialize for Task {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        use serde::ser::SerializeStruct;
-
-        let mut task = serializer.serialize_struct("task", 3)?;
-        task.serialize_field("id", &self.id)?;
-        task.serialize_field("kind", &self.kind)?;
-        task.serialize_field("cancelable", &self.cancel.is_some())?;
-        task.end()
-    }
+#[derive(Debug, Serialize)]
+pub struct Task {
+    pub id: Uuid,
+    pub task: TaskKind,
+    pub created: OffsetDateTime,
+    #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
+    pub cancel: Option<CancellationToken>,
 }
 
 impl Task {
@@ -75,7 +68,7 @@ impl Task {
         Self {
             created: now,
             id,
-            kind,
+            task: kind,
             cancel: cancel_token,
         }
     }
@@ -268,11 +261,11 @@ impl TaskResource {
 
     fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
         let mut tasks = self.tasks.lock().unwrap();
-        let duplicate = tasks.iter().find(|t| t.kind == task.kind);
+        let duplicate = tasks.iter().find(|t| t.task == task.task);
         if let Some(duplicate) = duplicate {
             error!(
                 "Failed to create task(): dublicate {} ({})",
-                task.kind, duplicate.id
+                task.task, duplicate.id
             );
             return Err(TaskError::Duplicate);
         }
