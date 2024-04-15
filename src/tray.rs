@@ -11,6 +11,7 @@ use winit::{
 };
 
 use crate::app_state::AppState;
+use crate::config::APP_RESOURCES;
 
 #[derive(Debug, Clone, Copy)]
 pub enum ButtonType {
@@ -49,8 +50,6 @@ impl ButtonRegistry {
 
 #[cfg(target_os = "windows")]
 fn windows_tray_icon(sender: mpsc::Sender<ButtonType>) {
-    use std::time::Duration;
-
     let event_loop = EventLoopBuilder::new()
         .with_any_thread(true)
         .build()
@@ -61,22 +60,21 @@ fn windows_tray_icon(sender: mpsc::Sender<ButtonType>) {
     let menu_channel = MenuEvent::receiver();
     let tray_channel = TrayIconEvent::receiver();
     let registry = menu();
+    let base_path = APP_RESOURCES.get().unwrap().base_path.clone();
 
     event_loop
         .run(move |event, event_loop| {
             event_loop.set_control_flow(ControlFlow::Wait);
 
             if let winit::event::Event::NewEvents(winit::event::StartCause::Init) = event {
-                let icon = load_icon("dist/logo.webp");
-                tray_icon = Some(
-                    TrayIconBuilder::new()
-                        .with_menu(Box::new(registry.menu.clone()))
-                        .with_tooltip("Media server")
-                        .with_icon(icon)
-                        .with_title("Media server")
-                        .build()
-                        .unwrap(),
-                );
+                let mut builder = TrayIconBuilder::new()
+                    .with_menu(Box::new(registry.menu.clone()))
+                    .with_tooltip("Media server")
+                    .with_title("Media server");
+                if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
+                    builder = builder.with_icon(icon);
+                }
+                tray_icon = Some(builder.build().unwrap());
             }
 
             if let Ok(event) = tray_channel.try_recv() {
@@ -141,14 +139,13 @@ fn menu() -> ButtonRegistry {
     registry
 }
 
-pub fn load_icon(path: impl AsRef<Path>) -> tray_icon::Icon {
+pub fn load_icon(path: impl AsRef<Path>) -> anyhow::Result<tray_icon::Icon> {
     let (icon_rgba, icon_width, icon_height) = {
-        let image = image::open(path)
-            .expect("Failed to open icon path")
-            .into_rgba8();
+        let image = image::open(path)?.into_rgba8();
         let (width, height) = image.dimensions();
         let rgba = image.into_raw();
         (rgba, width, height)
     };
-    tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height).expect("Failed to open icon")
+    let icon = tray_icon::Icon::from_rgba(icon_rgba, icon_width, icon_height)?;
+    Ok(icon)
 }
