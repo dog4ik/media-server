@@ -591,7 +591,7 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
     /// Run ffmpeg command. Returns handle to process
     fn run<I, S>(args: I) -> anyhow::Result<Child>
     where
-        I: IntoIterator<Item = S> + Copy,
+        I: IntoIterator<Item = S> + Copy + std::fmt::Debug,
         S: AsRef<std::ffi::OsStr>,
     {
         let ffmpeg = &APP_RESOURCES
@@ -653,8 +653,11 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
                     }
                     "out_time_ms" => {
                         // just a number
+                        let Ok(value) = value.parse() else {
+                            continue;
+                        };
                         let current_duration =
-                            Duration::from_micros(value.parse().unwrap()).as_secs();
+                            Duration::from_micros(value).as_secs();
                         let percent =
                             (current_duration as f64 / duration.as_secs() as f64) as f64 * 100.0;
                         let percent = percent.floor() as usize;
