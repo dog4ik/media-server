@@ -143,13 +143,13 @@ impl<S: Subscriber> Layer<S> for PublicTracerLayer {
     }
 }
 
-pub fn init_tracer(max_level: Level) -> LogChannel {
+pub fn init_tracer(max_level: Level, log_file_location: PathBuf) -> LogChannel {
     let sub = tracing_subscriber::fmt()
         .pretty()
         .with_max_level(max_level)
         .finish();
     let pub_tracer = PublicTracerLayer::new();
-    let file_logger = FileLoggingLayer::from_path("log.log".into()).unwrap();
+    let file_logger = FileLoggingLayer::from_path(log_file_location).unwrap();
     let log_channel = LogChannel(pub_tracer.channel.clone());
     sub.with(pub_tracer).with(file_logger).init();
     return log_channel;
