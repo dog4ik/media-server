@@ -13,50 +13,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::{self, H264Preset};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum ConfigLogLevel {
-    #[default]
-    Trace,
-    Warn,
-    Debug,
-    Error,
-    Info,
-}
-
-impl FromStr for ConfigLogLevel {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "Trace" => Ok(Self::Trace),
-            "Warn" => Ok(Self::Warn),
-            "Debug" => Ok(Self::Debug),
-            "Error" => Ok(Self::Error),
-            "Info" => Ok(Self::Info),
-            _ => Err(anyhow::anyhow!("{} does not match any log level", s)),
-        }
-    }
-}
-
-impl From<tracing::Level> for ConfigLogLevel {
-    fn from(value: tracing::Level) -> Self {
-        match value {
-            tracing::Level::TRACE => Self::Trace,
-            tracing::Level::WARN => Self::Warn,
-            tracing::Level::DEBUG => Self::Debug,
-            tracing::Level::ERROR => Self::Error,
-            tracing::Level::INFO => Self::Info,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Clone)]
 pub struct ServerConfiguration {
     pub port: u16,
-    pub log_level: ConfigLogLevel,
     pub capabilities: Capabilities,
-    pub log_path: PathBuf,
     pub movie_folders: Vec<PathBuf>,
     pub show_folders: Vec<PathBuf>,
     pub resources: AppResources,
@@ -66,13 +26,12 @@ pub struct ServerConfiguration {
     pub h264_preset: H264Preset,
     pub ffprobe_path: Option<PathBuf>,
     pub ffmpeg_path: Option<PathBuf>,
+    pub tmdb_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct TomlConfig {
     port: u16,
-    log_level: ConfigLogLevel,
-    log_path: PathBuf,
     movie_folders: Vec<PathBuf>,
     show_folders: Vec<PathBuf>,
     scan_max_concurrency: usize,
@@ -87,8 +46,6 @@ impl Default for TomlConfig {
             show_folders: Vec::new(),
             movie_folders: Vec::new(),
             port: 6969,
-            log_level: ConfigLogLevel::Trace,
-            log_path: PathBuf::from("log.log"),
             scan_max_concurrency: 10,
             h264_preset: H264Preset::default(),
             // TODO: move to full path to local dependency
@@ -166,15 +123,6 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         .get("port")
         .and_then(|v| v.as_integer())
         .map_or(default.port, |v| v as u16);
-    let log_level = parsed
-        .get("log_level")
-        .and_then(|v| v.as_str())
-        .and_then(|s| ConfigLogLevel::from_str(s).ok())
-        .unwrap_or(default.log_level);
-    let log_path = parsed
-        .get("log_path")
-        .and_then(|v| v.as_str())
-        .map_or(default.log_path, |x| x.into());
     let movie_folders = parsed
         .get("movie_folders")
         .and_then(|v| v.as_array())
@@ -217,8 +165,6 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
 
     let repaired_config = TomlConfig {
         port,
-        log_level,
-        log_path,
         movie_folders,
         show_folders,
         scan_max_concurrency,
@@ -234,8 +180,6 @@ impl ServerConfiguration {
     fn into_toml(&self) -> TomlConfig {
         TomlConfig {
             port: self.port,
-            log_level: self.log_level.clone(),
-            log_path: self.log_path.clone(),
             movie_folders: self.movie_folders.clone(),
             show_folders: self.show_folders.clone(),
             scan_max_concurrency: self.scan_max_concurrency,
@@ -276,12 +220,10 @@ impl ServerConfiguration {
                 ffprobe_path.clone(),
             ),
             port: file_config.port,
-            log_level: file_config.log_level,
             capabilities: ffprobe_path
                 .as_ref()
                 .and_then(|x| Capabilities::parse(&x).ok())
                 .unwrap_or_default(),
-            log_path: file_config.log_path,
             movie_folders: file_config.movie_folders,
             show_folders: file_config.show_folders,
             config_file: config,
@@ -289,14 +231,14 @@ impl ServerConfiguration {
             h264_preset: H264Preset::default(),
             ffprobe_path,
             ffmpeg_path,
+            tmdb_token: std::env::var("TMDB_TOKEN").ok(),
         };
         Ok(config)
     }
 
     pub fn apply_args(&mut self, args: Args) {
-        args.log_path.map(|x| self.log_path = x);
         args.port.map(|x| self.port = x);
-        args.log_level.map(|x| self.log_level = x.into());
+        args.tmdb_token.map(|x| self.tmdb_token = Some(x));
     }
 
     pub fn add_show_folder(&mut self, show_folder: PathBuf) -> Result<(), anyhow::Error> {
@@ -350,11 +292,6 @@ impl ServerConfiguration {
         self.flush()
     }
 
-    pub fn set_log_level(&mut self, level: ConfigLogLevel) -> Result<(), anyhow::Error> {
-        self.log_level = level;
-        self.flush()
-    }
-
     /// Flush current configuration in config file
     pub fn flush(&mut self) -> Result<(), anyhow::Error> {
         self.config_file.flush(self.into_toml())?;
@@ -367,15 +304,12 @@ pub struct Args {
     /// Override port
     #[arg(short, long)]
     pub port: Option<u16>,
-    /// Override log level
-    #[arg(short, long)]
-    pub log_level: Option<tracing::Level>,
-    /// Override log location
-    #[arg(long)]
-    pub log_path: Option<PathBuf>,
     /// Provide custom config location
     #[arg(short, long)]
     pub config_path: Option<PathBuf>,
+    /// Override tmdb api token
+    #[arg(long)]
+    pub tmdb_token: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -469,15 +403,18 @@ pub struct AppResources {
     #[serde(skip)]
     pub config_path: PathBuf,
     pub resources_path: PathBuf,
+    pub temp_path: PathBuf,
     pub cache_path: PathBuf,
     pub ffmpeg_path: Option<PathBuf>,
     pub ffprobe_path: Option<PathBuf>,
+    pub binary_path: Option<PathBuf>,
+    pub base_path: PathBuf,
 }
 
 pub static APP_RESOURCES: OnceLock<AppResources> = OnceLock::new();
 
 impl AppResources {
-    const APP_NAME: &'static str = "media-server";
+    pub const APP_NAME: &'static str = "media-server";
 
     fn prod_storage() -> PathBuf {
         dirs::data_dir()
@@ -502,18 +439,36 @@ impl AppResources {
         Self::data_storage().join("configuration.toml")
     }
 
-    fn cache_storage() -> PathBuf {
+    fn temp_storage() -> PathBuf {
         std::env::temp_dir().join(Self::APP_NAME)
     }
 
-    pub fn initiate(&self) -> Result<(), anyhow::Error> {
-        fs::create_dir_all(&self.resources_path)?;
-        fs::create_dir_all(&self.database_path.parent().unwrap())?;
+    fn cache_storage() -> PathBuf {
+        dirs::cache_dir().unwrap().join(Self::APP_NAME)
+    }
+
+    fn database_directory() -> PathBuf {
+        Self::data_storage().join("db")
+    }
+
+    fn resources() -> PathBuf {
+        Self::data_storage().join("resources")
+    }
+
+    fn database() -> PathBuf {
+        Self::database_directory().join("database.sqlite")
+    }
+
+    pub fn initiate() -> Result<(), std::io::Error> {
+        fs::create_dir_all(Self::resources())?;
+        fs::create_dir_all(Self::database_directory())?;
+        fs::create_dir_all(Self::temp_storage())?;
+        fs::create_dir_all(Self::cache_storage())?;
         fs::OpenOptions::new()
             .read(true)
             .write(true)
             .create(true)
-            .open(&self.database_path)?;
+            .open(Self::database())?;
         Ok(())
     }
 
@@ -522,18 +477,29 @@ impl AppResources {
         ffmpeg_path: Option<PathBuf>,
         ffprobe_path: Option<PathBuf>,
     ) -> Self {
-        let store_path = Self::data_storage();
-        let db_folder = store_path.join("db");
-        let resources_path = store_path.join("resources");
-        let database_path = db_folder.join("database.sqlite");
+        let resources_path = Self::resources();
+        let database_path = Self::database();
+        let temp_path = Self::temp_storage();
         let cache_path = Self::cache_storage();
+        let binary_path = std::env::current_exe()
+            .ok()
+            .and_then(|d| d.parent().map(|x| x.to_path_buf()));
+
+        let base_path = if cfg!(debug_assertions) {
+            "".into()
+        } else {
+            binary_path.clone().unwrap()
+        };
         Self {
             config_path,
             database_path,
             resources_path,
+            temp_path,
             cache_path,
             ffmpeg_path,
             ffprobe_path,
+            binary_path,
+            base_path,
         }
     }
     pub fn ffmpeg(&self) -> &PathBuf {

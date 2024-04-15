@@ -24,31 +24,23 @@ use tracing::Level;
 
 #[tokio::main]
 async fn main() {
-    let log_channel = init_tracer(Level::TRACE);
+    if let Err(err) = AppResources::initiate() {
+        tracing::error!("Failed to initiate resources {}", err);
+        panic!("Could not initate app resources");
+    };
+    let log_path = dirs::cache_dir()
+        .unwrap()
+        .join(AppResources::APP_NAME)
+        .join("log.log");
+    let log_channel = init_tracer(Level::TRACE, log_path);
+
     if let Ok(path) = dotenv() {
         tracing::info!("Loaded env variables from: {}", path.display());
     } else {
         tracing::warn!("Could not load env variables from dotfile");
     }
 
-    let cancellation_token = CancellationToken::new();
-
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_origin(Any)
-        .allow_headers(Any);
-
-    let database_url = std::env::var("DATABASE_URL").unwrap();
-    let db = Db::connect(&database_url)
-        .await
-        .expect("database to be found");
-    let db = Box::leak(Box::new(db));
-
-    let torrent_config = ClientConfig::default();
-    let torrent_client = torrent::Client::new(torrent_config).await.unwrap();
-
     let args = Args::parse();
-
     let config_path = args
         .config_path
         .clone()
@@ -57,14 +49,25 @@ async fn main() {
     let config = ConfigFile::open(config_path).unwrap();
     let mut configuration = ServerConfiguration::new(config).unwrap();
     configuration.apply_args(args);
-    if let Err(err) = configuration.resources.initiate() {
-        tracing::error!("Failed to initiate resources {}", err);
-        panic!("Could not initate app resources");
-    };
     APP_RESOURCES
         .set(configuration.resources.clone())
         .expect("resources are not initiated yet");
 
+    let cancellation_token = CancellationToken::new();
+
+    let cors = CorsLayer::new()
+        .allow_methods(Any)
+        .allow_origin(Any)
+        .allow_headers(Any);
+
+    let torrent_config = ClientConfig::default();
+    let torrent_client = torrent::Client::new(torrent_config).await.unwrap();
+
+    let db = Db::connect(configuration.resources.database_path.clone())
+        .await
+        .expect("database to be found");
+
+    let db = Box::leak(Box::new(db));
     let port = configuration.port;
 
     let shows_dirs: Vec<PathBuf> = configuration
@@ -94,10 +97,12 @@ async fn main() {
         movies: movies_dirs,
     };
 
+    let program_files = configuration.resources.base_path.clone();
+
     let library = Library::new(media_folders.clone(), shows, movies);
     let library = Box::leak(Box::new(Mutex::new(library)));
+    let tmdb_api = TmdbApi::new(configuration.tmdb_token.clone().unwrap());
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
-    let tmdb_api = TmdbApi::new(std::env::var("TMDB_TOKEN").unwrap());
     let tmdb_api = Box::leak(Box::new(tmdb_api));
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
@@ -185,12 +190,13 @@ async fn main() {
         .route("/admin/download_torrent", post(admin_api::download_torrent))
         .nest_service(
             "/",
-            ServeDir::new("dist").fallback(ServeFile::new("dist/index.html")),
+            ServeDir::new(program_files.join("dist"))
+                .fallback(ServeFile::new(program_files.join("dist/index.html"))),
         )
         .layer(cors)
         .with_state(app_state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     tracing::info!("Starting server on port {}", port);
 
