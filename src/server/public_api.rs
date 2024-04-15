@@ -454,12 +454,14 @@ pub async fn get_episode(
     Ok(Json(res))
 }
 
-/// Search torrent by content's imdb id
 pub async fn search_torrent(
-    Query(query): Query<StringIdQuery>,
+    Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<Torrent>>, AppError> {
-    let out = providers.get_torrents(&query.id).await;
+    if query.search.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    let out = providers.get_torrents(&query.search).await;
     Ok(Json(out))
 }
 
