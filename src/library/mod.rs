@@ -20,7 +20,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
     sync::Semaphore,
 };
-use tokio_util::codec::{BytesCodec, FramedRead};
+use tokio_util::{codec::{BytesCodec, FramedRead}, sync::CancellationToken};
 
 use crate::{
     config::APP_RESOURCES,
@@ -553,7 +553,11 @@ impl Source {
     /// Generate previews for file
     pub fn generate_previews(&self) -> anyhow::Result<FFmpegRunningJob<PreviewsJob>> {
         let job = PreviewsJob::from_source(&self);
-        Ok(FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())?)
+        Ok(FFmpegRunningJob::new_running(
+            job,
+            self.source_path().into(),
+            self.duration(),
+        )?)
     }
 
     /// Generate subtitles for file
@@ -1111,7 +1115,8 @@ async fn cancel_transcode() {
 
     let testing_resource = TestResource::new(true).await;
     let subject = testing_resource.test_show.clone();
-    let task_resource = TaskResource::new();
+    let cancellation_token = CancellationToken::new();
+    let task_resource = TaskResource::new(cancellation_token.clone());
     let size_before = fs::metadata(&subject.source.origin.path)
         .await
         .unwrap()
@@ -1135,7 +1140,12 @@ async fn cancel_transcode() {
     }
     let target_buffer = process.job.output_path.clone();
     let result = task_resource
-        .observe_ffmpeg_task(process, TaskKind::Transcode)
+        .observe_ffmpeg_task(
+            process,
+            TaskKind::Transcode {
+                target: video_path.clone(),
+            },
+        )
         .await;
     // task is canceled
     assert!(result.is_err());

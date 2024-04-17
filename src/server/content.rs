@@ -18,7 +18,7 @@ pub trait ServeContent {
     #[allow(async_fn_in_trait)]
     async fn serve_previews(
         &self,
-        number: i32,
+        number: usize,
     ) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode>;
 
     /// Serve subtitles
@@ -33,14 +33,14 @@ impl ServeContent for Source {
 
     async fn serve_previews(
         &self,
-        number: i32,
+        number: usize,
     ) -> Result<(TypedHeader<ContentType>, Bytes), StatusCode> {
         let path = PathBuf::from(self.previews_path().to_str().unwrap());
         let mut previews_dir = tokio::fs::read_dir(path).await.unwrap();
 
         while let Some(file) = previews_dir.next_entry().await.unwrap() {
             let file_path = file.path();
-            let file_number: i32 = file_path
+            let file_number: usize = file_path
                 .file_stem()
                 .unwrap()
                 .to_os_string()
