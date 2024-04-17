@@ -9,6 +9,7 @@ use torrent::Torrent;
 use crate::{
     config::ServerConfiguration,
     db::{Db, DbExternalId, DbSubtitles},
+    ffmpeg,
     library::{movie::MovieIdentifier, Library, LibraryFile, Source, TranscodePayload, Video},
     metadata::{
         tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
@@ -276,6 +277,31 @@ impl AppState {
         }
         self.tasks.finish_task(task_id).expect("task to exist");
         Ok(())
+    }
+
+    /// Get subtitle track from video file without saving it. Takes some time to run ffmpeg
+    pub async fn pull_subtitle_from_video(
+        &self,
+        video_id: i64,
+        subs_track: usize,
+    ) -> Result<String, AppError> {
+        let source = self.get_file_by_id(video_id).await?;
+        let track_number = {
+            let lib = self.library.lock().unwrap();
+            let source = lib
+                .find_source(source.source_path())
+                .ok_or(AppError::not_found("Failed to find source file on disk"))?;
+            source
+                .origin
+                .subtitle_streams()
+                .get(subs_track)
+                .ok_or(AppError::not_found(
+                    "Specified subtitle track does not exists",
+                ))?
+                .index
+        };
+        let subtitle = ffmpeg::pull_subtitles(source.source_path(), track_number).await?;
+        Ok(subtitle)
     }
 
     pub async fn download_torrent(

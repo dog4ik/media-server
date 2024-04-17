@@ -197,6 +197,16 @@ pub async fn subtitles(
     };
 }
 
+pub async fn pull_video_subtitle(
+    Query(video_id): Query<IdQuery>,
+    Query(number): Query<NumberQuery>,
+    State(state): State<AppState>,
+) -> Result<String, AppError> {
+    state
+        .pull_subtitle_from_video(video_id.id, number.number)
+        .await
+}
+
 pub async fn watch(
     Query(video_id): Query<IdQuery>,
     variant: Option<Query<VariantQuery>>,

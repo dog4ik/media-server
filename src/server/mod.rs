@@ -53,7 +53,7 @@ pub struct EpisodeQuery {
 
 #[derive(Deserialize)]
 pub struct NumberQuery {
-    pub number: i32,
+    pub number: usize,
 }
 
 #[derive(Deserialize)]

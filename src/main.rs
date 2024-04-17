@@ -149,6 +149,7 @@ async fn main() {
         .route("/api/external_ids/:id", get(public_api::external_ids))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
+        .route("/api/pull_video_subtitle", get(public_api::pull_video_subtitle))
         .route("/api/show/:show_id", get(public_api::get_show))
         .route("/api/show/:show_id/:season", get(public_api::get_season))
         .route(
