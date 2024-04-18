@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO history\n            (time, is_finished, video_id)\n            VALUES (?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "68bc96991d91d62cc49d6f5ac2027750dc2ea98d83788c7e4000e630cfa67db3"
+}
