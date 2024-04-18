@@ -116,6 +116,12 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     size INTEGER NOT NULL,
                                     video_id INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    time INTEGER NOT NULL,
+                                    is_finished BOOL NOT NULL,
+                                    video_id INTEGER NOT NULL UNIQUE,
+                                    update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     metadata_provider TEXT NOT NULL,
                                     metadata_id TEXT NOT NULL,
@@ -144,6 +150,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         DELETE FROM movies;
         DELETE FROM videos;
         DELETE FROM subtitles;
+        DELETE FROM history;
         DELETE FROM external_ids;
         ",
         )
@@ -244,6 +251,18 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
             db_subtitles.video_id
         );
         subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
+    }
+
+    pub async fn insert_history(&self, db_history: DbHistory) -> Result<i64, Error> {
+        let history_query = sqlx::query!(
+            "INSERT INTO history
+            (time, is_finished, video_id)
+            VALUES (?, ?, ?) RETURNING id;",
+            db_history.time,
+            db_history.is_finished,
+            db_history.video_id
+        );
+        history_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
     pub async fn insert_external_id(&self, db_external_id: DbExternalId) -> Result<i64, Error> {
@@ -886,6 +905,15 @@ pub struct DbSubtitles {
     pub path: String,
     pub hash: String,
     pub size: i64,
+    pub video_id: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DbHistory {
+    pub id: Option<i64>,
+    pub time: i64,
+    pub is_finished: bool,
+    pub update_time: time::OffsetDateTime,
     pub video_id: i64,
 }
 

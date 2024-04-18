@@ -1,9 +1,10 @@
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::{convert::Infallible, fmt::Display};
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Query};
+use axum::extract::{FromRequest, Path, Query};
 use axum::http::{Request, StatusCode};
 use axum::{
     extract::State,
@@ -16,6 +17,7 @@ use axum::{
 use axum_extra::headers::ContentType;
 use axum_extra::TypedHeader;
 use serde::Deserialize;
+use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
@@ -23,8 +25,9 @@ use uuid::Uuid;
 
 use super::{IdQuery, StringIdQuery};
 use crate::app_state::AppError;
-use crate::config::ServerConfiguration;
+use crate::config::{ServerConfiguration, APP_RESOURCES};
 use crate::library::TranscodePayload;
+use crate::metadata::MetadataProvidersStack;
 use crate::progress::{TaskKind, TaskResource};
 use crate::{
     app_state::AppState,
@@ -365,8 +368,16 @@ pub async fn server_configuration(
 }
 
 #[derive(Debug, Deserialize)]
+pub struct TorrentDownloadHint {
+    content_type: crate::metadata::ContentType,
+    metadata_provider: crate::metadata::MetadataProvider,
+    metadata_id: String,
+}
+
+#[derive(Debug, Deserialize)]
 pub struct TorrentDownloadPayload {
-    save_location: String,
+    save_location: Option<String>,
+    content_hint: Option<TorrentDownloadHint>,
     magnet: String,
 }
 
@@ -376,10 +387,13 @@ pub async fn download_torrent(
 ) -> Result<(), AppError> {
     use torrent::Torrent;
     let torrent = Torrent::from_mangnet_link(&payload.magnet).await?;
+    let default_path = APP_RESOURCES.get().unwrap().resources_path.join("torrents");
+    let save_location = payload
+        .save_location
+        .map(|l| PathBuf::from(l))
+        .unwrap_or(default_path);
     tokio::spawn(async move {
-        let _ = app_state
-            .download_torrent(torrent, payload.save_location.into())
-            .await;
+        let _ = app_state.download_torrent(torrent, save_location).await;
     });
     Ok(())
 }
@@ -429,4 +443,57 @@ pub async fn order_providers(
         provider_type: payload.provider_type,
         order: new_order,
     })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct UpdateHistoryPayload {
+    time: i64,
+    is_finished: bool,
+    video_id: i64,
+}
+
+pub async fn update_history(
+    State(db): State<Db>,
+    Json(payload): Json<UpdateHistoryPayload>,
+) -> Result<StatusCode, AppError> {
+    let query = sqlx::query!(
+        "UPDATE history SET time = ?, is_finished = ? WHERE video_id = ? RETURNING time;",
+        payload.time,
+        payload.is_finished,
+        payload.video_id,
+    );
+    if let Err(err) = dbg!(query.fetch_one(&db.pool).await) {
+        match err {
+            sqlx::Error::RowNotFound => {
+                db.insert_history(crate::db::DbHistory {
+                    id: None,
+                    time: payload.time,
+                    is_finished: payload.is_finished,
+                    update_time: OffsetDateTime::now_utc(),
+                    video_id: payload.video_id,
+                })
+                .await?;
+                return Ok(StatusCode::CREATED);
+            }
+            rest => return Err(rest.into()),
+        };
+    }
+    Ok(StatusCode::OK)
+}
+
+pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
+    sqlx::query!("DELETE FROM history")
+        .execute(&db.pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn remove_history_item(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    sqlx::query!("DELETE FROM history WHERE id = ?;", id)
+        .execute(&db.pool)
+        .await?;
+    Ok(())
 }

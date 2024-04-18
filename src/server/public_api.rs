@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 
 use crate::app_state::AppError;
-use crate::db::DbExternalId;
+use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, Summary, VideoCodec};
 use crate::metadata::{
@@ -51,6 +51,7 @@ pub struct DetailedVideo {
     pub subtitle_tracks: Vec<DetailedSubtitleTrack>,
     pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
+    pub history: Option<DbHistory>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -390,7 +391,11 @@ pub async fn get_video_by_id(
 ) -> Result<Json<DetailedVideo>, StatusCode> {
     let AppState { library, db, .. } = state;
     let db_video = sqlx::query!(
-        "SELECT scan_date, path, resources_folder FROM videos WHERE id = ?",
+        r#"SELECT videos.scan_date, videos.path, videos.resources_folder,
+        history.time, history.id, history.update_time, history.is_finished 
+        FROM videos
+        LEFT JOIN history ON history.video_id = videos.id
+        WHERE videos.id = ?;"#,
         id
     )
     .fetch_one(&db.pool)
@@ -428,6 +433,22 @@ pub async fn get_video_by_id(
         .collect();
 
     let date = db_video.scan_date.expect("scan date always defined");
+    let history = if let (Some(id), Some(time), Some(is_finished), Some(update_time)) = (
+        db_video.id,
+        db_video.time,
+        db_video.is_finished,
+        db_video.update_time,
+    ) {
+        Some(DbHistory {
+            id: Some(id),
+            time,
+            is_finished,
+            update_time,
+            video_id: db_video.id.unwrap(),
+        })
+    } else {
+        None
+    };
     let detailed_video = DetailedVideo {
         id,
         path: source.source_path().to_path_buf(),
@@ -454,6 +475,7 @@ pub async fn get_video_by_id(
             .into_iter()
             .map(|s| s.into())
             .collect(),
+        history,
     };
     Ok(Json(detailed_video))
 }
@@ -508,4 +530,26 @@ pub async fn search_content(
     }
     let res = providers.multi_search(&query.search).await?;
     Ok(Json(res))
+}
+
+pub async fn video_history(
+    Path(video_id): Path<i64>,
+    State(db): State<Db>,
+) -> Result<Json<DbHistory>, AppError> {
+    let history = sqlx::query_as!(
+        DbHistory,
+        "SELECT * FROM history WHERE video_id = ?;",
+        video_id
+    )
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(history))
+}
+
+// todo: pagination
+pub async fn all_history(State(db): State<Db>) -> Result<Json<Vec<DbHistory>>, AppError> {
+    let history = sqlx::query_as!(DbHistory, "SELECT * FROM history LIMIT 50;")
+        .fetch_all(&db.pool)
+        .await?;
+    Ok(Json(history))
 }

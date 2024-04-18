@@ -158,6 +158,10 @@ async fn main() {
         )
         .route("/api/variants", get(public_api::get_all_variants))
         .route("/api/video/:id", get(public_api::get_video_by_id))
+        .route("/api/history", get(public_api::all_history))
+        .route("/api/history", delete(admin_api::clear_history))
+        .route("/api/history/:id", get(public_api::video_history))
+        .route("/api/history/:id", delete(admin_api::remove_history_item))
         .route("/api/contents_video/:id", get(public_api::contents_video))
         .route("/api/search_torrent", get(public_api::search_torrent))
         .route("/api/search_content", get(public_api::search_content))
@@ -190,6 +194,7 @@ async fn main() {
         .route("/admin/configuration", get(admin_api::server_configuration))
         .route("/admin/download_torrent", post(admin_api::download_torrent))
         .route("/admin/order_providers", post(admin_api::order_providers))
+        .route("/admin/update_history", post(admin_api::update_history))
         .nest_service(
             "/",
             ServeDir::new(program_files.join("dist"))

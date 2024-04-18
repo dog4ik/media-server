@@ -72,6 +72,12 @@ CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     size INTEGER NOT NULL,
                                     video_id INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                    time INTEGER NOT NULL,
+                                    is_finished BOOL NOT NULL,
+                                    video_id INTEGER NOT NULL UNIQUE,
+                                    update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     metadata_provider TEXT NOT NULL,
                                     metadata_id TEXT NOT NULL,
