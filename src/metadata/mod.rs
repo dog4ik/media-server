@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::Display,
     str::FromStr,
     sync::{Arc, Mutex},
@@ -13,15 +14,13 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Request, Response, Url};
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{de::DeserializeOwned, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::sync::{mpsc, oneshot, Semaphore};
-use tracing::instrument;
 
 pub mod tmdb_api;
 #[allow(dead_code)]
 pub mod tvdb_api;
 
-#[derive(Debug)]
 pub struct MetadataProvidersStack {
     pub discover_providers_stack: Mutex<Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)>>,
     pub movie_providers_stack: Mutex<Vec<&'static (dyn MovieMetadataProvider + Send + Sync)>>,
@@ -29,27 +28,44 @@ pub struct MetadataProvidersStack {
     pub torrent_indexes_stack: Mutex<Vec<&'static (dyn TorrentIndex + Send + Sync)>>,
 }
 
-impl std::fmt::Debug for dyn DiscoverMetadataProvider + Send + Sync {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DiscoverMetadataProvider")
+impl Serialize for MetadataProvidersStack {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut providers = serializer.serialize_struct("MetadataProvidersStack", 4)?;
+        let discover_providers: Vec<_> = self
+            .discover_providers()
+            .into_iter()
+            .map(|v| v.provider_identifier().to_string())
+            .collect();
+        providers.serialize_field("discover_providers", &discover_providers)?;
+        let movie_providers: Vec<_> = self
+            .movie_providers()
+            .into_iter()
+            .map(|v| v.provider_identifier().to_string())
+            .collect();
+        providers.serialize_field("movie_providers", &movie_providers)?;
+        let show_providers: Vec<_> = self
+            .show_providers()
+            .into_iter()
+            .map(|v| v.provider_identifier().to_string())
+            .collect();
+        providers.serialize_field("show_providers", &show_providers)?;
+        let torrent_providers: Vec<_> = self
+            .torrent_indexes()
+            .into_iter()
+            .map(|v| v.provider_identifier().to_string())
+            .collect();
+        providers.serialize_field("torrent_providers", &torrent_providers)?;
+        providers.end()
     }
 }
 
-impl std::fmt::Debug for dyn MovieMetadataProvider + Send + Sync {
+impl std::fmt::Debug for MetadataProvidersStack {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "MovieMetadataProvider")
-    }
-}
-
-impl std::fmt::Debug for dyn ShowMetadataProvider + Send + Sync {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "ShowMetadataProvider")
-    }
-}
-
-impl std::fmt::Debug for dyn TorrentIndex + Send + Sync {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "TorrentIndex")
+        let serialized = serde_json::to_string(self).map_err(|_| std::fmt::Error)?;
+        write!(f, "{}", serialized)
     }
 }
 
@@ -94,7 +110,7 @@ impl MetadataProvidersStack {
 
     pub async fn multi_search(&self, query: &str) -> anyhow::Result<Vec<MetadataSearchResult>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(discover_providers.len());
         let handles: Vec<_> = discover_providers
             .into_iter()
             .map(|p| {
@@ -169,7 +185,7 @@ impl MetadataProvidersStack {
 
     pub async fn get_torrents(&self, query: &str) -> Vec<Torrent> {
         let show_providers = { self.torrent_indexes_stack.lock().unwrap().clone() };
-        let mut out = Vec::new();
+        let mut out = Vec::with_capacity(show_providers.len());
         let handles: Vec<_> = show_providers
             .into_iter()
             .map(|p| {
@@ -186,12 +202,97 @@ impl MetadataProvidersStack {
         out
     }
 
-    pub fn discover_providers(&self) -> Vec<&(dyn DiscoverMetadataProvider + Send + Sync)> {
+    // Can do something smarter here if extract provider_identifer() in its own trait
+    pub fn order_discover_providers(
+        &self,
+        new_order: Vec<String>,
+    ) -> Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)> {
+        let providers: HashMap<&str, &(dyn DiscoverMetadataProvider + Send + Sync)> = self
+            .discover_providers()
+            .into_iter()
+            .map(|p| (p.provider_identifier(), p))
+            .collect();
+        let mut out = Vec::with_capacity(new_order.len());
+        for identifier in new_order {
+            if let Some(provider) = providers.get(identifier.as_str()) {
+                out.push(*provider);
+            }
+        }
+        *self.discover_providers_stack.lock().unwrap() = out.clone();
+        out
+    }
+
+    pub fn order_movie_providers(
+        &self,
+        new_order: Vec<String>,
+    ) -> Vec<&'static (dyn MovieMetadataProvider + Send + Sync)> {
+        let providers: HashMap<&str, &(dyn MovieMetadataProvider + Send + Sync)> = self
+            .movie_providers()
+            .into_iter()
+            .map(|p| (p.provider_identifier(), p))
+            .collect();
+        let mut out = Vec::with_capacity(new_order.len());
+        for identifier in new_order {
+            if let Some(provider) = providers.get(identifier.as_str()) {
+                out.push(*provider);
+            }
+        }
+        *self.movie_providers_stack.lock().unwrap() = out.clone();
+        out
+    }
+
+    pub fn order_show_providers(
+        &self,
+        new_order: Vec<String>,
+    ) -> Vec<&'static (dyn ShowMetadataProvider + Send + Sync)> {
+        let providers: HashMap<&str, &(dyn ShowMetadataProvider + Send + Sync)> = self
+            .show_providers()
+            .into_iter()
+            .map(|p| (p.provider_identifier(), p))
+            .collect();
+        let mut out = Vec::with_capacity(new_order.len());
+        for identifier in new_order {
+            if let Some(provider) = providers.get(identifier.as_str()) {
+                out.push(*provider);
+            }
+        }
+        *self.show_providers_stack.lock().unwrap() = out.clone();
+        out
+    }
+
+    pub fn order_torrent_indexes(
+        &self,
+        new_order: Vec<String>,
+    ) -> Vec<&'static (dyn TorrentIndex + Send + Sync)> {
+        let providers: HashMap<&str, &(dyn TorrentIndex + Send + Sync)> = self
+            .torrent_indexes()
+            .into_iter()
+            .map(|p| (p.provider_identifier(), p.clone()))
+            .collect();
+        let mut out = Vec::with_capacity(new_order.len());
+        for identifier in new_order {
+            if let Some(provider) = providers.get(identifier.as_str()) {
+                out.push(*provider);
+            }
+        }
+        *self.torrent_indexes_stack.lock().unwrap() = out.clone();
+        out
+    }
+
+    pub fn discover_providers(&self) -> Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)> {
         self.discover_providers_stack.lock().unwrap().clone()
     }
 
-    pub fn show_providers(&self) -> Vec<&(dyn ShowMetadataProvider + Send + Sync)> {
+    pub fn movie_providers(&self) -> Vec<&'static (dyn MovieMetadataProvider + Send + Sync)> {
+        self.movie_providers_stack.lock().unwrap().clone()
+    }
+
+    pub fn show_providers(&self) -> Vec<&'static (dyn ShowMetadataProvider + Send + Sync)> {
         self.show_providers_stack.lock().unwrap().clone()
+    }
+
+    pub fn torrent_indexes(&self) -> Vec<&'static (dyn TorrentIndex + Send + Sync)> {
+        self.torrent_indexes_stack.lock().unwrap().clone()
     }
 }
 

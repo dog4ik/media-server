@@ -383,3 +383,50 @@ pub async fn download_torrent(
     });
     Ok(())
 }
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase", untagged)]
+pub enum ProviderType {
+    Discover,
+    Movie,
+    Show,
+    Torrent,
+}
+
+#[derive(Debug, Deserialize, serde::Serialize)]
+pub struct ReorderPayload {
+    provider_type: ProviderType,
+    order: Vec<String>,
+}
+
+pub async fn order_providers(
+    State(providers): State<&'static MetadataProvidersStack>,
+    Json(payload): Json<ReorderPayload>,
+) -> Json<ReorderPayload> {
+    let new_order: Vec<_> = match payload.provider_type {
+        ProviderType::Discover => providers
+            .order_discover_providers(payload.order)
+            .into_iter()
+            .map(|x| x.provider_identifier().to_string())
+            .collect(),
+        ProviderType::Movie => providers
+            .order_movie_providers(payload.order)
+            .into_iter()
+            .map(|x| x.provider_identifier().to_string())
+            .collect(),
+        ProviderType::Show => providers
+            .order_show_providers(payload.order)
+            .into_iter()
+            .map(|x| x.provider_identifier().to_string())
+            .collect(),
+        ProviderType::Torrent => providers
+            .order_torrent_indexes(payload.order)
+            .into_iter()
+            .map(|x| x.provider_identifier().to_string())
+            .collect(),
+    };
+    Json(ReorderPayload {
+        provider_type: payload.provider_type,
+        order: new_order,
+    })
+}

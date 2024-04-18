@@ -189,6 +189,7 @@ async fn main() {
         .route("/admin/transcode", post(admin_api::transcode_video))
         .route("/admin/configuration", get(admin_api::server_configuration))
         .route("/admin/download_torrent", post(admin_api::download_torrent))
+        .route("/admin/order_providers", post(admin_api::order_providers))
         .nest_service(
             "/",
             ServeDir::new(program_files.join("dist"))

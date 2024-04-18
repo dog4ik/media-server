@@ -53,6 +53,9 @@ impl TorrentIndex for TpbApi {
             .map(|x| x.into())
             .collect())
     }
+    fn provider_identifier(&self) -> &'static str {
+        "tpb"
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]
