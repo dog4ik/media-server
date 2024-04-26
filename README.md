@@ -6,6 +6,10 @@
 - [x] Torrent client
 - [x] Media transcoding
 
+### Required dependencies
+
+- `ffmpeg` and `ffprobe` are required.
+
 ### Supported metadata providers
 
 - [TMDB](https://www.themoviedb.org/)
@@ -14,3 +18,7 @@
 ### Supported torrent indexes
 
 - TPB
+
+### Related projcets
+
+- [Web UI](https://github.com/dog4ik/media-server-web)
