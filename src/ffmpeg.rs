@@ -14,7 +14,7 @@ use tokio::sync::mpsc;
 
 use crate::config::APP_RESOURCES;
 use crate::library::{
-    AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, VideoCodec,
+    AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, Video, VideoCodec,
 };
 use crate::utils;
 use anyhow::anyhow;
@@ -390,6 +390,12 @@ pub trait FFmpegTask {
     fn args(&self) -> Vec<String>;
     #[allow(async_fn_in_trait)]
     async fn cancel(self) -> Result<(), anyhow::Error>;
+    fn run(self, source_path: PathBuf, duration: Duration) -> anyhow::Result<FFmpegRunningJob<Self>>
+    where
+        Self: Sized,
+    {
+        FFmpegRunningJob::new(self, source_path, duration)
+    }
 }
 
 #[derive(Debug)]
@@ -399,16 +405,10 @@ pub struct PreviewsJob {
 }
 
 impl PreviewsJob {
-    pub fn from_source(source: &Source) -> Self {
-        Self {
-            source_path: source.source_path().to_path_buf(),
-            output_folder: source.previews_path(),
-        }
-    }
-    pub fn new(source_path: PathBuf, output_folder: PathBuf) -> Self {
+    pub fn new(source_path: impl AsRef<Path>, output_folder: PathBuf) -> Self {
         Self {
             output_folder,
-            source_path,
+            source_path: source_path.as_ref().to_path_buf(),
         }
     }
 }
@@ -438,14 +438,18 @@ impl FFmpegTask for PreviewsJob {
 pub struct SubtitlesJob {
     track: usize,
     source_path: PathBuf,
-    output_file_path: PathBuf,
+    pub output_file_path: PathBuf,
 }
 
 impl SubtitlesJob {
-    pub fn from_source(input: &Source, track: usize) -> Result<Self, anyhow::Error> {
+    pub fn from_source(
+        input: &Video,
+        output_dir: impl AsRef<Path>,
+        track: i32,
+    ) -> Result<Self, anyhow::Error> {
         let output_path = |lang: Option<String>| {
             let file_name = lang.unwrap_or(uuid::Uuid::new_v4().to_string());
-            input.subtitles_path().join(
+            output_dir.as_ref().join(
                 PathBuf::new()
                     .with_file_name(file_name)
                     .with_extension("srt"),
@@ -453,12 +457,11 @@ impl SubtitlesJob {
         };
 
         input
-            .origin
             .subtitle_streams()
             .iter()
             .find(|s| s.index == track as i32 && s.codec().supports_text())
             .map(|s| Self {
-                source_path: input.source_path().to_path_buf(),
+                source_path: input.path().to_path_buf(),
                 track: s.index as usize,
                 output_file_path: output_path(s.language.map(|x| x.to_string())),
             })
@@ -504,20 +507,23 @@ pub struct TranscodeJob {
 }
 
 impl TranscodeJob {
-    pub fn from_source(source: &Source, payload: TranscodePayload) -> Result<Self, anyhow::Error> {
-        let source_path = source.source_path();
+    pub fn from_source(
+        source: &Source,
+        output: impl AsRef<Path>,
+        payload: TranscodePayload,
+    ) -> Result<Self, anyhow::Error> {
+        let source_path = source.video.path().to_path_buf();
         let extention = source_path
             .extension()
             .ok_or(anyhow::anyhow!("extention missing"))?;
 
-        let output_name = PathBuf::new()
+        let file_name = PathBuf::new()
             .with_file_name(uuid::Uuid::new_v4().to_string())
             .with_extension(extention);
-        let output_path = source.variants_path().join(output_name);
         Ok(Self {
-            source_path: source.source_path().to_path_buf(),
+            source_path,
             payload,
-            output_path,
+            output_path: output.as_ref().join(file_name),
         })
     }
 
@@ -574,7 +580,7 @@ pub struct FFmpegRunningJob<T: FFmpegTask> {
 }
 
 impl<T: FFmpegTask> FFmpegRunningJob<T> {
-    pub fn new_running(
+    pub fn new(
         job: T,
         source_path: PathBuf,
         duration: Duration,
@@ -750,6 +756,53 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
     let output = child.wait_with_output().await?;
     if output.status.code().unwrap_or(1) == 0 {
         Ok(String::from_utf8(output.stdout).expect("ffmpeg output utf-8"))
+    } else {
+        Err(anyhow::anyhow!(
+            "ffmpeg process was unexpectedly terminated"
+        ))
+    }
+}
+
+/// Pull frame in specified time
+pub async fn pull_frame(
+    input_file: impl AsRef<Path>,
+    output_file: impl AsRef<Path>,
+    timing: Duration,
+) -> anyhow::Result<()> {
+    let ffmpeg = &APP_RESOURCES
+        .get()
+        .unwrap()
+        .ffmpeg_path
+        .as_ref()
+        .ok_or(anyhow!("ffmpeg is missing in resources"))?;
+    let format_time = |duration: Duration| {
+        let seconds = duration.as_secs();
+        let minutes = seconds / 60;
+        let hours = minutes / 60;
+        format!("{:0>2}:{:0>2}:{:0>2}", hours, minutes % 60, seconds % 60)
+    };
+    let time = format_time(timing);
+    let args: &[&OsStr] = &[
+        "-hide_banner".as_ref(),
+        "-loglevel".as_ref(),
+        "error".as_ref(),
+        "-ss".as_ref(),
+        time.as_ref(),
+        "-i".as_ref(),
+        &input_file.as_ref().as_os_str(),
+        "-frames:v".as_ref(),
+        "1".as_ref(),
+        &output_file.as_ref().as_os_str(),
+    ];
+    let mut child = tokio::process::Command::new(ffmpeg)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let status = child.wait().await?;
+    if status.code().unwrap_or(1) == 0 {
+        Ok(())
     } else {
         Err(anyhow::anyhow!(
             "ffmpeg process was unexpectedly terminated"

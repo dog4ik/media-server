@@ -1,11 +1,12 @@
 use std::{
+    collections::HashMap,
     convert::Infallible,
     fmt::Display,
     io::SeekFrom,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
-    time::{Duration, SystemTime},
+    time::Duration,
 };
 
 use anyhow::Context;
@@ -17,22 +18,36 @@ use axum::{
 use axum_extra::{headers::Range, TypedHeader};
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::{
-    io::{AsyncReadExt, AsyncSeekExt},
+    fs,
+    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     sync::Semaphore,
+    task::JoinHandle,
 };
-use tokio_util::{codec::{BytesCodec, FramedRead}, sync::CancellationToken};
+use tokio_stream::StreamExt;
+use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
-    config::APP_RESOURCES,
     db::DbVideo,
-    ffmpeg::{get_metadata, FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream},
-    ffmpeg::{FFmpegRunningJob, FFprobeOutput, PreviewsJob, SubtitlesJob, TranscodeJob},
+    ffmpeg::{
+        get_metadata, FFmpegRunningJob, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream,
+        FFprobeVideoStream, PreviewsJob, SubtitlesJob, TranscodeJob,
+    },
+    metadata::{EpisodeMetadata, MovieMetadata},
     utils,
 };
 
-use self::movie::MovieIdentifier;
-use self::show::ShowIdentifier;
+use self::{
+    assets::{
+        AssetDir, PreviewAsset, PreviewsDirAsset, SubtitleAsset, SubtitlesDirAsset, VideoAssetsDir,
+    },
+    movie::MovieIdentifier,
+};
+use self::{
+    assets::{VariantAsset, VariantsDirAsset},
+    show::ShowIdentifier,
+};
 
+pub mod assets;
 pub mod movie;
 pub mod show;
 
@@ -52,31 +67,11 @@ const EXTRAS_FOLDERS: &[&str] = &[
     "trailers",
 ];
 
-#[derive(Debug, Serialize, Clone)]
-pub struct Summary {
-    pub subs: Vec<String>,
-    pub previews: usize,
-    pub duration: Duration,
-    pub title: String,
-    pub chapters: Vec<Chapter>,
-}
-
 #[derive(Debug)]
 pub struct Library {
-    pub shows: Vec<LibraryFile<ShowIdentifier>>,
-    pub movies: Vec<LibraryFile<MovieIdentifier>>,
+    pub shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
+    pub movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
     pub media_folders: MediaFolders,
-}
-
-fn extract_summary(file: &LibraryFile<impl Media>) -> Summary {
-    let source = &file.source;
-    Summary {
-        previews: source.previews_count(),
-        subs: source.get_subs(),
-        duration: source.origin.duration(),
-        title: file.identifier.title().to_string(),
-        chapters: source.origin.chapters(),
-    }
 }
 
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
@@ -91,26 +86,29 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     !is_extra && supports_extension
 }
 
-#[tracing::instrument(level = "trace", name = "explore library folder")]
 pub async fn explore_folder<T: Media + Send + 'static>(
     folder: &PathBuf,
-) -> Result<Vec<LibraryFile<T>>, anyhow::Error> {
+    db: &crate::db::Db,
+) -> Result<HashMap<i64, LibraryFile<T>>, anyhow::Error> {
     let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
     let mut handles = Vec::with_capacity(paths.len());
     let semaphore = Arc::new(Semaphore::new(100));
     for path in paths {
         let semaphore = semaphore.clone();
+        let db = db.clone();
         handles.push(tokio::spawn(async move {
             let _permit = semaphore.acquire().await;
-            LibraryFile::from_path(path).await
+            LibraryFile::from_path(path, &db).await
         }));
     }
 
-    let mut result = Vec::with_capacity(handles.len());
+    let mut result = HashMap::with_capacity(handles.len());
 
     for handle in handles {
         match handle.await {
-            Ok(Ok(item)) => result.push(item),
+            Ok(Ok(item)) => {
+                result.insert(item.source.id, item);
+            }
             Ok(Err(e)) => tracing::warn!("One of the metadata collectors errored: {}", e),
             Err(e) => tracing::error!("One of the metadata collectors paniced: {}", e),
         }
@@ -123,76 +121,88 @@ pub async fn explore_folder<T: Media + Send + 'static>(
 pub struct LibraryFile<T: Media> {
     pub identifier: T,
     pub source: Source,
-    pub data_folder: DataFolder,
 }
 
 #[derive(Debug, Clone)]
-pub struct DataFolder {
-    pub size: u64,
-    pub time_hash: String,
+pub struct Source {
+    pub id: i64,
+    pub video: Video,
+    pub variants: Vec<Video>,
 }
 
-impl DataFolder {
-    fn time_hash(time: SystemTime) -> u32 {
-        use crc32fast::Hasher;
-        use std::hash::Hash;
-        let mut hasher = Hasher::new();
-        time.hash(&mut hasher);
-        hasher.finalize()
-    }
-
-    pub fn from_metadata(metadata: &std::fs::Metadata) -> Self {
-        let size = metadata.len();
-        let created_time = metadata.created().unwrap_or(SystemTime::UNIX_EPOCH);
-        let hash = Self::time_hash(created_time).to_string();
-        Self {
-            time_hash: hash,
-            size,
+impl Source {
+    pub async fn from_video(video: Video, db: &crate::db::Db) -> anyhow::Result<Self> {
+        let id = video.get_or_insert_id(db).await?;
+        let variants_dir = VariantsDirAsset::new(id);
+        let variants = variants_dir.variants().await.unwrap_or_default();
+        let mut variants_videos = Vec::with_capacity(variants.len());
+        for variant in variants {
+            if let Ok(video) = variant.video().await {
+                variants_videos.push(video);
+            }
         }
+        Ok(Self {
+            video,
+            id,
+            variants: variants_videos,
+        })
     }
-
-    pub fn from_path(path: &PathBuf) -> Option<Self> {
-        let name = path.iter().last()?.to_string_lossy().to_string();
-        let (size, hash) = name.split_once('.')?;
-        Some(Self {
-            size: size.parse().ok()?,
-            time_hash: hash.to_string(),
+    pub async fn from_path(path: impl AsRef<Path>, db: &crate::db::Db) -> anyhow::Result<Self> {
+        let video = Video::from_path(path).await?;
+        let id = video.get_or_insert_id(db).await?;
+        let variants = VariantsDirAsset::new(id).variants().await?;
+        let mut variants_videos = Vec::with_capacity(variants.len());
+        for variant in variants {
+            if let Ok(video) = variant.video().await {
+                variants_videos.push(video);
+            }
+        }
+        Ok(Self {
+            video,
+            id,
+            variants: variants_videos,
         })
     }
 
-    pub fn verify_existance(&self) -> bool {
-        let mut episode_dir_path = APP_RESOURCES
-            .get()
-            .expect("resources to be initiated")
-            .resources_path
-            .clone();
-
-        episode_dir_path.push("content");
-        episode_dir_path.push(self.to_string());
-        episode_dir_path.try_exists().unwrap_or(false)
+    pub async fn delete_all_resources(&self) -> std::io::Result<()> {
+        VideoAssetsDir::new(self.id).delete_dir().await
     }
-}
 
-impl Display for DataFolder {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.size, self.time_hash)
+    pub fn previews_dir(&self) -> PreviewsDirAsset {
+        PreviewsDirAsset::new(self.id)
+    }
+
+    pub fn preview(&self, index: usize) -> PreviewAsset {
+        PreviewAsset::new(self.id, index)
+    }
+
+    pub fn variants_dir(&self) -> VariantsDirAsset {
+        VariantsDirAsset::new(self.id)
+    }
+
+    pub fn variant(&self, id: String) -> VariantAsset {
+        VariantAsset::new(self.id, id)
+    }
+
+    pub fn subtitles_dir(&self) -> SubtitlesDirAsset {
+        SubtitlesDirAsset::new(self.id)
+    }
+
+    pub fn subtitle(&self, id: String) -> SubtitleAsset {
+        SubtitleAsset::new(self.id, id)
     }
 }
 
 impl<T: Media> LibraryFile<T> {
-    pub async fn from_path(path: PathBuf) -> Result<Self, anyhow::Error> {
+    pub async fn from_path(path: PathBuf, db: &crate::db::Db) -> Result<Self, anyhow::Error> {
         let video = Video::from_path(&path).await?;
-        let metadata = path.metadata()?;
+        let metadata_title = video.metadata.format.tags.title.clone();
+        let source = Source::from_video(video, db).await?;
         let file_name = path
             .file_name()
             .ok_or(anyhow::anyhow!("failed to get filename"))?
             .to_string_lossy()
             .to_string();
-        let data_folder = DataFolder::from_metadata(&metadata);
-        let resources_path = generate_resources_path(&data_folder);
-        utils::generate_resources(&resources_path).await?;
-        let metadata_title = video.metadata.format.tags.title.clone();
-        let source = Source::from_video(video, &resources_path).await?;
         let path_tokens = utils::tokenize_filename(file_name);
         let identifier = T::identify(path_tokens)
             .or_else(|| {
@@ -209,30 +219,45 @@ impl<T: Media> LibraryFile<T> {
                 "Could not identify file: {}",
                 path.file_name().unwrap_or_default().display()
             ))?;
-        Ok(Self {
-            identifier,
-            source,
-            data_folder,
-        })
+        Ok(Self { identifier, source })
     }
 }
 
-fn generate_resources_path(folder: &DataFolder) -> PathBuf {
-    let mut episode_dir_path = APP_RESOURCES
-        .get()
-        .expect("resources to be initated")
-        .resources_path
-        .clone();
-    episode_dir_path.push("content");
-    episode_dir_path.push(folder.to_string());
-    episode_dir_path
+impl LibraryFile<ShowIdentifier> {
+    pub fn into_episode_metadata(&self) -> EpisodeMetadata {
+        EpisodeMetadata {
+            metadata_id: uuid::Uuid::new_v4().to_string(),
+            metadata_provider: crate::metadata::MetadataProvider::Local,
+            release_date: None,
+            number: self.identifier.episode.into(),
+            title: self.identifier.title.to_string(),
+            plot: None,
+            season_number: self.identifier.season.into(),
+            runtime: Some(self.source.video.duration()),
+            poster: None,
+        }
+    }
+}
+
+impl LibraryFile<MovieIdentifier> {
+    pub fn into_movie_metadata(&self) -> MovieMetadata {
+        MovieMetadata {
+            metadata_id: uuid::Uuid::new_v4().to_string(),
+            metadata_provider: crate::metadata::MetadataProvider::Local,
+            poster: None,
+            backdrop: None,
+            plot: None,
+            release_date: None,
+            title: self.identifier.title.clone(),
+        }
+    }
 }
 
 impl Library {
     pub fn new(
         media_folders: MediaFolders,
-        shows: Vec<LibraryFile<ShowIdentifier>>,
-        movies: Vec<LibraryFile<MovieIdentifier>>,
+        shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
+        movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
     ) -> Self {
         Self {
             media_folders,
@@ -241,94 +266,116 @@ impl Library {
         }
     }
 
-    pub fn add_show(&mut self, show: LibraryFile<ShowIdentifier>) {
-        self.shows.push(show);
+    pub fn add_show(&mut self, id: i64, show: LibraryFile<ShowIdentifier>) {
+        self.shows.insert(id, show);
     }
 
-    pub fn add_movie(&mut self, movie: LibraryFile<MovieIdentifier>) {
-        self.movies.push(movie);
+    pub fn add_movie(&mut self, id: i64, movie: LibraryFile<MovieIdentifier>) {
+        self.movies.insert(id, movie);
     }
 
-    pub fn add_variant(&mut self, path: impl AsRef<Path>, video: Video) {
-        let item = self.find_source_mut(path).unwrap();
-        item.add_variant(video)
-    }
-
-    pub fn remove_variant(&mut self, video_path: impl AsRef<Path>, variant_id: &str) {
-        let item = self.find_source_mut(video_path).unwrap();
-        item.delete_variant(variant_id);
-    }
-
-    pub fn remove_show(&mut self, path: impl AsRef<Path>) {
-        self.shows
-            .iter()
-            .position(|f| f.source.source_path() == path.as_ref())
-            .map(|pos| self.shows.remove(pos));
-    }
-
-    pub fn remove_movie(&mut self, path: impl AsRef<Path>) {
-        self.movies
-            .iter()
-            .position(|f| f.source.source_path() == path.as_ref())
-            .map(|pos| self.movies.remove(pos));
-    }
-
-    pub fn remove_file(&mut self, path: impl AsRef<Path>) {
-        self.remove_show(&path);
-        self.remove_movie(path);
-    }
-
-    pub fn get_summary(&self) -> Vec<Summary> {
-        let mut out = Vec::new();
-        out.extend(self.shows.iter().map(|s| extract_summary(s)));
-        out.extend(self.movies.iter().map(|s| extract_summary(s)));
-        out
-    }
-
-    pub fn find_source(&self, path: impl AsRef<Path>) -> Option<&Source> {
-        let show = self
+    pub fn remove_show_by_path(&mut self, path: impl AsRef<Path>) {
+        if let Some(id) = self
             .shows
             .iter()
-            .find(|f| f.source.source_path() == path.as_ref())
-            .map(|x| &x.source);
+            .find(|(_, f)| f.source.video.path() == path.as_ref())
+            .map(|(i, _f)| *i)
+        {
+            self.shows.remove(&id);
+        };
+    }
+
+    pub fn remove_movie_by_path(&mut self, path: impl AsRef<Path>) {
+        if let Some(id) = self
+            .movies
+            .iter()
+            .find(|(_, f)| f.source.video.path() == path.as_ref())
+            .map(|(i, _f)| *i)
+        {
+            self.movies.remove(&id);
+        };
+    }
+
+    pub fn remove_show(&mut self, id: i64) {
+        self.shows.remove(&id);
+    }
+
+    pub fn remove_movie(&mut self, id: i64) {
+        self.movies.remove(&id);
+    }
+
+    pub fn remove_file_by_path(&mut self, path: impl AsRef<Path>) {
+        self.remove_show_by_path(&path);
+        self.remove_movie_by_path(path);
+    }
+
+    /// Remove video from the library
+    /// NOTE: it does not physically delete video
+    pub fn remove_file(&mut self, id: i64) {
+        self.remove_show(id);
+        self.remove_movie(id);
+    }
+
+    pub fn find_video_by_path(&self, path: impl AsRef<Path>) -> Option<&Video> {
+        let show = self
+            .shows
+            .values()
+            .find(|f| f.source.video.path() == path.as_ref())
+            .map(|x| &x.source.video);
         if show.is_none() {
             return self
                 .movies
-                .iter()
-                .find(|f| f.source.source_path() == path.as_ref())
-                .map(|x| &x.source);
+                .values()
+                .find(|f| f.source.video.path() == path.as_ref())
+                .map(|x| &x.source.video);
         }
         show
     }
 
-    pub fn find_source_mut(&mut self, path: impl AsRef<Path>) -> Option<&mut Source> {
-        let show = self
-            .shows
-            .iter_mut()
-            .find(|f| f.source.source_path() == path.as_ref())
-            .map(|x| &mut x.source);
+    pub fn get_source(&self, id: i64) -> Option<&Source> {
+        let show = self.shows.get(&id).map(|f| &f.source);
         if show.is_none() {
-            return self
-                .movies
-                .iter_mut()
-                .find(|f| f.source.source_path() == path.as_ref())
-                .map(|x| &mut x.source);
+            return self.movies.get(&id).map(|f| &f.source);
         }
         show
     }
 
-    pub async fn full_refresh(&mut self) {
-        let mut shows = Vec::new();
+    pub fn get_source_mut(&mut self, id: i64) -> Option<&mut Source> {
+        let show = self.shows.get_mut(&id).map(|f| &mut f.source);
+        if show.is_none() {
+            return self.movies.get_mut(&id).map(|f| &mut f.source);
+        }
+        show
+    }
+
+    pub fn find_video_mut(&mut self, path: impl AsRef<Path>) -> Option<&mut Video> {
+        let show = self
+            .shows
+            .values_mut()
+            .find(|f| f.source.video.path() == path.as_ref())
+            .map(|x| &mut x.source.video);
+        if show.is_none() {
+            return self
+                .movies
+                .values_mut()
+                .find(|f| f.source.video.path() == path.as_ref())
+                .map(|x| &mut x.source.video);
+        }
+        show
+    }
+
+    pub async fn full_refresh(&mut self, db: crate::db::Db) {
+        let mut shows = HashMap::new();
         for folder in &self.media_folders.shows {
-            if let Ok(items) = explore_folder(folder).await {
+            if let Ok(items) = explore_folder(folder, &db.clone()).await {
                 shows.extend(items);
             }
         }
         self.shows = shows;
 
-        let mut movies = Vec::new();
+        let mut movies = HashMap::new();
         for folder in &self.media_folders.movies {
-            if let Ok(items) = explore_folder(folder).await {
+            if let Ok(items) = explore_folder(folder, &db.clone()).await {
                 movies.extend(items);
             }
         }
@@ -385,15 +432,8 @@ pub trait Media {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct Source {
-    pub origin: Video,
-    pub variants: Vec<Video>,
-    pub resources_path: PathBuf,
-}
-
-#[derive(Debug, Clone, Serialize)]
 pub struct Video {
-    pub path: PathBuf,
+    path: PathBuf,
     metadata: FFprobeOutput,
 }
 
@@ -420,184 +460,42 @@ async fn get_variants(folder: impl AsRef<Path>) -> anyhow::Result<Vec<Video>> {
     Ok(out)
 }
 
-impl Source {
-    pub async fn new(
-        source_path: impl AsRef<Path>,
-        resources_path: impl AsRef<Path>,
-    ) -> anyhow::Result<Self> {
-        let resources_path = resources_path.as_ref().to_path_buf();
-        let origin = Video::from_path(source_path).await?;
-        let variants = get_variants(&resources_path.join("variants"))
-            .await
-            .context("failed to get variants")?;
-        Ok(Self {
-            origin,
-            variants,
-            resources_path,
-        })
-    }
-
-    pub async fn from_video(
-        source_video: Video,
-        resources_path: impl AsRef<Path>,
-    ) -> anyhow::Result<Self> {
-        let resources_path = resources_path.as_ref().to_path_buf();
-        let variants = get_variants(&resources_path.join("variants"))
-            .await
-            .context("failed to get variants")?;
-        Ok(Self {
-            origin: source_video,
-            variants,
-            resources_path,
-        })
-    }
-
-    pub fn resources_folder_name(&self) -> String {
-        self.resources_path
-            .file_name()
-            .expect("resources_folder to exist")
-            .to_string_lossy()
-            .to_string()
-    }
-
-    /// Find variant
-    pub fn find_variant(&self, file_name: &str) -> Option<Video> {
-        self.variants
-            .iter()
-            .find(|v| v.path.file_stem().map(|s| s == file_name).unwrap_or(false))
-            .cloned()
-    }
-
-    /// Add variant
-    pub fn add_variant(&mut self, video: Video) {
-        self.variants.push(video);
-    }
-
-    /// Delete variant
-    pub fn delete_variant(&mut self, variant_id: &str) {
-        let position = self.variants.iter().position(|v| {
-            v.path
-                .file_stem()
-                .map(|stem| stem.to_string_lossy().to_string() == variant_id)
-                .unwrap_or(false)
-        });
-        if let Some(position) = position {
-            if std::fs::remove_file(&self.variants[position].path).is_ok() {
-                self.variants.remove(position);
-            };
-        }
-    }
-
-    /// Remove all files that belong to source
-    pub fn delete(&self) -> Result<(), std::io::Error> {
-        self.origin.delete()?;
-        self.delete_resources()
-    }
-
-    /// Get origin video duration
-    pub fn duration(&self) -> Duration {
-        self.origin.duration()
-    }
-
-    /// Source file folder path
-    pub fn source_path(&self) -> &Path {
-        &self.origin.path
-    }
-
-    /// Previews folder path
-    pub fn previews_path(&self) -> PathBuf {
-        self.resources_path.join("previews")
-    }
-
-    /// Subtitles forder path
-    pub fn subtitles_path(&self) -> PathBuf {
-        self.resources_path.join("subs")
-    }
-
-    /// Variants forder path
-    pub fn variants_path(&self) -> PathBuf {
-        self.resources_path.join("variants")
-    }
-
-    /// Get prewies count
-    pub fn previews_count(&self) -> usize {
-        std::fs::read_dir(self.previews_path()).unwrap().count()
-    }
-
-    /// Clean all generated resources
-    pub fn delete_resources(&self) -> Result<(), std::io::Error> {
-        std::fs::remove_dir_all(&self.resources_path)
-    }
-
-    /// Get title included in file metadata
-    pub fn metadata_title(&self) -> Option<String> {
-        self.origin.metadata.format.tags.title.clone()
-    }
-
-    /// Get subtitles list
-    pub fn get_subs(&self) -> Vec<String> {
-        std::fs::read_dir(self.subtitles_path())
-            .unwrap()
-            .map(|sub| {
-                sub.unwrap()
-                    .path()
-                    .file_stem()
-                    .unwrap()
-                    .to_str()
-                    .unwrap()
-                    .to_string()
-            })
-            .collect()
-    }
-
-    /// Generate previews for file
-    pub fn generate_previews(&self) -> anyhow::Result<FFmpegRunningJob<PreviewsJob>> {
-        let job = PreviewsJob::from_source(&self);
-        Ok(FFmpegRunningJob::new_running(
-            job,
-            self.source_path().into(),
-            self.duration(),
-        )?)
-    }
-
-    /// Generate subtitles for file
-    pub fn generate_subtitles(
-        &self,
-        track: i32,
-    ) -> Result<FFmpegRunningJob<SubtitlesJob>, anyhow::Error> {
-        SubtitlesJob::from_source(&self, track as usize).map(|job| {
-            FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
-        })?
-    }
-
-    /// Transcode file
-    pub fn transcode_video(
-        &self,
-        payload: TranscodePayload,
-    ) -> Result<FFmpegRunningJob<TranscodeJob>, anyhow::Error> {
-        TranscodeJob::from_source(&self, payload).map(|job| {
-            FFmpegRunningJob::new_running(job, self.source_path().into(), self.duration())
-        })?
-    }
-
+impl Video {
     /// Returns struct compatible with database Video table
     pub fn into_db_video(&self) -> DbVideo {
-        let origin = &self.origin;
         let now = time::OffsetDateTime::now_utc();
-        let duration = origin.duration().as_secs() as i64;
+        let duration = self.duration().as_secs() as i64;
 
         DbVideo {
             id: None,
-            path: self.source_path().to_string_lossy().to_string(),
-            resources_folder: self.resources_folder_name(),
-            size: origin.file_size() as i64,
+            path: self.path.to_string_lossy().to_string(),
+            size: self.file_size() as i64,
             duration,
             scan_date: now.to_string(),
         }
     }
-}
 
-impl Video {
+    pub async fn get_or_insert_id(&self, db: &crate::db::Db) -> anyhow::Result<i64> {
+        let path = self.path().to_string_lossy().to_string();
+        let res = sqlx::query!("SELECT id FROM videos WHERE path = ?", path)
+            .fetch_one(&db.pool)
+            .await;
+        let video_id: Result<i64, anyhow::Error> = match res {
+            Ok(r) => Ok(r.id.unwrap()),
+            Err(sqlx::Error::RowNotFound) => {
+                let db_video = self.into_db_video();
+                let id = db.insert_video(db_video).await?;
+                Ok(id)
+            }
+            Err(e) => Err(e.into()),
+        };
+        video_id
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
     /// Create self from path
     pub async fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         get_metadata(&path).await.map(|metadata| Self {
@@ -638,8 +536,8 @@ impl Video {
     }
 
     /// Delete self
-    pub fn delete(&self) -> Result<(), std::io::Error> {
-        std::fs::remove_file(&self.path)
+    pub async fn delete(&self) -> Result<(), std::io::Error> {
+        tokio::fs::remove_file(&self.path).await
     }
 
     pub fn video_streams(&self) -> Vec<FFprobeVideoStream> {
@@ -677,6 +575,11 @@ impl Video {
     /// Video bitrate
     pub fn bitrate(&self) -> usize {
         self.metadata.bitrate()
+    }
+
+    /// Title included in file metadata
+    pub fn metadata_title(&self) -> Option<String> {
+        self.metadata.format.tags.title.clone()
     }
 
     /// Video mime type
@@ -1103,78 +1006,4 @@ impl SubtitlesCodec {
             SubtitlesCodec::Other(_) => false,
         }
     }
-}
-
-#[tokio::test]
-async fn cancel_transcode() {
-    use crate::progress::{TaskKind, TaskResource};
-    use crate::testing::TestResource;
-    use std::time::Duration;
-    use tokio::fs;
-    use tokio::time;
-
-    let testing_resource = TestResource::new(true).await;
-    let subject = testing_resource.test_show.clone();
-    let cancellation_token = CancellationToken::new();
-    let task_resource = TaskResource::new(cancellation_token.clone());
-    let size_before = fs::metadata(&subject.source.origin.path)
-        .await
-        .unwrap()
-        .len();
-    let video_path = subject.source.source_path().to_path_buf();
-    let payload = TranscodePayloadBuilder::new()
-        .video_codec(VideoCodec::Hevc)
-        .build();
-
-    let process = subject.source.transcode_video(payload).unwrap();
-    {
-        let task_resource = task_resource.clone();
-        tokio::spawn(async move {
-            time::sleep(Duration::from_secs(2)).await;
-            let id = {
-                let tasks = task_resource.tasks.lock().unwrap();
-                tasks.first().unwrap().id
-            };
-            task_resource.cancel_task(id).unwrap();
-        });
-    }
-    let target_buffer = process.job.output_path.clone();
-    let result = task_resource
-        .observe_ffmpeg_task(
-            process,
-            TaskKind::Transcode {
-                target: video_path.clone(),
-            },
-        )
-        .await;
-    // task is canceled
-    assert!(result.is_err());
-
-    let size_after = fs::metadata(&video_path).await.unwrap().len();
-    let is_cleaned = !fs::try_exists(target_buffer).await.unwrap();
-    // file is untouched
-    assert_eq!(size_before, size_after);
-    // variant is cleared
-    assert!(is_cleaned);
-}
-
-#[tokio::test]
-async fn transcode_video() {
-    use crate::testing::TestResource;
-
-    let testing_resource = TestResource::new(false).await;
-    let subject = testing_resource.test_show.clone();
-    let source = subject.source;
-    let default_audio_idx = source.origin.default_audio().unwrap().index as usize;
-    let desired_video_codec = VideoCodec::Hevc;
-    let desired_audio_codec = AudioCodec::AAC;
-    let desired_resoultion = Resolution((80, 60));
-    let payload = TranscodePayloadBuilder::new()
-        .video_codec(desired_video_codec)
-        .audio_codec(desired_audio_codec)
-        .resolution(desired_resoultion)
-        .audio_track(default_audio_idx)
-        .build();
-    let mut job = source.transcode_video(payload).unwrap();
-    job.wait().await.unwrap();
 }

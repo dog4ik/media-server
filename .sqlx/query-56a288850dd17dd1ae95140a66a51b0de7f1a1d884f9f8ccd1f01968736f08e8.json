@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.id as \"id!\" FROM movies \n                    JOIN videos ON videos.id = movies.video_id\n                    WHERE videos.path = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "56a288850dd17dd1ae95140a66a51b0de7f1a1d884f9f8ccd1f01968736f08e8"
+}

@@ -1,4 +1,3 @@
-use crc32fast::Hasher;
 use std::{
     fs::{self, File},
     io::{self, Read},
@@ -6,6 +5,7 @@ use std::{
 };
 
 pub fn file_hash(file: &mut File) -> Result<u32, std::io::Error> {
+    use crc32fast::Hasher;
     let mut hasher = Hasher::new();
     let mut buffer = [0; 4096];
 
@@ -61,15 +61,6 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
     Ok(removed_files)
 }
 
-pub async fn generate_resources(resources_path: impl AsRef<Path>) -> Result<(), io::Error> {
-    use tokio::fs;
-    let resources_path = resources_path.as_ref();
-    fs::create_dir_all(resources_path.join("subs")).await?;
-    fs::create_dir_all(resources_path.join("previews")).await?;
-    fs::create_dir_all(resources_path.join("variants")).await?;
-    Ok(())
-}
-
 pub fn tokenize_filename(file_name: String) -> Vec<String> {
     let is_spaced = file_name.contains(' ');
     match is_spaced {
@@ -79,4 +70,19 @@ pub fn tokenize_filename(file_name: String) -> Vec<String> {
     .map(|e| e.trim().to_lowercase())
     .filter(|t| t != "-")
     .collect()
+}
+
+pub fn calculate_sha256<I, S>(args: I) -> String
+where
+    I: IntoIterator<Item = S> + Copy,
+    S: AsRef<[u8]>,
+{
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+
+    for arg in args {
+        hasher.update(arg);
+    }
+
+    format!("{:x}", hasher.finalize())
 }

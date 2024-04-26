@@ -105,7 +105,6 @@ END;
 
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
-                                    resources_folder TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
                                     duration INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
@@ -229,10 +228,9 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_video(&self, db_video: DbVideo) -> Result<i64, Error> {
         let video_query = sqlx::query!(
             "INSERT INTO videos
-            (path, resources_folder, size, duration)
-            VALUES (?, ?, ?, ?) RETURNING id;",
+            (path, size, duration)
+            VALUES (?, ?, ?) RETURNING id;",
             db_video.path,
-            db_video.resources_folder,
             db_video.size,
             db_video.duration
         );
@@ -892,7 +890,6 @@ pub struct DbEpisode {
 pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
-    pub resources_folder: String,
     pub size: i64,
     pub duration: i64,
     pub scan_date: String,

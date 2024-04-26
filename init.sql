@@ -61,7 +61,6 @@ END;
 
 CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
-                                    resources_folder TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
                                     duration INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);

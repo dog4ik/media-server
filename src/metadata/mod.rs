@@ -299,6 +299,12 @@ impl MetadataProvidersStack {
 #[derive(Debug, Clone)]
 pub struct MetadataImage(pub Url);
 
+impl AsRef<Url> for MetadataImage {
+    fn as_ref(&self) -> &Url {
+        &self.0
+    }
+}
+
 impl Serialize for MetadataImage {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
@@ -323,6 +329,12 @@ impl MetadataImage {
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+}
+
+impl Display for MetadataImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0.to_string())
     }
 }
 
@@ -673,17 +685,6 @@ impl MovieMetadata {
             plot: self.plot,
         }
     }
-}
-
-#[tokio::test]
-async fn blur_data_generation() {
-    use std::str::FromStr;
-    let image = MetadataImage::new(
-        Url::from_str("https://image.tmdb.org/t/p/original/%2Fgrt1km00cjrwAckfgO3QGiHYq89.jpg")
-            .unwrap(),
-    );
-    let blur_data = image.generate_blur_data().await.unwrap();
-    assert!(blur_data.len() > 100);
 }
 
 #[tokio::test]

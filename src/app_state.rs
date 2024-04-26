@@ -1,4 +1,10 @@
-use std::{fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr, sync::Mutex};
+use std::{
+    fmt::Display,
+    num::ParseIntError,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Mutex,
+};
 
 use anyhow::anyhow;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
@@ -9,8 +15,15 @@ use torrent::Torrent;
 use crate::{
     config::ServerConfiguration,
     db::{Db, DbExternalId, DbSubtitles},
-    ffmpeg,
-    library::{movie::MovieIdentifier, Library, LibraryFile, Source, TranscodePayload, Video},
+    ffmpeg::{self, FFmpegTask, SubtitlesJob, TranscodeJob},
+    library::{
+        assets::{
+            AssetDir, BackdropAsset, BackdropContentType, FileAsset, PosterAsset,
+            PosterContentType, SubtitlesDirAsset, VariantAsset,
+        },
+        movie::MovieIdentifier,
+        Library, LibraryFile, Source, TranscodePayload, Video,
+    },
     metadata::{
         tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
         MetadataProvider, MetadataProvidersStack, ShowMetadataProvider,
@@ -158,39 +171,38 @@ impl IntoResponse for AppError {
 }
 
 impl AppState {
-    pub async fn get_file_by_id(&self, id: i64) -> Result<Source, AppError> {
-        let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", id)
-            .fetch_one(&self.db.pool)
-            .await?
-            .path;
+    pub async fn get_source_by_id(&self, id: i64) -> Result<Source, AppError> {
         let library = self.library.lock().unwrap();
         library
-            .find_source(&video_path)
+            .get_source(id)
             .ok_or(AppError::not_found("file with path from db is not found"))
             .cloned()
     }
 
     pub async fn remove_video(&self, id: i64) -> Result<(), AppError> {
-        let source = self.get_file_by_id(id).await?;
+        let source = self.get_source_by_id(id).await?;
         source
+            .video
             .delete()
+            .await
             .map_err(|_| AppError::internal_error("Failed to remove video"))?;
+        let _ = source.delete_all_resources().await;
         self.db.remove_video(id).await?;
         let mut library = self.library.lock().unwrap();
-        library.remove_file(source.source_path());
+        library.remove_file(id);
         Ok(())
     }
 
     pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> Result<(), AppError> {
-        let video_path = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id)
-            .fetch_one(&self.db.pool)
-            .await?
-            .path;
-        let mut library = self.library.lock().unwrap();
-        let source = library
-            .find_source_mut(&video_path)
-            .ok_or(AppError::not_found("file with path from db is not found"))?;
-        source.delete_variant(&variant_id);
+        let asset = VariantAsset::new(video_id, variant_id.to_string());
+        asset.delete_file().await?;
+        if let Some(source) = self.library.lock().unwrap().get_source_mut(video_id) {
+            source
+                .variants
+                .iter()
+                .position(|x| x.path() == asset.path())
+                .map(|idx| source.variants.swap_remove(idx));
+        };
         Ok(())
     }
 
@@ -202,10 +214,10 @@ impl AppState {
     where
         T: DiscoverMetadataProvider + ShowMetadataProvider,
     {
-        let show = LibraryFile::from_path(video_path).await?;
+        let show = LibraryFile::from_path(video_path, &self.db).await?;
         {
             let mut library = self.library.lock().unwrap();
-            library.add_show(show);
+            library.add_show(show.source.id, show);
         }
         // self.handle_show(show, metadata_provider).await
         todo!();
@@ -217,55 +229,51 @@ impl AppState {
         video_path: PathBuf,
         metadata_provider: &impl DiscoverMetadataProvider,
     ) -> Result<(), AppError> {
-        let movie = LibraryFile::from_path(video_path).await?;
+        let movie = LibraryFile::from_path(video_path, &self.db).await?;
         // the heck is going on here
         {
             let mut library = self.library.lock().unwrap();
-            library.add_movie(movie.clone());
+            library.add_movie(movie.source.id, movie.clone());
         };
         self.handle_movie(movie, metadata_provider).await
     }
 
-    #[tracing::instrument]
     pub async fn extract_subs(&self, video_id: i64) -> Result<(), AppError> {
-        let source = self.get_file_by_id(video_id).await?;
+        let source = self.get_source_by_id(video_id).await?;
         let mut jobs = Vec::new();
         let task_id = self
             .tasks
             .start_task(
                 TaskKind::Subtitles {
-                    target: source.source_path().to_path_buf(),
+                    target: source.video.path().to_path_buf(),
                 },
                 None,
             )
             .unwrap();
-        let subtitles_path = source.subtitles_path();
-        for stream in source.origin.subtitle_streams() {
+        let subtitles_dir = SubtitlesDirAsset::new(video_id);
+        for stream in source.video.subtitle_streams() {
             if stream.codec().supports_text() {
-                let job = source
-                    .generate_subtitles(stream.index)
-                    .expect("track to support text decoding");
-                jobs.push((job, stream));
+                let job = SubtitlesJob::from_source(
+                    &source.video,
+                    subtitles_dir.prepare_path().await?,
+                    stream.index,
+                )?;
+                let output_file = job.output_file_path.clone();
+                let job = job.run(source.video.path().to_path_buf(), source.video.duration())?;
+                jobs.push((job, stream, output_file));
             }
         }
-        for (mut job, stream) in jobs {
+        for (mut job, stream, output_file) in jobs {
             if let Ok(status) = job.wait().await {
                 if status.success() {
-                    let mut file_path = subtitles_path.clone();
-                    file_path.push(format!(
-                        "{}.srt",
-                        stream
-                            .language
-                            .map_or(uuid::Uuid::new_v4().to_string(), |x| x.to_string())
-                    ));
-                    let mut file = std::fs::File::open(&file_path)?;
-                    let metadata = fs::metadata(&file_path).await?;
+                    let metadata = fs::metadata(&output_file).await?;
                     let size = metadata.len();
+                    let mut file = std::fs::File::open(&output_file)?;
                     let hash = utils::file_hash(&mut file)?;
                     let db_subtitles = DbSubtitles {
                         id: None,
                         language: stream.language.map(|x| x.to_string()),
-                        path: subtitles_path.to_str().unwrap().to_string(),
+                        path: output_file.to_string_lossy().to_string(),
                         hash: hash.to_string(),
                         size: size as i64,
                         video_id,
@@ -285,14 +293,9 @@ impl AppState {
         video_id: i64,
         subs_track: usize,
     ) -> Result<String, AppError> {
-        let source = self.get_file_by_id(video_id).await?;
+        let video = self.get_source_by_id(video_id).await?.video;
         let track_number = {
-            let lib = self.library.lock().unwrap();
-            let source = lib
-                .find_source(source.source_path())
-                .ok_or(AppError::not_found("Failed to find source file on disk"))?;
-            source
-                .origin
+            video
                 .subtitle_streams()
                 .get(subs_track)
                 .ok_or(AppError::not_found(
@@ -300,7 +303,7 @@ impl AppState {
                 ))?
                 .index
         };
-        let subtitle = ffmpeg::pull_subtitles(source.source_path(), track_number).await?;
+        let subtitle = ffmpeg::pull_subtitles(video.path(), track_number).await?;
         Ok(subtitle)
     }
 
@@ -320,71 +323,71 @@ impl AppState {
         Ok(())
     }
 
-    #[tracing::instrument]
     pub async fn transcode_video(
         &self,
         video_id: i64,
         payload: TranscodePayload,
     ) -> Result<(), AppError> {
-        let source = self.get_file_by_id(video_id).await?;
-
-        let job = source.transcode_video(payload)?;
-        let output_path = job.job.output_path.clone();
+        let source = self.get_source_by_id(video_id).await?;
+        let variant_assets = source.variants_dir();
+        let output_path = variant_assets.prepare_path().await?;
+        let job = TranscodeJob::from_source(&source, output_path, payload)?;
+        let variant_path = job.output_path.clone();
+        let job = job.run(source.video.path().to_path_buf(), source.video.duration())?;
 
         self.tasks
             .tracker
             .track_future(self.tasks.observe_ffmpeg_task(
                 job,
                 TaskKind::Transcode {
-                    target: source.source_path().to_path_buf(),
+                    target: source.video.path().to_path_buf(),
                 },
             ))
             .await?;
-        let variant_video = Video::from_path(output_path)
-            .await
-            .expect("file to be done transcoding");
-
-        let mut library = self.library.lock().unwrap();
-        library.add_variant(source.source_path(), variant_video);
-
+        let variant = Video::from_path(variant_path).await?;
+        if let Some(source) = self.library.lock().unwrap().get_source_mut(video_id) {
+            source.variants.push(variant);
+        };
         Ok(())
     }
 
-    #[tracing::instrument]
     pub async fn generate_previews(&self, video_id: i64) -> Result<(), AppError> {
-        let file = self.get_file_by_id(video_id).await?;
-
-        if (file.previews_count() as f64) < (file.duration().as_secs() as f64 / 10.0).round() {
+        let source = self.get_source_by_id(video_id).await?;
+        let previews_dir = source.previews_dir();
+        let count = previews_dir.previews_count();
+        if (count as f64) < (source.video.duration().as_secs() as f64 / 10.0).round() {
             tracing::warn!("Rewriting existing previews")
         }
+        let output_dir = previews_dir.prepare_path().await?;
+        let job = ffmpeg::PreviewsJob::new(source.video.path(), output_dir);
+        let job = ffmpeg::FFmpegRunningJob::new(
+            job,
+            source.video.path().to_path_buf(),
+            source.video.duration(),
+        )?;
 
-        let job = file.generate_previews()?;
-
-        let run_result = self
-            .tasks
+        self.tasks
             .tracker
             .track_future(self.tasks.observe_ffmpeg_task(
                 job,
                 TaskKind::Previews {
-                    target: file.source_path().to_path_buf(),
+                    target: source.video.path().to_path_buf(),
                 },
             ))
-            .await;
+            .await?;
 
-        if let Err(err) = run_result {
-            return Err(err.into());
-        }
         Ok(())
     }
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
+        // TODO: refresh local library files
         let local_episodes = {
             let library = self.library.lock().unwrap();
             library.shows.clone()
         };
 
         let db_episodes_videos = sqlx::query!(
-            r#"SELECT videos.*, episodes.id as "episode_id!" FROM videos
+            r#"SELECT videos.id as "video_id!", episodes.id as "episode_id!" FROM videos
         JOIN episodes ON videos.id = episodes.video_id"#
         )
         .fetch_all(&self.db.pool)
@@ -392,94 +395,113 @@ impl AppState {
 
         let missing_episodes: Vec<_> = db_episodes_videos
             .iter()
-            .filter(|d| {
-                local_episodes
-                    .iter()
-                    .find(|l| d.path == l.source.source_path().to_string_lossy().to_string())
-                    .is_none()
-            })
+            .filter(|d| !local_episodes.contains_key(&d.video_id))
             .collect();
+        debug_assert!(missing_episodes.is_empty());
 
         let mut new: Vec<_> = local_episodes
-            .into_iter()
+            .values()
             .filter(|l| {
                 db_episodes_videos
                     .iter()
-                    .find(|d| d.path == l.source.source_path().to_string_lossy().to_string())
+                    .find(|d| d.video_id == l.source.id)
                     .is_none()
             })
+            .cloned()
             .collect();
         new.sort_unstable_by_key(|x| x.identifier.title.clone());
 
         let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
 
-        for mut new_episodes in new
+        for mut show_episodes in new
             .chunk_by(|a, b| a.identifier.title == b.identifier.title)
             .map(Vec::from)
         {
-            new_episodes.sort_unstable_by_key(|x| x.identifier.season);
+            show_episodes.sort_unstable_by_key(|x| x.identifier.season);
             let db = self.db.clone();
             let providers_stack = self.providers_stack;
-            let title = new_episodes.first().unwrap().identifier.title.clone();
+            let title = show_episodes.first().unwrap().identifier.title.clone();
             let discover_providers = providers_stack.discover_providers();
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let local_id = handle_series(&title, &db, discover_providers).await?;
-                let external_ids = db.external_ids(&local_id, ContentType::Show).await.unwrap();
-                for new_seasons_episodes in new_episodes
+                let external_ids = db
+                    .external_ids(&local_id.to_string(), ContentType::Show)
+                    .await
+                    .unwrap();
+                let mut seasons_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
+                for season_episodes in show_episodes
                     .chunk_by(|a, b| a.identifier.season == b.identifier.season)
                     .map(Vec::from)
                 {
-                    let season = new_seasons_episodes.first().unwrap().identifier.season;
-                    let local_season_id = handle_season(
-                        &local_id,
-                        external_ids.clone(),
-                        season.into(),
-                        &db,
-                        &show_providers,
-                    )
-                    .await
-                    .unwrap();
-
-                    for episode in new_seasons_episodes {
-                        dbg!(episode.source.source_path());
-                        let db_video = episode.source.into_db_video();
-                        let Ok(video_id) = db.insert_video(db_video).await else {
-                            continue;
-                        };
-                        if let Err(_) = handle_episode(
-                            &local_id,
+                    let external_ids = external_ids.clone();
+                    let show_providers = show_providers.clone();
+                    let db = db.clone();
+                    seasons_scan_handles.spawn(async move {
+                        let season = season_episodes.first().unwrap().identifier.season;
+                        let local_season_id = handle_season(
+                            local_id,
                             external_ids.clone(),
-                            video_id,
-                            local_season_id,
                             season.into(),
-                            episode.identifier.episode.into(),
                             &db,
                             &show_providers,
                         )
-                        .await
-                        {
-                            tracing::warn!(
-                                "Failed to fetch metadata for episode: {}",
-                                episode.source.source_path().display()
-                            );
+                        .await?;
+                        let mut episodes_scan_handles: JoinSet<anyhow::Result<()>> = JoinSet::new();
+
+                        // we can spawn here one more time
+                        for episode in season_episodes {
+                            let db = db.clone();
+                            let show_providers = show_providers.clone();
+                            let external_ids = external_ids.clone();
+                            episodes_scan_handles.spawn(async move {
+                                handle_episode(
+                                    local_id,
+                                    external_ids.clone(),
+                                    episode.source.id,
+                                    local_season_id,
+                                    season.into(),
+                                    episode.identifier.episode.into(),
+                                    &db,
+                                    &show_providers,
+                                )
+                                .await
+                            });
                         }
-                    }
+                        while let Some(result) = episodes_scan_handles.join_next().await {
+                            match result {
+                                Ok(Err(e)) => {
+                                    tracing::error!("Episode reconciliation task failed with err {}", e)
+                                }
+                                Err(_) => tracing::error!("Episode reconciliation task paniced"),
+                                Ok(Ok(_)) => tracing::trace!("Joined episode reconciliation task"),
+                            }
+                        }
+
+                        Ok(())
+                    });
                 }
 
+                while let Some(result) = seasons_scan_handles.join_next().await {
+                    match result {
+                        Ok(Err(e)) => tracing::error!("Season Reconciliation task failed with err {}", e),
+                        Err(_) => tracing::error!("Season reconciliation task paniced"),
+                        Ok(Ok(_)) => tracing::trace!("Joined season reconciliation task"),
+                    }
+                }
                 Ok(())
             });
         }
 
         for missing_episode in missing_episodes {
-            let _ = self.db.remove_episode(missing_episode.id).await;
+            let _ = self.db.remove_episode(missing_episode.episode_id).await;
         }
 
         while let Some(result) = show_scan_handles.join_next().await {
             match result {
-                Ok(Err(e)) => tracing::error!("Reconciliation task failed with err {}", e),
-                Err(_) => tracing::error!("Reconciliation task paniced"),
-                Ok(Ok(res)) => tracing::trace!("Joined reconciliation task"),
+                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
+                Err(_) => tracing::error!("Show reconciliation task paniced"),
+                Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
             }
         }
 
@@ -492,12 +514,11 @@ impl AppState {
         movie: LibraryFile<MovieIdentifier>,
         metadata_provider: &impl DiscoverMetadataProvider,
     ) -> Result<(), AppError> {
-        let resources_folder = movie.source.resources_folder_name();
         let movie_query = sqlx::query!(
             r#"SELECT movies.id as "id!" FROM movies 
                     JOIN videos ON videos.id = movies.video_id
-                    WHERE videos.resources_folder = ?;"#,
-            resources_folder
+                    WHERE videos.id = ?;"#,
+            movie.source.id
         )
         .fetch_one(&self.db.pool)
         .await
@@ -518,12 +539,8 @@ impl AppState {
                         .into_iter()
                         .next()
                         .ok_or(anyhow!("results are empty"))?;
-                    let db_video = movie.source.into_db_video();
-                    let video_id = self.db.insert_video(db_video).await?;
-                    let provider = metadata.metadata_provider.clone();
-                    let metadata_id = metadata.metadata_id.clone();
-                    let db_movie = metadata.into_db_movie(video_id).await;
-                    (self.db.insert_movie(db_movie).await?, metadata_id, provider);
+                    let db_movie = metadata.into_db_movie(movie.source.id).await;
+                    self.db.insert_movie(db_movie).await?;
                 } else {
                     tracing::error!("Unexpected database error when fetching movie: {}", e);
                     return Err(e.into());
@@ -540,30 +557,57 @@ async fn handle_series(
     title: &str,
     db: &Db,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
-) -> Result<String, AppError> {
+) -> Result<i64, AppError> {
     let shows = db.search_show(&title).await.unwrap();
 
     if shows.is_empty() {
         for provider in providers {
-            if let Ok(show) = provider.show_search(&title).await {
-                let Some(first) = show.into_iter().next() else {
+            if let Ok(search_result) = provider.show_search(&title).await {
+                let Some(first_result) = search_result.into_iter().next() else {
                     continue;
                 };
+                // save poster, backdrop and mutate result's urls to local,
+                // leave original url in if saving fails
                 let external_ids = provider
-                    .external_ids(&first.metadata_id, ContentType::Show)
+                    .external_ids(&first_result.metadata_id, ContentType::Show)
                     .await?;
-                let metadata_id = first.metadata_id.clone();
-                let metadata_provider = first.metadata_provider;
-                let local_id = db.insert_show(first.into_db_show().await).await.unwrap();
-                db.insert_external_id(DbExternalId {
+                let metadata_id = first_result.metadata_id.clone();
+                let metadata_provider = first_result.metadata_provider;
+                let poster_url = first_result.poster.clone();
+                let backdrop_url = first_result.backdrop.clone();
+                let local_id = db
+                    .insert_show(first_result.into_db_show().await)
+                    .await
+                    .unwrap();
+                let poster_job = poster_url.map(|url| {
+                    let poster_asset = PosterAsset::new(local_id, PosterContentType::Show);
+                    save_asset_from_url(url.to_string(), poster_asset)
+                });
+                let backdrop_job = backdrop_url.map(|url| {
+                    let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Show);
+                    save_asset_from_url(url.to_string(), backdrop_asset)
+                });
+                let insert_job = db.insert_external_id(DbExternalId {
                     metadata_provider: metadata_provider.to_string(),
                     metadata_id: metadata_id.clone(),
                     show_id: Some(local_id),
                     is_prime: true.into(),
                     ..Default::default()
-                })
-                .await
-                .unwrap();
+                });
+                match (poster_job, backdrop_job) {
+                    (Some(poster_job), Some(backdrop_job)) => {
+                        let _ = tokio::join!(poster_job, backdrop_job, insert_job);
+                    }
+                    (Some(poster_job), None) => {
+                        let _ = tokio::join!(poster_job, insert_job);
+                    }
+                    (None, Some(backdrop_job)) => {
+                        let _ = tokio::join!(backdrop_job, insert_job);
+                    }
+                    (None, None) => {
+                        let _ = insert_job.await;
+                    }
+                }
 
                 for external_id in external_ids {
                     let db_external_id = DbExternalId {
@@ -575,23 +619,23 @@ async fn handle_series(
                     };
                     let _ = db.insert_external_id(db_external_id).await;
                 }
-                return Ok(local_id.to_string());
+                return Ok(local_id);
             }
         }
         return Err(AppError::not_found("providers could not find the show"));
     }
     let top_search = shows.into_iter().next().expect("shows not empty");
-    Ok(top_search.metadata_id)
+    Ok(top_search.metadata_id.parse().unwrap())
 }
 
 async fn handle_season(
-    local_show_id: &str,
+    local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
     season: usize,
     db: &Db,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
-    let Ok(local_season) = db.season(local_show_id, season).await else {
+    let Ok(local_season) = db.season(&local_show_id.to_string(), season).await else {
         for provider in providers {
             let p = MetadataProvider::from_str(provider.provider_identifier())
                 .expect("all providers are known");
@@ -600,7 +644,7 @@ async fn handle_season(
                     continue;
                 };
                 let id = db
-                    .insert_season(season.into_db_season(local_show_id.parse().unwrap()).await)
+                    .insert_season(season.into_db_season(local_show_id).await)
                     .await
                     .unwrap();
                 return Ok(id);
@@ -612,7 +656,7 @@ async fn handle_season(
 }
 
 async fn handle_episode(
-    local_show_id: &str,
+    local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
     db_video_id: i64,
     local_season_id: i64,
@@ -621,7 +665,10 @@ async fn handle_episode(
     db: &Db,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<()> {
-    let Ok(_) = db.episode(local_show_id, season, episode).await else {
+    let Ok(_) = db
+        .episode(&local_show_id.to_string(), season, episode)
+        .await
+    else {
         for provider in providers {
             let p = MetadataProvider::from_str(provider.provider_identifier())
                 .expect("all providers are known");
@@ -637,6 +684,23 @@ async fn handle_episode(
         }
         return Err(anyhow!("all providers failed to find episode"));
     };
+    Ok(())
+}
+
+pub(crate) async fn save_asset_from_url(
+    url: impl reqwest::IntoUrl,
+    asset: impl FileAsset,
+) -> anyhow::Result<()> {
+    use std::io::{Error, ErrorKind};
+    use tokio_stream::StreamExt;
+    use tokio_util::io::StreamReader;
+
+    let response = reqwest::get(url).await.unwrap();
+    let stream = response
+        .bytes_stream()
+        .map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
+    let mut stream_reader = StreamReader::new(stream);
+    asset.save_from_reader(&mut stream_reader).await?;
     Ok(())
 }
 

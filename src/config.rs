@@ -521,6 +521,6 @@ impl Default for AppResources {
 
 #[test]
 fn parse_capabilities() {
-    let capabilities = Capabilities::parse("ffpmeg");
+    let capabilities = Capabilities::parse("ffmpeg");
     assert!(capabilities.is_ok())
 }

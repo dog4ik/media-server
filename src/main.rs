@@ -13,6 +13,7 @@ use media_server::server::{admin_api, public_api};
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -76,9 +77,9 @@ async fn main() {
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-    let mut shows = Vec::new();
+    let mut shows = HashMap::new();
     for dir in &shows_dirs {
-        shows.extend(explore_folder(dir).await.unwrap());
+        shows.extend(explore_folder(dir, &db).await.unwrap());
     }
 
     let movies_dirs: Vec<PathBuf> = configuration
@@ -87,9 +88,9 @@ async fn main() {
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-    let mut movies = Vec::new();
+    let mut movies = HashMap::new();
     for dir in &movies_dirs {
-        movies.extend(explore_folder(dir).await.unwrap());
+        movies.extend(explore_folder(dir, &db).await.unwrap());
     }
 
     let media_folders = MediaFolders {
@@ -139,7 +140,6 @@ async fn main() {
     let app = Router::new()
         .route("/admin/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
-        .route("/summary", get(public_api::get_summary))
         .route("/api/watch", get(public_api::watch))
         .route("/api/local_shows", get(public_api::all_local_shows))
         .route(
@@ -149,7 +149,10 @@ async fn main() {
         .route("/api/external_ids/:id", get(public_api::external_ids))
         .route("/api/previews", get(public_api::previews))
         .route("/api/subs", get(public_api::subtitles))
-        .route("/api/pull_video_subtitle", get(public_api::pull_video_subtitle))
+        .route(
+            "/api/pull_video_subtitle",
+            get(public_api::pull_video_subtitle),
+        )
         .route("/api/show/:show_id", get(public_api::get_show))
         .route("/api/show/:show_id/:season", get(public_api::get_season))
         .route(
@@ -191,6 +194,8 @@ async fn main() {
         .route("/admin/remove_video", delete(admin_api::remove_video))
         .route("/admin/remove_variant", delete(admin_api::remove_variant))
         .route("/admin/transcode", post(admin_api::transcode_video))
+        .route("/admin/generate_previews", post(admin_api::generate_previews))
+        .route("/admin/delete_previews", delete(admin_api::delete_previews))
         .route("/admin/configuration", get(admin_api::server_configuration))
         .route("/admin/download_torrent", post(admin_api::download_torrent))
         .route("/admin/order_providers", post(admin_api::order_providers))

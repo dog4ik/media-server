@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.title, movies.poster FROM movies\n        JOIN videos ON videos.id = movies.video_id\n        WHERE videos.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "title",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "6b9e4d7af549e4fda10ee6958180659280d866a869e1bab3a60d44883509c7fd"
+}

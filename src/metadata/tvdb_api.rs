@@ -573,15 +573,3 @@ struct TvdbResponse<T> {
     status: String,
     data: T,
 }
-
-#[cfg(test)]
-mod tests {
-    use crate::metadata::tvdb_api::TvdbApi;
-
-    #[tokio::test]
-    async fn tvdb_search_movie() {
-        let api = TvdbApi::new("eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhZ2UiOiIiLCJhcGlrZXkiOiJjM2Q2YzBjOS03ODZjLTRjNTEtYjI4NC0xN2MyMGQ4NmZjNTgiLCJjb21tdW5pdHlfc3VwcG9ydGVkIjpmYWxzZSwiZXhwIjoxNzEyMzIzNDE2LCJnZW5kZXIiOiIiLCJoaXRzX3Blcl9kYXkiOjEwMDAwMDAwMCwiaGl0c19wZXJfbW9udGgiOjEwMDAwMDAwMCwiaWQiOiIyNDQ5ODE1IiwiaXNfbW9kIjpmYWxzZSwiaXNfc3lzdGVtX2tleSI6ZmFsc2UsImlzX3RydXN0ZWQiOmZhbHNlLCJwaW4iOm51bGwsInJvbGVzIjpbXSwidGVuYW50IjoidHZkYiIsInV1aWQiOiIifQ.SinjFB08M1INyYQ-OOWhNdpKQ51BmsquoXfcf-MUfYcFIjCr_V4O5WxNV_Enk5RaqZn8yIp_j458VWuIZEzyKy_LCadyJ6OefkrWUt9dEwEm1qIod9EvcoSgn3IgQEpmWsHHwb2Y8_yePJXbI-TQMIk1i2c3OisHm-dPD1ZtLnC0FIsPJNztHFxLGyRQd-Uao6SLqeA6bCFP66Gnue5rmrZvP8sS5wjmQHvpYnnh-gO5uMRjR_FXm0o8NvU3BRF1Pncjv49GLMIpiyMVRn6ZVYZom3f4LspW5DWNzCSZ_0P5A9LZmspPCPiCQySOGxyefnDC3uRRgJK7sYkpDbVMWh-dI1kHeJxISB1Y1asqTzVF4Imfa7-FaksCHFv-OoueRbEGHZalafik2Ou1NfvAKBuB1jN1PGAlSrZyHzpaeLCzguiFigRR4_7C2eFJ1s-r-9eRP2jEIlxOALh4aixZSwtyD_EOu84MxuUobXNVwnFibIoexmYcaGvxnoxhjksFozHO3PZE7nzPG_sMj8-cuJHZdQdTh9CBFFRU4KnVHX5YR3100miseG6e4PScyvUqpCOQdv32zKu0HEgCa0kukfN_vMwrbtJZkLrDwGq05W6ay4hQClpdMyyoBRDcKaK0WoieFbswv-43S-4C5YV5Xj2xRsjZWq0Bw6sNE4M3wqI");
-        let result = api.search_movie("inception").await.unwrap();
-        dbg!(result.first().unwrap());
-    }
-}

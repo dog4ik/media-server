@@ -26,6 +26,7 @@ use uuid::Uuid;
 use super::{IdQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{ServerConfiguration, APP_RESOURCES};
+use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::MetadataProvidersStack;
 use crate::progress::{TaskKind, TaskResource};
@@ -142,6 +143,7 @@ fn sqlx_err_wrap(err: sqlx::Error) -> AppError {
     }
 }
 
+#[axum::debug_handler]
 pub async fn remove_video(
     State(state): State<AppState>,
     Query(IdQuery { id }): Query<IdQuery>,
@@ -251,6 +253,12 @@ pub async fn generate_previews(
     tokio::spawn(async move {
         app_state.generate_previews(id).await.unwrap();
     });
+}
+
+pub async fn delete_previews(Query(IdQuery { id }): Query<IdQuery>) -> Result<(), AppError> {
+    let previews_dir = PreviewsDirAsset::new(id);
+    previews_dir.delete_dir().await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -462,7 +470,7 @@ pub async fn update_history(
         payload.is_finished,
         payload.video_id,
     );
-    if let Err(err) = dbg!(query.fetch_one(&db.pool).await) {
+    if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
             sqlx::Error::RowNotFound => {
                 db.insert_history(crate::db::DbHistory {

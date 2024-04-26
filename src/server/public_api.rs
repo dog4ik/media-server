@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use axum::extract::{Path, Query, State};
+use axum::body::Body;
+use axum::extract::{Path, Query, Request, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -8,11 +9,15 @@ use axum_extra::headers::Range;
 use axum_extra::TypedHeader;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
+use tokio_util::io::ReaderStream;
 
 use crate::app_state::AppError;
 use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
-use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, Summary, VideoCodec};
+use crate::library::assets::{
+    FileAsset, PreviewAsset, PreviewsDirAsset, SubtitleAsset, VariantAsset,
+};
+use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, VideoCodec};
 use crate::metadata::{
     EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
     MetadataSearchResult, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
@@ -43,7 +48,7 @@ pub struct ContentRequestQuery {
 pub struct DetailedVideo {
     pub id: i64,
     pub path: PathBuf,
-    pub resources_folder: String,
+    pub previews_count: usize,
     pub size: u64,
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
@@ -130,7 +135,7 @@ impl Into<DetailedSubtitleTrack> for FFprobeSubtitleStream<'_> {
 impl DetailedVariant {
     pub fn from_video(video: crate::library::Video) -> Self {
         let id = video
-            .path
+            .path()
             .file_stem()
             .expect("file to have stem like {size}.{hash}")
             .to_string_lossy()
@@ -149,7 +154,7 @@ impl DetailedVariant {
                 .into_iter()
                 .map(|s| s.into())
                 .collect(),
-            path: video.path,
+            path: video.path().to_path_buf(),
         }
     }
 }
@@ -157,45 +162,23 @@ impl DetailedVariant {
 pub async fn previews(
     Query(video_id): Query<IdQuery>,
     Query(number): Query<NumberQuery>,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let AppState { library, db, .. } = state;
-    let video = sqlx::query!("SELECT * FROM videos WHERE id = ?", video_id.id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
-    let video_path = PathBuf::from(video.path);
-    let file = {
-        let library = library.lock().unwrap();
-        library.find_source(&video_path).cloned()
-    };
-    if let Some(file) = file {
-        return Ok(file.serve_previews(number.number).await);
-    } else {
-        return Err(StatusCode::NOT_FOUND);
-    };
+) -> Result<Body, AppError> {
+    let preview_asset = PreviewAsset::new(video_id.id, number.number);
+    let file = preview_asset.open().await?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    Ok(body)
 }
 
 pub async fn subtitles(
     Query(video_id): Query<IdQuery>,
     Query(lang): Query<LanguageQuery>,
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let AppState { library, db, .. } = state;
-    let video = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id.id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
-    let video_path = PathBuf::from(video.path);
-    let file = {
-        let library = library.lock().unwrap();
-        library.find_source(&video_path).cloned()
-    };
-    if let Some(file) = file {
-        return Ok(file.serve_subs(lang.lang).await);
-    } else {
-        return Err(StatusCode::NOT_FOUND);
-    };
+) -> Result<Body, AppError> {
+    let subtitle_asset = SubtitleAsset::new(video_id.id, lang.lang.unwrap_or_default());
+    let file = subtitle_asset.open().await?;
+    let stream = ReaderStream::new(file);
+    let body = Body::from_stream(stream);
+    Ok(body)
 }
 
 pub async fn pull_video_subtitle(
@@ -213,28 +196,22 @@ pub async fn watch(
     variant: Option<Query<VariantQuery>>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, StatusCode> {
-    let AppState { library, db, .. } = state;
-    let video = sqlx::query!("SELECT path FROM videos WHERE id = ?", video_id.id)
-        .fetch_one(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
-    let path = PathBuf::from(video.path);
-    let file = {
-        let library = library.lock().unwrap();
-        library.find_source(&path).map(|x| x.clone())
-    }
-    .ok_or(StatusCode::NOT_FOUND)?;
+) -> Result<impl IntoResponse, AppError> {
     if let Some(Query(VariantQuery { variant })) = variant {
-        let file = file.find_variant(&variant).ok_or(StatusCode::NOT_FOUND)?;
-        return Ok(file.serve(range).await);
+        let variant_asset = VariantAsset::new(video_id.id, variant);
+        let video = variant_asset.video().await?;
+        return Ok(video.serve(range).await);
+    } else {
+        let AppState { library, .. } = state;
+        let video = {
+            let library = library.lock().unwrap();
+            library
+                .get_source(video_id.id)
+                .map(|x| x.video.clone())
+                .ok_or(AppError::not_found("Video not found"))?
+        };
+        return Ok(video.serve(range).await);
     }
-    return Ok(file.origin.serve(range).await);
-}
-
-pub async fn get_summary(State(state): State<AppState>) -> Json<Vec<Summary>> {
-    let library = state.library.lock().unwrap();
-    return Json(library.get_summary());
 }
 
 pub async fn all_local_shows(
@@ -320,11 +297,11 @@ pub async fn contents_video(
 }
 
 pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
-    let (shows, movies): (Vec<Source>, Vec<Source>) = {
+    let (shows, movies): (Vec<_>, Vec<_>) = {
         let library = state.library.lock().unwrap();
         (
-            library.shows.iter().map(|x| x.source.clone()).collect(),
-            library.movies.iter().map(|x| x.source.clone()).collect(),
+            library.shows.values().map(|x| x.source.clone()).collect(),
+            library.movies.values().map(|x| x.source.clone()).collect(),
         )
     };
     let mut summary = Vec::new();
@@ -343,33 +320,31 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_j
         summary.push(json);
     };
     for show_source in shows {
-        let path = show_source.source_path().to_string_lossy().to_string();
         if show_source.variants.len() == 0 {
             continue;
         }
         let db_show = sqlx::query!(
-            "SELECT episodes.* FROM episodes
+            "SELECT episodes.title, episodes.poster FROM episodes
         JOIN videos ON videos.id = episodes.video_id
-        WHERE videos.path = ?",
-            path
+        WHERE videos.id = ?",
+            show_source.id
         )
         .fetch_one(&state.db.pool)
         .await;
         if let Ok(db_show) = db_show {
-            add_summary(db_show.title, db_show.poster, db_show.video_id, show_source);
+            add_summary(db_show.title, db_show.poster, show_source.id, show_source);
         }
     }
 
     for movie_source in movies {
-        let path = movie_source.source_path().to_string_lossy().to_string();
         if movie_source.variants.len() == 0 {
             continue;
         }
         let db_movie = sqlx::query!(
-            "SELECT movies.* FROM movies
+            "SELECT movies.title, movies.poster FROM movies
         JOIN videos ON videos.id = movies.video_id
-        WHERE videos.path = ?",
-            path
+        WHERE videos.id = ?",
+            movie_source.id
         )
         .fetch_one(&state.db.pool)
         .await;
@@ -377,7 +352,7 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_j
             add_summary(
                 db_movie.title,
                 db_movie.poster,
-                db_movie.video_id,
+                movie_source.id,
                 movie_source,
             );
         }
@@ -391,8 +366,8 @@ pub async fn get_video_by_id(
 ) -> Result<Json<DetailedVideo>, StatusCode> {
     let AppState { library, db, .. } = state;
     let db_video = sqlx::query!(
-        r#"SELECT videos.scan_date, videos.path, videos.resources_folder,
-        history.time, history.id, history.update_time, history.is_finished 
+        r#"SELECT videos.scan_date, videos.path, history.time,
+        history.id, history.update_time, history.is_finished 
         FROM videos
         LEFT JOIN history ON history.video_id = videos.id
         WHERE videos.id = ?;"#,
@@ -403,9 +378,7 @@ pub async fn get_video_by_id(
     .map_err(sqlx_err_wrap)?;
     let source = {
         let library = library.lock().unwrap();
-        let file = library
-            .find_source(db_video.path)
-            .ok_or(StatusCode::NOT_FOUND)?;
+        let file = library.get_source(id).ok_or(StatusCode::NOT_FOUND)?;
         file.clone()
     };
 
@@ -413,13 +386,10 @@ pub async fn get_video_by_id(
         .variants
         .iter()
         .map(|v| {
-            let id = v
-                .path
-                .file_stem()
-                .expect("file to have stem like {size}.{hash}");
+            let id = v.path().file_stem().expect("file stem to be id");
             DetailedVariant {
                 id: id.to_string_lossy().to_string(),
-                path: v.path.clone(),
+                path: v.path().to_path_buf(),
                 size: v.file_size(),
                 duration: v.duration(),
                 video_tracks: v
@@ -449,28 +419,29 @@ pub async fn get_video_by_id(
     } else {
         None
     };
+    let previews_dir = PreviewsDirAsset::new(id);
     let detailed_video = DetailedVideo {
         id,
-        path: source.source_path().to_path_buf(),
-        resources_folder: source.resources_folder_name(),
-        size: source.origin.file_size(),
-        duration: source.duration(),
+        path: source.video.path().to_path_buf(),
+        previews_count: previews_dir.previews_count(),
+        size: source.video.file_size(),
+        duration: source.video.duration(),
         variants: detailed_variants,
         scan_date: date.to_string(),
         video_tracks: source
-            .origin
+            .video
             .video_streams()
             .into_iter()
-            .map(|s| DetailedVideoTrack::from_video_stream(s, source.origin.bitrate()))
+            .map(|s| DetailedVideoTrack::from_video_stream(s, source.video.bitrate()))
             .collect(),
         audio_tracks: source
-            .origin
+            .video
             .audio_streams()
             .into_iter()
             .map(|s| s.into())
             .collect(),
         subtitle_tracks: source
-            .origin
+            .video
             .subtitle_streams()
             .into_iter()
             .map(|s| s.into())

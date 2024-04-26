@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT videos.path, episodes.id as \"episode_id!\" FROM videos\n        JOIN episodes ON videos.id = episodes.video_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "path",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "episode_id!",
+        "ordinal": 1,
+        "type_info": "Int64"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "3f13c792178235f94cb495778fd3955a2f64b4642dae259c2b2fdc19f5ed7556"
+}
