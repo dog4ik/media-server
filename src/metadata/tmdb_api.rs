@@ -106,7 +106,7 @@ impl TmdbApi {
     ) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
-        url.path_segments_mut().unwrap().push("search").push("tv");
+        url.path_segments_mut().unwrap().push("search").push("movie");
         url.query_pairs_mut().extend_pairs(query);
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
