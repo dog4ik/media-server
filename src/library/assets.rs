@@ -1,12 +1,17 @@
 use std::{
     fmt::Display,
     path::{Path, PathBuf},
+    time::Duration,
 };
 
+use axum::{body::Body, response::IntoResponse};
+use axum_extra::{headers::ContentLength, TypedHeader};
+use reqwest::StatusCode;
 use tokio::{
     fs,
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
 };
+use tokio_util::io::ReaderStream;
 
 use crate::app_state::AppError;
 
@@ -75,7 +80,56 @@ pub(crate) trait FileAsset {
         Ok(())
     }
 
-    async fn open(&self) -> anyhow::Result<fs::File> {
+    async fn into_response(
+        self,
+        content_type: axum_extra::headers::ContentType,
+        if_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    ) -> Result<impl IntoResponse, std::io::Error>
+    where
+        Self: Sized,
+    {
+        let file = self.open().await?;
+        let metadata = file.metadata().await?;
+        let length_header = TypedHeader(ContentLength(metadata.len()));
+
+        if let (Some(if_modified_since), Ok(metadata_modified)) =
+            (if_modified_since, metadata.modified())
+        {
+            if !if_modified_since.is_modified(metadata_modified) {
+                return Ok(StatusCode::NOT_MODIFIED.into_response());
+            }
+        }
+
+        let crated_header = metadata
+            .created()
+            .map(|c| TypedHeader(axum_extra::headers::Date::from(c)))
+            .ok();
+        let modified_header = metadata
+            .modified()
+            .map(|d| TypedHeader(axum_extra::headers::LastModified::from(d)))
+            .ok();
+
+        let cache_control = TypedHeader(
+            axum_extra::headers::CacheControl::new()
+                .with_public()
+                .with_max_age(Duration::from_secs(60 * 60 * 12)),
+        );
+
+        let stream = ReaderStream::new(file);
+        let body = Body::from_stream(stream);
+
+        Ok((
+            TypedHeader(content_type),
+            length_header,
+            crated_header,
+            cache_control,
+            modified_header,
+            body,
+        )
+            .into_response())
+    }
+
+    async fn open(&self) -> Result<fs::File, std::io::Error> {
         let path = self.path();
         let file = fs::File::open(path).await?;
         Ok(file)

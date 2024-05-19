@@ -17,7 +17,7 @@ use crate::library::{
     AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, Video, VideoCodec,
 };
 use crate::utils;
-use anyhow::anyhow;
+use anyhow::{anyhow, Context};
 
 /// General track stream provided by FFprobe
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -515,9 +515,7 @@ impl TranscodeJob {
         hw_accel: bool,
     ) -> Result<Self, anyhow::Error> {
         let source_path = source.video.path().to_path_buf();
-        let extention = source_path
-            .extension()
-            .ok_or(anyhow::anyhow!("extention missing"))?;
+        let extention = source_path.extension().context("file extension")?;
 
         let file_name = PathBuf::new()
             .with_file_name(uuid::Uuid::new_v4().to_string())
@@ -806,6 +804,7 @@ pub async fn pull_frame(
         "-frames:v".as_ref(),
         "1".as_ref(),
         &output_file.as_ref().as_os_str(),
+        "-y".as_ref(),
     ];
     let mut child = tokio::process::Command::new(ffmpeg)
         .args(args)

@@ -1,6 +1,6 @@
 # Media server / Library manager
 
-Project designed to be media library with ability to search and download new content without much hassle.
+The project is designed to be a media library for easy searching and downloading any media content.
 
 ### Key Features
 

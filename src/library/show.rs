@@ -25,11 +25,17 @@ impl Media for ShowIdentifier {
                 && chars[4].is_ascii_digit()
                 && chars[5] == ')'
                 && (chars[1] == '1' || chars[1] == '2');
-            if is_year && season.is_none() && episode.is_none() {
+            let is_year_appendix = token.len() == 4
+                && chars[0].is_ascii_digit()
+                && chars[1].is_ascii_digit()
+                && chars[2].is_ascii_digit()
+                && chars[3].is_ascii_digit()
+                && (chars[0] == '1' || chars[0] == '2');
+            if (is_year || is_year_appendix) && season.is_none() && episode.is_none() {
                 continue;
             }
 
-            if token.len() == 6
+            if token.len() >= 6
                 && chars[0] == 's'
                 && chars[1].is_ascii_digit()
                 && chars[2].is_ascii_digit()

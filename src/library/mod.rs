@@ -18,19 +18,15 @@ use axum::{
 use axum_extra::{headers::Range, TypedHeader};
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::{
-    fs,
-    io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncSeekExt},
     sync::Semaphore,
-    task::JoinHandle,
 };
-use tokio_stream::StreamExt;
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
     db::DbVideo,
     ffmpeg::{
-        get_metadata, FFmpegRunningJob, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream,
-        FFprobeVideoStream, PreviewsJob, SubtitlesJob, TranscodeJob,
+        get_metadata, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream, FFprobeVideoStream,
     },
     metadata::{EpisodeMetadata, MovieMetadata},
     utils,
@@ -704,15 +700,6 @@ pub enum AudioCodec {
     Other(String),
 }
 
-impl Serialize for AudioCodec {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
 impl Display for AudioCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -768,15 +755,6 @@ pub enum VideoCodec {
     Hevc,
     H264,
     Other(String),
-}
-
-impl Serialize for VideoCodec {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(&self.to_string())
-    }
 }
 
 impl Display for VideoCodec {

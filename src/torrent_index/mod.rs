@@ -10,7 +10,7 @@ fn serialize_url<S: Serializer>(url: &Url, serializer: S) -> Result<S::Ok, S::Er
     serializer.serialize_str(&url.to_string())
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Torrent {
     pub name: String,
     #[serde(serialize_with = "serialize_url")]

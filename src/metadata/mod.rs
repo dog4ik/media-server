@@ -14,7 +14,11 @@ use crate::{
 };
 use anyhow::{anyhow, Context};
 use reqwest::{Client, Request, Response, Url};
-use serde::{de::DeserializeOwned, ser::SerializeStruct, Deserialize, Serialize};
+use serde::{
+    de::{self, DeserializeOwned},
+    ser::SerializeStruct,
+    Deserialize, Deserializer, Serialize,
+};
 use tokio::sync::{mpsc, oneshot, Semaphore};
 
 pub mod tmdb_api;
@@ -127,6 +131,19 @@ impl MetadataProvidersStack {
         Ok(out)
     }
 
+    pub async fn get_movie(
+        &self,
+        movie_id: &str,
+        provider: MetadataProvider,
+    ) -> Result<MovieMetadata, AppError> {
+        let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
+        let provider = movie_providers
+            .into_iter()
+            .find(|p| p.provider_identifier() == provider.to_string())
+            .ok_or(anyhow!("provider is not supported"))?;
+        provider.movie(movie_id).await
+    }
+
     pub async fn get_show(
         &self,
         show_id: &str,
@@ -184,20 +201,33 @@ impl MetadataProvidersStack {
     }
 
     pub async fn get_torrents(&self, query: &str) -> Vec<Torrent> {
-        let show_providers = { self.torrent_indexes_stack.lock().unwrap().clone() };
-        let mut out = Vec::with_capacity(show_providers.len());
-        let handles: Vec<_> = show_providers
+        let torrent_indexes = { self.torrent_indexes_stack.lock().unwrap().clone() };
+        let mut out = Vec::new();
+        let handles: Vec<_> = torrent_indexes
             .into_iter()
             .map(|p| {
                 let query = query.to_owned();
-                tokio::spawn(async move { p.search_torrent(&query).await })
+                tokio::spawn(async move {
+                    tokio::time::timeout(Duration::from_secs(5), p.search_torrent(&query)).await
+                })
             })
             .collect();
 
         for handle in handles {
-            if let Ok(Ok(res)) = handle.await {
-                out.extend(res);
-            }
+            match handle.await {
+                Ok(Ok(Ok(res))) => {
+                    out.extend(res);
+                }
+                Ok(Ok(Err(e))) => {
+                    tracing::warn!("Torrent index returned an error: {e}");
+                }
+                Ok(Err(_)) => {
+                    tracing::warn!("Torrent index timed out");
+                }
+                Err(e) => {
+                    tracing::error!("Torrent index task paniced: {e}");
+                }
+            };
         }
         out
     }
@@ -267,7 +297,7 @@ impl MetadataProvidersStack {
         let providers: HashMap<&str, &(dyn TorrentIndex + Send + Sync)> = self
             .torrent_indexes()
             .into_iter()
-            .map(|p| (p.provider_identifier(), p.clone()))
+            .map(|p| (p.provider_identifier(), p))
             .collect();
         let mut out = Vec::with_capacity(new_order.len());
         for identifier in new_order {
