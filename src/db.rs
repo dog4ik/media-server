@@ -514,11 +514,12 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         let backdrop = show
             .backdrop
             .map(|b| MetadataImage::new(b.parse().unwrap()));
-        let seasons = show
+        let mut seasons: Vec<_> = show
             .seasons
             .split(',')
             .map(|x| x.parse().unwrap())
             .collect();
+        seasons.sort_unstable();
         Ok(ShowMetadata {
             metadata_id: show.id.unwrap().to_string(),
             metadata_provider: MetadataProvider::Local,
