@@ -504,6 +504,7 @@ pub struct TranscodeJob {
     pub output_path: PathBuf,
     pub source_path: PathBuf,
     payload: TranscodePayload,
+    hw_accel: bool,
 }
 
 impl TranscodeJob {
@@ -511,6 +512,7 @@ impl TranscodeJob {
         source: &Source,
         output: impl AsRef<Path>,
         payload: TranscodePayload,
+        hw_accel: bool,
     ) -> Result<Self, anyhow::Error> {
         let source_path = source.video.path().to_path_buf();
         let extention = source_path
@@ -524,14 +526,21 @@ impl TranscodeJob {
             source_path,
             payload,
             output_path: output.as_ref().join(file_name),
+            hw_accel,
         })
     }
 
-    pub fn new(input_path: PathBuf, output_path: PathBuf, payload: TranscodePayload) -> Self {
+    pub fn new(
+        input_path: PathBuf,
+        output_path: PathBuf,
+        payload: TranscodePayload,
+        hw_accel: bool,
+    ) -> Self {
         Self {
             output_path,
             source_path: input_path,
             payload,
+            hw_accel,
         }
     }
 }
@@ -539,6 +548,10 @@ impl TranscodeJob {
 impl FFmpegTask for TranscodeJob {
     fn args(&self) -> Vec<String> {
         let mut args = Vec::new();
+        if self.hw_accel {
+            args.push("-hwaccel".into());
+            args.push("auto".into());
+        }
         args.push("-i".into());
         args.push(self.source_path.to_string_lossy().to_string());
         if let Some(audio_codec) = &self.payload.audio_codec {

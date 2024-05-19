@@ -331,7 +331,8 @@ impl AppState {
         let source = self.get_source_by_id(video_id).await?;
         let variant_assets = source.variants_dir();
         let output_path = variant_assets.prepare_path().await?;
-        let job = TranscodeJob::from_source(&source, output_path, payload)?;
+        let hw_accel_enabled = self.configuration.lock().unwrap().hw_accel;
+        let job = TranscodeJob::from_source(&source, output_path, payload, hw_accel_enabled)?;
         let variant_path = job.output_path.clone();
         let job = job.run(source.video.path().to_path_buf(), source.video.duration())?;
 

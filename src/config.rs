@@ -27,6 +27,7 @@ pub struct ServerConfiguration {
     pub ffprobe_path: Option<PathBuf>,
     pub ffmpeg_path: Option<PathBuf>,
     pub tmdb_token: Option<String>,
+    pub hw_accel: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -38,6 +39,7 @@ struct TomlConfig {
     h264_preset: H264Preset,
     ffprobe_path: PathBuf,
     ffmpeg_path: PathBuf,
+    hw_accel: bool,
 }
 
 impl Default for TomlConfig {
@@ -51,6 +53,7 @@ impl Default for TomlConfig {
             // TODO: move to full path to local dependency
             ffprobe_path: "ffprobe".into(),
             ffmpeg_path: "ffmpeg".into(),
+            hw_accel: false,
         }
     }
 }
@@ -162,6 +165,10 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         .and_then(|v| v.as_str())
         .and_then(|v| PathBuf::from_str(v).ok())
         .unwrap_or(default.ffprobe_path);
+    let hw_accel = parsed
+        .get("hw_accel")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(default.hw_accel);
 
     let repaired_config = TomlConfig {
         port,
@@ -171,6 +178,7 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         h264_preset,
         ffmpeg_path,
         ffprobe_path,
+        hw_accel,
     };
     Ok(repaired_config)
 }
@@ -186,6 +194,7 @@ impl ServerConfiguration {
             h264_preset: self.h264_preset,
             ffmpeg_path: self.ffmpeg_path.clone().unwrap_or("ffmpeg".into()),
             ffprobe_path: self.ffprobe_path.clone().unwrap_or("ffprobe".into()),
+            hw_accel: self.hw_accel,
         }
     }
     /// Try to load config or creates default config file
@@ -232,6 +241,7 @@ impl ServerConfiguration {
             ffprobe_path,
             ffmpeg_path,
             tmdb_token: std::env::var("TMDB_TOKEN").ok(),
+            hw_accel: file_config.hw_accel,
         };
         Ok(config)
     }
