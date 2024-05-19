@@ -37,6 +37,8 @@ tower-http = { version = "0.5.2", features = ["cors", "fs"] }
 tracing = "0.1.40"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
+utoipa = { version = "4.2.3", features = ["axum_extras", "time", "url", "uuid"] }
+utoipa-swagger-ui = { version = "7.0.1", features = ["axum"] }
 torrent = {path = "./torrent"}
 
 # Windows dependencies

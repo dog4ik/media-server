@@ -639,7 +639,7 @@ impl Video {
     }
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct TranscodePayload {
     pub audio_codec: Option<AudioCodec>,
     pub audio_track: Option<usize>,
@@ -696,7 +696,8 @@ impl TranscodePayloadBuilder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum AudioCodec {
     AAC,
     AC3,
@@ -761,7 +762,8 @@ impl<'de> Deserialize<'de> for AudioCodec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
     Hevc,
     H264,
@@ -828,6 +830,31 @@ impl<'de> Deserialize<'de> for VideoCodec {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolution(pub (usize, usize));
+
+impl<'__s> utoipa::ToSchema<'__s> for Resolution {
+    fn schema() -> (
+        &'__s str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        (
+            "Resolution",
+            utoipa::openapi::ObjectBuilder::new()
+                .property(
+                    "width",
+                    utoipa::openapi::ObjectBuilder::new()
+                        .schema_type(utoipa::openapi::SchemaType::Integer),
+                )
+                .required("width")
+                .property(
+                    "height",
+                    utoipa::openapi::ObjectBuilder::new()
+                        .schema_type(utoipa::openapi::SchemaType::Integer),
+                )
+                .required("height")
+                .into(),
+        )
+    }
+}
 
 impl Resolution {
     pub fn new(width: usize, height: usize) -> Self {
@@ -954,7 +981,7 @@ impl FromStr for Resolution {
     }
 }
 
-#[derive(Debug, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Deserialize, Clone, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", untagged)]
 pub enum SubtitlesCodec {
     SubRip,

@@ -17,15 +17,29 @@ use crate::{
     ffmpeg::{FFmpegRunningJob, FFmpegTask},
 };
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "task_kind")]
 pub enum TaskKind {
-    Transcode { target: PathBuf },
-    Scan { target: PathBuf },
+    Transcode {
+        #[schema(value_type = String)]
+        target: PathBuf,
+    },
+    Scan {
+        #[schema(value_type = String)]
+        target: PathBuf,
+    },
     FullScan,
-    Previews { target: PathBuf },
-    Subtitles { target: PathBuf },
-    Torrent { info_hash: [u8; 20] },
+    Previews {
+        #[schema(value_type = String)]
+        target: PathBuf,
+    },
+    Subtitles {
+        #[schema(value_type = String)]
+        target: PathBuf,
+    },
+    Torrent {
+        info_hash: [u8; 20],
+    },
 }
 
 fn display_info_hash(hash: &[u8; 20]) -> String {
@@ -52,12 +66,13 @@ where
     ser.serialize_bool(option.is_some())
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Task {
     pub id: Uuid,
     pub task: TaskKind,
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
+    #[schema(value_type = bool)]
     pub cancel: Option<CancellationToken>,
 }
 

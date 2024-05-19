@@ -9,7 +9,7 @@ use media_server::library::{explore_folder, Library, MediaFolders};
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
-use media_server::server::{admin_api, public_api};
+use media_server::server::{admin_api, public_api, OpenApiDoc};
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch::monitor_library;
@@ -22,6 +22,8 @@ use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::Level;
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() {
@@ -137,74 +139,91 @@ async fn main() {
     tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
     monitor_library(app_state.clone(), media_folders).await;
 
-    let app = Router::new()
-        .route("/admin/log", get(LogChannel::into_sse_stream))
-        .layer(Extension(log_channel))
-        .route("/api/watch", get(public_api::watch))
-        .route("/api/local_shows", get(public_api::all_local_shows))
+    let public_api = Router::new()
+        .route("/local_shows", get(public_api::all_local_shows))
+        .route("/local_movies", get(public_api::all_local_movies))
         .route(
-            "/api/external_to_local/:id",
+            "/external_to_local/:id",
             get(public_api::external_to_local_id),
         )
-        .route("/api/external_ids/:id", get(public_api::external_ids))
-        .route("/api/previews", get(public_api::previews))
-        .route("/api/subs", get(public_api::subtitles))
+        .route("/external_ids/:id", get(public_api::external_ids))
+        .route("/movie/:movie_id", get(public_api::get_movie))
+        .route("/movie/:movie_id", put(admin_api::alter_movie_metadata))
+        .route("/movie/:movie_id/poster", get(public_api::movie_poster))
+        .route("/movie/:movie_id/backdrop", get(public_api::movie_backdrop))
+        .route("/show/:show_id", get(public_api::get_show))
+        .route("/show/:show_id", put(admin_api::alter_show_metadata))
+        .route("/show/:show_id/poster", get(public_api::show_poster))
+        .route("/show/:show_id/backdrop", get(public_api::show_backdrop))
+        .route("/show/:show_id/:season", get(public_api::get_season))
         .route(
-            "/api/pull_video_subtitle",
-            get(public_api::pull_video_subtitle),
-        )
-        .route("/api/show/:show_id", get(public_api::get_show))
-        .route("/api/show/:show_id/:season", get(public_api::get_season))
-        .route(
-            "/api/show/:show_id/:season/:episode",
-            get(public_api::get_episode),
-        )
-        .route("/api/variants", get(public_api::get_all_variants))
-        .route("/api/video/:id", get(public_api::get_video_by_id))
-        .route("/api/history", get(public_api::all_history))
-        .route("/api/history", delete(admin_api::clear_history))
-        .route("/api/history/:id", get(public_api::video_history))
-        .route("/api/history/:id", delete(admin_api::remove_history_item))
-        .route("/api/contents_video/:id", get(public_api::contents_video))
-        .route("/api/search_torrent", get(public_api::search_torrent))
-        .route("/api/search_content", get(public_api::search_content))
-        .route(
-            "/admin/alter_show_metadata",
-            put(admin_api::alter_show_metadata),
+            "/show/:show_id/:season/poster",
+            put(public_api::season_poster),
         )
         .route(
-            "/admin/alter_season_metadata",
+            "/show/:show_id/:season",
             put(admin_api::alter_season_metadata),
         )
         .route(
-            "/admin/alter_episode_metadata",
+            "/episode/:episode_id/poster",
+            get(public_api::episode_poster),
+        )
+        .route(
+            "/show/:show_id/:season/:episode",
+            get(public_api::get_episode),
+        )
+        .route(
+            "/show/:show_id/:season/:episode",
             put(admin_api::alter_episode_metadata),
         )
         .route(
-            "/admin/alter_movie_metadata",
-            put(admin_api::alter_movie_metadata),
+            "/show/:show_id/:season/:episode/poster",
+            get(public_api::episode_poster),
         )
-        .route("/admin/latest_log", get(admin_api::latest_log))
-        .route("/admin/progress", get(admin_api::progress))
-        .route("/admin/tasks", get(admin_api::get_tasks))
-        .route("/admin/mock_progress", post(admin_api::mock_progress))
-        .route("/admin/cancel_task", post(admin_api::cancel_task))
-        .route("/admin/scan", post(admin_api::reconciliate_lib))
-        .route("/admin/clear_db", delete(admin_api::clear_db))
-        .route("/admin/remove_video", delete(admin_api::remove_video))
-        .route("/admin/remove_variant", delete(admin_api::remove_variant))
-        .route("/admin/transcode", post(admin_api::transcode_video))
-        .route("/admin/generate_previews", post(admin_api::generate_previews))
-        .route("/admin/delete_previews", delete(admin_api::delete_previews))
-        .route("/admin/configuration", get(admin_api::server_configuration))
-        .route("/admin/download_torrent", post(admin_api::download_torrent))
-        .route("/admin/order_providers", post(admin_api::order_providers))
-        .route("/admin/update_history", post(admin_api::update_history))
-        .nest_service(
-            "/",
-            ServeDir::new(program_files.join("dist"))
-                .fallback(ServeFile::new(program_files.join("dist/index.html"))),
+        .route("/variants", get(public_api::get_all_variants))
+        .route("/video/by_content", get(public_api::contents_video))
+        .route("/video/:id", get(public_api::get_video_by_id))
+        .route("/video/:id", delete(admin_api::remove_video))
+        .route(
+            "/video/:id/pull_subtitle",
+            get(public_api::pull_video_subtitle),
         )
+        .route("/video/:id/previews", get(public_api::previews))
+        .route("/video/:id/previews", post(admin_api::generate_previews))
+        .route("/video/:id/previews", delete(admin_api::delete_previews))
+        .route("/video/:id/transcode", post(admin_api::transcode_video))
+        .route("/video/:id/watch", get(public_api::watch))
+        .route(
+            "/video/:id/variant/:variant_id",
+            delete(admin_api::remove_variant),
+        )
+        .route("/history", get(public_api::all_history))
+        .route("/history", delete(admin_api::clear_history))
+        .route("/history/:id", get(public_api::video_history))
+        .route("/history/:id", delete(admin_api::remove_history_item))
+        .route("/history/:id", put(admin_api::update_history))
+        .route("/torrent/search", get(public_api::search_torrent))
+        .route("/torrent/download", post(admin_api::download_torrent))
+        .route("/search/content", get(public_api::search_content))
+        .route("/configuration", get(admin_api::server_configuration))
+        .route("/configuration/providers", put(admin_api::order_providers))
+        .route("/log/latest", get(admin_api::latest_log))
+        .route("/tasks", get(admin_api::get_tasks))
+        .route("/tasks/:id", delete(admin_api::cancel_task))
+        .route("/tasks/progress", get(admin_api::progress))
+        .route("/mock_progress", post(admin_api::mock_progress))
+        .route("/cancel_task", post(admin_api::cancel_task))
+        .route("/scan", post(admin_api::reconciliate_lib))
+        .route("/clear_db", delete(admin_api::clear_db));
+
+    let assets_service = ServeDir::new(program_files.join("dist"))
+        .fallback(ServeFile::new(program_files.join("dist/index.html")));
+    let app = Router::new()
+        .route("/api/log", get(LogChannel::into_sse_stream))
+        .layer(Extension(log_channel))
+        .nest("/api", public_api)
+        .nest_service("/", assets_service)
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .layer(cors)
         .with_state(app_state);
 

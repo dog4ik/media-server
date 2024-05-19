@@ -296,7 +296,7 @@ impl MetadataProvidersStack {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
 pub struct MetadataImage(pub Url);
 
 impl AsRef<Url> for MetadataImage {
@@ -311,6 +311,35 @@ impl Serialize for MetadataImage {
         S: serde::Serializer,
     {
         serializer.serialize_str(self.0.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for MetadataImage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct MetadataImageVisitor;
+
+        impl<'de> de::Visitor<'de> for MetadataImageVisitor {
+            type Value = MetadataImage;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("a string representing a valid URL")
+            }
+
+            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+            where
+                E: de::Error,
+            {
+                match Url::from_str(value) {
+                    Ok(url) => Ok(MetadataImage(url)),
+                    Err(_) => Err(de::Error::invalid_value(de::Unexpected::Str(value), &self)),
+                }
+            }
+        }
+
+        deserializer.deserialize_str(MetadataImageVisitor)
     }
 }
 
@@ -450,7 +479,7 @@ impl LimitedRequestClient {
 
 // types
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum MetadataProvider {
     #[default]
@@ -487,14 +516,14 @@ impl Display for MetadataProvider {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ContentType {
     Movie,
     Show,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MetadataSearchResult {
     pub title: String,
     pub poster: Option<MetadataImage>,
@@ -504,7 +533,7 @@ pub struct MetadataSearchResult {
     pub metadata_id: String,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct MovieMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
@@ -515,7 +544,7 @@ pub struct MovieMetadata {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToResponse, utoipa::ToSchema)]
 pub struct ShowMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
@@ -529,7 +558,7 @@ pub struct ShowMetadata {
     pub title: String,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct SeasonMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
@@ -540,7 +569,7 @@ pub struct SeasonMetadata {
     pub number: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct EpisodeMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
@@ -549,18 +578,19 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
+    #[schema(value_type = SerdeDuration)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CharacterMetadata {
     pub actor: String,
     pub character: String,
     pub image: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExternalIdMetadata {
     pub provider: MetadataProvider,
     pub id: String,

@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
-use axum::body::Body;
-use axum::extract::{Path, Query, Request, State};
+use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -9,34 +8,25 @@ use axum_extra::headers::Range;
 use axum_extra::TypedHeader;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use tokio_util::io::ReaderStream;
 
 use crate::app_state::AppError;
 use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::library::assets::{
-    FileAsset, PreviewAsset, PreviewsDirAsset, SubtitleAsset, VariantAsset,
+    BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
+    PreviewsDirAsset, VariantAsset,
 };
 use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, VideoCodec};
 use crate::metadata::{
     EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
-    MetadataSearchResult, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    MetadataSearchResult, MovieMetadata, SeasonMetadata, ShowMetadata,
 };
 use crate::torrent_index::Torrent;
 use crate::{app_state::AppState, db::Db};
 
-use super::content::ServeContent;
 use super::{
-    ContentTypeQuery, IdQuery, LanguageQuery, NumberQuery, PageQuery, ProviderQuery, SearchQuery,
-    StringIdQuery, VariantQuery,
+    ContentTypeQuery, IdQuery, NumberQuery, PageQuery, ProviderQuery, SearchQuery, VariantQuery,
 };
-
-fn sqlx_err_wrap(err: sqlx::Error) -> StatusCode {
-    match err {
-        sqlx::Error::RowNotFound => StatusCode::NOT_FOUND,
-        _ => StatusCode::INTERNAL_SERVER_ERROR,
-    }
-}
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct ContentRequestQuery {
@@ -44,12 +34,14 @@ pub struct ContentRequestQuery {
     id: String,
 }
 
-#[derive(Debug, Serialize, FromRow)]
+#[derive(Debug, Serialize, FromRow, utoipa::ToSchema)]
 pub struct DetailedVideo {
     pub id: i64,
+    #[schema(value_type = String)]
     pub path: PathBuf,
     pub previews_count: usize,
     pub size: u64,
+    #[schema(value_type = SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
@@ -59,17 +51,19 @@ pub struct DetailedVideo {
     pub history: Option<DbHistory>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedVariant {
     pub id: String,
+    #[schema(value_type = String)]
     pub path: PathBuf,
     pub size: u64,
+    #[schema(value_type = SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedAudioTrack {
     pub is_default: bool,
     pub sample_rate: String,
@@ -78,14 +72,14 @@ pub struct DetailedAudioTrack {
     pub codec: AudioCodec,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedSubtitleTrack {
     pub is_default: bool,
     pub language: Option<String>,
     pub codec: SubtitlesCodec,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedVideoTrack {
     pub is_default: bool,
     pub resolution: Resolution,
@@ -159,46 +153,79 @@ impl DetailedVariant {
     }
 }
 
+/// Get preview by video id
+#[utoipa::path(
+    get,
+    path = "/api/video/{id}/preview",
+    params(
+        ("id", description = "video id"),
+        NumberQuery,
+    ),
+    responses(
+        (status = 200, description = "Binary image", body = [u8]),
+        (status = 304),
+        (status = 404, description = "Preiew is not found", body = AppError),
+    )
+)]
 pub async fn previews(
-    Query(video_id): Query<IdQuery>,
+    Path(video_id): Path<i64>,
     Query(number): Query<NumberQuery>,
-) -> Result<Body, AppError> {
-    let preview_asset = PreviewAsset::new(video_id.id, number.number);
-    let file = preview_asset.open().await?;
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
-    Ok(body)
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let preview_asset = PreviewAsset::new(video_id, number.number);
+    let response = preview_asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
 }
 
-pub async fn subtitles(
-    Query(video_id): Query<IdQuery>,
-    Query(lang): Query<LanguageQuery>,
-) -> Result<Body, AppError> {
-    let subtitle_asset = SubtitleAsset::new(video_id.id, lang.lang.unwrap_or_default());
-    let file = subtitle_asset.open().await?;
-    let stream = ReaderStream::new(file);
-    let body = Body::from_stream(stream);
-    Ok(body)
-}
-
+/// Pull subtitle from video file
+#[utoipa::path(
+    get,
+    path = "/api/video/{id}/pull_subtitle",
+    params(
+        ("id", description = "video id"),
+        NumberQuery,
+    ),
+    responses(
+        (status = 200, description = "Subtitle", body = String),
+        (status = 404, description = "Video is not found", body = AppError),
+    )
+)]
 pub async fn pull_video_subtitle(
-    Query(video_id): Query<IdQuery>,
+    Path(video_id): Path<i64>,
     Query(number): Query<NumberQuery>,
     State(state): State<AppState>,
 ) -> Result<String, AppError> {
     state
-        .pull_subtitle_from_video(video_id.id, number.number)
+        .pull_subtitle_from_video(video_id, number.number)
         .await
 }
 
+/// Video stream
+#[utoipa::path(
+    get,
+    path = "/api/video/{id}/watch",
+    params(
+        ("id", description = "video id"),
+        VariantQuery,
+    ),
+    responses(
+        (status = 200, description = "Video stream", body = [u8]),
+        (status = 404, description = "Video is not found", body = AppError),
+    )
+)]
 pub async fn watch(
-    Query(video_id): Query<IdQuery>,
-    variant: Option<Query<VariantQuery>>,
+    Path(video_id): Path<i64>,
+    variant: Query<VariantQuery>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
-    if let Some(Query(VariantQuery { variant })) = variant {
-        let variant_asset = VariantAsset::new(video_id.id, variant);
+    if let Query(VariantQuery {
+        variant: Some(variant),
+    }) = variant
+    {
+        let variant_asset = VariantAsset::new(video_id, variant);
         let video = variant_asset.video().await?;
         return Ok(video.serve(range).await);
     } else {
@@ -206,7 +233,7 @@ pub async fn watch(
         let video = {
             let library = library.lock().unwrap();
             library
-                .get_source(video_id.id)
+                .get_source(video_id)
                 .map(|x| x.video.clone())
                 .ok_or(AppError::not_found("Video not found"))?
         };
@@ -214,6 +241,13 @@ pub async fn watch(
     }
 }
 
+#[utoipa::path(
+    get,
+    path = "/api/local_shows",
+    responses(
+        (status = 200, description = "All local shows", body = Vec<ShowMetadata>),
+    )
+)]
 pub async fn all_local_shows(
     Query(q): Query<PageQuery>,
     State(db): State<Db>,
@@ -224,25 +258,36 @@ pub async fn all_local_shows(
     Ok(Json(db.all_shows().await?))
 }
 
-pub async fn local_show(
-    Query(id): Query<StringIdQuery>,
-    Query(provider): Query<ProviderQuery>,
-    State(db): State<Db>,
-) -> Result<Json<ShowMetadata>, AppError> {
-    let provider = provider.provider.to_string();
-    let local_id = sqlx::query!(
-        "SELECT show_id FROM external_ids WHERE metadata_id = ? AND metadata_provider = ?",
-        id.id,
-        provider
+#[utoipa::path(
+    get,
+    path = "/api/local_movies",
+    responses(
+        (status = 200, description = "All local movies", body = Vec<MovieMetadata>),
     )
-    .fetch_one(&db.pool)
-    .await?
-    .show_id
-    .ok_or(AppError::not_found("Show is not found locally"))?;
-
-    Ok(Json(db.show(&local_id.to_string()).await?))
+)]
+pub async fn all_local_movies(
+    Query(q): Query<PageQuery>,
+    State(db): State<Db>,
+) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+    const PAGE_SIZE: i32 = 20;
+    let page = (q.page.unwrap_or(1) - 1).max(0) as i32;
+    let offset = page * PAGE_SIZE;
+    Ok(Json(db.all_movies().await?))
 }
 
+/// Map external to local id
+#[utoipa::path(
+    get,
+    path = "/api/external_to_local/{id}",
+    params(
+        ("id", description = "External id"),
+        ProviderQuery,
+    ),
+    responses(
+        (status = 200, body = DbExternalId),
+        (status = 404, body = AppError),
+    )
+)]
 pub async fn external_to_local_id(
     Path(id): Path<String>,
     Query(provider): Query<ProviderQuery>,
@@ -261,6 +306,19 @@ pub async fn external_to_local_id(
     Ok(Json(local_id))
 }
 
+/// List external ids for desired content
+#[utoipa::path(
+    get,
+    path = "/api/external_ids/{id}",
+    params(
+        ("id", description = "External id"),
+        ProviderQuery,
+        ContentTypeQuery,
+    ),
+    responses(
+        (status = 200, description = "External ids", body = Vec<ExternalIdMetadata>),
+    )
+)]
 pub async fn external_ids(
     State(providers): State<&'static MetadataProvidersStack>,
     Path(id): Path<String>,
@@ -273,11 +331,24 @@ pub async fn external_ids(
     Ok(Json(res))
 }
 
+/// Get video by content local id
+#[utoipa::path(
+    get,
+    path = "/api/video/by_content",
+    params(
+        ContentTypeQuery,
+        IdQuery,
+    ),
+    responses(
+        (status = 200, description = "Desired video", body = DetailedVideo),
+        (status = 404, description = "Video is not found"),
+    )
+)]
 pub async fn contents_video(
-    Path(id): Path<i64>,
+    Query(IdQuery { id }): Query<IdQuery>,
     Query(content_type): Query<ContentTypeQuery>,
     State(state): State<AppState>,
-) -> Result<Json<DetailedVideo>, StatusCode> {
+) -> Result<Json<DetailedVideo>, AppError> {
     let video_id = match content_type.content_type {
         crate::metadata::ContentType::Movie => {
             sqlx::query!("SELECT video_id FROM movies WHERE id = ?", id)
@@ -291,12 +362,27 @@ pub async fn contents_video(
                 .await
                 .map(|x| x.video_id)
         }
-    }
-    .map_err(|_| StatusCode::NOT_FOUND)?;
+    }?;
     get_video_by_id(Path(video_id), State(state)).await
 }
 
-pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_json::Value>> {
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct VariantSummary {
+    pub title: String,
+    pub poster: Option<String>,
+    pub video_id: i64,
+    pub variants: Vec<DetailedVariant>,
+}
+
+/// Get all variants in the library
+#[utoipa::path(
+    get,
+    path = "/api/variants",
+    responses(
+        (status = 200, description = "All variants", body = Vec<VariantSummary>),
+    )
+)]
+pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<VariantSummary>> {
     let (shows, movies): (Vec<_>, Vec<_>) = {
         let library = state.library.lock().unwrap();
         (
@@ -311,13 +397,12 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_j
             .into_iter()
             .map(|x| DetailedVariant::from_video(x))
             .collect();
-        let json = serde_json::json!({
-        "title": title,
-        "poster": poster,
-        "video_id": video_id,
-        "variants": variants
+        summary.push(VariantSummary {
+            title,
+            poster,
+            video_id,
+            variants,
         });
-        summary.push(json);
     };
     for show_source in shows {
         if show_source.variants.len() == 0 {
@@ -360,10 +445,21 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<serde_j
     Json(summary)
 }
 
+/// Get video by id
+#[utoipa::path(
+    get,
+    path = "/api/video/{id}",
+    params(
+        ("id", description = "Video id")
+    ),
+    responses(
+        (status = 200, description = "Requested video", body = DetailedVideo),
+    )
+)]
 pub async fn get_video_by_id(
     Path(id): Path<i64>,
     State(state): State<AppState>,
-) -> Result<Json<DetailedVideo>, StatusCode> {
+) -> Result<Json<DetailedVideo>, AppError> {
     let AppState { library, db, .. } = state;
     let db_video = sqlx::query!(
         r#"SELECT videos.scan_date, videos.path, history.time,
@@ -374,11 +470,12 @@ pub async fn get_video_by_id(
         id
     )
     .fetch_one(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
+    .await?;
     let source = {
         let library = library.lock().unwrap();
-        let file = library.get_source(id).ok_or(StatusCode::NOT_FOUND)?;
+        let file = library
+            .get_source(id)
+            .ok_or(AppError::not_found("Library video is not found"))?;
         file.clone()
     };
 
@@ -451,16 +548,208 @@ pub async fn get_video_by_id(
     Ok(Json(detailed_video))
 }
 
+/// Get show by id and provider
+#[utoipa::path(
+    get,
+    path = "/api/show/{id}",
+    params(
+        ("id", description = "Show id"),
+        ProviderQuery,
+    ),
+    responses(
+        (status = 200, description = "Requested show", body = ShowMetadata),
+        (status = 404, body = AppError)
+    )
+)]
 pub async fn get_show(
     State(providers): State<&'static MetadataProvidersStack>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
 ) -> Result<Json<ShowMetadata>, AppError> {
     let res = providers.get_show(&id, provider).await?;
-
     Ok(Json(res))
 }
 
+/// Get movie by id and provider
+#[utoipa::path(
+    get,
+    path = "/api/movie/{id}",
+    params(
+        ("id", description = "Movie id"),
+        ProviderQuery,
+    ),
+    responses(
+        (status = 200, description = "Requested movie", body = MovieMetadata),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn get_movie(
+    State(providers): State<&'static MetadataProvidersStack>,
+    Query(ProviderQuery { provider }): Query<ProviderQuery>,
+    Path(id): Path<String>,
+) -> Result<Json<MovieMetadata>, AppError> {
+    let res = providers.get_movie(&id, provider).await?;
+    Ok(Json(res))
+}
+
+/// Get show poster
+#[utoipa::path(
+    get,
+    path = "/api/show/{id}/poster",
+    params(
+        ("id", description = "Show id"),
+    ),
+    responses(
+        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 304),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn show_poster(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = PosterAsset::new(id, PosterContentType::Show);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get season poster
+#[utoipa::path(
+    get,
+    path = "/api/season/{id}/poster",
+    params(
+        ("id", description = "Season id"),
+    ),
+    responses(
+        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 304),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn season_poster(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = PosterAsset::new(id, PosterContentType::Season);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get show backdrop image
+#[utoipa::path(
+    get,
+    path = "/api/show/{id}/backdrop",
+    params(
+        ("id", description = "Show id"),
+    ),
+    responses(
+        (status = 200, description = "Response with image", body = [u8]),
+        (status = 304),
+        (status = 404, description = "Image not found", body = AppError)
+    )
+)]
+pub async fn show_backdrop(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = BackdropAsset::new(id, BackdropContentType::Show);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get movie poster
+#[utoipa::path(
+    get,
+    path = "/api/movie/{id}/poster",
+    params(
+        ("id", description = "Movie id"),
+    ),
+    responses(
+        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 304),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn movie_poster(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = PosterAsset::new(id, PosterContentType::Movie);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get movie backdrop image
+#[utoipa::path(
+    get,
+    path = "/api/movie/{id}/backdrop",
+    params(
+        ("id", description = "Movie id"),
+    ),
+    responses(
+        (status = 200, description = "Backdrop bytes", body = [u8]),
+        (status = 304),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn movie_backdrop(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = BackdropAsset::new(id, BackdropContentType::Movie);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get episode poster
+#[utoipa::path(
+    get,
+    path = "/api/episode/{id}/poster",
+    params(
+        ("id", description = "Episode id"),
+    ),
+    responses(
+        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 304),
+        (status = 404, body = AppError)
+    )
+)]
+pub async fn episode_poster(
+    Path(id): Path<i64>,
+    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = PosterAsset::new(id, PosterContentType::Episode);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .await?;
+    Ok(response)
+}
+
+/// Get season metadata
+#[utoipa::path(
+    get,
+    path = "/api/show/{id}/{season}",
+    params(
+        ("id", description = "Show id"),
+        ("season", description = "Season number"),
+        ProviderQuery,
+    ),
+    responses(
+        (status = 200, description = "Desired season metadata", body = SeasonMetadata),
+        (status = 404, body = AppError)
+    )
+)]
 pub async fn get_season(
     State(providers): State<&'static MetadataProvidersStack>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -470,6 +759,21 @@ pub async fn get_season(
     Ok(Json(res))
 }
 
+/// Get episode metadata
+#[utoipa::path(
+    get,
+    path = "/api/show/{id}/{season}/{episode}",
+    params(
+        ("id", description = "Show id"),
+        ("season", description = "Season number"),
+        ("episode", description = "Episode number"),
+        ProviderQuery,
+    ),
+    responses(
+        (status = 200, description = "Desired episode metadata", body = EpisodeMetadata),
+        (status = 404, body = AppError)
+    )
+)]
 pub async fn get_episode(
     State(providers): State<&'static MetadataProvidersStack>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -481,6 +785,17 @@ pub async fn get_episode(
     Ok(Json(res))
 }
 
+/// Search for torrent
+#[utoipa::path(
+    get,
+    path = "/api/torrent/search",
+    params(
+        SearchQuery,
+    ),
+    responses(
+        (status = 200, description = "Torrent search results", body = Vec<Torrent>),
+    )
+)]
 pub async fn search_torrent(
     Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
@@ -492,6 +807,17 @@ pub async fn search_torrent(
     Ok(Json(out))
 }
 
+/// Search for content. Allows to search for all types of content at once
+#[utoipa::path(
+    get,
+    path = "/api/search/content",
+    params(
+        SearchQuery,
+    ),
+    responses(
+        (status = 200, description = "Content search results", body = Vec<MetadataSearchResult>),
+    )
+)]
 pub async fn search_content(
     Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
@@ -503,6 +829,18 @@ pub async fn search_content(
     Ok(Json(res))
 }
 
+/// Get history for specific video
+#[utoipa::path(
+    get,
+    path = "/api/history/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200, description = "History of desired video", body = Vec<DbHistory>),
+        (status = 404),
+    )
+)]
 pub async fn video_history(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
@@ -517,8 +855,16 @@ pub async fn video_history(
     Ok(Json(history))
 }
 
-// todo: pagination
+/// Get all watch history of the default user. Have hard coded limit of 50 rows for now.
+#[utoipa::path(
+    get,
+    path = "/api/history",
+    responses(
+        (status = 200, description = "All history", body = Vec<DbHistory>),
+    )
+)]
 pub async fn all_history(State(db): State<Db>) -> Result<Json<Vec<DbHistory>>, AppError> {
+    // todo: pagination
     let history = sqlx::query_as!(DbHistory, "SELECT * FROM history LIMIT 50;")
         .fetch_all(&db.pool)
         .await?;

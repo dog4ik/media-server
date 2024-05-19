@@ -905,7 +905,7 @@ pub struct DbSubtitles {
     pub video_id: i64,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema)]
 pub struct DbHistory {
     pub id: Option<i64>,
     pub time: i64,
@@ -914,7 +914,7 @@ pub struct DbHistory {
     pub video_id: i64,
 }
 
-#[derive(Debug, Clone, FromRow, Serialize, Default)]
+#[derive(Debug, Clone, FromRow, Serialize, Default, utoipa::ToSchema)]
 pub struct DbExternalId {
     pub id: Option<i64>,
     pub metadata_provider: String,

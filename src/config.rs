@@ -13,18 +13,22 @@ use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::{self, H264Preset};
 
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
 pub struct ServerConfiguration {
     pub port: u16,
     pub capabilities: Capabilities,
+    #[schema(value_type = Vec<String>)]
     pub movie_folders: Vec<PathBuf>,
+    #[schema(value_type = Vec<String>)]
     pub show_folders: Vec<PathBuf>,
     pub resources: AppResources,
     #[serde(skip_serializing)]
     pub config_file: ConfigFile,
     pub scan_max_concurrency: usize,
     pub h264_preset: H264Preset,
+    #[schema(value_type = Option<String>)]
     pub ffprobe_path: Option<PathBuf>,
+    #[schema(value_type = Option<String>)]
     pub ffmpeg_path: Option<PathBuf>,
     pub tmdb_token: Option<String>,
     pub hw_accel: bool,
@@ -322,7 +326,7 @@ pub struct Args {
     pub tmdb_token: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum CodecType {
     Audio,
@@ -345,7 +349,7 @@ impl CodecType {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct Codec {
     pub codec_type: CodecType,
     pub name: String,
@@ -373,7 +377,7 @@ impl Codec {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct Capabilities {
     pub codecs: Vec<Codec>,
 }
@@ -407,17 +411,26 @@ impl Capabilities {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AppResources {
+    #[schema(value_type = String)]
     pub database_path: PathBuf,
+    #[schema(value_type = String)]
     #[serde(skip)]
     pub config_path: PathBuf,
+    #[schema(value_type = String)]
     pub resources_path: PathBuf,
+    #[schema(value_type = String)]
     pub temp_path: PathBuf,
+    #[schema(value_type = String)]
     pub cache_path: PathBuf,
+    #[schema(value_type = Option<String>)]
     pub ffmpeg_path: Option<PathBuf>,
+    #[schema(value_type = Option<String>)]
     pub ffprobe_path: Option<PathBuf>,
+    #[schema(value_type = Option<String>)]
     pub binary_path: Option<PathBuf>,
+    #[schema(value_type = String)]
     pub base_path: PathBuf,
 }
 

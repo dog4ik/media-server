@@ -14,8 +14,7 @@ use axum::{
     },
     Json,
 };
-use axum_extra::headers::ContentType;
-use axum_extra::TypedHeader;
+use axum_extra::{headers, TypedHeader};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
@@ -28,18 +27,36 @@ use crate::app_state::AppError;
 use crate::config::{ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
-use crate::metadata::MetadataProvidersStack;
-use crate::progress::{TaskKind, TaskResource};
+use crate::metadata::{
+    self, ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata, SeasonMetadata, ShowMetadata
+};
+use crate::progress::{Task, TaskKind, TaskResource};
 use crate::{
     app_state::AppState,
     db::Db,
     progress::{ProgressChannel, ProgressChunk},
 };
 
+/// Perform full library refresh
+#[utoipa::path(
+    post,
+    path = "/api/scan",
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
     app_state.reconciliate_library().await
 }
 
+/// Clear the database. For debug purposes only.
+#[utoipa::path(
+    delete,
+    path = "/api/clear_db",
+    responses(
+        (status = 200, body = String),
+    )
+)]
 pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, StatusCode> {
     info!("Clearing database");
     app_state
@@ -56,19 +73,19 @@ impl JsonExtractor {
     fn get_value(&self, key: &str) -> Result<&serde_json::Value, AppError> {
         self.0
             .get(key)
-            .ok_or(AppError::bad_request(format!("key {} not found", key)))
+            .ok_or(AppError::bad_request(format!("key {} is not found", key)))
     }
 
     pub fn i64(&self, key: &str) -> Result<i64, AppError> {
         self.get_value(key)?
             .as_i64()
-            .ok_or(AppError::bad_request("cant parse number"))
+            .ok_or(AppError::bad_request("can't parse number"))
     }
 
     pub fn str(&self, key: &str) -> Result<&str, AppError> {
         self.get_value(key)?
             .as_str()
-            .ok_or(AppError::bad_request("cant parse string"))
+            .ok_or(AppError::bad_request("can't parse string"))
     }
 }
 
@@ -103,29 +120,20 @@ pub enum Provider {
     Tmdb,
 }
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct TranscodeFilePayload {
-    pub payload: TranscodePayload,
-    pub video_id: i64,
-}
-
 #[test]
 fn parse_transcode_payload() {
     use crate::library::{AudioCodec, VideoCodec};
     let json = serde_json::json!({
-    "payload": {
         "audio_codec": "aac",
         "audio_track": 2,
         "video_codec": "hevc",
         "resolution": "1920x1080",
-        },
-    "video_id" : 23
     })
     .to_string();
-    let payload: TranscodeFilePayload = serde_json::from_str(&json).unwrap();
-    assert_eq!(payload.payload.audio_codec.unwrap(), AudioCodec::AAC);
-    assert_eq!(payload.payload.video_codec.unwrap(), VideoCodec::Hevc);
-    assert_eq!(payload.payload.resolution.unwrap(), (1920, 1080).into());
+    let payload: TranscodePayload = serde_json::from_str(&json).unwrap();
+    assert_eq!(payload.audio_codec.unwrap(), AudioCodec::AAC);
+    assert_eq!(payload.video_codec.unwrap(), VideoCodec::Hevc);
+    assert_eq!(payload.resolution.unwrap(), (1920, 1080).into());
 }
 
 impl Display for Provider {
@@ -136,126 +144,213 @@ impl Display for Provider {
     }
 }
 
-fn sqlx_err_wrap(err: sqlx::Error) -> AppError {
-    match err {
-        sqlx::Error::RowNotFound => AppError::not_found("row not found"),
-        _ => AppError::internal_error("unknown database error"),
-    }
-}
-
-#[axum::debug_handler]
+/// Remove video from library. WARN: It will actually delete video file
+#[utoipa::path(
+    delete,
+    path = "/api/video/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn remove_video(
     State(state): State<AppState>,
-    Query(IdQuery { id }): Query<IdQuery>,
+    Path(id): Path<i64>,
 ) -> Result<(), AppError> {
     state.remove_video(id).await
 }
 
-#[derive(Deserialize)]
-pub struct RemoveVariantPayload {
-    pub video_id: i64,
-    pub variant_id: String,
-}
-
+/// Remove variant from the library. WARN: It will actually delete video file
+#[utoipa::path(
+    delete,
+    path = "/api/video/{id}/variant/{variant_id}",
+    params(
+        ("id", description = "Video id"),
+        ("variant_id", description = "Variant id"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn remove_variant(
     State(state): State<AppState>,
-    Json(payload): Json<RemoveVariantPayload>,
+    Path((video_id, variant_id)): Path<(i64, String)>,
 ) -> Result<(), AppError> {
-    state
-        .remove_variant(payload.video_id, &payload.variant_id)
-        .await?;
+    state.remove_variant(video_id, &variant_id).await?;
     Ok(())
 }
 
+/// Update show metadata
+#[utoipa::path(
+    put,
+    path = "/api/show/{id}",
+    params(
+        ("id", description = "Show id"),
+    ),
+    request_body = ShowMetadata,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn alter_show_metadata(
     State(db): State<Db>,
-    json: JsonExtractor,
+    Path(show_id): Path<i64>,
+    Json(metadata): Json<ShowMetadata>,
 ) -> Result<(), AppError> {
-    let show_id = json.i64("id")?;
-    let title = json.str("title")?;
-    let plot = json.str("plot")?;
     sqlx::query!(
         "UPDATE shows SET title = ?, plot = ? WHERE id = ?;",
-        title,
-        plot,
+        metadata.title,
+        metadata.plot,
         show_id
     )
     .execute(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
+    .await?;
     Ok(())
 }
 
+/// Update season metadata
+#[utoipa::path(
+    put,
+    path = "/api/show/{id}/{season}",
+    params(
+        ("id", description = "Show id"),
+        ("season", description = "Season number"),
+    ),
+    request_body = SeasonMetadata,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn alter_season_metadata(
     State(db): State<Db>,
-    json: JsonExtractor,
+    Path((show_id, season)): Path<(i64, i64)>,
+    Json(metadata): Json<SeasonMetadata>,
 ) -> Result<(), AppError> {
-    let show_id = json.i64("id")?;
-    let plot = json.str("plot")?;
-    sqlx::query!("UPDATE seasons SET plot = ? WHERE id = ?;", plot, show_id)
-        .execute(&db.pool)
-        .await
-        .map_err(sqlx_err_wrap)?;
+    sqlx::query!(
+        "UPDATE seasons SET plot = ? WHERE show_id = ? AND number = ?;",
+        metadata.plot,
+        show_id,
+        season
+    )
+    .execute(&db.pool)
+    .await?;
     Ok(())
 }
 
+/// Update episode metadata
+#[utoipa::path(
+    put,
+    path = "/api/show/{id}/{season}/{episode}",
+    params(
+        ("id", description = "Show id"),
+        ("season", description = "Season number"),
+        ("episode", description = "Episode number"),
+    ),
+    request_body = EpisodeMetadata,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn alter_episode_metadata(
     State(db): State<Db>,
-    json: JsonExtractor,
+    Path((show_id, season, episode)): Path<(i64, i64, i64)>,
+    Json(metadata): Json<EpisodeMetadata>,
 ) -> Result<(), AppError> {
-    let show_id = json.i64("id")?;
-    let title = json.str("title")?;
-    let plot = json.str("plot")?;
     sqlx::query!(
-        "UPDATE episodes SET title = ?, plot = ? WHERE id = ?;",
-        title,
-        plot,
-        show_id
+        r#"UPDATE episodes SET title = ?, plot = ?
+        FROM seasons WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
+        metadata.title,
+        metadata.plot,
+        show_id,
+        season,
+        episode
     )
     .execute(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
+    .await?;
     Ok(())
 }
 
+/// Update movie metadata
+#[utoipa::path(
+    put,
+    path = "/api/movie/{id}",
+    params(
+        ("id", description = "Movie id"),
+    ),
+    request_body = MovieMetadata,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn alter_movie_metadata(
     State(db): State<Db>,
-    json: JsonExtractor,
+    Path(id): Path<i64>,
+    Json(metadata): Json<MovieMetadata>,
 ) -> Result<(), AppError> {
-    let movie_id = json.i64("id")?;
-    let title = json.str("title")?;
-    let plot = json.str("plot")?;
     sqlx::query!(
         "UPDATE movies SET title = ?, plot = ? WHERE id = ?;",
-        title,
-        plot,
-        movie_id
+        metadata.title,
+        metadata.plot,
+        id
     )
     .execute(&db.pool)
-    .await
-    .map_err(sqlx_err_wrap)?;
+    .await?;
     Ok(())
 }
 
+/// Start transcode video job
+#[utoipa::path(
+    post,
+    path = "/api/video/{id}/transcode",
+    params(
+        ("id", description = "Video id"),
+    ),
+    request_body = TranscodePayload,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn transcode_video(
     State(app_state): State<AppState>,
-    Json(body): Json<TranscodeFilePayload>,
+    Path(id): Path<i64>,
+    Json(payload): Json<TranscodePayload>,
 ) {
     tokio::spawn(async move {
-        let _ = app_state.transcode_video(body.video_id, body.payload).await;
+        let _ = app_state.transcode_video(id, payload).await;
     });
 }
 
-pub async fn generate_previews(
-    State(app_state): State<AppState>,
-    Query(IdQuery { id }): Query<IdQuery>,
-) {
+/// Start previews generation job on video
+#[utoipa::path(
+    post,
+    path = "/api/video/{id}/previews",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn generate_previews(State(app_state): State<AppState>, Path(id): Path<i64>) {
     tokio::spawn(async move {
-        app_state.generate_previews(id).await.unwrap();
+        let _ = app_state.generate_previews(id).await;
     });
 }
 
-pub async fn delete_previews(Query(IdQuery { id }): Query<IdQuery>) -> Result<(), AppError> {
+/// Delete previews on video
+#[utoipa::path(
+    delete,
+    path = "/api/video/{id}/previews",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn delete_previews(Path(id): Path<i64>) -> Result<(), AppError> {
     let previews_dir = PreviewsDirAsset::new(id);
     previews_dir.delete_dir().await?;
     Ok(())
@@ -266,9 +361,21 @@ pub struct CancelTaskPayload {
     pub task_id: Uuid,
 }
 
+/// Cancel task with provided id
+#[utoipa::path(
+    delete,
+    path = "/api/tasks/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+        (status = 400, description = "Task can't be canceled or it is not found"),
+    )
+)]
 pub async fn cancel_task(
     State(tasks): State<TaskResource>,
-    Json(CancelTaskPayload { task_id }): Json<CancelTaskPayload>,
+    Path(task_id): Path<Uuid>,
 ) -> Result<(), StatusCode> {
     tasks
         .cancel_task(task_id)
@@ -276,6 +383,17 @@ pub async fn cancel_task(
     Ok(())
 }
 
+/// Create fake task and progress. For debug purposes only
+#[utoipa::path(
+    post,
+    path = "/api/mock_progress",
+    params(
+        StringIdQuery,
+    ),
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn mock_progress(
     State(tasks): State<TaskResource>,
     Query(StringIdQuery { id: target }): Query<StringIdQuery>,
@@ -312,11 +430,28 @@ pub async fn mock_progress(
     });
 }
 
-pub async fn get_tasks(State(tasks): State<TaskResource>) -> String {
-    let tasks = tasks.tasks.lock().unwrap();
-    serde_json::to_string(&*tasks).unwrap()
+/// Get all running tasks
+#[utoipa::path(
+    get,
+    path = "/api/tasks",
+    responses(
+        (status = 200, body = Vec<Task>),
+        (status = 400, description = "Task can't be canceled or it is not found"),
+    )
+)]
+pub async fn get_tasks(State(tasks): State<TaskResource>) -> Json<Vec<Task>> {
+    let tasks = tasks.tasks.lock().unwrap().to_vec();
+    Json(tasks)
 }
 
+/// SSE stream of current tasks progress
+#[utoipa::path(
+    get,
+    path = "/api/tasks/progress",
+    responses(
+        (status = 200, body = [u8]),
+    )
+)]
 pub async fn progress(
     State(tasks): State<TaskResource>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
@@ -334,7 +469,15 @@ pub async fn progress(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
-pub async fn latest_log() -> Result<(TypedHeader<ContentType>, String), AppError> {
+/// Latest log
+#[utoipa::path(
+    get,
+    path = "/api/log/latest",
+    responses(
+        (status = 200, body = String, content_type = "application/json"),
+    )
+)]
+pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String), AppError> {
     use tokio::fs;
     use tokio::io;
     let file = fs::File::open("log.log").await?;
@@ -365,9 +508,17 @@ pub async fn latest_log() -> Result<(TypedHeader<ContentType>, String), AppError
     // remove trailing comma xd
     json.pop();
     json.push(']');
-    Ok((TypedHeader(ContentType::json()), json))
+    Ok((TypedHeader(headers::ContentType::json()), json))
 }
 
+/// Server configuartion
+#[utoipa::path(
+    get,
+    path = "/api/configuration",
+    responses(
+        (status = 200, body = ServerConfiguration),
+    )
+)]
 pub async fn server_configuration(
     State(configuration): State<&'static Mutex<ServerConfiguration>>,
 ) -> Json<ServerConfiguration> {
@@ -375,20 +526,29 @@ pub async fn server_configuration(
     Json(configuration.clone())
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TorrentDownloadHint {
-    content_type: crate::metadata::ContentType,
-    metadata_provider: crate::metadata::MetadataProvider,
+    content_type: ContentType,
+    metadata_provider: MetadataProvider,
     metadata_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TorrentDownloadPayload {
     save_location: Option<String>,
     content_hint: Option<TorrentDownloadHint>,
     magnet: String,
 }
 
+/// Start torrent download
+#[utoipa::path(
+    post,
+    path = "/api/torrent/download",
+    request_body = TorrentDownloadPayload,
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn download_torrent(
     State(app_state): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
@@ -406,7 +566,7 @@ pub async fn download_torrent(
     Ok(())
 }
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", untagged)]
 pub enum ProviderType {
     Discover,
@@ -415,12 +575,21 @@ pub enum ProviderType {
     Torrent,
 }
 
-#[derive(Debug, Deserialize, serde::Serialize)]
+#[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
 pub struct ReorderPayload {
     provider_type: ProviderType,
     order: Vec<String>,
 }
 
+/// Update providers order
+#[utoipa::path(
+    post,
+    path = "/api/configuration/providers",
+    request_body = ReorderPayload,
+    responses(
+        (status = 200, body = ReorderPayload, description = "Updated ordering of providers"),
+    )
+)]
 pub async fn order_providers(
     State(providers): State<&'static MetadataProvidersStack>,
     Json(payload): Json<ReorderPayload>,
@@ -453,22 +622,35 @@ pub async fn order_providers(
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct UpdateHistoryPayload {
     time: i64,
     is_finished: bool,
-    video_id: i64,
 }
 
+/// Update/Insert history
+#[utoipa::path(
+    put,
+    path = "/api/history/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    request_body = UpdateHistoryPayload,
+    responses(
+        (status = 200),
+        (status = 201),
+    )
+)]
 pub async fn update_history(
     State(db): State<Db>,
+    Path(id): Path<i64>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<StatusCode, AppError> {
     let query = sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ? WHERE video_id = ? RETURNING time;",
         payload.time,
         payload.is_finished,
-        payload.video_id,
+        id,
     );
     if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
@@ -478,7 +660,7 @@ pub async fn update_history(
                     time: payload.time,
                     is_finished: payload.is_finished,
                     update_time: OffsetDateTime::now_utc(),
-                    video_id: payload.video_id,
+                    video_id: id,
                 })
                 .await?;
                 return Ok(StatusCode::CREATED);
@@ -489,6 +671,14 @@ pub async fn update_history(
     Ok(StatusCode::OK)
 }
 
+/// Delete all history for default user
+#[utoipa::path(
+    delete,
+    path = "/api/history",
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
     sqlx::query!("DELETE FROM history")
         .execute(&db.pool)
@@ -496,11 +686,22 @@ pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Delete history for specific video
+#[utoipa::path(
+    delete,
+    path = "/api/history/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
 pub async fn remove_history_item(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<(), AppError> {
-    sqlx::query!("DELETE FROM history WHERE id = ?;", id)
+    sqlx::query!("DELETE FROM history WHERE video_id = ?;", id)
         .execute(&db.pool)
         .await?;
     Ok(())

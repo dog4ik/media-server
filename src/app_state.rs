@@ -46,19 +46,21 @@ pub struct AppState {
     pub cancelation_token: CancellationToken,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
 pub struct AppError {
     pub message: String,
     pub kind: AppErrorKind,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
 pub enum AppErrorKind {
     InternalError,
     NotFound,
     Duplicate,
     BadRequest,
 }
+
+impl Error for AppError {}
 
 impl Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
