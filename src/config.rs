@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::{self, H264Preset};
 
-#[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
 pub struct ServerConfiguration {
     pub port: u16,
     pub capabilities: Capabilities,
@@ -22,7 +22,7 @@ pub struct ServerConfiguration {
     #[schema(value_type = Vec<String>)]
     pub show_folders: Vec<PathBuf>,
     pub resources: AppResources,
-    #[serde(skip_serializing)]
+    #[serde(skip)]
     pub config_file: ConfigFile,
     pub scan_max_concurrency: usize,
     pub h264_preset: H264Preset,
@@ -34,19 +34,24 @@ pub struct ServerConfiguration {
     pub hw_accel: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct TomlConfig {
-    port: u16,
-    movie_folders: Vec<PathBuf>,
-    show_folders: Vec<PathBuf>,
-    scan_max_concurrency: usize,
-    h264_preset: H264Preset,
-    ffprobe_path: PathBuf,
-    ffmpeg_path: PathBuf,
-    hw_accel: bool,
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+/// Serializable config schema
+pub struct FileConfigSchema {
+    pub port: u16,
+    #[schema(value_type = Vec<String>)]
+    pub movie_folders: Vec<PathBuf>,
+    #[schema(value_type = Vec<String>)]
+    pub show_folders: Vec<PathBuf>,
+    pub scan_max_concurrency: usize,
+    pub h264_preset: H264Preset,
+    #[schema(value_type = String)]
+    pub ffprobe_path: PathBuf,
+    #[schema(value_type = String)]
+    pub ffmpeg_path: PathBuf,
+    pub hw_accel: bool,
 }
 
-impl Default for TomlConfig {
+impl Default for FileConfigSchema {
     fn default() -> Self {
         Self {
             show_folders: Vec::new(),
@@ -54,7 +59,7 @@ impl Default for TomlConfig {
             port: 6969,
             scan_max_concurrency: 10,
             h264_preset: H264Preset::default(),
-            // TODO: move to full path to local dependency
+            // TODO: move to full path to local dependency in prod
             ffprobe_path: "ffprobe".into(),
             ffmpeg_path: "ffmpeg".into(),
             hw_accel: false,
@@ -62,15 +67,15 @@ impl Default for TomlConfig {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ConfigFile(pub PathBuf);
 
 impl ConfigFile {
     pub fn open(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
         let path = config_path.as_ref().to_path_buf();
-        fs::create_dir_all(config_path.as_ref().parent().ok_or(anyhow::anyhow!(
-            "config path does not have parent directory"
-        ))?)?;
+        if let Some(parent) = config_path.as_ref().parent() {
+            fs::create_dir_all(parent)?;
+        }
         match fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -78,7 +83,7 @@ impl ConfigFile {
             .map_err(|e| e.kind())
         {
             Err(ErrorKind::NotFound) => {
-                let default_config = TomlConfig::default();
+                let default_config = FileConfigSchema::default();
                 let mut file = fs::File::create_new(&config_path)?;
                 let _ = file.write_all(&toml::to_string_pretty(&default_config)?.as_bytes());
                 tracing::info!(
@@ -95,7 +100,7 @@ impl ConfigFile {
     }
 
     /// Reads contents of config and resets it to defaults in case of parse error
-    fn read(&self) -> Result<TomlConfig, anyhow::Error> {
+    pub fn read(&self) -> Result<FileConfigSchema, anyhow::Error> {
         tracing::info!("Reading config file {}", self.0.display());
         let buf = fs::read_to_string(&self.0)?;
         Ok(toml::from_str(&buf).unwrap_or_else(|e| {
@@ -107,14 +112,14 @@ impl ConfigFile {
                 repaired_config
             } else {
                 tracing::error!("Failed to repair config, creating default one");
-                let default_config = TomlConfig::default();
+                let default_config = FileConfigSchema::default();
                 let _ = fs::write(&self.0, &toml::to_string_pretty(&default_config).unwrap());
                 default_config
             }
         }))
     }
 
-    fn flush(&self, config: TomlConfig) -> Result<(), anyhow::Error> {
+    fn flush(&self, config: FileConfigSchema) -> Result<(), anyhow::Error> {
         let config_text = toml::to_string_pretty(&config)?;
         fs::write(&self.0, &config_text)?;
         Ok(())
@@ -122,9 +127,9 @@ impl ConfigFile {
 }
 
 //NOTE: I hope to find solution to this mess
-fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
+fn repair_config(raw: &str) -> Result<FileConfigSchema, anyhow::Error> {
     tracing::trace!("Trying to repair config");
-    let default = TomlConfig::default();
+    let default = FileConfigSchema::default();
     let parsed: toml::Table = toml::from_str(raw)?;
     let port: u16 = parsed
         .get("port")
@@ -174,7 +179,7 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
         .and_then(|v| v.as_bool())
         .unwrap_or(default.hw_accel);
 
-    let repaired_config = TomlConfig {
+    let repaired_config = FileConfigSchema {
         port,
         movie_folders,
         show_folders,
@@ -189,8 +194,8 @@ fn repair_config(raw: &str) -> Result<TomlConfig, anyhow::Error> {
 
 impl ServerConfiguration {
     /// Into Json Config
-    fn into_toml(&self) -> TomlConfig {
-        TomlConfig {
+    pub fn into_schema(&self) -> FileConfigSchema {
+        FileConfigSchema {
             port: self.port,
             movie_folders: self.movie_folders.clone(),
             show_folders: self.show_folders.clone(),
@@ -248,6 +253,17 @@ impl ServerConfiguration {
             hw_accel: file_config.hw_accel,
         };
         Ok(config)
+    }
+
+    pub fn apply_config_schema(&mut self, other: FileConfigSchema) {
+        self.port = other.port;
+        self.movie_folders = other.movie_folders;
+        self.show_folders = other.show_folders;
+        self.scan_max_concurrency = other.scan_max_concurrency;
+        self.h264_preset = other.h264_preset;
+        self.ffprobe_path = Some(other.ffprobe_path);
+        self.ffmpeg_path = Some(other.ffmpeg_path);
+        self.hw_accel = other.hw_accel;
     }
 
     pub fn apply_args(&mut self, args: Args) {
@@ -308,7 +324,7 @@ impl ServerConfiguration {
 
     /// Flush current configuration in config file
     pub fn flush(&mut self) -> Result<(), anyhow::Error> {
-        self.config_file.flush(self.into_toml())?;
+        self.config_file.flush(self.into_schema())?;
         Ok(())
     }
 }

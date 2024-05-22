@@ -12,7 +12,7 @@ use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api, OpenApiDoc};
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
-use media_server::watch::monitor_library;
+use media_server::watch;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -49,7 +49,7 @@ async fn main() {
         .clone()
         .unwrap_or(AppResources::default_config_path());
     tracing::debug!("Selected config path: {}", &config_path.display());
-    let config = ConfigFile::open(config_path).unwrap();
+    let config = ConfigFile::open(&config_path).unwrap();
     let mut configuration = ServerConfiguration::new(config).unwrap();
     configuration.apply_args(args);
     APP_RESOURCES
@@ -137,10 +137,20 @@ async fn main() {
 
     #[cfg(feature = "windows-tray")]
     tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
-    monitor_library(app_state.clone(), media_folders).await;
+    tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
+    tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
     let public_api = Router::new()
         .route("/local_shows", get(public_api::all_local_shows))
+        .route("/local_episode/:id", get(public_api::local_episode))
+        .route(
+            "/local_episode/by_video",
+            get(public_api::local_episode_by_video_id),
+        )
+        .route(
+            "/local_movie/by_video",
+            get(public_api::local_movie_by_video_id),
+        )
         .route("/local_movies", get(public_api::all_local_movies))
         .route(
             "/external_to_local/:id",
@@ -206,7 +216,20 @@ async fn main() {
         .route("/torrent/download", post(admin_api::download_torrent))
         .route("/search/content", get(public_api::search_content))
         .route("/configuration", get(admin_api::server_configuration))
+        .route(
+            "/configuration",
+            put(admin_api::update_server_configuration),
+        )
+        .route(
+            "/configuration/reset",
+            post(admin_api::reset_server_configuration),
+        )
+        .route(
+            "/configuration/schema",
+            get(admin_api::server_configuration_schema),
+        )
         .route("/configuration/providers", put(admin_api::order_providers))
+        .route("/configuration/providers", get(admin_api::providers_order))
         .route("/log/latest", get(admin_api::latest_log))
         .route("/tasks", get(admin_api::get_tasks))
         .route("/tasks/:id", delete(admin_api::cancel_task))

@@ -18,7 +18,7 @@ use crate::library::assets::{
 };
 use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, VideoCodec};
 use crate::metadata::{
-    EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
+    ContentType, EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
     MetadataSearchResult, MovieMetadata, SeasonMetadata, ShowMetadata,
 };
 use crate::torrent_index::Torrent;
@@ -260,6 +260,65 @@ pub async fn all_local_shows(
 
 #[utoipa::path(
     get,
+    path = "/api/local_episode/{id}",
+    params(
+        ("id", description = "Local id"),
+    ),
+    responses(
+        (status = 200, description = "Local episode", body = EpisodeMetadata),
+    )
+)]
+pub async fn local_episode(
+    Path(id): Path<i64>,
+    State(db): State<Db>,
+) -> Result<Json<EpisodeMetadata>, AppError> {
+    Ok(Json(db.get_episode_by_id(id).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/local_episode/by_video",
+    params(
+        IdQuery,
+    ),
+    responses(
+        (status = 200, description = "Local episode", body = EpisodeMetadata),
+    )
+)]
+/// Get local episode metadata by video's id
+pub async fn local_episode_by_video_id(
+    Query(IdQuery { id }): Query<IdQuery>,
+    State(db): State<Db>,
+) -> Result<Json<EpisodeMetadata>, AppError> {
+    let episode_id = sqlx::query!(r#"SELECT id as "id!" FROM episodes WHERE video_id = ?"#, id)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(Json(db.get_episode_by_id(episode_id.id).await?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/api/local_movie/by_video",
+    params(
+        IdQuery,
+    ),
+    responses(
+        (status = 200, description = "Local movie", body = MovieMetadata),
+    )
+)]
+/// Get local movie metadata by video's id
+pub async fn local_movie_by_video_id(
+    Query(IdQuery { id }): Query<IdQuery>,
+    State(db): State<Db>,
+) -> Result<Json<MovieMetadata>, AppError> {
+    let movie_id = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
+        .fetch_one(&db.pool)
+        .await?;
+    Ok(Json(db.get_movie(movie_id.id).await?))
+}
+
+#[utoipa::path(
+    get,
     path = "/api/local_movies",
     responses(
         (status = 200, description = "All local movies", body = Vec<MovieMetadata>),
@@ -371,6 +430,8 @@ pub struct VariantSummary {
     pub title: String,
     pub poster: Option<String>,
     pub video_id: i64,
+    pub content_type: ContentType,
+    pub content_id: i64,
     pub variants: Vec<DetailedVariant>,
 }
 
@@ -391,7 +452,12 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Variant
         )
     };
     let mut summary = Vec::new();
-    let mut add_summary = |title: String, poster: Option<String>, video_id: i64, source: Source| {
+    let mut add_summary = |title: String,
+                           content_type: ContentType,
+                           content_id: i64,
+                           poster: Option<String>,
+                           video_id: i64,
+                           source: Source| {
         let variants: Vec<_> = source
             .variants
             .into_iter()
@@ -400,6 +466,8 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Variant
         summary.push(VariantSummary {
             title,
             poster,
+            content_type,
+            content_id,
             video_id,
             variants,
         });
@@ -409,15 +477,23 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Variant
             continue;
         }
         let db_show = sqlx::query!(
-            "SELECT episodes.title, episodes.poster FROM episodes
+            "SELECT episodes.title, episodes.poster, seasons.show_id FROM episodes
         JOIN videos ON videos.id = episodes.video_id
+        JOIN seasons ON seasons.id = episodes.season_id
         WHERE videos.id = ?",
             show_source.id
         )
         .fetch_one(&state.db.pool)
         .await;
         if let Ok(db_show) = db_show {
-            add_summary(db_show.title, db_show.poster, show_source.id, show_source);
+            add_summary(
+                db_show.title,
+                ContentType::Show,
+                db_show.show_id,
+                db_show.poster,
+                show_source.id,
+                show_source,
+            );
         }
     }
 
@@ -436,6 +512,8 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Variant
         if let Ok(db_movie) = db_movie {
             add_summary(
                 db_movie.title,
+                ContentType::Movie,
+                movie_source.id,
                 db_movie.poster,
                 movie_source.id,
                 movie_source,

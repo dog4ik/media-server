@@ -627,6 +627,33 @@ WHERE season_id = ? ORDER BY number ASC",
         })
     }
 
+    pub async fn get_episode_by_id(&self, episode_id: i64) -> Result<EpisodeMetadata, AppError> {
+        let episode = sqlx::query!(
+            r#"SELECT episodes.*, seasons.number as "season_number" FROM episodes 
+            JOIN seasons ON seasons.id = episodes.season_id
+            WHERE episodes.id = ?;"#,
+            episode_id,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let poster = episode
+            .poster
+            .map(|p| MetadataImage::new(p.parse().unwrap()));
+
+        Ok(EpisodeMetadata {
+            metadata_id: episode.id.to_string(),
+            metadata_provider: MetadataProvider::Local,
+            release_date: episode.release_date,
+            plot: episode.plot,
+            poster,
+            number: episode.number as usize,
+            title: episode.title,
+            runtime: None,
+            season_number: episode.season_number as usize,
+        })
+    }
+
     pub async fn search_movie(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError> {
         let query = query.trim().to_lowercase();
         let movies = sqlx::query_as!(

@@ -24,11 +24,12 @@ use uuid::Uuid;
 
 use super::{IdQuery, StringIdQuery};
 use crate::app_state::AppError;
-use crate::config::{ServerConfiguration, APP_RESOURCES};
+use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::{
-    self, ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata, SeasonMetadata, ShowMetadata
+    self, ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
+    SeasonMetadata, ShowMetadata,
 };
 use crate::progress::{Task, TaskKind, TaskResource};
 use crate::{
@@ -526,6 +527,57 @@ pub async fn server_configuration(
     Json(configuration.clone())
 }
 
+/// Current server configuartion schema
+#[utoipa::path(
+    get,
+    path = "/api/configuration/schema",
+    responses(
+        (status = 200, body = FileConfigSchema),
+    )
+)]
+pub async fn server_configuration_schema(
+    State(configuration): State<&'static Mutex<ServerConfiguration>>,
+) -> Json<FileConfigSchema> {
+    let configuration = configuration.lock().unwrap();
+    Json(configuration.into_schema())
+}
+
+/// Update server configuartion
+#[utoipa::path(
+    put,
+    path = "/api/configuration",
+    request_body = FileConfigSchema,
+    responses(
+        (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
+    )
+)]
+pub async fn update_server_configuration(
+    State(configuration): State<&'static Mutex<ServerConfiguration>>,
+    Json(new_config): Json<FileConfigSchema>,
+) -> Json<ServerConfiguration> {
+    let mut configuration = configuration.lock().unwrap();
+    configuration.apply_config_schema(new_config);
+    configuration.flush().unwrap();
+    Json(configuration.clone())
+}
+
+/// Reset server configuration to its defauts
+#[utoipa::path(
+    post,
+    path = "/api/configuration/reset",
+    responses(
+        (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
+    )
+)]
+pub async fn reset_server_configuration(
+    State(configuration): State<&'static Mutex<ServerConfiguration>>,
+) -> Json<ServerConfiguration> {
+    let mut configuration = configuration.lock().unwrap();
+    configuration.apply_config_schema(FileConfigSchema::default());
+    configuration.flush().unwrap();
+    Json(configuration.clone())
+}
+
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TorrentDownloadHint {
     content_type: ContentType,
@@ -567,7 +619,7 @@ pub async fn download_torrent(
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", untagged)]
+#[serde(rename_all = "lowercase")]
 pub enum ProviderType {
     Discover,
     Movie,
@@ -576,24 +628,24 @@ pub enum ProviderType {
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
-pub struct ReorderPayload {
+pub struct ProviderOrder {
     provider_type: ProviderType,
     order: Vec<String>,
 }
 
 /// Update providers order
 #[utoipa::path(
-    post,
+    put,
     path = "/api/configuration/providers",
-    request_body = ReorderPayload,
+    request_body = ProviderOrder,
     responses(
-        (status = 200, body = ReorderPayload, description = "Updated ordering of providers"),
+        (status = 200, body = ProviderOrder, description = "Updated ordering of providers"),
     )
 )]
 pub async fn order_providers(
     State(providers): State<&'static MetadataProvidersStack>,
-    Json(payload): Json<ReorderPayload>,
-) -> Json<ReorderPayload> {
+    Json(payload): Json<ProviderOrder>,
+) -> Json<ProviderOrder> {
     let new_order: Vec<_> = match payload.provider_type {
         ProviderType::Discover => providers
             .order_discover_providers(payload.order)
@@ -616,10 +668,56 @@ pub async fn order_providers(
             .map(|x| x.provider_identifier().to_string())
             .collect(),
     };
-    Json(ReorderPayload {
+    Json(ProviderOrder {
         provider_type: payload.provider_type,
         order: new_order,
     })
+}
+
+/// Update providers order
+#[utoipa::path(
+    get,
+    path = "/api/configuration/providers",
+    responses(
+        (status = 200, body = Vec<ProviderOrder>, description = "Ordering of providers"),
+    )
+)]
+pub async fn providers_order(
+    State(providers): State<&'static MetadataProvidersStack>,
+) -> Json<Vec<ProviderOrder>> {
+    let movie_order = ProviderOrder {
+        provider_type: ProviderType::Movie,
+        order: providers
+            .movie_providers()
+            .iter()
+            .map(|p| p.provider_identifier().into())
+            .collect(),
+    };
+    let show_order = ProviderOrder {
+        provider_type: ProviderType::Show,
+        order: providers
+            .show_providers()
+            .iter()
+            .map(|p| p.provider_identifier().into())
+            .collect(),
+    };
+    let discover_order = ProviderOrder {
+        provider_type: ProviderType::Discover,
+        order: providers
+            .discover_providers()
+            .iter()
+            .map(|p| p.provider_identifier().into())
+            .collect(),
+    };
+    let torrent_order = ProviderOrder {
+        provider_type: ProviderType::Torrent,
+        order: providers
+            .torrent_indexes()
+            .iter()
+            .map(|p| p.provider_identifier().into())
+            .collect(),
+    };
+    Json(vec![movie_order, show_order, discover_order, torrent_order])
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

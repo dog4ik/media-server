@@ -1,17 +1,15 @@
-use std::{fmt::Display, path::PathBuf};
+use std::{fmt::Display, path::PathBuf, sync::Mutex};
 
-use tokio::{
-    sync::mpsc::{self, Receiver},
-    task::JoinHandle,
-};
+use tokio::sync::mpsc::{self, Receiver};
 
 use notify::{
-    event::{ModifyKind, RenameMode},
+    event::{DataChange, ModifyKind, RenameMode},
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 
 use crate::{
     app_state::AppState,
+    config::ServerConfiguration,
     library::{is_format_supported, MediaFolders, MediaType},
     utils,
 };
@@ -41,21 +39,21 @@ impl Display for FileEvent {
 }
 
 fn watch_changes(
-    folders: Vec<&PathBuf>,
+    paths: Vec<&PathBuf>,
 ) -> anyhow::Result<(RecommendedWatcher, Receiver<FileEvent>)> {
     let (tx, rx) = mpsc::channel(100);
     let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
         if let Ok(event) = res {
-            tracing::debug!("folders change detected");
+            tracing::debug!("folders change detected: {:?}", event);
             let event_type = match event.kind {
                 EventKind::Create(_) => EventType::Create,
                 EventKind::Modify(kind) if kind == ModifyKind::Name(RenameMode::To) => {
                     EventType::Create
                 }
-                EventKind::Remove(_) => EventType::Remove,
-                EventKind::Modify(kind) if kind == ModifyKind::Name(RenameMode::From) => {
-                    EventType::Remove
+                EventKind::Modify(kind) if kind == ModifyKind::Data(DataChange::Content) => {
+                    EventType::Modify
                 }
+                EventKind::Remove(_) => EventType::Remove,
                 _ => {
                     return;
                 }
@@ -68,8 +66,8 @@ fn watch_changes(
         }
     })?;
 
-    for folder in folders {
-        watcher.watch(folder, RecursiveMode::Recursive)?;
+    for path in paths {
+        watcher.watch(path, RecursiveMode::Recursive)?;
     }
 
     Ok((watcher, rx))
@@ -90,37 +88,62 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
     Ok(flattened_paths)
 }
 
-pub async fn monitor_library(app_state: AppState, folders: MediaFolders) -> JoinHandle<()> {
-    let metadata_provider = app_state.tmdb_api;
-    tokio::spawn(async move {
-        let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
-        while let Some(event) = rx.recv().await {
-            if let Some(media_type) = folders.folder_type(&event.path) {
-                match event.event_type {
-                    EventType::Create => {
-                        let _ = match media_type {
-                            MediaType::Show => {
-                                let files_paths = flatten_path(&event.path).unwrap();
-                                for path in files_paths {
-                                    let _ = app_state.add_show(path, metadata_provider).await;
-                                }
+/// Monitor library changes (blocking)
+pub async fn monitor_library(app_state: AppState, folders: MediaFolders) {
+    let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
+    while let Some(event) = rx.recv().await {
+        if let Some(media_type) = folders.folder_type(&event.path) {
+            match event.event_type {
+                EventType::Create => {
+                    let _ = match media_type {
+                        MediaType::Show => {
+                            let files_paths = flatten_path(&event.path).unwrap();
+                            for path in files_paths {
+                                tracing::info!("Detected new show file: {}", path.display())
                             }
-                            MediaType::Movie => {
-                                let files_paths = flatten_path(&event.path).unwrap();
-                                for path in files_paths {
-                                    let _ = app_state.add_movie(path, metadata_provider).await;
-                                }
+                        }
+                        MediaType::Movie => {
+                            let files_paths = flatten_path(&event.path).unwrap();
+                            for path in files_paths {
+                                tracing::info!("Detected new movie file: {}", path.display())
                             }
-                        };
-                    }
-                    EventType::Remove => {
-                        _ = app_state.reconciliate_library().await;
-                    }
-                    EventType::Modify => {
-                        let _ = app_state.reconciliate_library().await;
-                    }
-                };
-            }
+                        }
+                    };
+                }
+                EventType::Remove => {
+                    _ = app_state.reconciliate_library().await;
+                }
+                EventType::Modify => {}
+            };
         }
-    })
+    }
+}
+
+pub async fn monitor_config(
+    configuration: &'static Mutex<ServerConfiguration>,
+    config_path: PathBuf,
+) {
+    let (mut watcher, mut rx) = watch_changes(vec![&config_path]).unwrap();
+    while let Some(event) = rx.recv().await {
+        match event.event_type {
+            EventType::Modify => {
+                let mut config = configuration.lock().unwrap();
+                if let Ok(new_config) = config.config_file.read() {
+                    tracing::info!("Detected config file changes");
+                    config.apply_config_schema(new_config)
+                }
+            }
+            EventType::Remove => {
+                watcher
+                    .watch(&config_path, RecursiveMode::NonRecursive)
+                    .unwrap();
+                let mut config = configuration.lock().unwrap();
+                if let Ok(new_config) = config.config_file.read() {
+                    tracing::info!("Detected config file changes");
+                    config.apply_config_schema(new_config)
+                }
+            }
+            _ => {}
+        }
+    }
 }
