@@ -5,18 +5,15 @@ use bytes::{Bytes, BytesMut};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
-    task::JoinSet,
+    sync::mpsc,
+    task::{JoinHandle, JoinSet},
 };
 
 use crate::{
-    file::{Hashes, Info, OutputFile},
     peers::BitField,
+    protocol::{Hashes, Info, OutputFile},
     utils::verify_sha1,
 };
-
-trait SyncBitfield {
-    async fn save(&mut self, bitfield: BitField) -> anyhow::Result<()>;
-}
 
 #[derive(Debug)]
 pub struct TorrentStorage {
@@ -26,6 +23,25 @@ pub struct TorrentStorage {
     pub pieces: Hashes,
 }
 
+#[derive(Debug)]
+pub struct StorageHandle {
+    pub sender: mpsc::Sender<StorePiece>,
+    pub handle: JoinHandle<anyhow::Result<()>>,
+}
+
+#[derive(Debug)]
+pub enum StorePiece {
+    Preallocated {
+        piece_i: usize,
+        bytes: Bytes,
+    },
+    Reallocated {
+        bitfield: BitField,
+        piece_i: usize,
+        bytes: Bytes,
+    },
+}
+
 impl TorrentStorage {
     pub fn new(torrent: &Info, output_dir: impl AsRef<Path>) -> Self {
         Self {
@@ -33,6 +49,25 @@ impl TorrentStorage {
             piece_size: torrent.piece_length,
             total_length: torrent.total_size(),
             pieces: torrent.pieces.clone(),
+        }
+    }
+
+    pub fn spawn(self) -> anyhow::Result<StorageHandle> {
+        let (tx, rx) = mpsc::channel(100);
+        let handle = tokio::spawn(self.work(rx));
+        Ok(StorageHandle { sender: tx, handle })
+    }
+
+    pub async fn work(mut self, mut reciever: mpsc::Receiver<StorePiece>) -> anyhow::Result<()> {
+        loop {
+            tokio::select! {
+                Some(data) = reciever.recv() => {
+                    match data {
+                        StorePiece::Preallocated { piece_i, bytes } => self.save_piece_preallocated(piece_i, bytes).await?,
+                        StorePiece::Reallocated { bitfield, piece_i, bytes } => self.save_piece(&bitfield, piece_i, bytes).await?,
+                    }
+                }
+            }
         }
     }
 
@@ -131,7 +166,7 @@ impl TorrentStorage {
                 .create(true)
                 .read(true)
                 .write(true)
-                .open(&file.path())
+                .open(file.path())
                 .await?;
 
             file_handle
@@ -152,6 +187,56 @@ impl TorrentStorage {
             file_offset += file.length();
         }
 
+        Ok(())
+    }
+
+    /// saves piece preallocating all bytes in the file
+    pub async fn save_piece_preallocated(
+        &mut self,
+        piece_i: usize,
+        bytes: Bytes,
+    ) -> anyhow::Result<()> {
+        let piece_length = bytes.len() as u32;
+        ensure!(piece_length == self.piece_length(piece_i));
+
+        let piece_start = piece_i as u64 * self.piece_size as u64;
+        let piece_end = piece_start + piece_length as u64;
+
+        let hash = self.pieces.get_hash(piece_i).unwrap();
+        if verify_sha1(hash, &bytes) {
+            tracing::trace!("Successfuly verified hash of piece {}", piece_i);
+        } else {
+            let msg = format!("Failed to verify hash of piece {}", piece_i);
+            tracing::error!("{}", msg);
+            return Err(anyhow::anyhow!("{}", msg));
+        };
+        dbg!(piece_i);
+
+        let mut file_offset = 0;
+        for file in &self.output_files {
+            let file_start = file_offset as u64;
+            let file_end = (file_offset + file.length()) as u64;
+            if file_start > piece_end || file_end < piece_start {
+                file_offset += file.length();
+                continue;
+            }
+
+            // NOTE: Not cool
+            if let Some(parent) = &file.path().parent() {
+                fs::create_dir_all(parent).await?;
+            }
+
+            let insert_offset = file_start + piece_start;
+            let mut file_handle = fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .open(file.path())
+                .await?;
+            file_handle.set_len(file.length()).await?;
+            file_handle.seek(SeekFrom::Start(insert_offset)).await?;
+            file_handle.write_all(&bytes).await?;
+            file_offset += file.length();
+        }
         Ok(())
     }
 
