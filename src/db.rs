@@ -79,7 +79,7 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     poster TEXT,
                                     blur_data TEXT,
                                     release_date TEXT,
-                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     video_id INTEGER NOT NULL UNIQUE,
@@ -226,6 +226,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn insert_video(&self, db_video: DbVideo) -> Result<i64, Error> {
+        tracing::debug!("Inserting new video: {}", db_video.path);
         let video_query = sqlx::query!(
             "INSERT INTO videos
             (path, size, duration)
@@ -280,6 +281,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
+        tracing::debug!(id, "Remoning video");
         sqlx::query!("DELETE FROM videos WHERE id = ?;", id)
             .execute(&self.pool)
             .await?;
@@ -292,11 +294,11 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
             return self.remove_episode(episode.id).await;
         }
 
-        if let Ok(_movie) = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
+        if let Ok(movie) = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
             .fetch_one(&self.pool)
             .await
         {
-            // TODO: remove movie
+            return self.remove_movie(movie.id).await;
         }
 
         Ok(())
@@ -313,6 +315,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn remove_episode(&self, id: i64) -> Result<(), Error> {
+        tracing::debug!(id, "Removing episode");
         let delete_episode_result = sqlx::query!(
             "DELETE FROM episodes WHERE id = ? RETURNING season_id, video_id",
             id
@@ -320,12 +323,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         .fetch_one(&self.pool)
         .await?;
         let season_id = delete_episode_result.season_id;
-        sqlx::query!(
-            "DELETE FROM videos WHERE id = ? ",
-            delete_episode_result.video_id
-        )
-        .execute(&self.pool)
-        .await?;
 
         let siblings_count = sqlx::query!(
             "SELECT COUNT(*) as count FROM episodes WHERE season_id = ?",
@@ -342,6 +339,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn remove_season(&self, id: i64) -> Result<(), Error> {
+        tracing::debug!(id, "Removing season");
         let delete_result = sqlx::query!("DELETE FROM seasons WHERE id = ? RETURNING show_id", id)
             .fetch_one(&self.pool)
             .await?;
@@ -360,7 +358,15 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn remove_show(&self, id: i64) -> Result<(), Error> {
+        tracing::debug!(id, "Removing show");
         let query = sqlx::query!("DELETE FROM shows WHERE id = ?", id);
+        query.execute(&self.pool).await?;
+        Ok(())
+    }
+
+    pub async fn remove_movie(&self, id: i64) -> Result<(), Error> {
+        tracing::debug!(id, "Removing movie");
+        let query = sqlx::query!("DELETE FROM movies WHERE id = ?", id);
         query.execute(&self.pool).await?;
         Ok(())
     }

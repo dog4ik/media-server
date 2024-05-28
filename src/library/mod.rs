@@ -85,11 +85,15 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
 pub async fn explore_folder<T: Media + Send + 'static>(
     folder: &PathBuf,
     db: &crate::db::Db,
+    exclude: &Vec<PathBuf>,
 ) -> Result<HashMap<i64, LibraryFile<T>>, anyhow::Error> {
     let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
     let mut handles = Vec::with_capacity(paths.len());
     let semaphore = Arc::new(Semaphore::new(100));
     for path in paths {
+        if exclude.contains(&path) {
+            continue;
+        }
         let semaphore = semaphore.clone();
         let db = db.clone();
         handles.push(tokio::spawn(async move {
@@ -360,10 +364,11 @@ impl Library {
         show
     }
 
+    /// Full refresh of the library files.
     pub async fn full_refresh(&mut self, db: crate::db::Db) {
         let mut shows = HashMap::new();
         for folder in &self.media_folders.shows {
-            if let Ok(items) = explore_folder(folder, &db.clone()).await {
+            if let Ok(items) = explore_folder(folder, &db.clone(), &Vec::new()).await {
                 shows.extend(items);
             }
         }
@@ -371,7 +376,7 @@ impl Library {
 
         let mut movies = HashMap::new();
         for folder in &self.media_folders.movies {
-            if let Ok(items) = explore_folder(folder, &db.clone()).await {
+            if let Ok(items) = explore_folder(folder, &db.clone(), &Vec::new()).await {
                 movies.extend(items);
             }
         }

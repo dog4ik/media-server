@@ -81,7 +81,7 @@ async fn main() {
         .collect();
     let mut shows = HashMap::new();
     for dir in &shows_dirs {
-        shows.extend(explore_folder(dir, &db).await.unwrap());
+        shows.extend(explore_folder(dir, &db, &Vec::new()).await.unwrap());
     }
 
     let movies_dirs: Vec<PathBuf> = configuration
@@ -92,7 +92,7 @@ async fn main() {
         .collect();
     let mut movies = HashMap::new();
     for dir in &movies_dirs {
-        movies.extend(explore_folder(dir, &db).await.unwrap());
+        movies.extend(explore_folder(dir, &db, &Vec::new()).await.unwrap());
     }
 
     let media_folders = MediaFolders {
@@ -137,7 +137,7 @@ async fn main() {
 
     #[cfg(feature = "windows-tray")]
     tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
-    tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
+    // tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
     tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
     let public_api = Router::new()

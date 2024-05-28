@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     poster TEXT,
                                     blur_data TEXT,
                                     release_date TEXT,
-                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     video_id INTEGER NOT NULL UNIQUE,

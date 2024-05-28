@@ -1,7 +1,9 @@
 use std::{
-    error::Error, fmt::Display, num::ParseIntError, path::PathBuf, str::FromStr, sync::Mutex,
+    collections::HashMap, error::Error, fmt::Display, num::ParseIntError, path::PathBuf,
+    str::FromStr, sync::Mutex,
 };
 
+use anyhow::Context;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, task::JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -198,7 +200,7 @@ impl AppState {
             source
                 .variants
                 .iter()
-                .position(|x| x.path() == asset.path())
+                .position(|x| *x.path() == asset.path())
                 .map(|idx| source.variants.swap_remove(idx));
         };
         Ok(())
@@ -379,6 +381,7 @@ impl AppState {
     }
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
+        self.partial_refresh().await;
         // TODO: refresh local library files
         let local_episodes = {
             let library = self.library.lock().unwrap();
@@ -396,7 +399,11 @@ impl AppState {
             .iter()
             .filter(|d| !local_episodes.contains_key(&d.video_id))
             .collect();
-        debug_assert!(missing_episodes.is_empty());
+        for missing_episode in &missing_episodes {
+            if let Err(e) = self.db.remove_video(missing_episode.video_id).await {
+                tracing::error!("Failed to remove video: {e}");
+            };
+        }
 
         let mut new_episodes: Vec<_> = local_episodes
             .values()
@@ -423,9 +430,9 @@ impl AppState {
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let identifier = show_episodes.first().unwrap();
-                let local_id = handle_series(&identifier, &db, discover_providers).await?;
+                let local_show_id = handle_series(&identifier, &db, discover_providers).await?;
                 let external_ids = db
-                    .external_ids(&local_id.to_string(), ContentType::Show)
+                    .external_ids(&local_show_id.to_string(), ContentType::Show)
                     .await
                     .unwrap();
                 let mut seasons_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
@@ -439,7 +446,7 @@ impl AppState {
                     seasons_scan_handles.spawn(async move {
                         let season = season_episodes.first().unwrap();
                         let local_season_id = handle_season(
-                            local_id,
+                            local_show_id,
                             external_ids.clone(),
                             season,
                             &db,
@@ -455,7 +462,7 @@ impl AppState {
                             let external_ids = external_ids.clone();
                             episodes_scan_handles.spawn(async move {
                                 handle_episode(
-                                    local_id,
+                                    local_show_id,
                                     external_ids.clone(),
                                     episode.source.id,
                                     local_season_id,
@@ -517,11 +524,15 @@ impl AppState {
         .fetch_all(&self.db.pool)
         .await?;
 
-        let missing_movies: Vec<_> = db_episodes_videos
+        let missing_movies: Vec<_> = db_movies_videos
             .iter()
-            .filter(|d| !local_episodes.contains_key(&d.video_id))
+            .filter(|d| !local_movies.contains_key(&d.video_id))
             .collect();
-        debug_assert!(missing_movies.is_empty());
+        for missing_movie in &missing_movies {
+            if let Err(e) = self.db.remove_video(missing_movie.video_id).await {
+                tracing::error!("Failed to remove video: {e}");
+            };
+        }
 
         let new_movies: Vec<_> = local_movies
             .values()
@@ -554,6 +565,78 @@ impl AppState {
 
         tracing::info!("Finished library reconciliation");
         Ok(())
+    }
+
+    pub async fn partial_refresh(&self) {
+        tracing::info!("Partially refreshing library");
+        let mut shows = HashMap::new();
+        let mut to_remove = Vec::new();
+        let media_folders = {
+            let library = self.library.lock().unwrap();
+            library.media_folders.clone()
+        };
+        for (id, file) in &self.library.lock().unwrap().shows {
+            if !file.source.video.path().try_exists().unwrap_or(false) {
+                to_remove.push(*id);
+            }
+        }
+        {
+            let mut library = self.library.lock().unwrap();
+            for absent_id in &to_remove {
+                library.remove_show(*absent_id)
+            }
+        }
+        for absent_id in &to_remove {
+            let _ = self.db.remove_video(*absent_id).await;
+        }
+        to_remove.clear();
+        let show_paths = {
+            self.library
+                .lock()
+                .unwrap()
+                .shows
+                .values()
+                .map(|v| v.source.video.path().to_path_buf())
+                .collect()
+        };
+        for folder in media_folders.shows {
+            if let Ok(items) = crate::library::explore_folder(&folder, self.db, &show_paths).await {
+                shows.extend(items);
+            }
+        }
+        self.library.lock().unwrap().shows.extend(shows);
+
+        let mut movies = HashMap::new();
+        for (id, file) in &self.library.lock().unwrap().movies {
+            if !file.source.video.path().try_exists().unwrap_or(false) {
+                to_remove.push(*id);
+            }
+        }
+        {
+            let mut library = self.library.lock().unwrap();
+            for absent_id in &to_remove {
+                library.movies.remove(absent_id);
+            }
+        }
+        for absent_id in &to_remove {
+            let _ = self.db.remove_video(*absent_id).await;
+        }
+        let movie_paths = {
+            self.library
+                .lock()
+                .unwrap()
+                .movies
+                .values()
+                .map(|v| v.source.video.path().to_path_buf())
+                .collect()
+        };
+        for folder in media_folders.movies {
+            if let Ok(items) = crate::library::explore_folder(&folder, self.db, &movie_paths).await
+            {
+                movies.extend(items);
+            }
+        }
+        self.library.lock().unwrap().movies.extend(movies);
     }
 }
 
