@@ -209,6 +209,8 @@ async fn main() {
         )
         .route("/history", get(public_api::all_history))
         .route("/history", delete(admin_api::clear_history))
+        .route("/history/suggest/movies", get(public_api::suggest_movies))
+        .route("/history/suggest/shows", get(public_api::suggest_shows))
         .route("/history/:id", get(public_api::video_history))
         .route("/history/:id", delete(admin_api::remove_history_item))
         .route("/history/:id", put(admin_api::update_history))

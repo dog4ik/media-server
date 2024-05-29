@@ -948,3 +948,113 @@ pub async fn all_history(State(db): State<Db>) -> Result<Json<Vec<DbHistory>>, A
         .await?;
     Ok(Json(history))
 }
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct MovieHistory {
+    pub movie: MovieMetadata,
+    pub history: DbHistory,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ShowHistory {
+    pub show_id: i64,
+    pub episode: EpisodeMetadata,
+    pub history: DbHistory,
+}
+
+/// Suggest to continue watching up to 3 movies based on history
+#[utoipa::path(
+    get,
+    path = "/api/history/suggest/movies",
+    responses(
+        (status = 200, description = "Suggested movies", body = Vec<MovieHistory>),
+    )
+)]
+pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
+    let history = sqlx::query!(
+        r#"SELECT history.id as history_id, history.time, history.is_finished, history.update_time,
+        history.video_id as video_id, movies.id as movie_id FROM history
+    JOIN movies ON movies.video_id = history.video_id WHERE history.is_finished = false
+    ORDER BY history.update_time DESC LIMIT 3;"#
+    )
+    .fetch_all(&db.pool)
+    .await?;
+
+    let mut movie_suggestions = Vec::with_capacity(history.len());
+    for entry in history {
+        let Ok(movie_metadata) = db.get_movie(entry.movie_id.unwrap()).await else {
+            tracing::error!("Failed to get movie connected to the history");
+            continue;
+        };
+        movie_suggestions.push(MovieHistory {
+            history: DbHistory {
+                id: Some(entry.history_id),
+                time: entry.time,
+                is_finished: entry.is_finished,
+                update_time: entry.update_time,
+                video_id: entry.video_id,
+            },
+            movie: movie_metadata,
+        });
+    }
+    Ok(Json(movie_suggestions))
+}
+
+/// Suggest to continue watching up to 3 shows based on history
+#[utoipa::path(
+    get,
+    path = "/api/history/suggest/shows",
+    responses(
+        (status = 200, description = "Suggested shows", body = Vec<ShowHistory>),
+    )
+)]
+pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowHistory>>, AppError> {
+    let history = sqlx::query!(
+        r#"SELECT history.id as history_id, history.time, history.is_finished, history.update_time,
+        history.video_id as video_id, episodes.number as episode_number, seasons.show_id as show_id,
+        seasons.number as season_number FROM history 
+    JOIN episodes ON episodes.video_id = history.video_id
+    JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
+    ORDER BY history.update_time DESC LIMIT 50;"#
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    let mut show_suggestions: Vec<ShowHistory> = Vec::with_capacity(3);
+    for entry in history {
+        if show_suggestions
+            .iter()
+            .map(|x| x.show_id)
+            .any(|id| id == entry.show_id)
+        {
+            continue;
+        };
+        let Ok(episode_metadata) = db
+            .get_episode(
+                entry.show_id,
+                entry.season_number as usize,
+                entry.episode_number as usize,
+            )
+            .await
+        else {
+            tracing::error!("Failed to get episode connected to the history");
+            continue;
+        };
+        show_suggestions.push(ShowHistory {
+            history: DbHistory {
+                id: Some(entry.history_id),
+                time: entry.time,
+                is_finished: entry.is_finished,
+                update_time: entry.update_time,
+                video_id: entry.video_id,
+            },
+            show_id: entry.show_id,
+            episode: episode_metadata,
+        });
+
+        if show_suggestions.len() == 3 {
+            break;
+        }
+    }
+
+    Ok(Json(show_suggestions))
+}
