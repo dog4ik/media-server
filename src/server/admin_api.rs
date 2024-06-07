@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::sync::Mutex;
 use std::{convert::Infallible, fmt::Display};
 
@@ -18,20 +19,22 @@ use axum_extra::{headers, TypedHeader};
 use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
+use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::{IdQuery, StringIdQuery};
+use super::StringIdQuery;
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::{
-    self, ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
+    ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
     SeasonMetadata, ShowMetadata,
 };
 use crate::progress::{Task, TaskKind, TaskResource};
+use crate::stream::transcode_stream::TranscodeStream;
 use crate::{
     app_state::AppState,
     db::Db,
@@ -803,4 +806,102 @@ pub async fn remove_history_item(
         .execute(&db.pool)
         .await?;
     Ok(())
+}
+
+/// Recieve transcoded segment
+#[utoipa::path(
+    delete,
+    path = "/api/transcode/{id}/segment/{segment}",
+    params(
+        ("id", description = "Transcode job"),
+        ("segment", description = "Desired segment"),
+    ),
+    responses(
+        (status = 200),
+        (status = 404, description = "Transcode job is not found"),
+        (status = 500, description = "Worker is not avialable"),
+    )
+)]
+pub async fn transcoded_segment(
+    Path((task_id, index)): Path<(String, usize)>,
+    State(tasks): State<TaskResource>,
+) -> Result<bytes::Bytes, AppError> {
+    let sender = {
+        let tasks = tasks.active_streams.lock().unwrap();
+        let task_id = uuid::Uuid::from_str(&task_id).unwrap();
+        let stream = tasks
+            .iter()
+            .find(|t| t.uuid == task_id)
+            .ok_or(AppError::not_found("Requested stream is not found"))?;
+        stream.sender.clone()
+    };
+    let (tx, rx) = oneshot::channel();
+    sender.send((index, tx)).await.unwrap();
+    if let Ok(bytes) = rx.await {
+        Ok(bytes)
+    } else {
+        Err(AppError::internal_error(
+            "Transcode worker is not avaiblable",
+        ))
+    }
+}
+
+/// Start transcoded stream
+#[utoipa::path(
+    delete,
+    path = "/api/video/:id/stream_transcode",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200),
+        (status = 404, description = "Video is not found"),
+    )
+)]
+pub async fn create_transcode_stream(
+    Path(id): Path<i64>,
+    State(app_state): State<AppState>,
+) -> Result<(), AppError> {
+    let AppState { library, tasks, .. } = app_state;
+    let video_path = {
+        let library = library.lock().unwrap();
+        let source = library
+            .get_source(id)
+            .ok_or(AppError::not_found("Requested video is not found"))?;
+        source.video.path().to_path_buf()
+    };
+    let cancellation_token = tasks.parent_cancellation_token.child_token();
+    let tracker = tasks.tracker.clone();
+    let stream = TranscodeStream::init(id, video_path, tracker, cancellation_token).await?;
+    let mut streams = tasks.active_streams.lock().unwrap();
+    streams.push(stream);
+    Ok(())
+}
+
+/// M3U8 manifest of live transcode task
+#[utoipa::path(
+    delete,
+    path = "/api/transcode/:id/manifest",
+    params(
+        ("id", description = "Task id"),
+    ),
+    responses(
+        (status = 200),
+        (status = 400, description = "Task uuid is incorrect"),
+        (status = 404, description = "Task is not found"),
+    )
+)]
+pub async fn transcode_stream_manifest(
+    Path(stream_id): Path<String>,
+    State(tasks): State<TaskResource>,
+) -> Result<String, AppError> {
+    let streams = tasks.active_streams.lock().unwrap();
+    let id = uuid::Uuid::from_str(&stream_id)
+        .map_err(|_| AppError::bad_request("Failed to parse uuid"))?;
+    let stream = streams
+        .iter()
+        .find(|s| s.uuid == id)
+        .ok_or(AppError::not_found("Stream is not found"))?;
+
+    Ok(stream.manifest.as_ref().to_string())
 }

@@ -15,6 +15,7 @@ use uuid::Uuid;
 use crate::{
     app_state::AppError,
     ffmpeg::{FFmpegRunningJob, FFmpegTask},
+    stream::transcode_stream::TranscodeStream,
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
@@ -159,6 +160,7 @@ pub struct TaskResource {
     pub parent_cancellation_token: CancellationToken,
     pub tracker: TaskTracker,
     pub tasks: Arc<Mutex<Vec<Task>>>,
+    pub active_streams: Arc<Mutex<Vec<TranscodeStream>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -188,6 +190,7 @@ impl TaskResource {
             progress_channel: ProgressChannel::new(),
             parent_cancellation_token: cancellation_token,
             tasks: Arc::new(Mutex::new(Vec::new())),
+            active_streams: Arc::new(Mutex::new(Vec::new())),
             tracker: TaskTracker::new(),
         }
     }

@@ -35,7 +35,7 @@ async fn main() {
         .unwrap()
         .join(AppResources::APP_NAME)
         .join("log.log");
-    let log_channel = init_tracer(Level::TRACE, log_path);
+    let log_channel = init_tracer(Level::DEBUG, log_path);
 
     if let Ok(path) = dotenv() {
         tracing::info!("Loaded env variables from: {}", path.display());
@@ -202,6 +202,10 @@ async fn main() {
         .route("/video/:id/previews", post(admin_api::generate_previews))
         .route("/video/:id/previews", delete(admin_api::delete_previews))
         .route("/video/:id/transcode", post(admin_api::transcode_video))
+        .route(
+            "/video/:id/stream_transcode",
+            post(admin_api::create_transcode_stream),
+        )
         .route("/video/:id/watch", get(public_api::watch))
         .route(
             "/video/:id/variant/:variant_id",
@@ -239,6 +243,14 @@ async fn main() {
         .route("/mock_progress", post(admin_api::mock_progress))
         .route("/cancel_task", post(admin_api::cancel_task))
         .route("/scan", post(admin_api::reconciliate_lib))
+        .route(
+            "/transcode/:id/segment/:segment",
+            get(admin_api::transcoded_segment),
+        )
+        .route(
+            "/transcode/:id/manifest",
+            get(admin_api::transcode_stream_manifest),
+        )
         .route("/clear_db", delete(admin_api::clear_db));
 
     let assets_service = ServeDir::new(program_files.join("dist"))
