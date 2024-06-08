@@ -19,6 +19,8 @@ use crate::library::{
 use crate::utils;
 use anyhow::{anyhow, Context};
 
+const FFMPEG_IMAGE_CODECS: [&str; 6] = ["png", "jpeg", "mjpeg", "gif", "tiff", "bmp"];
+
 /// General track stream provided by FFprobe
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeStream {
@@ -187,7 +189,9 @@ impl FFprobeOutput {
     pub fn video_streams(&self) -> Vec<FFprobeVideoStream> {
         self.streams
             .iter()
-            .filter(|s| s.codec_type == "video")
+            .filter(|s| {
+                s.codec_type == "video" && !FFMPEG_IMAGE_CODECS.contains(&s.codec_name.as_str())
+            })
             .map(|s| s.video_stream().expect("video stream"))
             .collect()
     }
@@ -666,7 +670,7 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
                     }
                     "speed" => {
                         // speed looks like 10x
-                        // sometimes have wierd space in front
+                        // sometimes have space in front
                     }
                     "out_time_ms" => {
                         // just a number
@@ -749,7 +753,7 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
             "-loglevel",
             "error",
             "-i",
-            &input_file.as_ref().to_string_lossy().to_string(),
+            &input_file.as_ref().to_string_lossy(),
             "-f",
             "srt",
             "-map",
