@@ -312,14 +312,14 @@ impl AppState {
         torrent: Torrent,
         output: PathBuf,
     ) -> Result<(), AppError> {
-        let _ = self
-            .tasks
+        self.tasks
             .tracker
             .track_future(
                 self.tasks
                     .observe_torrent_download(self.torrent_client, torrent, output),
             )
-            .await;
+            .await
+            .unwrap();
         Ok(())
     }
 

@@ -12,6 +12,7 @@ pub mod metadata;
 pub mod progress;
 pub mod server;
 pub mod stream;
+pub mod torrent;
 pub mod torrent_index;
 pub mod tracing;
 #[cfg(feature = "windows-tray")]

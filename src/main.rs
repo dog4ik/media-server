@@ -217,6 +217,7 @@ async fn main() {
         .route("/history/:id", put(admin_api::update_history))
         .route("/torrent/search", get(public_api::search_torrent))
         .route("/torrent/download", post(admin_api::download_torrent))
+        .route("/torrent/:id/stream_range", get(admin_api::stream_download))
         .route("/search/content", get(public_api::search_content))
         .route("/configuration", get(admin_api::server_configuration))
         .route(

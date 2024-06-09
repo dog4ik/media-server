@@ -7,6 +7,7 @@ use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Path, Query};
 use axum::http::{Request, StatusCode};
+use axum::response::IntoResponse;
 use axum::{
     extract::State,
     response::{
@@ -15,6 +16,7 @@ use axum::{
     },
     Json,
 };
+use axum_extra::headers::Range;
 use axum_extra::{headers, TypedHeader};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -24,7 +26,7 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::StringIdQuery;
+use super::{NumberQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
@@ -609,14 +611,17 @@ pub async fn download_torrent(
     State(app_state): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
 ) -> Result<(), AppError> {
-    use torrent::Torrent;
-    let torrent = Torrent::from_mangnet_link(&payload.magnet).await?;
     let default_path = APP_RESOURCES.get().unwrap().resources_path.join("torrents");
     let save_location = payload
         .save_location
         .map(|l| PathBuf::from(l))
         .unwrap_or(default_path);
     tokio::spawn(async move {
+        let torrent = app_state
+            .torrent_client
+            .from_magnet_link(payload.magnet.parse().unwrap())
+            .await
+            .unwrap();
         let _ = app_state.download_torrent(torrent, save_location).await;
     });
     Ok(())
@@ -905,4 +910,39 @@ pub async fn transcode_stream_manifest(
         .ok_or(AppError::not_found("Stream is not found"))?;
 
     Ok(stream.manifest.as_ref().to_string())
+}
+
+/// Stream torrent download
+#[utoipa::path(
+    get,
+    path = "/api/torrent/:id/stream_range",
+    params(
+        ("id", description = "Torrent download id"),
+    ),
+    request_body = TorrentDownloadPayload,
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn stream_download(
+    State(tasks): State<TaskResource>,
+    Path(torrent_id): Path<String>,
+    Query(file_idx): Query<NumberQuery>,
+    range: Option<TypedHeader<Range>>,
+) -> Result<impl IntoResponse, AppError> {
+    let torrent_download = {
+        let downloads = tasks.pending_downloads.lock().unwrap();
+        downloads
+            .iter()
+            .next()
+            .ok_or(AppError::not_found("Torrent download is not found"))?
+            .clone()
+    };
+    let file = torrent_download
+        .files
+        .get(file_idx.number)
+        .ok_or(AppError::not_found("File with index is not found"))?;
+    Ok(torrent_download
+        .handle_request(file.range.clone(), range)
+        .await)
 }
