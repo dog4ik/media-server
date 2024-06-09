@@ -88,6 +88,8 @@ pub struct ExtensionHandshake {
     pub fields: HashMap<String, serde_bencode::value::Value>,
 }
 
+pub const CLIENT_EXTENSIONS: [(&str, u8); 1] = [("ut_metadata", 1)];
+
 impl ExtensionHandshake {
     pub fn from_bytes(bytes: &[u8]) -> serde_bencode::Result<Self> {
         serde_bencode::from_bytes(bytes)
@@ -98,9 +100,11 @@ impl ExtensionHandshake {
     }
 
     pub fn new() -> Self {
-        let mut dict = HashMap::new();
+        let mut dict = HashMap::with_capacity(CLIENT_EXTENSIONS.len());
         let fields = HashMap::new();
-        dict.insert("ut_metadata".into(), 1);
+        for (name, id) in CLIENT_EXTENSIONS {
+            dict.insert(name.into(), id);
+        }
 
         Self { dict, fields }
     }
@@ -127,7 +131,7 @@ impl ExtensionHandshake {
 #[derive(Debug, Clone)]
 pub struct UtMetadata {
     pub size: usize,
-    pub peer_id: u8,
+    pub metadata_id: u8,
     pub blocks: Vec<Option<Bytes>>,
 }
 
@@ -233,36 +237,36 @@ impl UtMetadata {
     const BLOCK_SIZE: usize = 1024 * 16;
 
     pub fn empty_from_handshake(handshake: &ExtensionHandshake) -> Option<Self> {
-        let peer_id = *handshake.dict.get("ut_metadata")?;
+        let metadata_id = *handshake.dict.get("ut_metadata")?;
         let size = handshake.ut_metadata_size()?;
         let total_pieces = (size + Self::BLOCK_SIZE - 1) / Self::BLOCK_SIZE;
         Some(Self {
             size,
-            peer_id,
+            metadata_id,
             blocks: vec![None; total_pieces],
         })
     }
 
     /// Create metadata from existing Info
-    pub fn full_from_info(message_id: u8, info: Info) -> Self {
-        let bytes = Bytes::copy_from_slice(&serde_bencode::to_bytes(&info).unwrap());
+    pub fn full_from_info(info: &Info) -> Self {
+        let bytes = Bytes::copy_from_slice(&serde_bencode::to_bytes(info).unwrap());
+        let metadata_id = CLIENT_EXTENSIONS[0].1;
         let size = bytes.len();
         let total_pieces = (size + Self::BLOCK_SIZE - 1) / Self::BLOCK_SIZE;
         let mut blocks = Vec::with_capacity(total_pieces);
         for i in 0..total_pieces - 1 {
             let start = i * Self::BLOCK_SIZE;
             let end = start + Self::BLOCK_SIZE;
-            blocks[i] = Some(bytes.slice(start..end));
+            blocks.push(Some(bytes.slice(start..end)));
         }
-        let last_start = total_pieces - 1 * Self::BLOCK_SIZE;
+        let last_start = (total_pieces - 1) * Self::BLOCK_SIZE;
         let last_length = crate::utils::piece_size(total_pieces - 1, Self::BLOCK_SIZE, size);
         let last_end = last_start + last_length;
-        let last_block = blocks.last_mut().unwrap();
-        *last_block = Some(bytes.slice(last_start..last_end));
+        blocks.push(Some(bytes.slice(last_start..last_end)));
 
         Self {
             size,
-            peer_id: message_id,
+            metadata_id,
             blocks,
         }
     }
@@ -398,7 +402,12 @@ impl Display for PeerMessage {
                 write!(f, "Extension handshake")
             }
             PeerMessage::Extension { extension_id, .. } => {
-                write!(f, "Extension with id {extension_id}")
+                let name = CLIENT_EXTENSIONS
+                    .iter()
+                    .find(|(_, id)| id == extension_id)
+                    .map(|(name, _)| *name)
+                    .unwrap_or("unknown");
+                write!(f, "{name} extension with id {extension_id}")
             }
         }
     }
@@ -448,7 +457,7 @@ impl PeerMessage {
                 Ok(PeerMessage::Bitfield { payload })
             }
             6 => {
-                let (index, length, begin) = request_payload(payload)?;
+                let (index, begin, length) = request_payload(payload)?;
                 Ok(PeerMessage::Request {
                     index,
                     length,
@@ -468,7 +477,7 @@ impl PeerMessage {
                 })
             }
             8 => {
-                let (index, length, begin) = request_payload(payload)?;
+                let (index, begin, length) = request_payload(payload)?;
                 Ok(PeerMessage::Cancel {
                     index,
                     length,
@@ -605,9 +614,7 @@ impl Decoder for MessageFramer {
         }
 
         // Read length marker.
-        let mut length_bytes = [0u8; 4];
-        length_bytes.copy_from_slice(&src[..4]);
-        let length = u32::from_be_bytes(length_bytes) as usize;
+        let length = u32::from_be_bytes(src[..4].try_into().unwrap()) as usize;
 
         // TODO: heartbeat
         // if length == 0 {
@@ -679,5 +686,56 @@ impl Encoder<PeerMessage> for MessageFramer {
         dst.extend_from_slice(&len_slice);
         dst.extend_from_slice(&bytes);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::{Bytes, BytesMut};
+    use tokio_util::codec::{Decoder, Encoder};
+
+    use crate::peers::BitField;
+
+    use super::{ExtensionHandshake, MessageFramer, PeerMessage};
+
+    #[test]
+    fn parse_peer_message() {
+        let mut framer = MessageFramer;
+        let mut buffer = BytesMut::new();
+        let mut re_encode_message = |msg: PeerMessage| {
+            framer.encode(msg.clone(), &mut buffer).unwrap();
+            let result = framer.decode(&mut buffer).unwrap().unwrap();
+            assert_eq!(msg, result)
+        };
+        re_encode_message(PeerMessage::Choke);
+        re_encode_message(PeerMessage::Unchoke);
+        re_encode_message(PeerMessage::Interested);
+        re_encode_message(PeerMessage::NotInterested);
+        re_encode_message(PeerMessage::Have { index: 123 });
+        re_encode_message(PeerMessage::Bitfield {
+            payload: BitField::empty(300),
+        });
+        re_encode_message(PeerMessage::Request {
+            index: 22,
+            begin: 100,
+            length: 200,
+        });
+        re_encode_message(PeerMessage::Piece {
+            index: 22,
+            begin: 100,
+            block: Bytes::from_static(&[23, 222, 32]),
+        });
+        re_encode_message(PeerMessage::Cancel {
+            index: 22,
+            begin: 100,
+            length: 200,
+        });
+        re_encode_message(PeerMessage::ExtensionHandshake {
+            payload: ExtensionHandshake::new(),
+        });
+        re_encode_message(PeerMessage::Extension {
+            extension_id: 1,
+            payload: Bytes::from_static(&[22, 222, 32]),
+        });
     }
 }

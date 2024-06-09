@@ -1,6 +1,6 @@
 #![feature(array_chunks)]
 #![feature(iter_repeat_n)]
-#![feature(ip_bits)]
+#![feature(assert_matches)]
 #![feature(iter_array_chunks)]
 #![feature(cursor_remaining)]
 #![feature(iter_collect_into)]
@@ -13,45 +13,45 @@ use std::{
     time::Duration,
 };
 
+use download::DownloadHandle;
 pub use download::{DownloadProgress, ProgressConsumer};
 use file::{MagnetLink, TorrentFile};
 use peers::Peer;
-use protocol::{tracker::UdpTrackerRequest, Info};
+use protocol::Info;
 use reqwest::Url;
-use storage::verify_integrety;
+use storage::{verify_integrety, StorageMethod, TorrentStorage};
 use tokio::{
-    sync::{broadcast, mpsc, watch, Semaphore},
-    task::{JoinHandle, JoinSet},
+    sync::{mpsc, watch, Semaphore},
+    task::JoinSet,
     time::timeout,
 };
-use tracker::{TrackerType, UdpTrackerWorker};
-use uuid::Uuid;
+use tracker::{TrackerType, UdpTrackerChannel, UdpTrackerWorker};
 
 use crate::{
     download::Download,
     tracker::{DownloadStat, Tracker},
 };
 
-mod download;
-mod file;
+pub mod download;
+pub mod file;
 mod peers;
-mod protocol;
-mod scheduler;
-mod storage;
+pub mod protocol;
+pub mod scheduler;
+pub mod storage;
 mod tracker;
 mod utils;
 
 #[derive(Debug)]
 pub struct ClientConfig {
     port: u16,
-    max_connections: usize,
+    udp_listener_port: u16,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             port: 6881,
-            max_connections: 100,
+            udp_listener_port: 7897,
         }
     }
 }
@@ -69,7 +69,7 @@ struct PeerListener {
 
 impl PeerListener {
     pub async fn spawn(port: u16) -> anyhow::Result<Self> {
-        let addr = SocketAddrV4::new(Ipv4Addr::new(127, 0, 0, 1), port);
+        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
         let listener = utils::bind_tcp_listener(addr).await?;
         let (tx, mut rx) = mpsc::channel(100);
         tokio::spawn(async move {
@@ -77,7 +77,7 @@ impl PeerListener {
             loop {
                 tokio::select! {
                     Ok((socket,ip)) = listener.accept() => {
-                        let timeout_duration = Duration::from_secs(1);
+                        let timeout_duration = Duration::from_secs(3);
                         match timeout(timeout_duration, Peer::new_without_info_hash(socket)).await {
                             Ok(Ok(peer)) => {
                                 let info_hash = peer.handshake.info_hash();
@@ -88,7 +88,7 @@ impl PeerListener {
                                         map.remove(&info_hash);
                                     };
                                 } else {
-                                    tracing::warn!(?info_hash, "Peer () connected but torrent does not exist", );
+                                    tracing::warn!(?info_hash, "Peer {ip} connected but torrent does not exist", );
                                     peer.close();
                                 }
                             }
@@ -123,68 +123,41 @@ impl PeerListener {
 }
 
 #[derive(Debug)]
-enum WorkerCommand {
-    Download(Torrent),
-    Cancel(Uuid),
-}
-
-// TODO: cancel, pause and other control
-#[derive(Debug)]
-pub struct DownloadHandle {
-    pub handle: JoinHandle<anyhow::Result<()>>,
-}
-
-impl DownloadHandle {
-    pub fn abort(&self) {
-        self.handle.abort()
-    }
-}
-
-#[derive(Debug)]
 pub struct Client {
     config: ClientConfig,
-    torrents: Vec<Torrent>,
     peer_listener: PeerListener,
-    progress_channel: broadcast::Sender<DownloadStat>,
-    udp_tracker_tx: mpsc::Sender<UdpTrackerRequest>,
+    udp_tracker_tx: UdpTrackerChannel,
 }
 
 impl Client {
     pub async fn new(config: ClientConfig) -> anyhow::Result<Self> {
         let peer_listener = PeerListener::spawn(config.port).await?;
-        let (progress_channel, _) = broadcast::channel(10);
-        let worker = UdpTrackerWorker::new("0.0.0.0:7897".parse()?).await?;
+        let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
+        let udp_channel = UdpTrackerWorker::spawn(udp_listener_addr).await?;
 
         Ok(Self {
             config,
-            torrents: Vec::new(),
             peer_listener,
-            progress_channel,
-            udp_tracker_tx: worker.request_tx.clone(),
+            udp_tracker_tx: udp_channel,
         })
     }
 
     pub async fn download(
         &self,
         save_location: impl AsRef<Path>,
-        torrent: Torrent,
+        mut torrent: Torrent,
         progress_consumer: impl ProgressConsumer,
     ) -> anyhow::Result<DownloadHandle> {
-        let (new_peer_tx, new_peer_rx) = mpsc::channel(100);
         let hash = torrent.info.hash();
         self.peer_listener
-            .subscribe(hash, new_peer_tx.clone())
+            .subscribe(hash, torrent.new_peers_tx.clone())
             .await;
-        let save_location_metadata = save_location.as_ref().metadata()?;
-        if !save_location_metadata.is_dir() {
-            return Err(anyhow::anyhow!(
-                "Save directory must be a directory, got {:?}",
-                save_location_metadata.file_type()
-            ));
-        }
-        let download = Download::new(save_location, torrent.info, new_peer_rx).await;
-        let handle = tokio::spawn(download.start(progress_consumer, torrent.peers));
-        let download_handle = DownloadHandle { handle };
+        let storage =
+            TorrentStorage::new(&torrent.info, save_location, StorageMethod::Preallocated);
+        let storage_handle = storage.spawn().await?;
+        torrent.tracker_set.detach_all();
+        let download = Download::new(storage_handle, torrent.info, torrent.new_peers_rx).await;
+        let download_handle = download.start(progress_consumer, torrent.peers);
         Ok(download_handle)
     }
 
@@ -196,11 +169,8 @@ impl Client {
     pub async fn from_magnet_link(&self, magnet_link: MagnetLink) -> anyhow::Result<Torrent> {
         let info_hash = magnet_link.hash();
         let Some(tracker_list) = magnet_link.announce_list else {
-            return Err(anyhow::anyhow!(
-                "Magnet links without annonuce list are not yet supported"
-            ));
+            anyhow::bail!("Magnet links without annonuce list are not yet supported");
         };
-        // Dont care about stats, need only ut_metadata
         let (_, rx) = watch::channel(DownloadStat::empty(0));
         let (peers_tx, mut peers_rx) = mpsc::channel(1000);
         tracing::info!("Connecting trackers");
@@ -209,7 +179,7 @@ impl Client {
             info_hash,
             self.udp_tracker_tx.clone(),
             rx,
-            peers_tx,
+            peers_tx.clone(),
         ));
         let mut peers_set = JoinSet::new();
 
@@ -227,7 +197,7 @@ impl Client {
                             peers_set.spawn(async move {
                                 let _permit = peers_semaphore.acquire().await.unwrap();
                                 timeout(
-                                    Duration::from_secs(3),
+                                    Duration::from_secs(5),
                                     Peer::new_from_ip(addr, info_hash),
                                 ).await
                             });
@@ -240,7 +210,7 @@ impl Client {
                             peers.push(peer);
                         },
                         Ok(Err(e)) => tracing::error!("Failed to construct peer: {e}"),
-                        Err(_) => tracing::error!("Failed to construct peer: Timed out"),
+                        Err(_) => tracing::warn!("Failed to construct peer: Timed out"),
                     };
                     if peers_set.is_empty() {
                         break;
@@ -251,13 +221,12 @@ impl Client {
                 }
             };
         }
-        let tracker_set = trackers_announce_handle.await.unwrap().unwrap();
+        let tracker_set = trackers_announce_handle.await.unwrap();
         tracing::info!("Fetching ut metadata");
         for peer in &mut peers {
             if peer.supports_ut_metadata() {
                 match timeout(Duration::from_secs(3), peer.fetch_ut_metadata()).await {
                     Ok(Ok(i)) => {
-                        dbg!(&i.name);
                         info = Some(i);
                         break;
                     }
@@ -275,10 +244,39 @@ impl Client {
                 info,
                 peers,
                 tracker_set,
+                new_peers_tx: peers_tx,
+                new_peers_rx: peers_rx,
             })
         } else {
             Err(anyhow::anyhow!("failed to fetch info from peers"))
         }
+    }
+
+    pub async fn from_torrent_file(&self, file: TorrentFile) -> anyhow::Result<Torrent> {
+        let info_hash = file.info.hash();
+        let tracker_list = file.all_trackers();
+        if tracker_list.is_empty() {
+            anyhow::bail!("Magnet links without annonuce list are not yet supported");
+        };
+        let (_, rx) = watch::channel(DownloadStat::empty(file.info.total_size()));
+        let (peers_tx, peers_rx) = mpsc::channel(1000);
+        tracing::info!("Connecting trackers");
+        let tracker_set = announce_trackers(
+            tracker_list,
+            info_hash,
+            self.udp_tracker_tx.clone(),
+            rx,
+            peers_tx.clone(),
+        )
+        .await;
+
+        Ok(Torrent {
+            info: file.info,
+            new_peers_tx: peers_tx,
+            new_peers_rx: peers_rx,
+            peers: Vec::new(),
+            tracker_set,
+        })
     }
 }
 
@@ -286,6 +284,8 @@ impl Client {
 pub struct Torrent {
     pub info: Info,
     pub tracker_set: JoinSet<anyhow::Result<()>>,
+    pub new_peers_tx: mpsc::Sender<NewPeer>,
+    pub new_peers_rx: mpsc::Receiver<NewPeer>,
     pub peers: Vec<Peer>,
 }
 
@@ -302,16 +302,18 @@ impl Torrent {
 async fn announce_trackers(
     urls: Vec<Url>,
     info_hash: [u8; 20],
-    tracker_tx: mpsc::Sender<UdpTrackerRequest>,
+    tracker_tx: UdpTrackerChannel,
     progress: watch::Receiver<DownloadStat>,
     peer_tx: mpsc::Sender<NewPeer>,
-) -> anyhow::Result<JoinSet<anyhow::Result<()>>> {
+) -> JoinSet<anyhow::Result<()>> {
     let mut tracker_init_set = JoinSet::new();
     let mut tracker_set = JoinSet::new();
     for tracker in urls {
-        let tracker_type = TrackerType::from_url(tracker.clone(), tracker_tx.clone())?;
+        let Ok(tracker_type) = TrackerType::from_url(tracker.clone(), tracker_tx.clone()) else {
+            continue;
+        };
         tracker_init_set.spawn(timeout(
-            Duration::from_secs(3),
+            Duration::from_secs(5),
             Tracker::new(
                 info_hash,
                 tracker_type,
@@ -324,6 +326,7 @@ async fn announce_trackers(
     while let Some(tracker_result) = tracker_init_set.join_next().await {
         match tracker_result {
             Ok(Ok(Ok(tracker))) => {
+                tracing::info!("Connected to the tracker: {}", tracker.url);
                 tracker_set.spawn(tracker.work());
             }
             Ok(Ok(Err(e))) => {
@@ -337,5 +340,5 @@ async fn announce_trackers(
             }
         };
     }
-    Ok(tracker_set)
+    tracker_set
 }

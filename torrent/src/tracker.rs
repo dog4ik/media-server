@@ -47,13 +47,8 @@ pub struct AnnouncePayload {
 
 impl AnnouncePayload {
     async fn announce_http(&self) -> anyhow::Result<AnnounceResult> {
-        let url_params = HttpAnnounceUrlParams {
-            peer_id: String::from_utf8(self.peer_id.to_vec())?,
-            port: self.port,
-            uploaded: self.uploaded,
-            downloaded: self.downloaded,
-            left: self.left,
-        };
+        tracing::debug!("Announcing tracker {} via HTTP", self.announce);
+        let url_params = HttpAnnounceUrlParams::from_payload(self);
         let tracker_url = format!(
             "{}?{}&info_hash={}",
             self.announce,
@@ -107,7 +102,10 @@ impl AnnouncePayload {
                 peers,
             })
         } else {
-            Err(anyhow!("Expected announce response"))
+            Err(anyhow!(
+                "Expected announce response, got {:?}",
+                res.message_type
+            ))
         }
     }
 }
@@ -122,18 +120,18 @@ fn urlencode(t: &[u8; 20]) -> String {
 }
 
 #[derive(Serialize, Debug, Clone)]
-pub struct HttpAnnounceUrlParams {
-    pub peer_id: String,
-    pub port: u16,
-    pub uploaded: u64,
-    pub downloaded: u64,
-    pub left: u64,
+struct HttpAnnounceUrlParams {
+    peer_id: String,
+    port: u16,
+    uploaded: u64,
+    downloaded: u64,
+    left: u64,
 }
 
 impl HttpAnnounceUrlParams {
-    pub fn new(announce: &AnnouncePayload) -> Self {
+    pub fn from_payload(announce: &AnnouncePayload) -> Self {
         Self {
-            peer_id: String::from_utf8(ID.to_vec()).unwrap(),
+            peer_id: String::from_utf8(announce.peer_id.to_vec()).unwrap(),
             port: announce.port,
             uploaded: announce.uploaded,
             downloaded: announce.downloaded,
@@ -242,7 +240,10 @@ impl UdpTrackerChannel {
         if let UdpTrackerMessageType::Connect { connection_id } = res.message_type {
             return Ok(connection_id);
         } else {
-            return Err(anyhow::anyhow!("Expected connect response"));
+            return Err(anyhow::anyhow!(
+                "Expected connect response, got {:?}",
+                res.message_type
+            ));
         }
     }
 }
@@ -254,10 +255,10 @@ pub enum TrackerType {
 }
 
 impl TrackerType {
-    pub fn from_url(url: Url, sender: mpsc::Sender<UdpTrackerRequest>) -> anyhow::Result<Self> {
+    pub fn from_url(url: Url, sender: UdpTrackerChannel) -> anyhow::Result<Self> {
         match url.scheme() {
             "https" | "http" => Ok(Self::Http),
-            "udp" => Ok(Self::Udp(UdpTrackerChannel::new(sender))),
+            "udp" => Ok(Self::Udp(sender)),
             rest => Err(anyhow::anyhow!("url scheme {rest} is not supported")),
         }
     }
@@ -268,7 +269,6 @@ pub struct Tracker {
     pub tracker_type: TrackerType,
     pub url: Url,
     pub peers: HashSet<SocketAddr>,
-    pub info_hash: [u8; 20],
     pub progress: watch::Receiver<DownloadStat>,
     pub peer_tx: mpsc::Sender<NewPeer>,
     pub announce_payload: AnnouncePayload,
@@ -300,12 +300,8 @@ impl Tracker {
             TrackerType::Udp(c) => {
                 let addrs = url.socket_addrs(|| None)?;
                 let addr = addrs.first().context("could not resove url hostname")?;
-                let res = c.send(UdpTrackerRequestType::Connect, *addr).await?;
-                if let UdpTrackerMessageType::Connect { connection_id } = res.message_type {
-                    Some(connection_id)
-                } else {
-                    None
-                }
+                let res = c.connect(*addr).await?;
+                Some(res)
             }
         };
 
@@ -313,7 +309,6 @@ impl Tracker {
             tracker_type,
             url,
             peers: HashSet::new(),
-            info_hash,
             progress,
             peer_tx,
             announce_payload,
@@ -322,13 +317,12 @@ impl Tracker {
     }
 
     pub async fn work(mut self) -> anyhow::Result<()> {
-        let initial_announce = self.reannounce().await?;
+        let initial_announce = self.announce().await?;
         let interval_duration = std::cmp::max(
             Duration::from_secs(2 * 60),
             Duration::from_secs(initial_announce.interval as u64),
         );
-        tracing::debug!("Reannounce peers: {}", initial_announce.peers.len());
-        self.handle_reannounce(initial_announce).await;
+        self.handle_announce(initial_announce).await;
 
         let mut reannounce_interval = tokio::time::interval(interval_duration);
         // immediate tick
@@ -337,18 +331,18 @@ impl Tracker {
         loop {
             tokio::select! {
                 _ = reannounce_interval.tick() => {
-                    let announce_result = self.reannounce().await?;
-                    self.handle_reannounce(announce_result).await;
+                    let announce_result = self.announce().await?;
+                    self.handle_announce(announce_result).await;
                 }
-                Ok(_) = self.progress.changed() => self.handle_update(),
+                Ok(_) = self.progress.changed() => self.handle_progress_update(),
                 else => break
             }
         }
         Ok(())
     }
 
-    pub async fn reannounce(&mut self) -> anyhow::Result<AnnounceResult> {
-        tracing::trace!("Reannouncing tracker {}", self.url);
+    pub async fn announce(&mut self) -> anyhow::Result<AnnounceResult> {
+        tracing::trace!("Announcing tracker {}", self.url);
         match &self.tracker_type {
             TrackerType::Http => self.announce_payload.announce_http().await,
             TrackerType::Udp(chan) => {
@@ -359,15 +353,18 @@ impl Tracker {
         }
     }
 
-    pub async fn handle_reannounce(&mut self, announce_result: AnnounceResult) {
+    pub async fn handle_announce(&mut self, announce_result: AnnounceResult) {
+        let mut count = 0;
         for ip in announce_result.peers {
             if self.peers.insert(ip) {
+                count += 1;
                 self.peer_tx.send(NewPeer::TrackerOrigin(ip)).await.unwrap();
             };
         }
+        tracing::debug!("Tracker {} announced {count} new peers", self.url);
     }
 
-    fn handle_update(&mut self) {
+    fn handle_progress_update(&mut self) {
         let new = { self.progress.borrow_and_update().clone() };
         self.announce_payload.downloaded = new.downloaded;
         self.announce_payload.uploaded = new.uploaded;
@@ -379,11 +376,8 @@ impl Tracker {
 }
 
 #[derive(Debug)]
-pub struct UdpTrackerWorker {
-    pub request_tx: mpsc::Sender<UdpTrackerRequest>,
-}
-
-
+/// Entity that owns udp socket and handles all udp tracker messages
+pub struct UdpTrackerWorker {}
 
 async fn udp_tracker_worker(socket: UdpSocket, mut data_rx: mpsc::Receiver<UdpTrackerRequest>) {
     let mut pending_transactions: HashMap<u32, oneshot::Sender<UdpTrackerMessage>> = HashMap::new();
@@ -402,7 +396,11 @@ async fn udp_tracker_worker(socket: UdpSocket, mut data_rx: mpsc::Receiver<UdpTr
                 if let Some(chan) = pending_transactions.remove(&message.transaction_id) {
                     let _ = chan.send(message);
                 } else {
-                    tracing::error!("Recieved message for non existant transaction: {}", message.transaction_id);
+                    tracing::error!(
+                        "Recieved message {:?} for non existant transaction: {}",
+                        message.message_type,
+                        message.transaction_id
+                    );
                 }
             },
             Some(request) = data_rx.recv() => {
@@ -414,12 +412,11 @@ async fn udp_tracker_worker(socket: UdpSocket, mut data_rx: mpsc::Receiver<UdpTr
 }
 
 impl UdpTrackerWorker {
-    pub async fn new(local_addr: SocketAddrV4) -> anyhow::Result<Self> {
+    pub async fn spawn(local_addr: SocketAddrV4) -> anyhow::Result<UdpTrackerChannel> {
         let socket = utils::bind_udp_socket(local_addr).await?;
         let (data_tx, data_rx) = mpsc::channel(100);
         tokio::spawn(udp_tracker_worker(socket, data_rx));
-        Ok(Self {
-            request_tx: data_tx,
-        })
+        let channel = UdpTrackerChannel::new(data_tx);
+        Ok(channel)
     }
 }

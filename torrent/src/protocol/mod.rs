@@ -6,6 +6,7 @@ use std::{
 use serde::{de::Visitor, Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
+pub mod dht;
 pub mod peer;
 pub mod tracker;
 
@@ -40,7 +41,6 @@ pub struct OutputFile {
 
 impl OutputFile {
     pub fn new(length: u64, path: PathBuf) -> Self {
-        let path = sanitize_path(path);
         Self { length, path }
     }
 
@@ -77,7 +77,12 @@ impl Info {
         match &self.file_descriptor {
             SizeDescriptor::Files(files) => files
                 .iter()
-                .map(|f| OutputFile::new(f.length, base.join(PathBuf::from_iter(f.path.iter()))))
+                .map(|f| {
+                    OutputFile::new(
+                        f.length,
+                        base.join(sanitize_path(PathBuf::from_iter(f.path.iter()))),
+                    )
+                })
                 .collect(),
             SizeDescriptor::Length(length) => {
                 vec![OutputFile::new(*length, base)]

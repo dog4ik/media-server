@@ -1,11 +1,11 @@
-use std::{net::SocketAddr, time::Duration};
+use std::{fmt::Display, net::SocketAddr, time::Duration};
 
 use anyhow::{anyhow, ensure, Context};
-use bytes::{Bytes, BytesMut};
+use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::{mpsc, oneshot},
+    sync::mpsc,
 };
 use tokio_stream::StreamExt;
 use tokio_util::codec::{Encoder, Framed};
@@ -31,15 +31,26 @@ pub struct PeerError {
     pub error_type: PeerErrorCause,
 }
 
-impl<E> From<E> for PeerError
-where
-    E: Into<anyhow::Error>,
-{
-    fn from(err: E) -> Self {
+impl std::error::Error for PeerError {}
+
+impl From<anyhow::Error> for PeerError {
+    fn from(err: anyhow::Error) -> Self {
         Self {
-            msg: err.into().to_string(),
+            msg: err.to_string(),
             error_type: PeerErrorCause::Unhandled,
         }
+    }
+}
+
+impl Display for PeerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let error_type = match self.error_type {
+            PeerErrorCause::Timeout => "Timeout",
+            PeerErrorCause::Connection => "Connection",
+            PeerErrorCause::PeerLogic => "Peer logic",
+            PeerErrorCause::Unhandled => "Unhandled",
+        };
+        write!(f, "{error_type} with message: {}", self.msg)
     }
 }
 
@@ -282,16 +293,15 @@ impl Peer {
         let handshake = self
             .extension_handshake
             .as_ref()
-            .ok_or(anyhow!("peer does not support extensions"))?;
+            .context("peer does not support extensions")?;
         let mut ut_metadata = UtMetadata::empty_from_handshake(handshake)
             .ok_or(anyhow!("peer does not support ut_metadata"))?;
         while let Some(block) = ut_metadata.request_next_block() {
             self.send_peer_msg(PeerMessage::Extension {
-                extension_id: ut_metadata.peer_id,
+                extension_id: ut_metadata.metadata_id,
                 payload: block.as_bytes().into(),
             })
-            .await
-            .unwrap();
+            .await?;
             let response = self.stream.next().await.context("stream to be open")??;
             let PeerMessage::Extension {
                 extension_id,
@@ -369,6 +379,7 @@ impl Peer {
                 if !self.choked {
                     self.send_peer_msg(PeerMessage::request(block)).await?;
                 } else {
+                    self.send_peer_msg(PeerMessage::request(block)).await?;
                     tracing::warn!("ignoring new job (choked)");
                 }
             }
@@ -390,6 +401,14 @@ impl Peer {
             PeerCommand::Choke => self.send_peer_msg(PeerMessage::Choke).await?,
             PeerCommand::Unchoke => self.send_peer_msg(PeerMessage::Unchoke).await?,
             PeerCommand::NotInterested => self.send_peer_msg(PeerMessage::NotInterested).await?,
+            PeerCommand::Block { block, data } => {
+                self.send_peer_msg(PeerMessage::Piece {
+                    index: block.piece,
+                    begin: block.offset,
+                    block: data,
+                })
+                .await?
+            }
         };
         Ok(false)
     }
@@ -399,13 +418,9 @@ impl Peer {
         peer_msg: PeerMessage,
         ipc: &mut PeerIPC,
     ) -> Result<(), PeerError> {
-        tracing::trace!(%self.uuid, "Peer sent {} message", peer_msg);
         match peer_msg {
             PeerMessage::HeatBeat => {}
             PeerMessage::Choke => {
-                if self.choked {
-                    tracing::error!("Choked peer sends choke");
-                }
                 self.choked = true;
                 self.send_status(PeerStatusMessage::Choked, ipc).await;
             }
@@ -432,11 +447,8 @@ impl Peer {
                 begin,
                 length,
             } => {
-                println!("peer requesting block, it will block peer exectution");
-                let (tx, rx) = oneshot::channel();
                 self.send_status(
                     PeerStatusMessage::Request {
-                        response: tx,
                         block: Block {
                             piece: index,
                             offset: begin,
@@ -446,15 +458,6 @@ impl Peer {
                     ipc,
                 )
                 .await;
-                if let Ok(Some(bytes)) = rx.await {
-                    let _ = self
-                        .send_peer_msg(PeerMessage::Piece {
-                            index,
-                            begin,
-                            block: bytes.slice(begin as usize..=length as usize),
-                        })
-                        .await;
-                }
             }
             PeerMessage::Piece {
                 index,
@@ -491,22 +494,29 @@ impl Peer {
     pub async fn send_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
         let mut framer = MessageFramer;
         let mut buf = BytesMut::new();
+        let msg_description = peer_msg.to_string();
         framer
             .encode(peer_msg, &mut buf)
             .expect("our own message to encode");
         let socket = self.stream.get_mut();
-        tokio::time::timeout(Duration::from_secs(1), socket.write_all(&buf))
-            .await
-            .map_err(|_| {
+        match tokio::time::timeout(Duration::from_secs(2), socket.write_all(&buf)).await {
+            Ok(Ok(_)) => Ok(()),
+            Err(_) => {
                 tracing::error!("Peer write timed out");
-                PeerError::timeout("failed to send message to peer (Timeout)")
-            })
-            .map_err(|_| PeerError::connection("failed to send message to peer"))??;
-        Ok(())
+                Err(PeerError::timeout(
+                    "failed to send message to peer (Timeout)",
+                ))
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "Peer connection error while sending {msg_description} message: {e}"
+                );
+                Err(PeerError::connection("peer connection failed"))
+            }
+        }
     }
 
     pub async fn send_status(&mut self, status: PeerStatusMessage, ipc: &mut PeerIPC) {
-        tracing::debug!("Sending status: {}", status);
         ipc.status_tx
             .send(PeerStatus {
                 peer_id: self.uuid,
@@ -522,11 +532,11 @@ impl Peer {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BitField(pub Bytes);
+pub struct BitField(pub Vec<u8>);
 
 impl BitField {
     pub fn new(data: &[u8]) -> Self {
-        Self(Bytes::copy_from_slice(data))
+        Self(data.to_vec())
     }
 
     pub fn has(&self, piece: usize) -> bool {
@@ -540,15 +550,40 @@ impl BitField {
     }
 
     pub fn add(&mut self, piece: usize) -> anyhow::Result<()> {
-        let mut bytes = BytesMut::with_capacity(self.0.len());
-        bytes.extend_from_slice(&self.0);
+        let bytes = &mut self.0;
         let Some(block) = bytes.get_mut(piece / 8) else {
             return Err(anyhow!("piece {piece} does not exist"));
         };
         let position = (piece % 8) as u32;
         let new_value = *block | 1u8.rotate_right(position + 1);
         *block = new_value;
-        self.0 = bytes.into();
+        Ok(())
+    }
+
+    pub fn is_full(&self, max_pieces: usize) -> bool {
+        if self.0.is_empty() {
+            return true;
+        }
+        let mut pieces = 0;
+        for byte in &self.0[..self.0.len() - 1] {
+            if *byte != u8::MAX {
+                return false;
+            }
+            pieces += byte.count_ones();
+        }
+        let last = self.0.last().unwrap();
+        pieces += last.count_ones();
+        pieces as usize == max_pieces
+    }
+
+    pub fn remove(&mut self, piece: usize) -> anyhow::Result<()> {
+        let bytes = &mut self.0;
+        let Some(block) = bytes.get_mut(piece / 8) else {
+            return Err(anyhow!("piece {piece} does not exist"));
+        };
+        let position = (piece % 8) as u32;
+        let new_value = *block & !1u8.rotate_right(position + 1);
+        *block = new_value;
         Ok(())
     }
 
@@ -563,9 +598,7 @@ impl BitField {
     }
 
     pub fn empty(pieces_amount: usize) -> Self {
-        let mut bytes = vec![0; std::cmp::max((pieces_amount + 8 - 1) / 8, 1)];
-        bytes.fill(0);
-        Self(bytes.into())
+        Self(vec![0; std::cmp::max((pieces_amount + 8 - 1) / 8, 1)])
     }
 }
 
@@ -628,6 +661,35 @@ mod test {
     }
 
     #[test]
+    fn bitfield_remove() {
+        let data = [0b01110101, 0b01110001];
+        let mut bitfield = BitField::new(&data);
+        bitfield.remove(1).unwrap();
+        bitfield.remove(4).unwrap();
+        bitfield.remove(9).unwrap();
+        bitfield.remove(15).unwrap();
+        assert!(!bitfield.has(0));
+        assert!(!bitfield.has(1));
+        assert!(bitfield.has(2));
+        assert!(bitfield.has(3));
+        assert!(!bitfield.has(4));
+        assert!(bitfield.has(5));
+        assert!(!bitfield.has(6));
+        assert!(bitfield.has(7));
+        assert!(!bitfield.has(8));
+        assert!(!bitfield.has(9));
+        assert!(bitfield.has(10));
+        assert!(bitfield.has(11));
+        assert!(!bitfield.has(12));
+        assert!(!bitfield.has(13));
+        assert!(!bitfield.has(14));
+        assert!(!bitfield.has(15));
+        assert!(!bitfield.has(16));
+        assert!(!bitfield.has(17));
+        assert!(bitfield.remove(16).is_err());
+    }
+
+    #[test]
     fn bitfield_iterator() {
         let data = [0b01110101, 0b01110001];
         let bitfield = BitField::new(&data);
@@ -649,7 +711,6 @@ mod test {
         let data = b"d1:md11:LT_metadatai1e6:qT_PEXi2ee1:pi6881e1:v13:\xc2\xb5Torreet 1.2e";
         let extenstion_handshake: ExtensionHandshake = serde_bencode::from_bytes(data).unwrap();
         let back = serde_bencode::to_string(&extenstion_handshake).unwrap();
-        dbg!(&extenstion_handshake, &back);
         assert_eq!(*extenstion_handshake.dict.get("LT_metadata").unwrap(), 1);
         assert_eq!(*extenstion_handshake.dict.get("qT_PEX").unwrap(), 2);
         assert_eq!(std::str::from_utf8(data).unwrap(), back);
