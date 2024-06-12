@@ -163,94 +163,69 @@ impl Client {
         Ok(download_handle)
     }
 
-    pub fn torrent_file_info(&self, path: impl AsRef<Path>) -> anyhow::Result<Info> {
-        let file = TorrentFile::from_path(path)?;
-        Ok(file.info)
-    }
-
-    pub async fn from_magnet_link(&self, magnet_link: MagnetLink) -> anyhow::Result<Torrent> {
-        let info_hash = magnet_link.hash();
-        let Some(tracker_list) = magnet_link.announce_list else {
-            anyhow::bail!("Magnet links without annonuce list are not yet supported");
+    pub async fn resolve_magnet_link(&self, link: &MagnetLink) -> anyhow::Result<Info> {
+        let info_hash = link.hash();
+        let Some(ref tracker_list) = link.announce_list else {
+            bail!("magnet links without announce list are not supported yet");
         };
-        let (_, rx) = watch::channel(DownloadStat::empty(0));
-        let (peers_tx, mut peers_rx) = mpsc::channel(1000);
-        tracing::info!("Connecting trackers");
-        let trackers_announce_handle = tokio::spawn(announce_trackers(
-            tracker_list,
-            info_hash,
-            self.udp_tracker_tx.clone(),
-            rx,
-            peers_tx.clone(),
-        ));
-        let mut peers_set = JoinSet::new();
-
-        tracing::info!("Waiting for new peers");
-        let peers_semaphore = Arc::new(Semaphore::new(200));
-        let mut peers = Vec::new();
-        let mut info: Option<Info> = None;
-        loop {
-            let peers_semaphore = peers_semaphore.clone();
-            tokio::select! {
-                Some(new_peer) = peers_rx.recv() => {
-                    match new_peer {
-                        NewPeer::ListenerOrigin(_) => unreachable!("We are not listening udp socket yet"),
-                        NewPeer::TrackerOrigin(addr) => {
-                            peers_set.spawn(async move {
-                                let _permit = peers_semaphore.acquire().await.unwrap();
-                                timeout(
-                                    Duration::from_secs(5),
-                                    Peer::new_from_ip(addr, info_hash),
-                                ).await
-                            });
-                        },
-                    }
-                },
-                Some(Ok(info)) = peers_set.join_next() => {
-                    match info {
-                        Ok(Ok(peer)) => {
-                            peers.push(peer);
-                        },
-                        Ok(Err(e)) => tracing::error!("Failed to construct peer: {e}"),
-                        Err(_) => tracing::warn!("Failed to construct peer: Timed out"),
-                    };
-                    if peers_set.is_empty() {
-                        break;
-                    }
-                },
-                else => {
-                    break;
-                }
-            };
+        let (new_peers_tx, mut new_peers_rx) = mpsc::channel(100);
+        // don't care about download stats
+        let (_, download_rx) = watch::channel(DownloadStat::empty(0));
+        let mut tracker_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
+        let mut ut_metadata_set: JoinSet<anyhow::Result<Info>> = JoinSet::new();
+        for tracker_url in tracker_list.clone() {
+            let tracker_type = TrackerType::from_url(&tracker_url, self.udp_tracker_tx.clone())
+                .expect("http | udp | https scheme");
+            {
+                let new_peers_tx = new_peers_tx.clone();
+                let download_rx = download_rx.clone();
+                tracker_set.spawn(async move {
+                    let mut tracker = Tracker::new(
+                        info_hash,
+                        tracker_type,
+                        tracker_url,
+                        download_rx,
+                        new_peers_tx,
+                    )
+                    .await?;
+                    let announce = tracker.announce().await?;
+                    tracker.handle_announce(announce).await;
+                    Ok(())
+                });
+            }
         }
-        let tracker_set = trackers_announce_handle.await.unwrap();
-        tracing::info!("Fetching ut metadata");
-        for peer in &mut peers {
-            if peer.supports_ut_metadata() {
-                match timeout(Duration::from_secs(3), peer.fetch_ut_metadata()).await {
-                    Ok(Ok(i)) => {
-                        info = Some(i);
-                        break;
-                    }
-                    Ok(Err(e)) => {
-                        tracing::error!("Failed to fetch ut_metadata: {e}");
-                    }
-                    Err(_) => {
-                        tracing::error!("Failed to fetch ut_metadata: Timeout");
+        let peer_semaphore = Arc::new(Semaphore::new(100));
+        let duration = Duration::from_secs(2);
+        loop {
+            let peer_semaphore = peer_semaphore.clone();
+            tokio::select! {
+                Some(NewPeer::TrackerOrigin(addr)) = new_peers_rx.recv() => {
+                    ut_metadata_set.spawn(async move {
+                        let _lock = peer_semaphore.acquire().await;
+                        let socket = timeout(duration, TcpStream::connect(addr)).await??;
+                        let mut peer = timeout(duration, Peer::new(socket, info_hash)).await??;
+                        let metadata = timeout(Duration::from_secs(5), peer.fetch_ut_metadata()).await??;
+                        Ok(metadata)
+                    });
+                }
+                Some(join) = ut_metadata_set.join_next() => {
+                    match join {
+                        Ok(Ok(info)) => return Ok(info),
+                        Ok(Err(e)) => {
+                            if ut_metadata_set.is_empty() {
+                                bail!("No one managed to send metadata");
+                            }
+                            tracing::warn!("ut_metadata retrival task failed: {e}");
+                        },
+                        Err(e) => {
+                            if ut_metadata_set.is_empty() {
+                                bail!("No one managed to send metadata");
+                            }
+                            tracing::error!("ut_metadata retrieval task paniced: {e}");
+                        },
                     }
                 }
             }
-        }
-        if let Some(info) = info {
-            Ok(Torrent {
-                info,
-                peers,
-                tracker_set,
-                new_peers_tx: peers_tx,
-                new_peers_rx: peers_rx,
-            })
-        } else {
-            Err(anyhow::anyhow!("failed to fetch info from peers"))
         }
     }
 
