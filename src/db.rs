@@ -281,7 +281,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
-        tracing::debug!(id, "Remoning video");
+        tracing::debug!(id, "Removing video");
         sqlx::query!("DELETE FROM videos WHERE id = ?;", id)
             .execute(&self.pool)
             .await?;
