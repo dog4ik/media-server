@@ -9,7 +9,7 @@ use std::{
 use anyhow::anyhow;
 use bytes::Bytes;
 use tokio::{
-    sync::{mpsc, oneshot},
+    sync::mpsc,
     task::JoinSet,
     time::{timeout, Instant},
 };
@@ -17,7 +17,11 @@ use uuid::Uuid;
 
 use crate::{
     peers::{BitField, Peer, PeerError, PeerIPC},
-    protocol::{peer::UtMetadata, Info},
+    protocol::{
+        pex::{PexEntry, PexHistory, PexHistoryEntry, PexMessage},
+        ut_metadata::{UtMessage, UtMetadata},
+        Info,
+    },
     scheduler::{ScheduleStrategy, Scheduler},
     storage::{StorageFeedback, StorageHandle},
     NewPeer,
@@ -166,10 +170,12 @@ pub struct ActivePeer {
     pub uploaded: u64,
     /// Peer's perfomance history (holds diff rates) useful to say how peer is performing
     pub performance_history: PerformanceHistory,
+    /// Current pointer to the relevant pex history
+    pub pex_idx: usize,
 }
 
 impl ActivePeer {
-    pub fn new(command: mpsc::Sender<PeerCommand>, peer: &Peer) -> Self {
+    pub fn new(command: mpsc::Sender<PeerCommand>, peer: &Peer, pex_idx: usize) -> Self {
         let choke_status = Status::default();
         Self {
             id: peer.uuid,
@@ -182,6 +188,7 @@ impl ActivePeer {
             uploaded: 0,
             pending_blocks: Vec::new(),
             performance_history: PerformanceHistory::new(),
+            pex_idx,
         }
     }
 
@@ -393,6 +400,7 @@ pub struct Download {
     pub pending_retrieves: HashMap<usize, Vec<(Uuid, Block)>>,
     pub scheduler: Scheduler,
     pub storage: StorageHandle,
+    pub pex_history: PexHistory,
 }
 
 impl Download {
@@ -422,29 +430,26 @@ impl Download {
             scheduler,
             storage,
             total_pieces,
+            pex_history: PexHistory::new(),
         }
     }
 
-    pub fn start(self, progress: impl ProgressConsumer, start_peers: Vec<Peer>) -> DownloadHandle {
+    pub fn start(self, progress: impl ProgressConsumer) -> DownloadHandle {
         let (download_tx, download_rx) = mpsc::channel(100);
         let download_handle = DownloadHandle {
             download_tx,
             total_pieces: self.total_pieces,
             storage: self.storage.clone(),
         };
-        tokio::spawn(self.work(progress, start_peers, download_rx));
+        tokio::spawn(self.work(progress, download_rx));
         download_handle
     }
 
     async fn work(
         mut self,
         mut progress: impl ProgressConsumer,
-        start_peers: Vec<Peer>,
-        mut requester: mpsc::Receiver<DownloadMessage>,
+        mut commands_rx: mpsc::Receiver<DownloadMessage>,
     ) -> anyhow::Result<()> {
-        for peer in start_peers {
-            self.handle_new_peer(peer).await;
-        }
         let mut optimistic_unchoke_interval = tokio::time::interval(Duration::from_secs(30));
         let mut choke_interval = tokio::time::interval(Duration::from_secs(10));
         let mut progress_dispatch_interval = tokio::time::interval(Duration::from_secs(1));
@@ -484,7 +489,7 @@ impl Download {
                         return Ok(());
                     }
                 },
-                Some(message) = requester.recv() => self.handle_command(message).await,
+                Some(message) = commands_rx.recv() => self.handle_command(message).await,
                 else => {
                     break Err(anyhow!("Select branch"));
                 }
@@ -493,37 +498,56 @@ impl Download {
     }
 
     fn handle_tracker_peer(&mut self, ip: SocketAddr) {
-        if self.pending_new_peers_ips.insert(ip) && !self.scheduler.peers.iter().any(|p| p.ip == ip)
+        if !self.scheduler.peers.iter().any(|p| p.ip == ip) && self.pending_new_peers_ips.insert(ip)
         {
-            let info_hash = self.info_hash.clone();
+            let info_hash = self.info_hash;
             self.new_peers_join_set.spawn(async move {
-                let timeout_duration = Duration::from_millis(500);
+                let timeout_duration = Duration::from_secs(3);
                 match timeout(timeout_duration, Peer::new_from_ip(ip, info_hash)).await {
                     Ok(Ok(peer)) => Ok(peer),
                     Ok(Err(e)) => {
-                        tracing::trace!("Peer with ip {} errored: {}", ip, e);
+                        tracing::error!("Failed to connect peer with ip {}: {}", ip, e);
                         Err(ip)
                     }
                     Err(_) => {
-                        tracing::trace!("Peer with ip {} timed out", ip);
+                        tracing::error!("Failed to connect peer with ip {} timed out", ip);
                         Err(ip)
                     }
                 }
             });
         } else {
-            tracing::trace!("Recieved duplicate peer with ip {}", ip);
+            tracing::warn!("Recieved duplicate peer with ip {}", ip);
         }
     }
 
     async fn handle_new_peer(&mut self, peer: Peer) {
-        let (tx, rx) = mpsc::channel(100);
+        let (peer_command_tx, peer_command_rx) = mpsc::channel(100);
         let ipc = PeerIPC {
             status_tx: self.status_tx.clone(),
-            commands_rx: rx,
+            commands_rx: peer_command_rx,
         };
-        let active_peer = ActivePeer::new(tx, &peer);
-        self.scheduler.add_peer(active_peer).await;
+        self.pex_history
+            .push_value(PexHistoryEntry::added(peer.ip()));
+        let pex_tip = self.pex_history.tip();
+        let active_peer = ActivePeer::new(peer_command_tx, &peer, pex_tip);
         self.peers_handles.spawn(peer.download(ipc));
+        let initial_pex_message = PexMessage {
+            added: self
+                .scheduler
+                .peers
+                .iter()
+                .map(|p| PexEntry::new(p.ip, None))
+                .collect(),
+            dropped: vec![],
+        };
+        let _ = active_peer
+            .command
+            .send(PeerCommand::Pex {
+                msg: initial_pex_message,
+            })
+            .await;
+        self.scheduler.add_peer(active_peer);
+        self.scheduler.schedule(self.scheduler.peers.len() - 1)
     }
 
     async fn handle_peer_status(&mut self, status: PeerStatus) {
@@ -578,11 +602,35 @@ impl Download {
                     }
                 }
             }
-            PeerStatusMessage::UtMetadataBlock { res, piece } => {
-                if let Some(Some(bytes)) = self.ut_metadata.blocks.get(piece) {
-                    res.send(bytes.clone()).unwrap();
+            PeerStatusMessage::UtMetadataBlockRequest { block } => {
+                if let Some(Some(bytes)) = self.ut_metadata.blocks.get(block) {
+                    if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
+                        let ut_message = UtMessage::Data {
+                            piece: block,
+                            total_size: self.ut_metadata.size,
+                        };
+                        peer.command
+                            .try_send(PeerCommand::UtMetadata {
+                                msg: ut_message,
+                                data: bytes.clone(),
+                            })
+                            .unwrap();
+                    }
                 } else {
-                    tracing::error!("Non existand ut metadata piece {piece}");
+                    tracing::error!("Non existand ut metadata block {block}");
+                }
+            }
+            PeerStatusMessage::PexMessage { msg } => {
+                tracing::info!("Recieved pex message with {} new peers", msg.added.len());
+                for added_peer in msg.added {
+                    self.handle_tracker_peer(added_peer.addr);
+                }
+            }
+            PeerStatusMessage::PexRequest => {
+                if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
+                    let msg = self.pex_history.pex_message(peer.pex_idx);
+                    peer.pex_idx = self.pex_history.tip();
+                    peer.command.try_send(PeerCommand::Pex { msg }).unwrap();
                 }
             }
         }
@@ -602,12 +650,19 @@ impl Download {
         }
 
         // remove peer from scheduler or propagate panic
-        if let Ok((peer_id, _)) = join_res {
-            let idx = self.scheduler.get_peer_idx(&peer_id).unwrap();
-            self.scheduler.remove_peer(idx);
-        } else {
-            panic!("Peer process paniced");
-        }
+        match join_res {
+            Ok((peer_id, _)) => {
+                let idx = self.scheduler.get_peer_idx(&peer_id).unwrap();
+
+                if let Some(removed_peer) = self.scheduler.remove_peer(idx) {
+                    self.pex_history
+                        .push_value(PexHistoryEntry::dropped(removed_peer.ip));
+                };
+            }
+            Err(e) => {
+                panic!("Peer process paniced: {e}");
+            }
+        };
     }
 
     async fn handle_choke_interval(&mut self) {
@@ -696,6 +751,8 @@ pub enum PeerCommand {
     Block { block: Block, data: Bytes },
     Cancel { block: Block },
     Have { piece: u32 },
+    Pex { msg: PexMessage },
+    UtMetadata { msg: UtMessage, data: Bytes },
     Interested,
     Abort,
     Choke,
@@ -711,24 +768,24 @@ pub struct PeerStatus {
 
 #[derive(Debug)]
 pub enum PeerStatusMessage {
-    Request {
-        block: Block,
-    },
+    /// Peer requested block
+    Request { block: Block },
+    /// Peer choked us
     Choked,
+    /// Peer unchoked us
     Unchoked,
-    Data {
-        block: Block,
-        bytes: Bytes,
-    },
+    /// Peer send us data
+    Data { block: Block, bytes: Bytes },
+    /// Peer does not show signs of activity
     Afk,
     /// Peer got new piece available
-    Have {
-        piece: u32,
-    },
-    UtMetadataBlock {
-        res: oneshot::Sender<Bytes>,
-        piece: usize,
-    },
+    Have { piece: u32 },
+    /// Peer requested ut_metadata block
+    UtMetadataBlockRequest { block: usize },
+    /// Peer send us pex message
+    PexMessage { msg: PexMessage },
+    /// Its time for pex message
+    PexRequest,
 }
 
 impl Display for PeerStatusMessage {
@@ -742,8 +799,19 @@ impl Display for PeerStatusMessage {
             PeerStatusMessage::Data { .. } => write!(f, "Peer batch"),
             PeerStatusMessage::Afk => write!(f, "Afk"),
             PeerStatusMessage::Have { piece } => write!(f, "Have piece {}", piece),
-            PeerStatusMessage::UtMetadataBlock { piece, .. } => {
-                write!(f, "ut_metadata piece {}", piece)
+            PeerStatusMessage::UtMetadataBlockRequest { block } => {
+                write!(f, "ut_metadata block {}", block)
+            }
+            PeerStatusMessage::PexMessage { msg } => {
+                write!(
+                    f,
+                    "pex message with {} entries added and {} entries removed",
+                    msg.added.len(),
+                    msg.dropped.len()
+                )
+            }
+            PeerStatusMessage::PexRequest => {
+                write!(f, "pex request")
             }
         }
     }

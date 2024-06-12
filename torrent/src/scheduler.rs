@@ -479,7 +479,7 @@ impl Scheduler {
         }
     }
 
-    pub async fn add_peer(&mut self, mut peer: ActivePeer) {
+    pub fn add_peer(&mut self, mut peer: ActivePeer) {
         peer.out_status.unchoke();
         peer.out_status.interest();
         peer.command.try_send(PeerCommand::Unchoke).unwrap();

@@ -8,7 +8,9 @@ use sha1::{Digest, Sha1};
 
 pub mod dht;
 pub mod peer;
+pub mod pex;
 pub mod tracker;
+pub mod ut_metadata;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {

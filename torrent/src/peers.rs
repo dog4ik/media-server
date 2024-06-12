@@ -14,7 +14,9 @@ use uuid::Uuid;
 use crate::{
     download::{Block, PeerCommand, PeerStatus, PeerStatusMessage},
     protocol::{
-        peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage, UtMessage, UtMetadata},
+        peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage, CLIENT_EXTENSIONS},
+        pex::PexMessage,
+        ut_metadata::{UtMessage, UtMetadata},
         Info,
     },
 };
@@ -125,7 +127,7 @@ impl Peer {
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
             tracing::debug!("Peer supports extensions");
-            let my_handshake = ExtensionHandshake::new();
+            let my_handshake = ExtensionHandshake::my_handshake();
             let mut framer = MessageFramer;
             let mut my_handshake_bytes = BytesMut::new();
             framer.encode(
@@ -213,7 +215,7 @@ impl Peer {
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
             tracing::debug!("Peer supports extensions");
-            let my_handshake = ExtensionHandshake::new();
+            let my_handshake = ExtensionHandshake::my_handshake();
             let mut framer = MessageFramer;
             let mut my_handshake_bytes = BytesMut::new();
             framer.encode(
@@ -296,32 +298,39 @@ impl Peer {
             .context("peer does not support extensions")?;
         let mut ut_metadata = UtMetadata::empty_from_handshake(handshake)
             .ok_or(anyhow!("peer does not support ut_metadata"))?;
-        while let Some(block) = ut_metadata.request_next_block() {
+        while let Some(msg) = ut_metadata.request_next_block() {
             self.send_peer_msg(PeerMessage::Extension {
                 extension_id: ut_metadata.metadata_id,
-                payload: block.as_bytes().into(),
+                payload: msg.as_bytes().into(),
             })
             .await?;
-            let response = self.stream.next().await.context("stream to be open")??;
-            let PeerMessage::Extension {
-                extension_id,
-                payload,
-            } = response
-            else {
-                continue;
-            };
-            ensure!(extension_id == 1);
-            let message: UtMessage = serde_bencode::from_bytes(&payload)?;
-            let message_length = serde_bencode::to_bytes(&message).unwrap().len();
-            match message {
-                UtMessage::Request { piece } => todo!(),
-                UtMessage::Data { piece, total_size } => {
-                    ensure!(total_size == ut_metadata.size);
-                    let data_slice = payload.slice(message_length..);
-                    ut_metadata.save_block(piece, data_slice).unwrap();
+            loop {
+                let response = self.stream.next().await.context("stream to be open")??;
+                let PeerMessage::Extension {
+                    extension_id,
+                    payload,
+                } = response
+                else {
+                    continue;
+                };
+                if extension_id != 1 {
+                    continue;
                 }
-                UtMessage::Reject { piece } => {
-                    return Err(anyhow!("peer rejected piece {piece}"));
+                let message: UtMessage = serde_bencode::from_bytes(&payload)?;
+                let message_length = serde_bencode::to_bytes(&message).unwrap().len();
+                match message {
+                    UtMessage::Request { piece } => {
+                        tracing::warn!("Ignoring ut metadata request piece: {piece}");
+                    }
+                    UtMessage::Data { piece, total_size } => {
+                        ensure!(total_size == ut_metadata.size);
+                        let data_slice = payload.slice(message_length..);
+                        ut_metadata.save_block(piece, data_slice).unwrap();
+                        break;
+                    }
+                    UtMessage::Reject { piece } => {
+                        return Err(anyhow!("peer rejected piece {piece}"));
+                    }
                 }
             }
         }
@@ -339,7 +348,9 @@ impl Peer {
 
     pub async fn download(mut self, mut ipc: PeerIPC) -> (Uuid, Result<(), PeerError>) {
         let mut afk_interval = tokio::time::interval(Duration::from_secs(1));
+        let mut pex_update_interval = tokio::time::interval(Duration::from_secs(90));
         afk_interval.tick().await;
+        pex_update_interval.tick().await;
         loop {
             tokio::select! {
                 Some(command_msg) = ipc.commands_rx.recv() => {
@@ -363,6 +374,9 @@ impl Peer {
                 },
                 _ = afk_interval.tick() => {
                     let _ = self.send_status(PeerStatusMessage::Afk, &mut ipc).await;
+                }
+                _ = pex_update_interval.tick() => {
+                    let _ = self.send_status(PeerStatusMessage::PexRequest, &mut ipc).await;
                 }
                 else => break
             };
@@ -408,6 +422,33 @@ impl Peer {
                     block: data,
                 })
                 .await?
+            }
+            PeerCommand::Pex { msg } => {
+                if let Some(pex_id) = self.extension_handshake.as_ref().and_then(|h| h.pex_id()) {
+                    self.send_peer_msg(PeerMessage::Extension {
+                        extension_id: pex_id,
+                        payload: msg.as_bytes().into(),
+                    })
+                    .await?;
+                };
+            }
+            PeerCommand::UtMetadata { msg, data } => {
+                if let Some(ut_metadata_id) = self
+                    .extension_handshake
+                    .as_ref()
+                    .and_then(|h| h.ut_metadata_id())
+                {
+                    let msg_bytes = msg.as_bytes();
+                    let mut bytes = bytes::BytesMut::with_capacity(msg_bytes.len() + data.len());
+                    bytes.extend_from_slice(&msg_bytes);
+                    bytes.extend_from_slice(&data);
+
+                    self.send_peer_msg(PeerMessage::Extension {
+                        extension_id: ut_metadata_id,
+                        payload: bytes.freeze(),
+                    })
+                    .await?;
+                };
             }
         };
         Ok(false)
@@ -484,8 +525,56 @@ impl Peer {
             PeerMessage::ExtensionHandshake { .. } => {
                 tracing::warn!(%peer_msg, "Not implemented")
             }
-            PeerMessage::Extension { .. } => {
-                tracing::warn!(%peer_msg, "Not implemented")
+            PeerMessage::Extension {
+                extension_id,
+                payload,
+            } => {
+                if let Some(name) = CLIENT_EXTENSIONS
+                    .iter()
+                    .find(|(_, id)| *id == extension_id)
+                    .map(|(name, _)| *name)
+                {
+                    match name {
+                        "ut_metadata" => match UtMessage::from_bytes(&payload) {
+                            Ok(msg) => match msg {
+                                UtMessage::Request { piece } => {
+                                    tracing::debug!("Peer asked for ut_metadata block({})", piece);
+                                    self.send_status(
+                                        PeerStatusMessage::UtMetadataBlockRequest { block: piece },
+                                        ipc,
+                                    )
+                                    .await
+                                }
+                                UtMessage::Data { .. } => {
+                                    tracing::warn!("Peer sent ut_metadata data message");
+                                }
+                                UtMessage::Reject { piece } => {
+                                    tracing::warn!(
+                                        "Peer sent ut_metadata reject message for block: {}",
+                                        piece
+                                    );
+                                }
+                            },
+                            Err(e) => {
+                                tracing::error!("Failed to decode ut_metadata message: {e}");
+                                return Err(PeerError::logic(
+                                    "Failed to decode ut_metadata message",
+                                ));
+                            }
+                        },
+                        "ut_pex" => match PexMessage::from_bytes(&payload) {
+                            Ok(msg) => {
+                                self.send_status(PeerStatusMessage::PexMessage { msg }, ipc)
+                                    .await;
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to decode pex message: {e}");
+                                return Err(PeerError::logic("Failed to decode pex message"));
+                            }
+                        },
+                        _ => return Err(PeerError::logic("Unrecognized extension")),
+                    }
+                };
             }
         }
         Ok(())

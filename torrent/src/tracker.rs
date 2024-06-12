@@ -63,7 +63,7 @@ impl AnnouncePayload {
 
     async fn announce_udp(
         &self,
-        channel: UdpTrackerChannel,
+        channel: &UdpTrackerChannel,
         connection_id: u64,
     ) -> anyhow::Result<AnnounceResult> {
         let addrs = self.announce.socket_addrs(|| None)?;
@@ -255,7 +255,7 @@ pub enum TrackerType {
 }
 
 impl TrackerType {
-    pub fn from_url(url: Url, sender: UdpTrackerChannel) -> anyhow::Result<Self> {
+    pub fn from_url(url: &Url, sender: UdpTrackerChannel) -> anyhow::Result<Self> {
         match url.scheme() {
             "https" | "http" => Ok(Self::Http),
             "udp" => Ok(Self::Udp(sender)),
@@ -292,7 +292,7 @@ impl Tracker {
             uploaded: stats.uploaded,
             downloaded: stats.downloaded,
             left: stats.left,
-            event: TrackerEvent::Empty,
+            event: TrackerEvent::Started,
         };
 
         let udp_connection_id = match &tracker_type {
@@ -318,11 +318,9 @@ impl Tracker {
 
     pub async fn work(mut self) -> anyhow::Result<()> {
         let initial_announce = self.announce().await?;
-        let interval_duration = std::cmp::max(
-            Duration::from_secs(2 * 60),
-            Duration::from_secs(initial_announce.interval as u64),
-        );
+        let interval_duration = Duration::from_secs(initial_announce.interval as u64);
         self.handle_announce(initial_announce).await;
+        self.announce_payload.event = TrackerEvent::Empty;
 
         let mut reannounce_interval = tokio::time::interval(interval_duration);
         // immediate tick
@@ -342,12 +340,12 @@ impl Tracker {
     }
 
     pub async fn announce(&mut self) -> anyhow::Result<AnnounceResult> {
-        tracing::trace!("Announcing tracker {}", self.url);
+        tracing::debug!("Announcing tracker {}", self.url);
         match &self.tracker_type {
             TrackerType::Http => self.announce_payload.announce_http().await,
             TrackerType::Udp(chan) => {
                 self.announce_payload
-                    .announce_udp(chan.clone(), self.udp_connection_id.unwrap())
+                    .announce_udp(chan, self.udp_connection_id.unwrap())
                     .await
             }
         }
@@ -365,7 +363,7 @@ impl Tracker {
     }
 
     fn handle_progress_update(&mut self) {
-        let new = { self.progress.borrow_and_update().clone() };
+        let new = self.progress.borrow_and_update();
         self.announce_payload.downloaded = new.downloaded;
         self.announce_payload.uploaded = new.uploaded;
         self.announce_payload.left = new.left;

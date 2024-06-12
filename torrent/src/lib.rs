@@ -13,14 +13,16 @@ use std::{
     time::Duration,
 };
 
+use anyhow::bail;
 use download::DownloadHandle;
 pub use download::{DownloadProgress, ProgressConsumer};
-use file::{MagnetLink, TorrentFile};
+use file::MagnetLink;
 use peers::Peer;
 use protocol::Info;
 use reqwest::Url;
 use storage::{verify_integrety, StorageMethod, TorrentStorage};
 use tokio::{
+    net::TcpStream,
     sync::{mpsc, watch, Semaphore},
     task::JoinSet,
     time::timeout,
@@ -157,7 +159,7 @@ impl Client {
         let storage_handle = storage.spawn().await?;
         torrent.tracker_set.detach_all();
         let download = Download::new(storage_handle, torrent.info, torrent.new_peers_rx).await;
-        let download_handle = download.start(progress_consumer, torrent.peers);
+        let download_handle = download.start(progress_consumer);
         Ok(download_handle)
     }
 
@@ -252,17 +254,16 @@ impl Client {
         }
     }
 
-    pub async fn from_torrent_file(&self, file: TorrentFile) -> anyhow::Result<Torrent> {
-        let info_hash = file.info.hash();
-        let tracker_list = file.all_trackers();
-        if tracker_list.is_empty() {
+    pub async fn create_torrent(&self, info: Info, trackers: Vec<Url>) -> anyhow::Result<Torrent> {
+        let info_hash = info.hash();
+        if trackers.is_empty() {
             anyhow::bail!("Magnet links without annonuce list are not yet supported");
         };
-        let (_, rx) = watch::channel(DownloadStat::empty(file.info.total_size()));
+        let (_, rx) = watch::channel(DownloadStat::empty(info.total_size()));
         let (peers_tx, peers_rx) = mpsc::channel(1000);
         tracing::info!("Connecting trackers");
         let tracker_set = announce_trackers(
-            tracker_list,
+            trackers,
             info_hash,
             self.udp_tracker_tx.clone(),
             rx,
@@ -271,10 +272,9 @@ impl Client {
         .await;
 
         Ok(Torrent {
-            info: file.info,
+            info,
             new_peers_tx: peers_tx,
             new_peers_rx: peers_rx,
-            peers: Vec::new(),
             tracker_set,
         })
     }
@@ -286,7 +286,6 @@ pub struct Torrent {
     pub tracker_set: JoinSet<anyhow::Result<()>>,
     pub new_peers_tx: mpsc::Sender<NewPeer>,
     pub new_peers_rx: mpsc::Receiver<NewPeer>,
-    pub peers: Vec<Peer>,
 }
 
 impl Torrent {
@@ -309,7 +308,7 @@ async fn announce_trackers(
     let mut tracker_init_set = JoinSet::new();
     let mut tracker_set = JoinSet::new();
     for tracker in urls {
-        let Ok(tracker_type) = TrackerType::from_url(tracker.clone(), tracker_tx.clone()) else {
+        let Ok(tracker_type) = TrackerType::from_url(&tracker, tracker_tx.clone()) else {
             continue;
         };
         tracker_init_set.spawn(timeout(
