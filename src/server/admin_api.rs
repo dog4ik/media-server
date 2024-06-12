@@ -478,13 +478,14 @@ pub async fn progress(
     get,
     path = "/api/log/latest",
     responses(
-        (status = 200, body = String, content_type = "application/json"),
+        (status = 200, body = Vec<JsonTracingEvent>, content_type = "application/json"),
     )
 )]
 pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String), AppError> {
     use tokio::fs;
     use tokio::io;
-    let file = fs::File::open("log.log").await?;
+    let log_path = &APP_RESOURCES.get().unwrap().log_path;
+    let file = fs::File::open(log_path).await?;
     let take = 40_000;
     let length = file.metadata().await?.len();
     let start = std::cmp::min(length, take) as i64;

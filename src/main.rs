@@ -31,11 +31,8 @@ async fn main() {
         tracing::error!("Failed to initiate resources {}", err);
         panic!("Could not initate app resources");
     };
-    let log_path = dirs::cache_dir()
-        .unwrap()
-        .join(AppResources::APP_NAME)
-        .join("log.log");
-    let log_channel = init_tracer(Level::DEBUG, log_path);
+    let log_channel = init_tracer();
+    tracing::info!("Selected log location: {}", AppResources::log().display());
 
     if let Ok(path) = dotenv() {
         tracing::info!("Loaded env variables from: {}", path.display());

@@ -1,40 +1,47 @@
 use std::convert::Infallible;
 use std::fmt::{self};
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{LineWriter, Write};
-use std::path::PathBuf;
-use std::sync::Mutex;
+use std::path::Path;
 
 use axum::response::sse::{Event, KeepAlive};
 use axum::response::Sse;
 use axum::Extension;
-use serde_json::{Map, Value};
-use tokio::sync::broadcast;
+use serde_json::{Map, Number, Value};
+use tokio::sync::{broadcast, mpsc};
 use tokio_stream::{Stream, StreamExt};
 use tracing::field::{Field, Visit};
 use tracing::{Level, Subscriber};
+use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+
+use crate::config::AppResources;
 
 #[derive(Debug)]
 pub struct FileLoggingLayer {
-    pub path: PathBuf,
-    pub writer: Mutex<LineWriter<File>>,
+    pub sender: mpsc::Sender<JsonTracingEvent>,
 }
 
 #[derive(Debug)]
 struct PublicTracerLayer {
-    channel: broadcast::Sender<String>,
+    channel: broadcast::Sender<JsonTracingEvent>,
 }
 
 #[derive(Debug, Clone)]
-pub struct LogChannel(pub broadcast::Sender<String>);
+pub struct LogChannel(pub broadcast::Sender<JsonTracingEvent>);
 
 impl FileLoggingLayer {
-    pub fn from_path(path: PathBuf) -> Result<Self, std::io::Error> {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
         let file = OpenOptions::new().append(true).create(true).open(&path)?;
-        let writer = LineWriter::new(file);
-        let writer = Mutex::new(writer);
-        Ok(Self { path, writer })
+        let mut writer = LineWriter::new(file);
+        let (tx, mut rx) = mpsc::channel(1000);
+        tokio::spawn(async move {
+            while let Some(event) = rx.recv().await {
+                serde_json::to_writer(&mut writer, &event).unwrap();
+                writer.write_all(b"\n").unwrap();
+            }
+        });
+        Ok(Self { sender: tx })
     }
 }
 
@@ -45,7 +52,7 @@ impl LogChannel {
         let receiver = channel.0.subscribe();
         let stream = tokio_stream::wrappers::BroadcastStream::new(receiver).map(|item| {
             if let Ok(item) = item {
-                Ok(Event::default().data(item))
+                Ok(Event::default().json_data(item).unwrap())
             } else {
                 Ok(Event::default())
             }
@@ -80,21 +87,64 @@ impl Visit for JsonVisitor {
             Value::String(format!("{:?}", value)),
         );
     }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.value
+            .insert(field.name().to_string(), Value::Number(value.into()));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.value
+            .insert(field.name().to_string(), Value::Bool(value));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.value
+            .insert(field.name().to_string(), Value::String(value.to_string()));
+    }
+
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.value
+            .insert(field.name().to_string(), Value::Number(value.into()));
+    }
+
+    fn record_f64(&mut self, field: &Field, value: f64) {
+        if let Some(num) = Number::from_f64(value) {
+            self.value
+                .insert(field.name().to_string(), Value::Number(num));
+        }
+    }
+
+    fn record_error(&mut self, field: &Field, value: &(dyn std::error::Error + 'static)) {
+        self.value
+            .insert(field.name().to_string(), Value::String(value.to_string()));
+    }
 }
 
-fn event_to_json(event: &tracing::Event) -> Value {
-    let metadata = event.metadata();
-    let mut visitor = JsonVisitor::new();
-    let now = time::OffsetDateTime::now_utc().to_string();
-    let level = metadata.level().to_string();
-    event.record(&mut visitor);
-    serde_json::json!({
-    "timestamp": now,
-    "target": metadata.target(),
-    "level": level,
-    "name": metadata.name(),
-    "fields": visitor.value
-    })
+#[derive(Debug, serde::Serialize, Clone, utoipa::ToSchema)]
+pub struct JsonTracingEvent {
+    timestamp: String,
+    target: &'static str,
+    level: String,
+    name: &'static str,
+    fields: Map<String, Value>,
+}
+
+impl JsonTracingEvent {
+    pub fn from_event(event: &tracing::Event) -> Self {
+        let metadata = event.metadata();
+        let mut visitor = JsonVisitor::new();
+        let now = time::OffsetDateTime::now_utc().to_string();
+        let level = metadata.level().to_string();
+        event.record(&mut visitor);
+        Self {
+            timestamp: now,
+            target: metadata.target(),
+            level,
+            name: metadata.name(),
+            fields: visitor.value,
+        }
+    }
 }
 
 impl<S: Subscriber> Layer<S> for FileLoggingLayer {
@@ -112,11 +162,8 @@ impl<S: Subscriber> Layer<S> for FileLoggingLayer {
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let json = event_to_json(event);
-        let mut bytes = serde_json::to_vec(&json).unwrap();
-        bytes.extend("\n".as_bytes());
-        let mut writer = self.writer.lock().unwrap();
-        writer.write_all(&bytes).unwrap();
+        let json = JsonTracingEvent::from_event(event);
+        let _ = self.sender.try_send(json);
     }
 }
 
@@ -138,19 +185,29 @@ impl<S: Subscriber> Layer<S> for PublicTracerLayer {
         event: &tracing::Event<'_>,
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) {
-        let json = event_to_json(event);
-        let _ = self.channel.send(serde_json::to_string(&json).unwrap());
+        if self.channel.receiver_count() > 0 {
+            let json = JsonTracingEvent::from_event(event);
+            let _ = self.channel.send(json);
+        }
     }
 }
 
-pub fn init_tracer(max_level: Level, log_file_location: PathBuf) -> LogChannel {
-    let sub = tracing_subscriber::fmt()
-        .pretty()
-        .with_max_level(max_level)
-        .finish();
+pub fn init_tracer() -> LogChannel {
+    let log_path = AppResources::log();
+
     let pub_tracer = PublicTracerLayer::new();
-    let file_logger = FileLoggingLayer::from_path(log_file_location).unwrap();
+    let file_logger = FileLoggingLayer::from_path(log_path).unwrap();
     let log_channel = LogChannel(pub_tracer.channel.clone());
-    sub.with(pub_tracer).with(file_logger).init();
+    if AppResources::is_prod() {
+        let sub = tracing_subscriber::fmt()
+            .with_max_level(Level::INFO)
+            .finish();
+        sub.with(pub_tracer).with(file_logger).init();
+    } else {
+        let sub = tracing_subscriber::fmt()
+            .with_env_filter(EnvFilter::from_default_env())
+            .finish();
+        sub.with(pub_tracer).with(file_logger).init();
+    };
     return log_channel;
 }

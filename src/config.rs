@@ -448,6 +448,8 @@ pub struct AppResources {
     pub binary_path: Option<PathBuf>,
     #[schema(value_type = String)]
     pub base_path: PathBuf,
+    #[schema(value_type = String)]
+    pub log_path: PathBuf,
 }
 
 pub static APP_RESOURCES: OnceLock<AppResources> = OnceLock::new();
@@ -466,12 +468,15 @@ impl AppResources {
     }
 
     fn data_storage() -> PathBuf {
-        let is_prod = !cfg!(debug_assertions);
-        if is_prod {
+        if Self::is_prod() {
             Self::prod_storage()
         } else {
             Self::debug_storage()
         }
+    }
+
+    pub fn is_prod() -> bool {
+        !cfg!(debug_assertions)
     }
 
     pub fn default_config_path() -> PathBuf {
@@ -498,6 +503,10 @@ impl AppResources {
         Self::database_directory().join("database.sqlite")
     }
 
+    pub fn log() -> PathBuf {
+        Self::data_storage().join("log.log")
+    }
+
     pub fn initiate() -> Result<(), std::io::Error> {
         fs::create_dir_all(Self::resources())?;
         fs::create_dir_all(Self::database_directory())?;
@@ -508,6 +517,11 @@ impl AppResources {
             .write(true)
             .create(true)
             .open(Self::database())?;
+        fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(Self::log())?;
         Ok(())
     }
 
@@ -520,6 +534,7 @@ impl AppResources {
         let database_path = Self::database();
         let temp_path = Self::temp_storage();
         let cache_path = Self::cache_storage();
+        let log_path = Self::log();
         let binary_path = std::env::current_exe()
             .ok()
             .and_then(|d| d.parent().map(|x| x.to_path_buf()));
@@ -539,6 +554,7 @@ impl AppResources {
             ffprobe_path,
             binary_path,
             base_path,
+            log_path,
         }
     }
     pub fn ffmpeg(&self) -> &PathBuf {

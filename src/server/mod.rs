@@ -7,6 +7,7 @@ use crate::ffmpeg;
 use crate::library;
 use crate::metadata;
 use crate::progress;
+use crate::tracing;
 use crate::torrent_index;
 use axum::response::IntoResponse;
 use axum_extra::{headers::Range, TypedHeader};
@@ -114,6 +115,7 @@ pub struct SerdeDuration {
             admin_api::ProviderType,
             progress::Task,
             progress::TaskKind,
+            tracing::JsonTracingEvent,
             torrent_index::Torrent,
             db::DbHistory,
             db::DbExternalId,
