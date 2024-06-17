@@ -136,7 +136,6 @@ pub struct SerdeDuration {
             library::VideoCodec,
             library::SubtitlesCodec,
             library::Resolution,
-            library::ContentIdentifier,
             config::ServerConfiguration,
             config::FileConfigSchema,
             config::AppResources,
