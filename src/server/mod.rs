@@ -113,6 +113,8 @@ pub struct SerdeDuration {
             public_api::ShowHistory,
             admin_api::ProviderOrder,
             admin_api::UpdateHistoryPayload,
+            public_api::ShowSuggestion,
+            public_api::MovieHistory,
             admin_api::ProviderType,
             torrent::DownloadContentHint,
             torrent::TorrentDownloadPayload,

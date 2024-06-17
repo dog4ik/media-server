@@ -1,7 +1,6 @@
 use std::path::PathBuf;
 
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use axum_extra::headers::Range;
@@ -248,13 +247,8 @@ pub async fn watch(
         (status = 200, description = "All local shows", body = Vec<ShowMetadata>),
     )
 )]
-pub async fn all_local_shows(
-    Query(q): Query<PageQuery>,
-    State(db): State<Db>,
-) -> Result<Json<Vec<ShowMetadata>>, AppError> {
-    const PAGE_SIZE: i32 = 20;
-    let page = (q.page.unwrap_or(1) - 1).max(0) as i32;
-    let offset = page * PAGE_SIZE;
+/// All local shows
+pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetadata>>, AppError> {
     Ok(Json(db.all_shows().await?))
 }
 
@@ -268,6 +262,7 @@ pub async fn all_local_shows(
         (status = 200, description = "Local episode", body = EpisodeMetadata),
     )
 )]
+/// Local episode metadata by local episode id
 pub async fn local_episode(
     Path(id): Path<i64>,
     State(db): State<Db>,
@@ -324,13 +319,8 @@ pub async fn local_movie_by_video_id(
         (status = 200, description = "All local movies", body = Vec<MovieMetadata>),
     )
 )]
-pub async fn all_local_movies(
-    Query(q): Query<PageQuery>,
-    State(db): State<Db>,
-) -> Result<Json<Vec<MovieMetadata>>, AppError> {
-    const PAGE_SIZE: i32 = 20;
-    let page = (q.page.unwrap_or(1) - 1).max(0) as i32;
-    let offset = page * PAGE_SIZE;
+/// All local movies
+pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMetadata>>, AppError> {
     Ok(Json(db.all_movies().await?))
 }
 
@@ -962,6 +952,20 @@ pub struct ShowHistory {
     pub history: DbHistory,
 }
 
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum HistoryEntry {
+    Show { show: ShowHistory },
+    Movie { movie: MovieHistory },
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ShowSuggestion {
+    pub show_id: i64,
+    pub episode: EpisodeMetadata,
+    pub history: Option<DbHistory>,
+}
+
 /// Suggest to continue watching up to 3 movies based on history
 #[utoipa::path(
     get,
@@ -1005,21 +1009,21 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
     get,
     path = "/api/history/suggest/shows",
     responses(
-        (status = 200, description = "Suggested shows", body = Vec<ShowHistory>),
+        (status = 200, description = "Suggested shows", body = Vec<ShowSuggestion>),
     )
 )]
-pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowHistory>>, AppError> {
+pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
     let history = sqlx::query!(
         r#"SELECT history.id as history_id, history.time, history.is_finished, history.update_time,
         history.video_id as video_id, episodes.number as episode_number, seasons.show_id as show_id,
         seasons.number as season_number FROM history 
     JOIN episodes ON episodes.video_id = history.video_id
-    JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
+    JOIN seasons ON seasons.id = episodes.season_id
     ORDER BY history.update_time DESC LIMIT 50;"#
     )
     .fetch_all(&db.pool)
     .await?;
-    let mut show_suggestions: Vec<ShowHistory> = Vec::with_capacity(3);
+    let mut show_suggestions: Vec<ShowSuggestion> = Vec::with_capacity(3);
     for entry in history {
         if show_suggestions
             .iter()
@@ -1039,14 +1043,14 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowHistory>
             tracing::error!("Failed to get episode connected to the history");
             continue;
         };
-        show_suggestions.push(ShowHistory {
-            history: DbHistory {
+        show_suggestions.push(ShowSuggestion {
+            history: Some(DbHistory {
                 id: Some(entry.history_id),
                 time: entry.time,
                 is_finished: entry.is_finished,
                 update_time: entry.update_time,
                 video_id: entry.video_id,
-            },
+            }),
             show_id: entry.show_id,
             episode: episode_metadata,
         });
