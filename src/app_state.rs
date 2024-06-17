@@ -628,9 +628,15 @@ async fn handle_series(
     db: &Db,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
+    // BUG: this will perform search with full text search so for example if we search for Dexter it will
+    // find Dexter: New Blood.
     let shows = db.search_show(&item.identifier.title).await.unwrap();
 
-    if shows.is_empty() {
+    // WARN: This temporary fix will only work if content does not have custom name
+    if shows.is_empty()
+        || shows.first().unwrap().title.split_whitespace().count()
+            != item.identifier.title.split_whitespace().count()
+    {
         for provider in providers {
             if let Ok(search_result) = provider.show_search(&item.identifier.title).await {
                 let Some(first_result) = search_result.into_iter().next() else {
@@ -814,7 +820,10 @@ async fn handle_movie(
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
     let db_movies = db.search_movie(&item.identifier.title).await?;
-    if db_movies.is_empty() {
+    if db_movies.is_empty()
+        || db_movies.first().unwrap().title.split_whitespace().count()
+            != item.identifier.title.split_whitespace().count()
+    {
         for provider in providers {
             if let Ok(search_result) = provider.movie_search(&item.identifier.title).await {
                 let Some(first_result) = search_result.into_iter().next() else {
