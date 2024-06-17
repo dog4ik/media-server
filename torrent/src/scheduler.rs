@@ -1,4 +1,9 @@
-use std::{collections::HashMap, ops::Range, time::Instant};
+use std::{
+    collections::{HashMap, HashSet},
+    fmt::Display,
+    ops::Range,
+    time::Instant,
+};
 
 use anyhow::anyhow;
 use bytes::{BufMut, Bytes, BytesMut};
@@ -21,6 +26,24 @@ pub enum ScheduleStrategy {
     Ranges {
         ranges: Vec<Range<u64>>,
     },
+}
+
+impl Display for ScheduleStrategy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ScheduleStrategy::Linear => write!(f, "Linear"),
+            ScheduleStrategy::RareFirst => write!(f, "Rare first"),
+            ScheduleStrategy::PieceRequest { piece } => write!(f, "Piece request: {}", piece),
+            ScheduleStrategy::Ranges { ranges } => {
+                write!(f, "Ranged ")?;
+                if ranges.len() > 10 {
+                    write!(f, "with {} ranges", ranges.len())
+                } else {
+                    write!(f, "{:?}", ranges)
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +153,7 @@ pub struct Scheduler {
     failed_blocks: Vec<Block>,
     pub bitfield: BitField,
     pub pending_pieces: HashMap<usize, PendingPiece>,
+    pub pending_saved_pieces: HashSet<usize>,
     pub peers: Vec<ActivePeer>,
     pub schedule_stategy: ScheduleStrategy,
 }
@@ -137,17 +161,18 @@ pub struct Scheduler {
 const BLOCK_LENGTH: u32 = 16 * 1024;
 
 impl Scheduler {
-    pub fn new(t: Info) -> Scheduler {
+    pub fn new(t: Info) -> Self {
         let total_pieces = t.pieces.len();
         let bitfield = BitField::empty(total_pieces);
         Self {
             piece_size: t.piece_length as usize,
             total_length: t.total_size(),
-            pieces: t.pieces.clone(),
+            pieces: t.pieces,
             pending_pieces: HashMap::new(),
             failed_blocks: Vec::new(),
             max_pending_pieces: 40,
             peers: Vec::new(),
+            pending_saved_pieces: HashSet::new(),
             bitfield,
             schedule_stategy: ScheduleStrategy::default(),
         }
@@ -158,11 +183,17 @@ impl Scheduler {
         crate::utils::piece_size(piece_i, self.piece_size, self.total_length as usize) as u32
     }
 
+    fn can_scheudle_piece(&self, i: usize) -> bool {
+        !self.bitfield.has(i)
+            && !self.pending_pieces.contains_key(&i)
+            && !self.pending_saved_pieces.contains(&i)
+    }
+
     /// Schedules next piece linearly (the next missing piece from start)
     /// returing `None` if no more pieces left
     fn linear_next(&self) -> Option<usize> {
         for i in 0..self.pieces.len() {
-            if !self.bitfield.has(i) && !self.pending_pieces.contains_key(&i) {
+            if self.can_scheudle_piece(i) {
                 tracing::debug!("Assigning next linear piece {i}");
                 return Some(i);
             }
@@ -176,13 +207,13 @@ impl Scheduler {
 
     fn request_piece_next(&self, piece: usize) -> Option<usize> {
         for i in piece..self.pieces.len() {
-            if !self.bitfield.has(i) && !self.pending_pieces.contains_key(&i) {
+            if self.can_scheudle_piece(i) {
                 tracing::debug!("Assigning next request({piece}) piece {i}");
                 return Some(i);
             }
         }
         for i in 0..piece {
-            if !self.bitfield.has(i) && !self.pending_pieces.contains_key(&i) {
+            if self.can_scheudle_piece(i) {
                 tracing::debug!("Assigning fallback request({piece}) piece {i}");
                 return Some(i);
             }
@@ -199,7 +230,7 @@ impl Scheduler {
             let start_piece = offset_piece(range.start as usize);
             let end_piece = offset_piece(range.end as usize - 1);
             for piece in start_piece..=end_piece {
-                if !self.bitfield.has(piece) && !self.pending_pieces.contains_key(&piece) {
+                if self.can_scheudle_piece(piece) {
                     tracing::debug!("Assigned ranged({:?}) piece: {piece}", range);
                     return Some(piece);
                 }
@@ -263,6 +294,7 @@ impl Scheduler {
                 .pending_pieces
                 .remove(&(insert_block.piece as usize))
                 .unwrap();
+            self.pending_saved_pieces.insert(piece.piece_i);
             let bytes = piece.as_bytes();
             if self.max_pending_pieces > self.pending_pieces.len() {
                 _ = self.schedule_next();
@@ -521,7 +553,7 @@ impl Scheduler {
     }
 
     pub fn is_torrent_finished(&self) -> bool {
-        self.bitfield.pieces().count() == self.pieces.len()
+        self.bitfield.is_full(self.pieces.len())
     }
 
     pub fn total_pieces(&self) -> usize {

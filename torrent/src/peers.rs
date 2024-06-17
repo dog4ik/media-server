@@ -126,7 +126,6 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            tracing::debug!("Peer supports extensions");
             let my_handshake = ExtensionHandshake::my_handshake();
             let mut framer = MessageFramer;
             let mut my_handshake_bytes = BytesMut::new();
@@ -214,7 +213,6 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            tracing::debug!("Peer supports extensions");
             let my_handshake = ExtensionHandshake::my_handshake();
             let mut framer = MessageFramer;
             let mut my_handshake_bytes = BytesMut::new();

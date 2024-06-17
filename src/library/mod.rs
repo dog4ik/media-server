@@ -47,9 +47,9 @@ pub mod assets;
 pub mod movie;
 pub mod show;
 
-const SUPPORTED_FILES: &[&str] = &["mkv", "webm", "mp4"];
+const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
 
-const EXTRAS_FOLDERS: &[&str] = &[
+const EXTRAS_FOLDERS: [&str; 11] = [
     "behind the scenes",
     "deleted scenes",
     "interviews",
@@ -58,7 +58,7 @@ const EXTRAS_FOLDERS: &[&str] = &[
     "shorts",
     "featurettes",
     "clips",
-    "other ",
+    "other",
     "extras",
     "trailers",
 ];
@@ -115,6 +115,13 @@ pub async fn explore_folder<T: Media + Send + 'static>(
     }
 
     return Ok(result);
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ContentIdentifier {
+    Show(ShowIdentifier),
+    Movie(MovieIdentifier),
 }
 
 #[derive(Debug, Clone)]
@@ -204,11 +211,11 @@ impl<T: Media> LibraryFile<T> {
             .to_string_lossy()
             .to_string();
         let path_tokens = utils::tokenize_filename(file_name);
-        let identifier = T::identify(path_tokens)
+        let identifier = T::identify(&path_tokens)
             .or_else(|| {
                 metadata_title.and_then(|video_metadata_title| {
                     T::identify(
-                        video_metadata_title
+                        &video_metadata_title
                             .split_whitespace()
                             .map(|x| x.to_string())
                             .collect(),
@@ -426,7 +433,7 @@ pub struct Chapter {
 }
 
 pub trait Media {
-    fn identify(tokens: Vec<String>) -> Option<Self>
+    fn identify(tokens: &Vec<String>) -> Option<Self>
     where
         Self: Sized;
     fn title(&self) -> &str;

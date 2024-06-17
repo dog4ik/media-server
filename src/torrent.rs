@@ -1,19 +1,399 @@
-use std::{ops::Range, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Mutex};
 
-use torrent::download::DownloadHandle;
-use uuid::Uuid;
+use serde::{Deserialize, Serialize};
+use tokio::task::JoinSet;
+use torrent::{
+    download::DownloadHandle,
+    file::MagnetLink,
+    protocol::{Info, OutputFile},
+};
 
-#[derive(Debug, Clone)]
-pub struct TorrentFile {
-    pub range: Range<u64>,
-    pub path: PathBuf,
-}
+use crate::{
+    library::{
+        is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
+    },
+    metadata::{
+        ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
+        ShowMetadata,
+    },
+    utils,
+};
 
 #[derive(Debug, Clone)]
 pub struct TorrentDownload {
-    pub uuid: Uuid,
     pub info_hash: [u8; 20],
-    pub piece_size: u32,
     pub download_handle: DownloadHandle,
-    pub files: Vec<TorrentFile>,
+    pub torrent_info: TorrentInfo,
+}
+
+#[derive(Debug)]
+pub struct TorrentClient {
+    pub client: torrent::Client,
+    resolved_magnet_links: Mutex<HashMap<[u8; 20], Info>>,
+    pending_downloads: Mutex<Vec<TorrentDownload>>,
+}
+
+impl TorrentClient {
+    pub async fn new(config: torrent::ClientConfig) -> anyhow::Result<Self> {
+        let client = torrent::Client::new(config).await?;
+        Ok(Self {
+            client,
+            resolved_magnet_links: HashMap::new().into(),
+            pending_downloads: Vec::new().into(),
+        })
+    }
+
+    pub async fn resolve_magnet_link(&self, magnet_link: &MagnetLink) -> anyhow::Result<Info> {
+        let hash = magnet_link.hash();
+        if let Ok(Some(info)) = self
+            .resolved_magnet_links
+            .lock()
+            .map(|s| s.get(&hash).cloned())
+        {
+            tracing::debug!("Resolved cached magnet link: {}", magnet_link.to_string());
+            return Ok(info);
+        };
+        let info = self.client.resolve_magnet_link(&magnet_link).await?;
+        tracing::debug!("Resolved magnet link: {}", magnet_link.to_string());
+
+        self.resolved_magnet_links
+            .lock()
+            .unwrap()
+            .insert(hash, info.clone());
+        Ok(info)
+    }
+
+    pub fn add_torrent_download(
+        &self,
+        info_hash: [u8; 20],
+        download_handle: DownloadHandle,
+        info: TorrentInfo,
+    ) {
+        let torrent = TorrentDownload {
+            info_hash,
+            download_handle,
+            torrent_info: info,
+        };
+        self.pending_downloads.lock().unwrap().push(torrent);
+    }
+
+    pub fn remove_torrent_download(&self, info_hash: [u8; 20]) -> Option<TorrentDownload> {
+        let mut downloads = self.pending_downloads.lock().unwrap();
+        downloads
+            .iter()
+            .position(|x| x.info_hash == info_hash)
+            .map(|idx| downloads.remove(idx))
+    }
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TorrentInfo {
+    pub name: String,
+    pub contents: TorrentContents,
+    pub piece_length: u32,
+    pub pieces_amount: usize,
+    pub total_size: u64,
+}
+
+impl TorrentInfo {
+    pub async fn new(
+        info: &Info,
+        content_type_hint: Option<DownloadContentHint>,
+        providers_stack: &'static MetadataProvidersStack,
+    ) -> Self {
+        let all_files = info.output_files("");
+        let files = parse_torrent_files(providers_stack, &all_files, content_type_hint).await;
+
+        TorrentInfo {
+            contents: files,
+            name: info.name.clone(),
+            piece_length: info.piece_length,
+            pieces_amount: info.pieces.len(),
+            total_size: info.total_size(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct DownloadContentHint {
+    pub content_type: ContentType,
+    pub metadata_provider: MetadataProvider,
+    pub metadata_id: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct TorrentDownloadPayload {
+    pub save_location: Option<String>,
+    pub content_hint: Option<DownloadContentHint>,
+    pub magnet_link: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ResolveMagnetLinkPayload {
+    pub magnet_link: String,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ResolvedTorrentFile {
+    pub offset: u64,
+    pub size: u64,
+    pub path: Vec<String>,
+}
+
+impl ResolvedTorrentFile {
+    pub fn from_output_file(output_file: &OutputFile, offset: u64) -> Self {
+        Self {
+            offset,
+            size: output_file.length(),
+            path: path_components(output_file.path()),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TorrentMovie {
+    pub file_idx: usize,
+    pub metadata: MovieMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TorrentEpisode {
+    pub file_idx: usize,
+    pub metadata: EpisodeMetadata,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TorrentShow {
+    pub show_metadata: ShowMetadata,
+    pub seasons: HashMap<u8, Vec<TorrentEpisode>>,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum TorrentContent {
+    Show(TorrentShow),
+    Movie(Vec<TorrentMovie>),
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct TorrentContents {
+    pub files: Vec<ResolvedTorrentFile>,
+    pub content: Option<TorrentContent>,
+}
+
+impl TorrentContents {
+    pub fn without_content(other_files: Vec<ResolvedTorrentFile>) -> Self {
+        Self {
+            content: None,
+            files: other_files,
+        }
+    }
+}
+
+fn path_components(path: &PathBuf) -> Vec<String> {
+    let mut out = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(component) => {
+                out.push(component.to_string_lossy().to_string())
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+async fn parse_torrent_files(
+    providers_stack: &'static MetadataProvidersStack,
+    files: &Vec<OutputFile>,
+    content_hint: Option<DownloadContentHint>,
+) -> TorrentContents {
+    let mut all_files: Vec<ResolvedTorrentFile> = Vec::new();
+    let mut show_identifiers: Vec<(usize, ShowIdentifier)> = Vec::new();
+    let mut movie_identifiers: Vec<(usize, MovieIdentifier)> = Vec::new();
+    let mut offset = 0;
+    for (i, output_file) in files.into_iter().enumerate() {
+        let path = output_file.path().to_path_buf();
+        let resolved_file = ResolvedTorrentFile::from_output_file(output_file, offset);
+        let Some(file_name) = path.file_stem() else {
+            tracing::warn!("Torrent file contains .dotfile: {}", path.display());
+            all_files.push(resolved_file);
+            offset += output_file.length();
+            continue;
+        };
+        if is_format_supported(&path) {
+            let name_tokens = utils::tokenize_filename(file_name.to_string_lossy().to_string());
+            let content_identifier = match content_hint.as_ref().map(|h| h.content_type) {
+                None => ShowIdentifier::identify(&name_tokens)
+                    .map(|s| ContentIdentifier::Show(s))
+                    .or_else(|| {
+                        MovieIdentifier::identify(&name_tokens).map(|m| ContentIdentifier::Movie(m))
+                    }),
+                Some(ContentType::Movie) => {
+                    MovieIdentifier::identify(&name_tokens).map(|m| ContentIdentifier::Movie(m))
+                }
+                Some(ContentType::Show) => {
+                    ShowIdentifier::identify(&name_tokens).map(|s| ContentIdentifier::Show(s))
+                }
+            };
+            match content_identifier {
+                Some(ContentIdentifier::Show(s)) => show_identifiers.push((i, s)),
+                Some(ContentIdentifier::Movie(m)) => movie_identifiers.push((i, m)),
+                None => {}
+            }
+        }
+        all_files.push(resolved_file);
+        offset += output_file.length();
+    }
+
+    if show_identifiers.is_empty() && movie_identifiers.is_empty() {
+        return TorrentContents::without_content(all_files);
+    };
+
+    let content_type = if show_identifiers.is_empty() {
+        ContentType::Movie
+    } else {
+        ContentType::Show
+    };
+
+    match content_type {
+        ContentType::Show => {
+            let show_title = show_identifiers.first().unwrap().1.title();
+            let mut seasons_map: HashMap<u8, Vec<TorrentEpisode>> = HashMap::new();
+            let show = match &content_hint {
+                Some(hint) => {
+                    match providers_stack
+                        .get_show(&hint.metadata_id, hint.metadata_provider)
+                        .await
+                    {
+                        Ok(show) => show,
+                        Err(_) => {
+                            tracing::warn!("Failed to fetch show from content_hint");
+                            let Ok(Some(show)) = providers_stack
+                                .search_show(show_title)
+                                .await
+                                .map(|r| r.into_iter().next())
+                            else {
+                                tracing::error!("Could not find show: {}", show_title);
+                                return TorrentContents::without_content(all_files);
+                            };
+                            show
+                        }
+                    }
+                }
+                None => {
+                    let Ok(Some(show)) = providers_stack
+                        .search_show(show_title)
+                        .await
+                        .map(|x| x.into_iter().next())
+                    else {
+                        tracing::error!("Could not find show: {}", show_title);
+                        return TorrentContents::without_content(all_files);
+                    };
+                    show
+                }
+            };
+
+            // NOTE: We need external provider because not all episodes can be available locally
+            let (show_id, show_metadata_provider) = if show.metadata_provider
+                == MetadataProvider::Local
+            {
+                let Ok(external_ids) = providers_stack
+                    .get_external_ids(&show.metadata_id, ContentType::Show, show.metadata_provider)
+                    .await
+                else {
+                    tracing::error!("External ids are not found while resolving local entry");
+                    return TorrentContents::without_content(all_files);
+                };
+                let Some(tmdb_id) = external_ids
+                    .into_iter()
+                    .find(|x| matches!(x.provider, MetadataProvider::Tmdb))
+                else {
+                    tracing::error!("External tmdb id is not found while resolving local entry");
+                    return TorrentContents::without_content(all_files);
+                };
+                (tmdb_id.id, tmdb_id.provider)
+            } else {
+                (show.metadata_id.clone(), show.metadata_provider)
+            };
+
+            show_identifiers.sort_by_key(|x| x.1.season);
+            let mut season_set = JoinSet::new();
+            for chunk in show_identifiers
+                .chunk_by(|(_, a), (_, b)| a.season == b.season)
+                .map(Vec::from)
+            {
+                let season = chunk.first().unwrap().1.season;
+                seasons_map.insert(season, Vec::new());
+                let show_id = show_id.clone();
+                season_set.spawn(async move {
+                    let resolved_season = providers_stack
+                        .get_season(&show_id, season as usize, show_metadata_provider)
+                        .await;
+                    return (resolved_season, chunk);
+                });
+            }
+            while let Some(Ok((resolved_season, chunk))) = season_set.join_next().await {
+                let season = chunk.first().unwrap().1.season;
+                for (file_idx, episode) in chunk.into_iter() {
+                    let metadata = resolved_season
+                        .as_ref()
+                        .ok()
+                        .and_then(|s| {
+                            s.episodes
+                                .iter()
+                                .find(|e| e.number == episode.episode as usize)
+                                .cloned()
+                        })
+                        .unwrap_or(EpisodeMetadata {
+                            metadata_id: uuid::Uuid::new_v4().to_string(),
+                            metadata_provider: MetadataProvider::Local,
+                            number: episode.episode as usize,
+                            title: episode.title,
+                            season_number: episode.season as usize,
+                            ..Default::default()
+                        });
+                    let episodes = seasons_map.get_mut(&season).expect("Map to be populated");
+                    episodes.push(TorrentEpisode { file_idx, metadata })
+                }
+            }
+            for episodes in seasons_map.values_mut() {
+                episodes.sort_unstable_by_key(|x| x.metadata.number);
+            }
+            return TorrentContents {
+                files: all_files,
+                content: Some(TorrentContent::Show(TorrentShow {
+                    show_metadata: show,
+                    seasons: seasons_map,
+                })),
+            };
+        }
+        ContentType::Movie => {
+            let mut resolved_movies = Vec::new();
+            for (file_idx, movie) in movie_identifiers {
+                if let Some(movie) = providers_stack
+                    .search_movie(movie.title())
+                    .await
+                    .ok()
+                    .and_then(|r| r.into_iter().next())
+                {
+                    resolved_movies.push(TorrentMovie {
+                        file_idx,
+                        metadata: movie,
+                    });
+                };
+            }
+            if resolved_movies.is_empty() {
+                return TorrentContents {
+                    files: all_files,
+                    content: None,
+                };
+            } else {
+                return TorrentContents {
+                    files: all_files,
+                    content: Some(TorrentContent::Movie(resolved_movies)),
+                };
+            }
+        }
+    }
 }

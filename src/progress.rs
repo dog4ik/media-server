@@ -8,7 +8,7 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use torrent::{download::DownloadHandle, protocol::OutputFile, Torrent};
+use torrent::download::DownloadHandle;
 use tracing::error;
 use uuid::Uuid;
 
@@ -16,7 +16,6 @@ use crate::{
     app_state::AppError,
     ffmpeg::{FFmpegRunningJob, FFmpegTask},
     stream::transcode_stream::TranscodeStream,
-    torrent::{TorrentDownload, TorrentFile},
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
@@ -162,7 +161,6 @@ pub struct TaskResource {
     pub tracker: TaskTracker,
     pub tasks: Arc<Mutex<Vec<Task>>>,
     pub active_streams: Arc<Mutex<Vec<TranscodeStream>>>,
-    pub pending_downloads: Arc<Mutex<Vec<TorrentDownload>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,7 +191,6 @@ impl TaskResource {
             parent_cancellation_token: cancellation_token,
             tasks: Arc::new(Mutex::new(Vec::new())),
             active_streams: Arc::new(Mutex::new(Vec::new())),
-            pending_downloads: Arc::new(Mutex::new(Vec::new())),
             tracker: TaskTracker::new(),
         }
     }
@@ -241,61 +238,24 @@ impl TaskResource {
     /// Wait until task is over while dispatching progress
     pub async fn observe_torrent_download(
         &self,
-        client: &'static torrent::Client,
-        torrent: Torrent,
-        output_path: PathBuf,
+        mut download_handle: DownloadHandle,
+        mut progress_rx: mpsc::Receiver<torrent::DownloadProgress>,
+        info_hash: [u8; 20],
     ) -> Result<(), TaskError> {
-        let info_hash = torrent.info_hash();
-        let piece_size = torrent.info.piece_length;
         let ProgressChannel(channel) = self.progress_channel.clone();
         let child_token = self.parent_cancellation_token.child_token();
-        let (progress_tx, mut progress_rx) = mpsc::channel(100);
+        let id = self.start_task(TaskKind::Torrent { info_hash }, Some(child_token.clone()))?;
 
-        let output_files = torrent.info.output_files(&output_path);
-        let mut files = Vec::with_capacity(output_files.len());
-        let mut file_offset = 0;
-        for output_file in output_files {
-            let file = TorrentFile {
-                range: file_offset..output_file.length() + file_offset,
-                path: output_file.path().to_owned(),
-            };
-            file_offset += output_file.length();
-            files.push(file);
-        }
-
-        let download_handle = client
-            .download(output_path, torrent, progress_tx)
-            .await
-            .map_err(|err| {
-                tracing::error!("Failed to start download: {}", err);
-                TaskError::Failure
-            })?;
-        let kind = TaskKind::Torrent { info_hash };
-        let id = self.start_task(kind, Some(child_token.clone()))?;
-
-        let download = TorrentDownload {
-            uuid: id,
-            info_hash,
-            piece_size,
-            download_handle: download_handle.clone(),
-            files,
-        };
-        {
-            let mut downloads = self.pending_downloads.lock().unwrap();
-            downloads.push(download)
-        }
-        let mut j = download_handle.clone();
         loop {
             tokio::select! {
                 Some(progress) = progress_rx.recv() => {
                     let _ = channel.send(ProgressChunk::pending(id, progress.percent as usize));
                 },
-                _ = j.wait() => {
+                _ = download_handle.wait() => {
                     let _ = self.finish_task(id);
-                    return Ok(());
                 }
                 _ = child_token.cancelled() => {
-                    let _ = download_handle.abort();
+                    download_handle.abort().await.unwrap();
                     return Err(TaskError::Canceled)
                 }
             };

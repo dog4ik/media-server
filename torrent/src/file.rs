@@ -1,6 +1,6 @@
-use std::{path::Path, str::FromStr};
+use std::{fmt::Display, path::Path, str::FromStr};
 
-use anyhow::{anyhow, ensure};
+use anyhow::{ensure, Context};
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
 
@@ -62,6 +62,26 @@ pub struct MagnetLink {
     pub info_hash: String,
 }
 
+impl Display for MagnetLink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        let mut url = Url::parse(&format!("magnet:?xt=urn:btih:{}", self.info_hash)).unwrap();
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(name) = &self.name {
+                query.append_pair("dn", name);
+            };
+            if let Some(announce_list) = &self.announce_list {
+                for tracker in announce_list {
+                    query.append_pair("tr", tracker.as_str());
+                }
+            }
+            query.finish();
+        }
+
+        write!(f, "{}", url.to_string())
+    }
+}
+
 impl FromStr for MagnetLink {
     type Err = anyhow::Error;
 
@@ -76,15 +96,12 @@ impl FromStr for MagnetLink {
                 // info_hash
                 "xt" => {
                     let mut split = value.splitn(3, ':');
-                    let urn = split
-                        .next()
-                        .ok_or(anyhow!("urn string is not found in xt"))?;
-                    let hash_indicator = split
-                        .next()
-                        .ok_or(anyhow!("hash indicator is not found in xt"))?;
+                    let urn = split.next().context("urn string is not found in xt")?;
+                    let hash_indicator =
+                        split.next().context("hash indicator is not found in xt")?;
                     ensure!(urn == "urn");
                     ensure!(hash_indicator == "btih");
-                    let hash = split.next().ok_or(anyhow!("hash is not found in xt"))?;
+                    let hash = split.next().context("hash is not found in xt")?;
                     ensure!(hash.len() == 40);
                     info_hash = Some(hash.to_string());
                 }
@@ -105,7 +122,7 @@ impl FromStr for MagnetLink {
         }
         let trackers = (!trackers.is_empty()).then_some(trackers);
         Ok(Self {
-            info_hash: info_hash.ok_or(anyhow!("magnet link does not contain info_hash"))?,
+            info_hash: info_hash.context("magnet link does not contain info_hash")?,
             name,
             announce_list: trackers,
         })
@@ -115,6 +132,9 @@ impl FromStr for MagnetLink {
 impl MagnetLink {
     pub fn hash(&self) -> [u8; 20] {
         hex::decode(&self.info_hash).unwrap().try_into().unwrap()
+    }
+    pub fn all_trackers(&self) -> Option<Vec<Url>> {
+        self.announce_list.clone()
     }
 }
 
@@ -159,6 +179,7 @@ mod tests {
         let expected_info_hash = "BE2D7CD9F6B0FDFC035EDFEE4EBD567003EBC254";
         let expected_name = "Rick.and.Morty.S07E01.1080p.WEB.H264-NHTFS[TGx]";
         let magnet_link = MagnetLink::from_str(&contents).unwrap();
+        let magnet_link_copy = magnet_link.clone();
         assert_eq!(magnet_link.info_hash, expected_info_hash);
         assert_eq!(magnet_link.name.unwrap(), expected_name);
         let announce_list = magnet_link.announce_list.unwrap();
@@ -166,5 +187,6 @@ mod tests {
         for (actual_url, expected_url) in announce_list.iter().zip(expected_trackers) {
             assert_eq!(actual_url.to_string(), expected_url);
         }
+        assert_eq!(contents, magnet_link_copy.to_string())
     }
 }

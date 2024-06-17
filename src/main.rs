@@ -10,6 +10,7 @@ use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api, OpenApiDoc};
+use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::watch;
@@ -21,7 +22,6 @@ use tokio_util::sync::CancellationToken;
 use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
-use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -61,7 +61,7 @@ async fn main() {
         .allow_headers(Any);
 
     let torrent_config = ClientConfig::default();
-    let torrent_client = torrent::Client::new(torrent_config).await.unwrap();
+    let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
     let db = Db::connect(configuration.resources.database_path.clone())
         .await
@@ -216,8 +216,15 @@ async fn main() {
         .route("/history/:id", delete(admin_api::remove_history_item))
         .route("/history/:id", put(admin_api::update_history))
         .route("/torrent/search", get(public_api::search_torrent))
+        .route(
+            "/torrent/resolve_magnet_link",
+            get(admin_api::resolve_magnet_link),
+        )
+        .route(
+            "/torrent/parse_torrent_file",
+            post(admin_api::parse_torrent_file),
+        )
         .route("/torrent/download", post(admin_api::download_torrent))
-        .route("/torrent/:id/stream_range", get(admin_api::stream_download))
         .route("/search/content", get(public_api::search_content))
         .route("/configuration", get(admin_api::server_configuration))
         .route(

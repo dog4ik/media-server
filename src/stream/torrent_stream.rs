@@ -16,13 +16,14 @@ use crate::torrent::TorrentDownload;
 impl TorrentDownload {
     pub async fn handle_request(
         &self,
-        file_range: Range<u64>,
+        file_start: u64,
+        file_size: u64,
         range: Option<TypedHeader<headers::Range>>,
     ) -> impl IntoResponse {
-        let file_size = file_range.end - file_range.start;
-        let file_start = file_range.start;
-        let file_end = file_range.end;
-        let range = range.map(|h| h.0).unwrap_or(headers::Range::bytes(0..).unwrap());
+        let file_end = file_start + file_size;
+        let range = range
+            .map(|h| h.0)
+            .unwrap_or(headers::Range::bytes(0..).unwrap());
         let (stream_tx, stream_rx) = mpsc::channel::<anyhow::Result<Bytes>>(5);
         let mut storage_handle = self.download_handle.storage.clone();
         let (start, end) = range
@@ -40,9 +41,9 @@ impl TorrentDownload {
             std::ops::Bound::Excluded(val) => val,
             std::ops::Bound::Unbounded => file_size,
         };
-        let range = start + file_range.start..end + file_range.end;
-        let piece_size = self.piece_size as usize;
-        let mut current_piece = range.start / self.piece_size as u64;
+        let range = start + file_start..end + file_end;
+        let piece_size = self.torrent_info.piece_length as usize;
+        let mut current_piece = range.start / piece_size as u64;
         self.download_handle
             .set_strategy(ScheduleStrategy::PieceRequest {
                 piece: current_piece as usize,

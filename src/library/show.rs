@@ -10,7 +10,7 @@ pub struct ShowIdentifier {
 }
 
 impl Media for ShowIdentifier {
-    fn identify(tokens: Vec<String>) -> Option<Self> {
+    fn identify(tokens: &Vec<String>) -> Option<Self> {
         let mut name: Option<String> = None;
         let mut season: Option<u8> = None;
         let mut episode: Option<u8> = None;
@@ -53,7 +53,7 @@ impl Media for ShowIdentifier {
             }
             match name {
                 Some(ref mut n) => n.push_str(&format!(" {}", token)),
-                None => name = Some(token),
+                None => name = Some(token.to_string()),
             }
         }
         if let (Some(name), Some(season), Some(episode)) = (name.clone(), season, episode) {

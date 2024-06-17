@@ -9,7 +9,7 @@ pub struct MovieIdentifier {
 }
 
 impl Media for MovieIdentifier {
-    fn identify(tokens: Vec<String>) -> Option<Self> {
+    fn identify(tokens: &Vec<String>) -> Option<Self> {
         let mut name: Option<String> = None;
         let mut year: Option<u32> = None;
         for token in tokens {
@@ -38,7 +38,7 @@ impl Media for MovieIdentifier {
             }
             match name {
                 Some(ref mut n) => n.push_str(&format!(" {}", token)),
-                None => name = Some(token),
+                None => name = Some(token.to_string()),
             }
         }
         if let Some(name) = name {

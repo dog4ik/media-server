@@ -13,6 +13,7 @@ use tokio::{
     task::JoinSet,
     time::{timeout, Instant},
 };
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
@@ -396,15 +397,20 @@ pub struct Download {
     pub new_peers: mpsc::Receiver<NewPeer>,
     pub new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
     pub pending_new_peers_ips: HashSet<SocketAddr>,
-    pub pending_saved_pieces: HashSet<usize>,
     pub pending_retrieves: HashMap<usize, Vec<(Uuid, Block)>>,
     pub scheduler: Scheduler,
     pub storage: StorageHandle,
     pub pex_history: PexHistory,
+    pub cancellation_token: CancellationToken,
 }
 
 impl Download {
-    pub async fn new(storage: StorageHandle, t: Info, new_peers: mpsc::Receiver<NewPeer>) -> Self {
+    pub async fn new(
+        storage: StorageHandle,
+        t: Info,
+        new_peers: mpsc::Receiver<NewPeer>,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let info_hash = t.hash();
         let ut_metadata = UtMetadata::full_from_info(&t);
         let active_peers = JoinSet::new();
@@ -419,7 +425,6 @@ impl Download {
             ut_metadata,
             new_peers_join_set: JoinSet::new(),
             pending_new_peers_ips: HashSet::new(),
-            pending_saved_pieces: HashSet::new(),
             pending_retrieves: HashMap::new(),
             info_hash,
             peers_handles: active_peers,
@@ -431,6 +436,7 @@ impl Download {
             storage,
             total_pieces,
             pex_history: PexHistory::new(),
+            cancellation_token,
         }
     }
 
@@ -578,7 +584,6 @@ impl Download {
             PeerStatusMessage::Data { block, bytes } => {
                 match self.scheduler.save_block(peer_idx, block, bytes).await {
                     Ok(Some((piece_i, data))) => {
-                        self.pending_saved_pieces.insert(piece_i);
                         self.storage
                             .save_piece(piece_i, data, self.storage_tx.clone())
                             .await;
@@ -701,14 +706,14 @@ impl Download {
         match storage_update {
             StorageFeedback::Saved { piece_i } => {
                 self.scheduler.add_piece(piece_i);
-                self.pending_saved_pieces.remove(&piece_i);
+                self.scheduler.pending_saved_pieces.remove(&piece_i);
                 if self.scheduler.is_torrent_finished() {
                     tracing::info!("Finished downloading torrent");
                     return true;
                 };
             }
             StorageFeedback::Failed { piece_i } => {
-                self.pending_saved_pieces.remove(&piece_i);
+                self.scheduler.pending_saved_pieces.remove(&piece_i);
             }
             StorageFeedback::Data { piece_i, bytes } => {
                 let retrieves = self.pending_retrieves.remove(&piece_i).unwrap();
@@ -730,10 +735,16 @@ impl Download {
                 if let ScheduleStrategy::PieceRequest { .. } = strategy {
                     self.scheduler.max_pending_pieces = 2;
                 };
+                tracing::debug!(
+                    "Switching schedule startegy from {} to {}",
+                    self.scheduler.schedule_stategy,
+                    strategy,
+                );
                 self.scheduler.schedule_stategy = strategy;
             }
             DownloadMessage::Abort => {
-                tracing::warn!("Abort is not implemented")
+                tracing::debug!("Aborting torrent download");
+                self.cancellation_token.cancel();
             }
             DownloadMessage::Pause => {
                 tracing::warn!("Pause is not implemented")

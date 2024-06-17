@@ -20,29 +20,30 @@ async fn main() {
     let magnet_link = url.parse().unwrap();
     let info = client.resolve_magnet_link(&magnet_link).await.unwrap();
     tracing::info!("Resolved magnet link: {}", info.name);
-    let torrent = client
-        .create_torrent(info, magnet_link.announce_list.unwrap())
-        .await
-        .unwrap();
     let mut handle = client
-        .download(save_location, torrent, |p: DownloadProgress| {
-            println!("");
-            println!("");
-            let mut total_speed = 0;
-            for peer in &p.peers {
-                total_speed += peer.speed;
-
+        .download(
+            save_location,
+            magnet_link.announce_list.unwrap(),
+            info,
+            |p: DownloadProgress| {
                 println!("");
-                println!("Speed: {} mb", bytes_in_mb(peer.speed));
-                println!("Downloaded: {}", bytes_in_mb(peer.downloaded));
-                println!("Blocks: {}", peer.pending_blocks);
-            }
-            println!("");
-            println!("Progress: {}", p.percent);
-            println!("Total Peers: {}", p.peers.len());
-            println!("Pending pieces: {}", p.pending_pieces);
-            println!("TOTAL SPEED: {} mb", bytes_in_mb(total_speed));
-        })
+                println!("");
+                let mut total_speed = 0;
+                for peer in &p.peers {
+                    total_speed += peer.speed;
+
+                    println!("");
+                    println!("Speed: {} mb", bytes_in_mb(peer.speed));
+                    println!("Downloaded: {}", bytes_in_mb(peer.downloaded));
+                    println!("Blocks: {}", peer.pending_blocks);
+                }
+                println!("");
+                println!("Progress: {}", p.percent);
+                println!("Total Peers: {}", p.peers.len());
+                println!("Pending pieces: {}", p.pending_pieces);
+                println!("TOTAL SPEED: {} mb", bytes_in_mb(total_speed));
+            },
+        )
         .await
         .unwrap();
     handle.wait().await;

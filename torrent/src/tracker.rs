@@ -13,6 +13,7 @@ use tokio::{
     net::UdpSocket,
     sync::{mpsc, oneshot, watch},
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     protocol::tracker::{
@@ -316,7 +317,7 @@ impl Tracker {
         })
     }
 
-    pub async fn work(mut self) -> anyhow::Result<()> {
+    pub async fn work(mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         let initial_announce = self.announce().await?;
         let interval_duration = Duration::from_secs(initial_announce.interval as u64);
         self.handle_announce(initial_announce).await;
@@ -333,7 +334,9 @@ impl Tracker {
                     self.handle_announce(announce_result).await;
                 }
                 Ok(_) = self.progress.changed() => self.handle_progress_update(),
-                else => break
+                _ = cancellation_token.cancelled() => {
+                    break;
+                },
             }
         }
         Ok(())
@@ -375,46 +378,63 @@ impl Tracker {
 
 #[derive(Debug)]
 /// Entity that owns udp socket and handles all udp tracker messages
-pub struct UdpTrackerWorker {}
-
-async fn udp_tracker_worker(socket: UdpSocket, mut data_rx: mpsc::Receiver<UdpTrackerRequest>) {
-    let mut pending_transactions: HashMap<u32, oneshot::Sender<UdpTrackerMessage>> = HashMap::new();
-    loop {
-        let mut buffer = BytesMut::with_capacity(1024 * 10);
-        tokio::select! {
-            Ok((read, addr)) = socket.recv_buf_from(&mut buffer) => {
-                tracing::debug!("Recieved {read} bytes from UDP worker from {:?} address", addr);
-                let message = match UdpTrackerMessage::from_bytes(&buffer[..read]) {
-                    Ok(msg) => msg,
-                    Err(e) => {
-                        tracing::error!("Failed to construct message from udp tracker: {e}");
-                        continue;
-                    }
-                };
-                if let Some(chan) = pending_transactions.remove(&message.transaction_id) {
-                    let _ = chan.send(message);
-                } else {
-                    tracing::error!(
-                        "Recieved message {:?} for non existant transaction: {}",
-                        message.message_type,
-                        message.transaction_id
-                    );
-                }
-            },
-            Some(request) = data_rx.recv() => {
-                let _ = socket.send_to(&request.as_bytes(), request.tracker_addr).await;
-                pending_transactions.insert(request.transaction_id, request.response);
-            }
-        }
-    }
+pub struct UdpTrackerWorker {
+    socket: UdpSocket,
+    cancellation_token: CancellationToken,
 }
 
 impl UdpTrackerWorker {
-    pub async fn spawn(local_addr: SocketAddrV4) -> anyhow::Result<UdpTrackerChannel> {
+    pub async fn bind(
+        local_addr: SocketAddrV4,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<Self> {
         let socket = utils::bind_udp_socket(local_addr).await?;
+        Ok(Self {
+            socket,
+            cancellation_token,
+        })
+    }
+
+    pub async fn spawn(self) -> anyhow::Result<UdpTrackerChannel> {
         let (data_tx, data_rx) = mpsc::channel(100);
-        tokio::spawn(udp_tracker_worker(socket, data_rx));
+        tokio::spawn(self.udp_tracker_worker(data_rx));
         let channel = UdpTrackerChannel::new(data_tx);
         Ok(channel)
+    }
+
+    async fn udp_tracker_worker(self, mut data_rx: mpsc::Receiver<UdpTrackerRequest>) {
+        let mut pending_transactions: HashMap<u32, oneshot::Sender<UdpTrackerMessage>> =
+            HashMap::new();
+        loop {
+            let mut buffer = BytesMut::with_capacity(1024 * 10);
+            tokio::select! {
+                Ok((read, addr)) = self.socket.recv_buf_from(&mut buffer) => {
+                    tracing::debug!("Recieved {read} bytes from UDP worker from {:?} address", addr);
+                    let message = match UdpTrackerMessage::from_bytes(&buffer[..read]) {
+                        Ok(msg) => msg,
+                        Err(e) => {
+                            tracing::error!("Failed to construct message from udp tracker: {e}");
+                            continue;
+                        }
+                    };
+                    if let Some(chan) = pending_transactions.remove(&message.transaction_id) {
+                        let _ = chan.send(message);
+                    } else {
+                        tracing::error!(
+                            "Recieved message {:?} for non existant transaction: {}",
+                            message.message_type,
+                            message.transaction_id
+                        );
+                    }
+                },
+                Some(request) = data_rx.recv() => {
+                    let _ = self.socket.send_to(&request.as_bytes(), request.tracker_addr).await;
+                    pending_transactions.insert(request.transaction_id, request.response);
+                }
+                _ = self.cancellation_token.cancelled() => {
+                    break;
+                }
+            }
+        }
     }
 }

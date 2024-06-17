@@ -3,11 +3,9 @@ use std::{
     str::FromStr, sync::Mutex,
 };
 
-use anyhow::Context;
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
 use tokio::{fs, task::JoinSet};
 use tokio_util::sync::CancellationToken;
-use torrent::Torrent;
 
 use crate::{
     config::ServerConfiguration,
@@ -27,6 +25,7 @@ use crate::{
         MetadataProvider, MetadataProvidersStack, ShowMetadataProvider,
     },
     progress::{TaskKind, TaskResource},
+    torrent::TorrentClient,
     torrent_index::tpb::TpbApi,
     utils,
 };
@@ -40,7 +39,7 @@ pub struct AppState {
     pub tmdb_api: &'static TmdbApi,
     pub tpb_api: &'static TpbApi,
     pub providers_stack: &'static MetadataProvidersStack,
-    pub torrent_client: &'static torrent::Client,
+    pub torrent_client: &'static TorrentClient,
     pub cancelation_token: CancellationToken,
 }
 
@@ -305,22 +304,6 @@ impl AppState {
         };
         let subtitle = ffmpeg::pull_subtitles(video.path(), track_number).await?;
         Ok(subtitle)
-    }
-
-    pub async fn download_torrent(
-        &self,
-        torrent: Torrent,
-        output: PathBuf,
-    ) -> Result<(), AppError> {
-        self.tasks
-            .tracker
-            .track_future(
-                self.tasks
-                    .observe_torrent_download(self.torrent_client, torrent, output),
-            )
-            .await
-            .unwrap();
-        Ok(())
     }
 
     pub async fn transcode_video(
@@ -1003,8 +986,8 @@ impl FromRef<AppState> for &'static Mutex<Library> {
     }
 }
 
-impl FromRef<AppState> for &'static torrent::Client {
-    fn from_ref(app_state: &AppState) -> &'static torrent::Client {
+impl FromRef<AppState> for &'static TorrentClient {
+    fn from_ref(app_state: &AppState) -> &'static TorrentClient {
         app_state.torrent_client
     }
 }

@@ -7,8 +7,9 @@ use crate::ffmpeg;
 use crate::library;
 use crate::metadata;
 use crate::progress;
-use crate::tracing;
+use crate::torrent;
 use crate::torrent_index;
+use crate::tracing;
 use axum::response::IntoResponse;
 use axum_extra::{headers::Range, TypedHeader};
 use serde::Deserialize;
@@ -69,6 +70,8 @@ pub struct SerdeDuration {
         public_api::suggest_movies,
         public_api::suggest_shows,
         public_api::search_torrent,
+        admin_api::resolve_magnet_link,
+        admin_api::parse_torrent_file,
         admin_api::download_torrent,
         public_api::search_content,
         admin_api::server_configuration,
@@ -106,13 +109,20 @@ pub struct SerdeDuration {
             public_api::DetailedSubtitleTrack,
             public_api::DetailedVariant,
             public_api::VariantSummary,
+            public_api::MovieHistory,
+            public_api::ShowHistory,
             admin_api::ProviderOrder,
             admin_api::UpdateHistoryPayload,
-            public_api::ShowHistory,
-            public_api::MovieHistory,
-            admin_api::TorrentDownloadHint,
-            admin_api::TorrentDownloadPayload,
             admin_api::ProviderType,
+            torrent::DownloadContentHint,
+            torrent::TorrentDownloadPayload,
+            torrent::TorrentInfo,
+            torrent::TorrentShow,
+            torrent::TorrentEpisode,
+            torrent::TorrentMovie,
+            torrent::TorrentContent,
+            torrent::TorrentContents,
+            torrent::ResolvedTorrentFile,
             progress::Task,
             progress::TaskKind,
             tracing::JsonTracingEvent,
@@ -124,6 +134,7 @@ pub struct SerdeDuration {
             library::VideoCodec,
             library::SubtitlesCodec,
             library::Resolution,
+            library::ContentIdentifier,
             config::ServerConfiguration,
             config::FileConfigSchema,
             config::AppResources,
@@ -159,6 +170,12 @@ pub struct SearchQuery {
 pub struct ContentTypeQuery {
     #[param(inline)]
     pub content_type: metadata::ContentType,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct OptionalContentTypeQuery {
+    #[param(inline)]
+    pub content_type: Option<metadata::ContentType>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]

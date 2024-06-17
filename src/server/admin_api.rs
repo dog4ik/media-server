@@ -5,7 +5,7 @@ use std::{convert::Infallible, fmt::Display};
 
 use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Path, Query};
+use axum::extract::{FromRequest, Multipart, Path, Query};
 use axum::http::{Request, StatusCode};
 use axum::response::IntoResponse;
 use axum::{
@@ -23,20 +23,25 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
+use torrent::file::{MagnetLink, TorrentFile};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::{NumberQuery, StringIdQuery};
+use super::{NumberQuery, OptionalContentTypeQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::{
-    ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
-    SeasonMetadata, ShowMetadata,
+    ContentType, EpisodeMetadata, MetadataProvidersStack, MovieMetadata, SeasonMetadata,
+    ShowMetadata,
 };
 use crate::progress::{Task, TaskKind, TaskResource};
 use crate::stream::transcode_stream::TranscodeStream;
+use crate::torrent::{
+    DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentContent,
+    TorrentDownloadPayload, TorrentInfo,
+};
 use crate::{
     app_state::AppState,
     db::Db,
@@ -584,47 +589,59 @@ pub async fn reset_server_configuration(
     Json(configuration.clone())
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct TorrentDownloadHint {
-    content_type: ContentType,
-    metadata_provider: MetadataProvider,
-    metadata_id: String,
-}
-
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct TorrentDownloadPayload {
-    save_location: Option<String>,
-    content_hint: Option<TorrentDownloadHint>,
-    magnet: String,
-}
-
-/// Start torrent download
+/// Parse .torrent file
 #[utoipa::path(
     post,
-    path = "/api/torrent/download",
-    request_body = TorrentDownloadPayload,
+    path = "/api/torrent/parse_torrent_file",
+    params(
+        OptionalContentTypeQuery,
+    ),
     responses(
-        (status = 200),
+        (status = 200, body = TorrentInfo),
+        (status = 400, description = "Failed to parse torrent file"),
     )
 )]
-pub async fn download_torrent(
-    State(app_state): State<AppState>,
-    Json(payload): Json<TorrentDownloadPayload>,
-) -> Result<(), AppError> {
-    let default_path = APP_RESOURCES.get().unwrap().resources_path.join("torrents");
-    let save_location = payload
-        .save_location
-        .map(|l| PathBuf::from(l))
-        .unwrap_or(default_path);
-    tokio::spawn(async move {
-        let torrent = app_state
-            .torrent_client
-            .from_magnet_link(payload.magnet.parse().unwrap())
-            .await
-            .unwrap();
-        let _ = app_state.download_torrent(torrent, save_location).await;
-    });
-    Ok(())
+pub async fn parse_torrent_file(
+    State(providers_stack): State<&'static MetadataProvidersStack>,
+    Query(hint): Query<Option<DownloadContentHint>>,
+    mut multipart: Multipart,
+) -> Result<Json<TorrentInfo>, AppError> {
+    if let Ok(Some(field)) = multipart.next_field().await {
+        let data = field.bytes().await.unwrap();
+        let torrent_file =
+            TorrentFile::from_bytes(data).map_err(|x| AppError::bad_request(x.to_string()))?;
+        let torrent_info = TorrentInfo::new(&torrent_file.info, hint, providers_stack).await;
+        return Ok(Json(torrent_info));
+    }
+    Err(AppError::bad_request("Failed to handle multipart request"))
+}
+
+/// Resolve magnet link
+#[utoipa::path(
+    get,
+    path = "/api/torrent/resolve_magnet_link",
+    params(
+        ResolveMagnetLinkPayload,
+        ("content_type" = Option<ContentType>, Query, description = "Content type"),
+        ("metadata_provider" = Option<MetadataProvider>, Query, description = "Metadata provider"),
+        ("metadata_id" = Option<String>, Query, description = "Metadata id"),
+    ),
+    responses(
+        (status = 200, body = TorrentInfo),
+        (status = 400, description = "Failed to parse magnet link"),
+    )
+)]
+pub async fn resolve_magnet_link(
+    State(client): State<&'static TorrentClient>,
+    State(providers_stack): State<&'static MetadataProvidersStack>,
+    Query(payload): Query<ResolveMagnetLinkPayload>,
+    hint: Option<Query<DownloadContentHint>>,
+) -> Result<Json<TorrentInfo>, AppError> {
+    let magnet_link = MagnetLink::from_str(&payload.magnet_link)
+        .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
+    let info = client.resolve_magnet_link(&magnet_link).await?;
+    let torrent_info = TorrentInfo::new(&info, hint.map(|x| x.0), providers_stack).await;
+    Ok(Json(torrent_info))
 }
 
 #[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
@@ -912,37 +929,84 @@ pub async fn transcode_stream_manifest(
     Ok(stream.manifest.as_ref().to_string())
 }
 
-/// Stream torrent download
+/// Download torrent
 #[utoipa::path(
-    get,
-    path = "/api/torrent/:id/stream_range",
-    params(
-        ("id", description = "Torrent download id"),
-    ),
+    post,
+    path = "/api/torrent/download",
     request_body = TorrentDownloadPayload,
     responses(
         (status = 200),
     )
 )]
-pub async fn stream_download(
-    State(tasks): State<TaskResource>,
-    Path(torrent_id): Path<String>,
-    Query(file_idx): Query<NumberQuery>,
-    range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, AppError> {
-    let torrent_download = {
-        let downloads = tasks.pending_downloads.lock().unwrap();
-        downloads
-            .iter()
-            .next()
-            .ok_or(AppError::not_found("Torrent download is not found"))?
-            .clone()
+pub async fn download_torrent(
+    State(app_state): State<AppState>,
+    Json(payload): Json<TorrentDownloadPayload>,
+) -> Result<(), AppError> {
+    let AppState {
+        configuration,
+        providers_stack,
+        torrent_client,
+        tasks,
+        ..
+    } = app_state;
+    let magnet_link = MagnetLink::from_str(&payload.magnet_link)
+        .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
+    let info = torrent_client
+        .resolve_magnet_link(&magnet_link)
+        .await
+        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    let hash = info.hash();
+    let torrent_info = TorrentInfo::new(&info, None, providers_stack).await;
+
+    let fallback_location = configuration
+        .lock()
+        .unwrap()
+        .resources
+        .resources_path
+        .join("torrents");
+
+    let save_location = match torrent_info
+        .contents
+        .content
+        .as_ref()
+        .map(|x| match x {
+            TorrentContent::Show(_) => ContentType::Show,
+            TorrentContent::Movie(_) => ContentType::Movie,
+        })
+        .or_else(|| payload.content_hint.as_ref().map(|h| h.content_type))
+    {
+        Some(ContentType::Show) => payload
+            .save_location
+            .map(PathBuf::from)
+            .or_else(|| configuration.lock().unwrap().show_folders.first().cloned())
+            .unwrap_or(fallback_location.join("shows")),
+        Some(ContentType::Movie) => payload
+            .save_location
+            .map(PathBuf::from)
+            .or_else(|| configuration.lock().unwrap().show_folders.first().cloned())
+            .unwrap_or(fallback_location.join("shows")),
+        None => return Err(AppError::bad_request("Couldn't choose output location")),
     };
-    let file = torrent_download
-        .files
-        .get(file_idx.number)
-        .ok_or(AppError::not_found("File with index is not found"))?;
-    Ok(torrent_download
-        .handle_request(file.range.clone(), range)
-        .await)
+    let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
+    let download_handle = torrent_client
+        .client
+        .download(
+            save_location,
+            magnet_link.announce_list.unwrap(),
+            info,
+            progress_tx,
+        )
+        .await
+        .unwrap();
+
+    torrent_client.add_torrent_download(hash, download_handle.clone(), torrent_info);
+
+    tokio::spawn(async move {
+        let _ = tasks
+            .observe_torrent_download(download_handle, progress_rx, hash)
+            .await;
+        torrent_client.remove_torrent_download(hash);
+    });
+
+    Ok(())
 }
