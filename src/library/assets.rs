@@ -29,6 +29,7 @@ pub(crate) trait FileAsset {
         }
         let mut file = fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(&path)
             .await?;
@@ -43,6 +44,7 @@ pub(crate) trait FileAsset {
         }
         let mut file = fs::OpenOptions::new()
             .create(true)
+            .truncate(true)
             .write(true)
             .open(&path)
             .await?;
@@ -57,7 +59,7 @@ pub(crate) trait FileAsset {
         }
         let mut file = fs::OpenOptions::new()
             .create(true)
-            .write(true)
+            .read(true)
             .open(&path)
             .await?;
         let length = file.metadata().await?.len();
