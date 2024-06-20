@@ -10,7 +10,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Child;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, Semaphore};
 
 use crate::config::APP_RESOURCES;
 use crate::library::{
@@ -778,12 +778,15 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
     }
 }
 
-/// Pull frame in specified time
+static PULL_FRAME_PERMITS: Semaphore = Semaphore::const_new(4);
+
+/// Pull the frame at specified time location
 pub async fn pull_frame(
     input_file: impl AsRef<Path>,
     output_file: impl AsRef<Path>,
     timing: Duration,
 ) -> anyhow::Result<()> {
+    let _guard = PULL_FRAME_PERMITS.acquire().await.unwrap();
     let ffmpeg = &APP_RESOURCES
         .get()
         .unwrap()
