@@ -273,6 +273,39 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
+    pub async fn external_to_local_id(
+        &self,
+        external_id: &str,
+        metadata_provider: MetadataProvider,
+    ) -> Result<DbExternalId, Error> {
+        let metadata_provider = metadata_provider.to_string();
+        let external_id = sqlx::query_as!(
+            DbExternalId,
+            "SELECT * from external_ids WHERE metadata_provider = ? AND metadata_id = ?;",
+            metadata_provider,
+            external_id,
+        )
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(external_id)
+    }
+
+    /// Get local id by external ids
+    pub async fn external_to_local_ids(
+        &self,
+        external_ids: &Vec<ExternalIdMetadata>,
+    ) -> Option<DbExternalId> {
+        for external_id in external_ids {
+            if let Ok(external_id) = self
+                .external_to_local_id(&external_id.id, external_id.provider)
+                .await
+            {
+                return Some(external_id);
+            }
+        }
+        None
+    }
+
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
         tracing::debug!(id, "Removing video");
         sqlx::query!("DELETE FROM videos WHERE id = ?;", id)

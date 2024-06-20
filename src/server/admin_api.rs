@@ -27,7 +27,9 @@ use torrent::file::{MagnetLink, TorrentFile};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::{NumberQuery, OptionalContentTypeQuery, StringIdQuery};
+use super::{
+    ContentTypeQuery, IdQuery, NumberQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery,
+};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
@@ -309,6 +311,156 @@ pub async fn alter_movie_metadata(
     .execute(&db.pool)
     .await?;
     Ok(())
+}
+
+/// Fix show metadata match
+#[utoipa::path(
+    post,
+    path = "/api/show/{show_id}/fix_metadata",
+    params(
+        ("show_id", description = "Id of the show that needs to be fixed"),
+        ProviderQuery,
+        StringIdQuery,
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn fix_show_metadata(
+    State(app_state): State<AppState>,
+    Path(show_id): Path<i64>,
+    Query(provider_query): Query<ProviderQuery>,
+    Query(new_id): Query<StringIdQuery>,
+) -> Result<(), AppError> {
+    let show = app_state
+        .providers_stack
+        .get_show(&new_id.id, provider_query.provider)
+        .await?;
+    app_state.fix_show_metadata(show_id, show).await
+}
+
+/// Fix movie metadata match
+#[utoipa::path(
+    post,
+    path = "/api/movie/{movie_id}/fix_metadata",
+    params(
+        ("movie_id", description = "Id of the movie that needs to be fixed"),
+        ProviderQuery,
+        StringIdQuery,
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn fix_movie_metadata(
+    State(app_state): State<AppState>,
+    Path(movie_id): Path<i64>,
+    Query(provider_query): Query<ProviderQuery>,
+    Query(new_id): Query<StringIdQuery>,
+) -> Result<(), AppError> {
+    let movie = app_state
+        .providers_stack
+        .get_movie(&new_id.id, provider_query.provider)
+        .await?;
+    app_state.fix_movie_metadata(movie_id, movie).await
+}
+
+/// Fix metadata match
+#[utoipa::path(
+    post,
+    path = "/api/fix_metadata/{content_id}",
+    params(
+        ("content_id", description = "Id of the content that needs to be fixed"),
+        ProviderQuery,
+        StringIdQuery,
+        ContentTypeQuery,
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn fix_metadata(
+    Path(content_id): Path<i64>,
+    State(app_state): State<AppState>,
+    Query(provider_query): Query<ProviderQuery>,
+    Query(content_type_query): Query<ContentTypeQuery>,
+    Query(new_id): Query<StringIdQuery>,
+) -> Result<(), AppError> {
+    match content_type_query.content_type {
+        ContentType::Movie => {
+            let movie = app_state
+                .providers_stack
+                .get_movie(&new_id.id, provider_query.provider)
+                .await?;
+            app_state.fix_movie_metadata(content_id, movie).await
+        }
+        ContentType::Show => {
+            let show = app_state
+                .providers_stack
+                .get_show(&new_id.id, provider_query.provider)
+                .await?;
+            app_state.fix_show_metadata(content_id, show).await
+        }
+    }
+}
+
+/// Reset show metadata
+#[utoipa::path(
+    post,
+    path = "/api/show/{show_id}/reset_metadata",
+    params(
+        ("show_id", description = "Id of the show that needs to be fixed"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn reset_show_metadata(
+    Path(show_id): Path<i64>,
+    State(app_state): State<AppState>,
+) -> Result<(), AppError> {
+    app_state.reset_show_metadata(show_id).await
+}
+
+/// Reset movie metadata
+#[utoipa::path(
+    post,
+    path = "/api/movie/{movie_id}/reset_metadata",
+    params(
+        ("movie_id", description = "Id of the movie that needs to be fixed"),
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn reset_movie_metadata(
+    Path(movie_id): Path<i64>,
+    State(app_state): State<AppState>,
+) -> Result<(), AppError> {
+    app_state.reset_movie_metadata(movie_id).await
+}
+
+/// Reset content's metadata
+#[utoipa::path(
+    post,
+    path = "/api/reset_metadata/{content_id}",
+    params(
+        ("content_id", description = "Id of the content that needs to be fixed"),
+        ContentTypeQuery,
+    ),
+    responses(
+        (status = 200),
+    )
+)]
+pub async fn reset_metadata(
+    Path(content_id): Path<i64>,
+    Query(content_type_query): Query<ContentTypeQuery>,
+    State(app_state): State<AppState>,
+) -> Result<(), AppError> {
+    match content_type_query.content_type {
+        ContentType::Movie => app_state.reset_movie_metadata(content_id).await,
+        ContentType::Show => app_state.reset_show_metadata(content_id).await,
+    }
 }
 
 /// Start transcode video job

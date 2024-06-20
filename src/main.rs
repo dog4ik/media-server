@@ -156,10 +156,26 @@ async fn main() {
         .route("/external_ids/:id", get(public_api::external_ids))
         .route("/movie/:movie_id", get(public_api::get_movie))
         .route("/movie/:movie_id", put(admin_api::alter_movie_metadata))
+        .route(
+            "/movie/:movie_id/fix_metadata",
+            post(admin_api::fix_movie_metadata),
+        )
+        .route(
+            "/movie/:movie_id/reset_metadata",
+            post(admin_api::reset_movie_metadata),
+        )
         .route("/movie/:movie_id/poster", get(public_api::movie_poster))
         .route("/movie/:movie_id/backdrop", get(public_api::movie_backdrop))
         .route("/show/:show_id", get(public_api::get_show))
         .route("/show/:show_id", put(admin_api::alter_show_metadata))
+        .route(
+            "/show/:show_id/fix_metadata",
+            post(admin_api::fix_show_metadata),
+        )
+        .route(
+            "/show/:show_id/reset_metadata",
+            post(admin_api::reset_show_metadata),
+        )
         .route("/show/:show_id/poster", get(public_api::show_poster))
         .route("/show/:show_id/backdrop", get(public_api::show_backdrop))
         .route("/show/:show_id/:season", get(public_api::get_season))
@@ -246,8 +262,12 @@ async fn main() {
         .route("/tasks/:id", delete(admin_api::cancel_task))
         .route("/tasks/progress", get(admin_api::progress))
         .route("/mock_progress", post(admin_api::mock_progress))
-        .route("/cancel_task", post(admin_api::cancel_task))
         .route("/scan", post(admin_api::reconciliate_lib))
+        .route("/fix_metadata/:content_id", post(admin_api::fix_metadata))
+        .route(
+            "/reset_metadata/:content_id",
+            post(admin_api::reset_metadata),
+        )
         .route(
             "/transcode/:id/segment/:segment",
             get(admin_api::transcoded_segment),
