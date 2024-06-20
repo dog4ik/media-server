@@ -232,7 +232,7 @@ impl MetadataProvidersStack {
         out
     }
 
-    // Can do something smarter here if extract provider_identifer() in its own trait
+    // Can do something smarter here if extract provider_identifier() in its own trait
     pub fn order_discover_providers(
         &self,
         new_order: Vec<String>,
@@ -653,12 +653,7 @@ impl Into<MetadataSearchResult> for ShowMetadata {
 }
 
 impl EpisodeMetadata {
-    pub async fn into_db_episode(self, season_id: i64, video_id: i64) -> DbEpisode {
-        let blur_data = if let Some(poster) = &self.poster {
-            poster.generate_blur_data().await.ok()
-        } else {
-            None
-        };
+    pub fn into_db_episode(self, season_id: i64, video_id: i64) -> DbEpisode {
         DbEpisode {
             id: None,
             video_id,
@@ -668,20 +663,16 @@ impl EpisodeMetadata {
             plot: self.plot,
             release_date: self.release_date,
             poster: self.poster.map(|x| x.as_str().to_owned()),
-            blur_data,
         }
     }
 }
 
 impl SeasonMetadata {
-    pub async fn into_db_season(self, show_id: i64) -> DbSeason {
-        let blur_data;
+    pub fn into_db_season(self, show_id: i64) -> DbSeason {
         let poster;
         if let Some(metadata_image) = self.poster {
-            blur_data = metadata_image.generate_blur_data().await.ok();
             poster = Some(metadata_image.as_str().to_owned());
         } else {
-            blur_data = None;
             poster = None;
         }
         DbSeason {
@@ -691,21 +682,17 @@ impl SeasonMetadata {
             release_date: self.release_date,
             plot: self.plot,
             poster,
-            blur_data,
         }
     }
 }
 
 impl ShowMetadata {
-    pub async fn into_db_show(self) -> DbShow {
-        let blur_data;
+    pub fn into_db_show(self) -> DbShow {
         let poster;
         if let Some(metadata_image) = self.poster {
             poster = Some(metadata_image.as_str().to_owned());
-            blur_data = metadata_image.generate_blur_data().await.ok();
         } else {
             poster = None;
-            blur_data = None;
         };
         let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
 
@@ -714,7 +701,6 @@ impl ShowMetadata {
             title: self.title,
             release_date: self.release_date,
             poster,
-            blur_data,
             backdrop,
             plot: self.plot,
         }
@@ -723,14 +709,11 @@ impl ShowMetadata {
 
 impl MovieMetadata {
     pub async fn into_db_movie(self, video_id: i64) -> DbMovie {
-        let blur_data;
         let poster;
         if let Some(metadata_image) = self.poster {
             poster = Some(metadata_image.as_str().to_owned());
-            blur_data = metadata_image.generate_blur_data().await.ok();
         } else {
             poster = None;
-            blur_data = None;
         };
         let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
 
@@ -740,7 +723,6 @@ impl MovieMetadata {
             title: self.title,
             release_date: self.release_date,
             poster,
-            blur_data,
             backdrop,
             plot: self.plot,
         }

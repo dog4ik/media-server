@@ -743,7 +743,7 @@ async fn handle_season(
                     continue;
                 };
                 let id = db
-                    .insert_season(season.into_db_season(local_show_id).await)
+                    .insert_season(season.into_db_season(local_show_id))
                     .await
                     .unwrap();
                 return Ok(id);
@@ -781,7 +781,7 @@ async fn handle_episode(
                 };
                 let poster = episode.poster.clone();
                 let local_id = db
-                    .insert_episode(episode.into_db_episode(local_season_id, db_video_id).await)
+                    .insert_episode(episode.into_db_episode(local_season_id, db_video_id))
                     .await?;
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);

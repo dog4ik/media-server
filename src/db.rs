@@ -17,6 +17,7 @@ use crate::{
 };
 
 fn path_to_url(path: &Path) -> String {
+    #[allow(unused_mut)]
     let mut path = path.to_string_lossy().to_string();
     #[cfg(target_os = "windows")]
     {
@@ -46,7 +47,6 @@ r#"CREATE TABLE IF NOT EXISTS shows (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     title TEXT NOT NULL, 
                                     release_date TEXT,
                                     poster TEXT,
-                                    blur_data TEXT,
                                     backdrop TEXT,
                                     plot TEXT);
 
@@ -68,7 +68,6 @@ CREATE TABLE IF NOT EXISTS seasons (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     release_date TEXT,
                                     plot TEXT,
                                     poster TEXT,
-                                    blur_data TEXT,
                                     FOREIGN KEY (show_id) REFERENCES shows (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, 
                                     video_id INTEGER NOT NULL UNIQUE,
@@ -77,14 +76,12 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     number INTEGER NOT NULL,
                                     plot TEXT,
                                     poster TEXT,
-                                    blur_data TEXT,
                                     release_date TEXT,
                                     FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     video_id INTEGER NOT NULL UNIQUE,
                                     title TEXT NOT NULL,
-                                    blur_data TEXT,
                                     backdrop TEXT,
                                     plot TEXT,
                                     poster TEXT,
@@ -162,12 +159,11 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         let query = sqlx::query!(
             "INSERT OR IGNORE INTO movies 
             (title, release_date, poster,
-            blur_data, backdrop, plot, video_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            backdrop, plot, video_id)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
             movie.title,
             movie.release_date,
             movie.poster,
-            movie.blur_data,
             movie.backdrop,
             movie.plot,
             movie.video_id
@@ -178,12 +174,11 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_show(&self, show: DbShow) -> Result<i64, Error> {
         let query = sqlx::query!(
             "INSERT OR IGNORE INTO shows 
-            (title, release_date, poster, blur_data, backdrop, plot)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            (title, release_date, poster, backdrop, plot)
+            VALUES (?, ?, ?, ?, ?) RETURNING id;",
             show.title,
             show.release_date,
             show.poster,
-            show.blur_data,
             show.backdrop,
             show.plot,
         );
@@ -194,14 +189,13 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_season(&self, season: DbSeason) -> Result<i64, Error> {
         let query = sqlx::query!(
             "INSERT OR IGNORE INTO seasons
-            (show_id, number, release_date, plot, poster, blur_data)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            (show_id, number, release_date, plot, poster)
+            VALUES (?, ?, ?, ?, ?) RETURNING id;",
             season.show_id,
             season.number,
             season.release_date,
             season.plot,
             season.poster,
-            season.blur_data,
         );
 
         query.fetch_one(&self.pool).await.map(|x| x.id)
@@ -210,8 +204,8 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     pub async fn insert_episode(&self, episode: DbEpisode) -> Result<i64, Error> {
         let episode_query = sqlx::query!(
             "INSERT OR IGNORE INTO episodes
-            (video_id, season_id, title, number, plot, release_date, poster, blur_data)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            (video_id, season_id, title, number, plot, release_date, poster)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
             episode.video_id,
             episode.season_id,
             episode.title,
@@ -219,7 +213,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
             episode.plot,
             episode.release_date,
             episode.poster,
-            episode.blur_data
         );
 
         episode_query.fetch_one(&self.pool).await.map(|x| x.id)
@@ -357,6 +350,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         Ok(())
     }
 
+    /// Relies on `ON DELETE CASCADE` to remove show's seasons and episodes.
     pub async fn remove_show(&self, id: i64) -> Result<(), Error> {
         tracing::debug!(id, "Removing show");
         let query = sqlx::query!("DELETE FROM shows WHERE id = ?", id);
@@ -372,20 +366,18 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     pub async fn update_show_metadata(&self, id: i64, metadata: ShowMetadata) -> Result<(), Error> {
-        let db_show = metadata.into_db_show().await;
+        let db_show = metadata.into_db_show();
         let q = sqlx::query!(
             "UPDATE shows SET
                             title = ?, 
                             release_date = ?,
                             poster = ?,
-                            blur_data =?,
                             backdrop = ?,
                             plot = ?
             WHERE id = ?",
             db_show.title,
             db_show.release_date,
             db_show.poster,
-            db_show.blur_data,
             db_show.backdrop,
             db_show.plot,
             id
@@ -400,7 +392,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         show_id: i64,
         metadata: SeasonMetadata,
     ) -> Result<(), Error> {
-        let db_season = metadata.into_db_season(show_id).await;
+        let db_season = metadata.into_db_season(show_id);
         let q = sqlx::query!(
             "UPDATE seasons SET
                                show_id = ?,
@@ -408,7 +400,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                release_date = ?,
                                plot = ?,
                                poster = ?,
-                               blur_data = ?,
                                show_id = ?
             WHERE id = ?",
             db_season.show_id,
@@ -416,7 +407,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
             db_season.release_date,
             db_season.plot,
             db_season.poster,
-            db_season.blur_data,
             db_season.show_id,
             id
         );
@@ -430,11 +420,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         season_id: i32,
         metadata: EpisodeMetadata,
     ) -> Result<(), Error> {
-        let blur_data = if let Some(poster) = &metadata.poster {
-            poster.generate_blur_data().await.ok()
-        } else {
-            None
-        };
         let number = metadata.number as i32;
         let poster = metadata.poster.map(|p| p.as_str().to_string());
         let q = sqlx::query!(
@@ -444,7 +429,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                 number = ?,
                                 plot = ?,
                                 poster = ?,
-                                blur_data = ?,
                                 release_date = ?
             WHERE id = ?",
             season_id,
@@ -452,7 +436,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
             number,
             metadata.plot,
             poster,
-            blur_data,
             metadata.release_date,
             id
         );
@@ -485,7 +468,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                 let seasons = show
                     .seasons
                     .split(',')
-                    .map(|x| x.parse().unwrap())
+                    .filter_map(|x| x.parse().ok())
                     .collect();
                 ShowMetadata {
                     metadata_id: show.id.unwrap().to_string(),
@@ -879,7 +862,6 @@ pub struct DbShow {
     pub title: String,
     pub release_date: Option<String>,
     pub poster: Option<String>,
-    pub blur_data: Option<String>,
     pub backdrop: Option<String>,
     pub plot: Option<String>,
 }
@@ -892,7 +874,6 @@ pub struct DbSeason {
     pub release_date: Option<String>,
     pub plot: Option<String>,
     pub poster: Option<String>,
-    pub blur_data: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -904,7 +885,6 @@ pub struct DbMovie {
     pub poster: Option<String>,
     pub release_date: Option<String>,
     pub backdrop: Option<String>,
-    pub blur_data: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -917,7 +897,6 @@ pub struct DbEpisode {
     pub plot: Option<String>,
     pub release_date: Option<String>,
     pub poster: Option<String>,
-    pub blur_data: Option<String>,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
