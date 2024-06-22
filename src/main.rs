@@ -118,6 +118,7 @@ async fn main() {
     let providers_stack = Box::leak(Box::new(providers_stack));
 
     let tasks = TaskResource::new(cancellation_token.clone());
+    let tasks = Box::leak(Box::new(tasks));
     let tracker = tasks.tracker.clone();
 
     let app_state = AppState {

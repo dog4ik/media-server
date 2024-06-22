@@ -35,7 +35,7 @@ use crate::{
 pub struct AppState {
     pub library: &'static Mutex<Library>,
     pub db: &'static Db,
-    pub tasks: TaskResource,
+    pub tasks: &'static TaskResource,
     pub configuration: &'static Mutex<ServerConfiguration>,
     pub tmdb_api: &'static TmdbApi,
     pub tpb_api: &'static TpbApi,
@@ -1228,9 +1228,9 @@ impl FromRef<AppState> for Db {
     }
 }
 
-impl FromRef<AppState> for TaskResource {
-    fn from_ref(app_state: &AppState) -> TaskResource {
-        app_state.tasks.clone()
+impl FromRef<AppState> for &'static TaskResource {
+    fn from_ref(app_state: &AppState) -> &'static TaskResource {
+        app_state.tasks
     }
 }
 

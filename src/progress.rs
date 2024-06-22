@@ -154,13 +154,13 @@ impl ProgressChunk {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TaskResource {
     pub progress_channel: ProgressChannel,
     pub parent_cancellation_token: CancellationToken,
     pub tracker: TaskTracker,
-    pub tasks: Arc<Mutex<Vec<Task>>>,
-    pub active_streams: Arc<Mutex<Vec<TranscodeStream>>>,
+    pub tasks: Mutex<Vec<Task>>,
+    pub active_streams: Mutex<Vec<TranscodeStream>>,
 }
 
 #[derive(Debug, Clone)]
@@ -189,8 +189,8 @@ impl TaskResource {
         TaskResource {
             progress_channel: ProgressChannel::new(),
             parent_cancellation_token: cancellation_token,
-            tasks: Arc::new(Mutex::new(Vec::new())),
-            active_streams: Arc::new(Mutex::new(Vec::new())),
+            tasks: Mutex::new(Vec::new()),
+            active_streams: Mutex::new(Vec::new()),
             tracker: TaskTracker::new(),
         }
     }

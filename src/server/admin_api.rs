@@ -537,7 +537,7 @@ pub struct CancelTaskPayload {
     )
 )]
 pub async fn cancel_task(
-    State(tasks): State<TaskResource>,
+    State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
 ) -> Result<(), StatusCode> {
     tasks
@@ -558,7 +558,7 @@ pub async fn cancel_task(
     )
 )]
 pub async fn mock_progress(
-    State(tasks): State<TaskResource>,
+    State(tasks): State<&'static TaskResource>,
     Query(StringIdQuery { id: target }): Query<StringIdQuery>,
 ) {
     debug!("Emitting fake progress with target: {}", target);
@@ -602,7 +602,7 @@ pub async fn mock_progress(
         (status = 400, description = "Task can't be canceled or it is not found"),
     )
 )]
-pub async fn get_tasks(State(tasks): State<TaskResource>) -> Json<Vec<Task>> {
+pub async fn get_tasks(State(tasks): State<&'static TaskResource>) -> Json<Vec<Task>> {
     let tasks = tasks.tasks.lock().unwrap().to_vec();
     Json(tasks)
 }
@@ -616,9 +616,9 @@ pub async fn get_tasks(State(tasks): State<TaskResource>) -> Json<Vec<Task>> {
     )
 )]
 pub async fn progress(
-    State(tasks): State<TaskResource>,
+    State(tasks): State<&'static TaskResource>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-    let ProgressChannel(channel) = tasks.progress_channel;
+    let ProgressChannel(channel) = &tasks.progress_channel;
     let rx = channel.subscribe();
 
     let stream = tokio_stream::wrappers::BroadcastStream::new(rx).map(|item| {
@@ -999,7 +999,7 @@ pub async fn remove_history_item(
 )]
 pub async fn transcoded_segment(
     Path((task_id, index)): Path<(String, usize)>,
-    State(tasks): State<TaskResource>,
+    State(tasks): State<&'static TaskResource>,
 ) -> Result<bytes::Bytes, AppError> {
     let sender = {
         let tasks = tasks.active_streams.lock().unwrap();
@@ -1068,7 +1068,7 @@ pub async fn create_transcode_stream(
 )]
 pub async fn transcode_stream_manifest(
     Path(stream_id): Path<String>,
-    State(tasks): State<TaskResource>,
+    State(tasks): State<&'static TaskResource>,
 ) -> Result<String, AppError> {
     let streams = tasks.active_streams.lock().unwrap();
     let id = uuid::Uuid::from_str(&stream_id)
