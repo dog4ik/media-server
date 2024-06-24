@@ -904,20 +904,87 @@ pub struct UpdateHistoryPayload {
     is_finished: bool,
 }
 
-/// Update/Insert history
+/// Update history
 #[utoipa::path(
     put,
     path = "/api/history/{id}",
+    params(
+        ("id", description = "History id"),
+    ),
+    request_body = UpdateHistoryPayload,
+    responses(
+        (status = 200),
+    ),
+    tag = "History",
+)]
+pub async fn update_history(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+    Json(payload): Json<UpdateHistoryPayload>,
+) -> Result<StatusCode, AppError> {
+    let query = sqlx::query!(
+        "UPDATE history SET time = ?, is_finished = ? WHERE id = ? RETURNING time;",
+        payload.time,
+        payload.is_finished,
+        id,
+    );
+    query.fetch_one(&db.pool).await?;
+    Ok(StatusCode::OK)
+}
+
+/// Delete all history for default user
+#[utoipa::path(
+    delete,
+    path = "/api/history",
+    responses(
+        (status = 200),
+    ),
+    tag = "History",
+)]
+pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
+    sqlx::query!("DELETE FROM history")
+        .execute(&db.pool)
+        .await?;
+    Ok(())
+}
+
+/// Delete history entry
+#[utoipa::path(
+    delete,
+    path = "/api/history/{id}",
+    params(
+        ("id", description = "History id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "History",
+)]
+pub async fn remove_history_item(
+    State(db): State<Db>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    sqlx::query!("DELETE FROM history WHERE id = ?;", id)
+        .execute(&db.pool)
+        .await?;
+    Ok(())
+}
+
+/// Update/Insert video history
+#[utoipa::path(
+    put,
+    path = "/api/video/{id}/history",
     params(
         ("id", description = "Video id"),
     ),
     request_body = UpdateHistoryPayload,
     responses(
         (status = 200),
-        (status = 201),
-    )
+        (status = 201, description = "History is created"),
+    ),
+    tag = "Videos",
 )]
-pub async fn update_history(
+pub async fn update_video_history(
     State(db): State<Db>,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateHistoryPayload>,

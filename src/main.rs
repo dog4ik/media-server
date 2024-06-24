@@ -215,6 +215,11 @@ async fn main() {
         .route("/video/:id/previews", get(public_api::previews))
         .route("/video/:id/previews", post(admin_api::generate_previews))
         .route("/video/:id/previews", delete(admin_api::delete_previews))
+        .route(
+            "/video/:id/history",
+            delete(admin_api::remove_video_history),
+        )
+        .route("/video/:id/history", put(admin_api::update_video_history))
         .route("/video/:id/transcode", post(admin_api::transcode_video))
         .route(
             "/video/:id/stream_transcode",

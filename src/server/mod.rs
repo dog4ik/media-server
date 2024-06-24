@@ -69,6 +69,8 @@ pub struct SerdeDuration {
         public_api::watch,
         admin_api::remove_variant,
         public_api::all_history,
+        admin_api::update_video_history,
+        admin_api::remove_video_history,
         admin_api::clear_history,
         public_api::video_history,
         admin_api::remove_history_item,
