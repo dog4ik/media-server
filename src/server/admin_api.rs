@@ -7,7 +7,6 @@ use axum::body::Body;
 use axum::extract::rejection::JsonRejection;
 use axum::extract::{FromRequest, Multipart, Path, Query};
 use axum::http::{Request, StatusCode};
-use axum::response::IntoResponse;
 use axum::{
     extract::State,
     response::{
@@ -16,7 +15,6 @@ use axum::{
     },
     Json,
 };
-use axum_extra::headers::Range;
 use axum_extra::{headers, TypedHeader};
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -27,9 +25,7 @@ use torrent::file::{MagnetLink, TorrentFile};
 use tracing::{debug, info};
 use uuid::Uuid;
 
-use super::{
-    ContentTypeQuery, IdQuery, NumberQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery,
-};
+use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
@@ -56,7 +52,8 @@ use crate::{
     path = "/api/scan",
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
     app_state.reconciliate_library().await
@@ -68,7 +65,8 @@ pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), A
     path = "/api/clear_db",
     responses(
         (status = 200, body = String),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, StatusCode> {
     info!("Clearing database");
@@ -166,7 +164,8 @@ impl Display for Provider {
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn remove_video(
     State(state): State<AppState>,
@@ -185,7 +184,8 @@ pub async fn remove_video(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn remove_variant(
     State(state): State<AppState>,
@@ -205,7 +205,8 @@ pub async fn remove_variant(
     request_body = ShowMetadata,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn alter_show_metadata(
     State(db): State<Db>,
@@ -234,7 +235,8 @@ pub async fn alter_show_metadata(
     request_body = SeasonMetadata,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn alter_season_metadata(
     State(db): State<Db>,
@@ -264,7 +266,8 @@ pub async fn alter_season_metadata(
     request_body = EpisodeMetadata,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn alter_episode_metadata(
     State(db): State<Db>,
@@ -295,7 +298,8 @@ pub async fn alter_episode_metadata(
     request_body = MovieMetadata,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn alter_movie_metadata(
     State(db): State<Db>,
@@ -324,7 +328,8 @@ pub async fn alter_movie_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn fix_show_metadata(
     State(app_state): State<AppState>,
@@ -350,7 +355,8 @@ pub async fn fix_show_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn fix_movie_metadata(
     State(app_state): State<AppState>,
@@ -377,7 +383,8 @@ pub async fn fix_movie_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Metadata",
 )]
 pub async fn fix_metadata(
     Path(content_id): Path<i64>,
@@ -413,7 +420,8 @@ pub async fn fix_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn reset_show_metadata(
     Path(show_id): Path<i64>,
@@ -431,7 +439,8 @@ pub async fn reset_show_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn reset_movie_metadata(
     Path(movie_id): Path<i64>,
@@ -450,7 +459,8 @@ pub async fn reset_movie_metadata(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Metadata",
 )]
 pub async fn reset_metadata(
     Path(content_id): Path<i64>,
@@ -473,7 +483,8 @@ pub async fn reset_metadata(
     request_body = TranscodePayload,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn transcode_video(
     State(app_state): State<AppState>,
@@ -494,7 +505,8 @@ pub async fn transcode_video(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn generate_previews(State(app_state): State<AppState>, Path(id): Path<i64>) {
     tokio::spawn(async move {
@@ -511,7 +523,8 @@ pub async fn generate_previews(State(app_state): State<AppState>, Path(id): Path
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn delete_previews(Path(id): Path<i64>) -> Result<(), AppError> {
     let previews_dir = PreviewsDirAsset::new(id);
@@ -534,7 +547,8 @@ pub struct CancelTaskPayload {
     responses(
         (status = 200),
         (status = 400, description = "Task can't be canceled or it is not found"),
-    )
+    ),
+    tag = "Tasks",
 )]
 pub async fn cancel_task(
     State(tasks): State<&'static TaskResource>,
@@ -555,7 +569,8 @@ pub async fn cancel_task(
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Tasks",
 )]
 pub async fn mock_progress(
     State(tasks): State<&'static TaskResource>,
@@ -600,7 +615,8 @@ pub async fn mock_progress(
     responses(
         (status = 200, body = Vec<Task>),
         (status = 400, description = "Task can't be canceled or it is not found"),
-    )
+    ),
+    tag = "Tasks",
 )]
 pub async fn get_tasks(State(tasks): State<&'static TaskResource>) -> Json<Vec<Task>> {
     let tasks = tasks.tasks.lock().unwrap().to_vec();
@@ -613,7 +629,8 @@ pub async fn get_tasks(State(tasks): State<&'static TaskResource>) -> Json<Vec<T
     path = "/api/tasks/progress",
     responses(
         (status = 200, body = [u8]),
-    )
+    ),
+    tag = "Tasks",
 )]
 pub async fn progress(
     State(tasks): State<&'static TaskResource>,
@@ -638,7 +655,8 @@ pub async fn progress(
     path = "/api/log/latest",
     responses(
         (status = 200, body = Vec<JsonTracingEvent>, content_type = "application/json"),
-    )
+    ),
+    tag = "Logs",
 )]
 pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String), AppError> {
     use tokio::fs;
@@ -681,7 +699,8 @@ pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String),
     path = "/api/configuration",
     responses(
         (status = 200, body = ServerConfiguration),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn server_configuration(
     State(configuration): State<&'static Mutex<ServerConfiguration>>,
@@ -696,7 +715,8 @@ pub async fn server_configuration(
     path = "/api/configuration/schema",
     responses(
         (status = 200, body = FileConfigSchema),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn server_configuration_schema(
     State(configuration): State<&'static Mutex<ServerConfiguration>>,
@@ -712,7 +732,8 @@ pub async fn server_configuration_schema(
     request_body = FileConfigSchema,
     responses(
         (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn update_server_configuration(
     State(configuration): State<&'static Mutex<ServerConfiguration>>,
@@ -730,7 +751,8 @@ pub async fn update_server_configuration(
     path = "/api/configuration/reset",
     responses(
         (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn reset_server_configuration(
     State(configuration): State<&'static Mutex<ServerConfiguration>>,
@@ -751,7 +773,8 @@ pub async fn reset_server_configuration(
     responses(
         (status = 200, body = TorrentInfo),
         (status = 400, description = "Failed to parse torrent file"),
-    )
+    ),
+    tag = "Torrent",
 )]
 pub async fn parse_torrent_file(
     State(providers_stack): State<&'static MetadataProvidersStack>,
@@ -781,7 +804,8 @@ pub async fn parse_torrent_file(
     responses(
         (status = 200, body = TorrentInfo),
         (status = 400, description = "Failed to parse magnet link"),
-    )
+    ),
+    tag = "Torrent",
 )]
 pub async fn resolve_magnet_link(
     State(client): State<&'static TorrentClient>,
@@ -818,7 +842,8 @@ pub struct ProviderOrder {
     request_body = ProviderOrder,
     responses(
         (status = 200, body = ProviderOrder, description = "Updated ordering of providers"),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn order_providers(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -858,7 +883,8 @@ pub async fn order_providers(
     path = "/api/configuration/providers",
     responses(
         (status = 200, body = Vec<ProviderOrder>, description = "Ordering of providers"),
-    )
+    ),
+    tag = "Configuration",
 )]
 pub async fn providers_order(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -1014,33 +1040,19 @@ pub async fn update_video_history(
     Ok(StatusCode::OK)
 }
 
-/// Delete all history for default user
+/// Delete video history entry
 #[utoipa::path(
     delete,
-    path = "/api/history",
-    responses(
-        (status = 200),
-    )
-)]
-pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
-    sqlx::query!("DELETE FROM history")
-        .execute(&db.pool)
-        .await?;
-    Ok(())
-}
-
-/// Delete history for specific video
-#[utoipa::path(
-    delete,
-    path = "/api/history/{id}",
+    path = "/api/video/{id}/history",
     params(
         ("id", description = "Video id"),
     ),
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Videos",
 )]
-pub async fn remove_history_item(
+pub async fn remove_video_history(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<(), AppError> {
@@ -1050,9 +1062,9 @@ pub async fn remove_history_item(
     Ok(())
 }
 
-/// Recieve transcoded segment
+/// Retrieve transcoded segment
 #[utoipa::path(
-    delete,
+    get,
     path = "/api/transcode/{id}/segment/{segment}",
     params(
         ("id", description = "Transcode job"),
@@ -1062,7 +1074,8 @@ pub async fn remove_history_item(
         (status = 200),
         (status = 404, description = "Transcode job is not found"),
         (status = 500, description = "Worker is not avialable"),
-    )
+    ),
+    tag = "Transcoding",
 )]
 pub async fn transcoded_segment(
     Path((task_id, index)): Path<(String, usize)>,
@@ -1078,7 +1091,10 @@ pub async fn transcoded_segment(
         stream.sender.clone()
     };
     let (tx, rx) = oneshot::channel();
-    sender.send((index, tx)).await.unwrap();
+    sender
+        .send((index, tx))
+        .await
+        .map_err(|_| AppError::bad_request("Stream is not available"))?;
     if let Ok(bytes) = rx.await {
         Ok(bytes)
     } else {
@@ -1090,20 +1106,21 @@ pub async fn transcoded_segment(
 
 /// Start transcoded stream
 #[utoipa::path(
-    delete,
-    path = "/api/video/:id/stream_transcode",
+    post,
+    path = "/api/video/{id}/stream_transcode",
     params(
         ("id", description = "Video id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, body = Task),
         (status = 404, description = "Video is not found"),
-    )
+    ),
+    tag = "Transcoding",
 )]
 pub async fn create_transcode_stream(
     Path(id): Path<i64>,
     State(app_state): State<AppState>,
-) -> Result<(), AppError> {
+) -> Result<Json<Task>, AppError> {
     let AppState { library, tasks, .. } = app_state;
     let video_path = {
         let library = library.lock().unwrap();
@@ -1114,16 +1131,35 @@ pub async fn create_transcode_stream(
     };
     let cancellation_token = tasks.parent_cancellation_token.child_token();
     let tracker = tasks.tracker.clone();
-    let stream = TranscodeStream::init(id, video_path, tracker, cancellation_token).await?;
-    let mut streams = tasks.active_streams.lock().unwrap();
-    streams.push(stream);
-    Ok(())
+    let task_id = tasks.start_task(
+        TaskKind::LiveTranscode {
+            target: video_path.clone(),
+        },
+        Some(cancellation_token.clone()),
+    )?;
+    let stream =
+        TranscodeStream::init(id, video_path, task_id, tracker, cancellation_token).await?;
+    {
+        let mut streams = tasks.active_streams.lock().unwrap();
+        streams.push(stream);
+    }
+    let task = {
+        tasks
+            .tasks
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|t| t.id == task_id)
+            .expect("Task to be created")
+            .clone()
+    };
+    Ok(Json(task))
 }
 
 /// M3U8 manifest of live transcode task
 #[utoipa::path(
-    delete,
-    path = "/api/transcode/:id/manifest",
+    get,
+    path = "/api/transcode/{id}/manifest",
     params(
         ("id", description = "Task id"),
     ),
@@ -1131,7 +1167,8 @@ pub async fn create_transcode_stream(
         (status = 200),
         (status = 400, description = "Task uuid is incorrect"),
         (status = 404, description = "Task is not found"),
-    )
+    ),
+    tag = "Transcoding",
 )]
 pub async fn transcode_stream_manifest(
     Path(stream_id): Path<String>,
@@ -1155,7 +1192,8 @@ pub async fn transcode_stream_manifest(
     request_body = TorrentDownloadPayload,
     responses(
         (status = 200),
-    )
+    ),
+    tag = "Torrent",
 )]
 pub async fn download_torrent(
     State(app_state): State<AppState>,

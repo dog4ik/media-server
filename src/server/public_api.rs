@@ -155,23 +155,23 @@ impl DetailedVariant {
 /// Get preview by video id
 #[utoipa::path(
     get,
-    path = "/api/video/{id}/preview",
+    path = "/api/video/{id}/previews/{number}",
     params(
         ("id", description = "video id"),
-        NumberQuery,
+        ("number", description = "preview number"),
     ),
     responses(
         (status = 200, description = "Binary image", body = [u8]),
         (status = 304),
         (status = 404, description = "Preiew is not found", body = AppError),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn previews(
-    Path(video_id): Path<i64>,
-    Query(number): Query<NumberQuery>,
+    Path((video_id, number)): Path<(i64, usize)>,
     is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let preview_asset = PreviewAsset::new(video_id, number.number);
+    let preview_asset = PreviewAsset::new(video_id, number);
     let response = preview_asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
         .await?;
@@ -189,7 +189,8 @@ pub async fn previews(
     responses(
         (status = 200, description = "Subtitle", body = String),
         (status = 404, description = "Video is not found", body = AppError),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn pull_video_subtitle(
     Path(video_id): Path<i64>,
@@ -212,7 +213,8 @@ pub async fn pull_video_subtitle(
     responses(
         (status = 200, description = "Video stream", body = [u8]),
         (status = 404, description = "Video is not found", body = AppError),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn watch(
     Path(video_id): Path<i64>,
@@ -245,7 +247,8 @@ pub async fn watch(
     path = "/api/local_shows",
     responses(
         (status = 200, description = "All local shows", body = Vec<ShowMetadata>),
-    )
+    ),
+    tag = "Shows",
 )]
 /// All local shows
 pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetadata>>, AppError> {
@@ -260,7 +263,8 @@ pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetada
     ),
     responses(
         (status = 200, description = "Local episode", body = EpisodeMetadata),
-    )
+    ),
+    tag = "Shows",
 )]
 /// Local episode metadata by local episode id
 pub async fn local_episode(
@@ -278,7 +282,8 @@ pub async fn local_episode(
     ),
     responses(
         (status = 200, description = "Local episode", body = EpisodeMetadata),
-    )
+    ),
+    tag = "Shows",
 )]
 /// Get local episode metadata by video's id
 pub async fn local_episode_by_video_id(
@@ -299,7 +304,8 @@ pub async fn local_episode_by_video_id(
     ),
     responses(
         (status = 200, description = "Local movie", body = MovieMetadata),
-    )
+    ),
+    tag = "Movies",
 )]
 /// Get local movie metadata by video's id
 pub async fn local_movie_by_video_id(
@@ -317,7 +323,8 @@ pub async fn local_movie_by_video_id(
     path = "/api/local_movies",
     responses(
         (status = 200, description = "All local movies", body = Vec<MovieMetadata>),
-    )
+    ),
+    tag = "Movies",
 )]
 /// All local movies
 pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMetadata>>, AppError> {
@@ -335,7 +342,8 @@ pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMeta
     responses(
         (status = 200, body = DbExternalId),
         (status = 404, body = AppError),
-    )
+    ),
+    tag = "Metadata",
 )]
 pub async fn external_to_local_id(
     Path(id): Path<String>,
@@ -366,7 +374,8 @@ pub async fn external_to_local_id(
     ),
     responses(
         (status = 200, description = "External ids", body = Vec<ExternalIdMetadata>),
-    )
+    ),
+    tag = "Metadata",
 )]
 pub async fn external_ids(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -391,7 +400,8 @@ pub async fn external_ids(
     responses(
         (status = 200, description = "Desired video", body = DetailedVideo),
         (status = 404, description = "Video is not found"),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn contents_video(
     Query(IdQuery { id }): Query<IdQuery>,
@@ -431,7 +441,8 @@ pub struct VariantSummary {
     path = "/api/variants",
     responses(
         (status = 200, description = "All variants", body = Vec<VariantSummary>),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<VariantSummary>> {
     let (shows, movies): (Vec<_>, Vec<_>) = {
@@ -522,7 +533,8 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Variant
     ),
     responses(
         (status = 200, description = "Requested video", body = DetailedVideo),
-    )
+    ),
+    tag = "Videos",
 )]
 pub async fn get_video_by_id(
     Path(id): Path<i64>,
@@ -627,7 +639,8 @@ pub async fn get_video_by_id(
     responses(
         (status = 200, description = "Requested show", body = ShowMetadata),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn get_show(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -649,7 +662,8 @@ pub async fn get_show(
     responses(
         (status = 200, description = "Requested movie", body = MovieMetadata),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn get_movie(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -671,7 +685,8 @@ pub async fn get_movie(
         (status = 200, description = "Poster bytes", body = [u8]),
         (status = 304),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn show_poster(
     Path(id): Path<i64>,
@@ -695,7 +710,8 @@ pub async fn show_poster(
         (status = 200, description = "Poster bytes", body = [u8]),
         (status = 304),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn season_poster(
     Path(id): Path<i64>,
@@ -719,7 +735,8 @@ pub async fn season_poster(
         (status = 200, description = "Response with image", body = [u8]),
         (status = 304),
         (status = 404, description = "Image not found", body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn show_backdrop(
     Path(id): Path<i64>,
@@ -743,7 +760,8 @@ pub async fn show_backdrop(
         (status = 200, description = "Poster bytes", body = [u8]),
         (status = 304),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn movie_poster(
     Path(id): Path<i64>,
@@ -767,7 +785,8 @@ pub async fn movie_poster(
         (status = 200, description = "Backdrop bytes", body = [u8]),
         (status = 304),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Movies",
 )]
 pub async fn movie_backdrop(
     Path(id): Path<i64>,
@@ -791,7 +810,8 @@ pub async fn movie_backdrop(
         (status = 200, description = "Poster bytes", body = [u8]),
         (status = 304),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn episode_poster(
     Path(id): Path<i64>,
@@ -816,7 +836,8 @@ pub async fn episode_poster(
     responses(
         (status = 200, description = "Desired season metadata", body = SeasonMetadata),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn get_season(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -840,7 +861,8 @@ pub async fn get_season(
     responses(
         (status = 200, description = "Desired episode metadata", body = EpisodeMetadata),
         (status = 404, body = AppError)
-    )
+    ),
+    tag = "Shows",
 )]
 pub async fn get_episode(
     State(providers): State<&'static MetadataProvidersStack>,
@@ -862,7 +884,8 @@ pub async fn get_episode(
     ),
     responses(
         (status = 200, description = "Torrent search results", body = Vec<Torrent>),
-    )
+    ),
+    tag = "Torrent",
 )]
 pub async fn search_torrent(
     Query(query): Query<SearchQuery>,
@@ -884,7 +907,8 @@ pub async fn search_torrent(
     ),
     responses(
         (status = 200, description = "Content search results", body = Vec<MetadataSearchResult>),
-    )
+    ),
+    tag = "Search",
 )]
 pub async fn search_content(
     Query(query): Query<SearchQuery>,
@@ -907,7 +931,8 @@ pub async fn search_content(
     responses(
         (status = 200, description = "History of desired video", body = Vec<DbHistory>),
         (status = 404),
-    )
+    ),
+    tag = "History",
 )]
 pub async fn video_history(
     Path(video_id): Path<i64>,
@@ -929,7 +954,8 @@ pub async fn video_history(
     path = "/api/history",
     responses(
         (status = 200, description = "All history", body = Vec<DbHistory>),
-    )
+    ),
+    tag = "History",
 )]
 pub async fn all_history(State(db): State<Db>) -> Result<Json<Vec<DbHistory>>, AppError> {
     // todo: pagination
@@ -972,7 +998,8 @@ pub struct ShowSuggestion {
     path = "/api/history/suggest/movies",
     responses(
         (status = 200, description = "Suggested movies", body = Vec<MovieHistory>),
-    )
+    ),
+    tag = "History",
 )]
 pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
     let history = sqlx::query!(
@@ -1010,7 +1037,8 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
     path = "/api/history/suggest/shows",
     responses(
         (status = 200, description = "Suggested shows", body = Vec<ShowSuggestion>),
-    )
+    ),
+    tag = "History",
 )]
 pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
     let history = sqlx::query!(
@@ -1018,7 +1046,7 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
         history.video_id as video_id, episodes.number as episode_number, seasons.show_id as show_id,
         seasons.number as season_number FROM history 
     JOIN episodes ON episodes.video_id = history.video_id
-    JOIN seasons ON seasons.id = episodes.season_id
+    JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 50;"#
     )
     .fetch_all(&db.pool)

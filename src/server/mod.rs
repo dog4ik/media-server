@@ -95,6 +95,9 @@ pub struct SerdeDuration {
         admin_api::cancel_task,
         admin_api::reconciliate_lib,
         admin_api::clear_db,
+        admin_api::create_transcode_stream,
+        admin_api::transcode_stream_manifest,
+        admin_api::transcoded_segment,
     ),
     components(
         schemas(
@@ -154,7 +157,17 @@ pub struct SerdeDuration {
         )
     ),
     tags(
-        (name = "public_api", description = "Show API")
+        (name = "Configuration", description = "Server configuration options"),
+        (name = "Shows", description = "Shows, seasons, episodes operations"),
+        (name = "Movies", description = "Movies operations"),
+        (name = "Metadata", description = "Metadata operations"),
+        (name = "History", description = "History operations"),
+        (name = "Logs", description = "Log operations"),
+        (name = "Tasks", description = "Tasks operations"),
+        (name = "Search", description = "Endopoints for searching content"),
+        (name = "Torrent", description = "Torrent client operations"),
+        (name = "Transcoding", description = "Live transcoding operations"),
+        (name = "Videos", description = ""),
     )
 )]
 pub struct OpenApiDoc;
