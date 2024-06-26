@@ -212,13 +212,13 @@ impl TranscodeStream {
     pub async fn init(
         video_id: i64,
         target_path: PathBuf,
+        task_id: uuid::Uuid,
         tracker: TaskTracker,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<Self> {
-        let uuid = uuid::uuid!("00000000-0000-0000-0000-ffff00000000");
-        let temp_path = PathBuf::from("transcode").join(uuid.to_string());
+        let temp_path = PathBuf::from("transcode").join(task_id.to_string());
         let key_frames = retrieve_keyframes(&target_path, 0, 2.0).await?;
-        let manifest = M3U8Manifest::from_key_frames(&key_frames, uuid.to_string());
+        let manifest = M3U8Manifest::from_key_frames(&key_frames, task_id.to_string());
         let manifest_path = temp_path.join("manifest.m3u8");
         manifest.save(manifest_path).await.unwrap();
         let (tx, rx) = mpsc::channel(100);
@@ -235,7 +235,7 @@ impl TranscodeStream {
             video_id,
             target_path,
             key_frames,
-            uuid,
+            uuid: task_id,
             manifest,
             sender: tx,
             cancellation_token,
@@ -274,7 +274,7 @@ async fn transcode_stream(
                 "-c:v",
                 "h264",
                 "-c:a",
-                "aac",
+                "mp3",
                 "-f",
                 "segment",
                 "-segment_list",
@@ -317,8 +317,9 @@ async fn transcode_stream(
                         start_index,
                         start_index + history.len() + 5
                     );
-                    command.kill().await.unwrap();
-                    let _ = tokio::fs::remove_file(&list_path).await;
+                    let kill = command.kill();
+                    let remove_list = tokio::fs::remove_file(&list_path);
+                    let (_, _) = tokio::join!(kill, remove_list);
                     history.clear();
                     pending_requests.retain(|_, v| !v.is_closed());
                     let behind = idx.checked_sub(0).unwrap_or(0);

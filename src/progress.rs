@@ -1,8 +1,4 @@
-use std::{
-    fmt::Display,
-    path::PathBuf,
-    sync::{Arc, Mutex},
-};
+use std::{fmt::Display, path::PathBuf, sync::Mutex};
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -22,6 +18,10 @@ use crate::{
 #[serde(rename_all = "lowercase", tag = "task_kind")]
 pub enum TaskKind {
     Transcode {
+        #[schema(value_type = String)]
+        target: PathBuf,
+    },
+    LiveTranscode {
         #[schema(value_type = String)]
         target: PathBuf,
     },
@@ -51,6 +51,7 @@ impl Display for TaskKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TaskKind::Transcode { target } => write!(f, "transcode: {}", target.display()),
+            TaskKind::LiveTranscode { target } => write!(f, "live transcode: {}", target.display()),
             TaskKind::Scan { target } => write!(f, "file scan: {}", target.display()),
             TaskKind::FullScan => write!(f, "library scan"),
             TaskKind::Previews { target } => write!(f, "previews: {}", target.display()),
