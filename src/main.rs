@@ -66,7 +66,7 @@ async fn main() {
     };
     let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
-    let db = Db::connect(configuration.resources.database_path.clone())
+    let db = Db::connect(&configuration.resources.database_path)
         .await
         .expect("database to be found");
 
@@ -215,7 +215,7 @@ async fn main() {
             "/video/:id/pull_subtitle",
             get(public_api::pull_video_subtitle),
         )
-        .route("/video/:id/previews", get(public_api::previews))
+        .route("/video/:id/previews/:number", get(public_api::previews))
         .route("/video/:id/previews", post(admin_api::generate_previews))
         .route("/video/:id/previews", delete(admin_api::delete_previews))
         .route(

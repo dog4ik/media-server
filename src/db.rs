@@ -953,6 +953,7 @@ pub struct DbSubtitles {
 
 #[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema)]
 pub struct DbHistory {
+    #[schema(value_type = i64)]
     pub id: Option<i64>,
     pub time: i64,
     pub is_finished: bool,
@@ -962,6 +963,7 @@ pub struct DbHistory {
 
 #[derive(Debug, Clone, FromRow, Serialize, Default, utoipa::ToSchema)]
 pub struct DbExternalId {
+    #[schema(value_type = i64)]
     pub id: Option<i64>,
     pub metadata_provider: String,
     pub metadata_id: String,
