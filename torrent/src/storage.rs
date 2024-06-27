@@ -11,6 +11,7 @@ use tokio::{
     sync::{mpsc, oneshot, watch},
     task::JoinSet,
 };
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     peers::BitField,
@@ -43,6 +44,7 @@ pub struct TorrentStorage {
 pub struct StorageHandle {
     pub piece_tx: mpsc::Sender<StorageMessage>,
     pub bitfield: watch::Receiver<BitField>,
+    pub cancellation_token: CancellationToken,
 }
 
 impl StorageHandle {
@@ -124,7 +126,11 @@ impl TorrentStorage {
         }
     }
 
-    pub async fn spawn(self) -> anyhow::Result<StorageHandle> {
+    pub async fn spawn(
+        mut self,
+        tracker: &TaskTracker,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<StorageHandle> {
         let save_location_metadata = self.output_dir.metadata()?;
         if !save_location_metadata.is_dir() {
             return Err(anyhow::anyhow!(
@@ -142,74 +148,79 @@ impl TorrentStorage {
                     .context("Init paths for torrent files")?;
             }
         }
-        let (piece_tx, piece_rx) = mpsc::channel(1000);
-        let (state_tx, state_rx) = watch::channel(self.bitfield.clone());
-        tokio::spawn(self.work(piece_rx, state_tx));
+        let (piece_tx, mut piece_rx) = mpsc::channel(1000);
+        let (mut state_tx, state_rx) = watch::channel(self.bitfield.clone());
+        let token = cancellation_token.clone();
+        tracker.spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(message) = piece_rx.recv() => self.handle_message(message, &mut state_tx).await,
+                    _ = token.cancelled() => {
+                        break;
+                    }
+                }
+            }
+        });
         Ok(StorageHandle {
             piece_tx,
             bitfield: state_rx,
+            cancellation_token,
         })
     }
 
-    async fn work(
-        mut self,
-        mut reciever: mpsc::Receiver<StorageMessage>,
-        state: watch::Sender<BitField>,
+    async fn handle_message(
+        &mut self,
+        message: StorageMessage,
+        state: &mut watch::Sender<BitField>,
     ) {
-        while let Some(data) = reciever.recv().await {
-            match data {
-                StorageMessage::Save {
-                    piece_i,
-                    bytes,
-                    response,
-                } => {
-                    let save_result = match self.storage_method {
-                        StorageMethod::Preallocated => self
-                            .save_piece_preallocated(piece_i, bytes)
-                            .await
-                            .map(|_| piece_i)
-                            .map_err(|_| piece_i),
-                        StorageMethod::Reallocated => self
-                            .save_piece(piece_i, bytes)
-                            .await
-                            .map(|_| piece_i)
-                            .map_err(|_| piece_i),
-                    };
-                    match save_result {
-                        Ok(p) => {
-                            response
-                                .try_send(StorageFeedback::Saved { piece_i: p })
-                                .unwrap();
-                            self.bitfield.add(p).unwrap();
-                            state.send_modify(|old| old.add(p).unwrap())
-                        }
-                        Err(p) => {
-                            response
-                                .try_send(StorageFeedback::Failed { piece_i: p })
-                                .unwrap();
-                        }
+        match message {
+            StorageMessage::Save {
+                piece_i,
+                bytes,
+                response,
+            } => {
+                let save_result = match self.storage_method {
+                    StorageMethod::Preallocated => self
+                        .save_piece_preallocated(piece_i, bytes)
+                        .await
+                        .map(|_| piece_i)
+                        .map_err(|_| piece_i),
+                    StorageMethod::Reallocated => self
+                        .save_piece(piece_i, bytes)
+                        .await
+                        .map(|_| piece_i)
+                        .map_err(|_| piece_i),
+                };
+                match save_result {
+                    Ok(piece_i) => {
+                        let _ = response.send(StorageFeedback::Saved { piece_i }).await;
+                        self.bitfield.add(piece_i).unwrap();
+                        state.send_modify(|old| old.add(piece_i).unwrap())
+                    }
+                    Err(piece_i) => {
+                        let _ = response.send(StorageFeedback::Failed { piece_i }).await;
                     }
                 }
-                StorageMessage::RetrieveBlocking { piece_i, response } => {
-                    let bytes = match self.storage_method {
-                        StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
-                        StorageMethod::Preallocated => {
-                            self.retrieve_piece_preallocated(piece_i).await.ok()
-                        }
-                    };
-                    let _ = response.send(bytes);
-                }
-                StorageMessage::RetrievePiece { piece_i, response } => {
-                    let bytes = match self.storage_method {
-                        StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
-                        StorageMethod::Preallocated => {
-                            self.retrieve_piece_preallocated(piece_i).await.ok()
-                        }
-                    };
-                    let _ = response.send(StorageFeedback::Data { piece_i, bytes });
-                }
-            };
-        }
+            }
+            StorageMessage::RetrieveBlocking { piece_i, response } => {
+                let bytes = match self.storage_method {
+                    StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
+                    StorageMethod::Preallocated => {
+                        self.retrieve_piece_preallocated(piece_i).await.ok()
+                    }
+                };
+                let _ = response.send(bytes);
+            }
+            StorageMessage::RetrievePiece { piece_i, response } => {
+                let bytes = match self.storage_method {
+                    StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
+                    StorageMethod::Preallocated => {
+                        self.retrieve_piece_preallocated(piece_i).await.ok()
+                    }
+                };
+                let _ = response.send(StorageFeedback::Data { piece_i, bytes });
+            }
+        };
     }
 
     /// Helper function to get piece length with consideration of the last piece

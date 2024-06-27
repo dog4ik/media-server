@@ -16,15 +16,17 @@ async fn main() {
         .init();
     let client = Client::new(ClientConfig::default()).await.unwrap();
     let save_location = ".";
-    let url = "magnet:?xt=urn:btih:1F3F09632F03B6DD572662F1BDB496958A079A5C&dn=The.Witcher.Blood.Origin.S01.COMPLETE.720p.NF.WEBRip.x264-Galaxy&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.bittor.pw%3A1337%2Fannounce&tr=udp%3A%2F%2Fpublic.popcorn-tracker.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.dler.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969&tr=udp%3A%2F%2Fopen.demonii.com%3A1337%2Fannounce";
+    let url = "magnet:?xt=urn%3Abtih%3A48B1E1C185A40F6916BA9BB5DF9AA7B84D8DAD77&dn=The.Witcher.S02.1080p.NF.WEBRip.DDP5.1.Atmos.x264-TEPES&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A6969%2Fannounce&tr=udp%3A%2F%2Fopen.stealth.si%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.torrent.eu.org%3A451%2Fannounce&tr=udp%3A%2F%2Ftracker.bittor.pw%3A1337%2Fannounce&tr=udp%3A%2F%2Fpublic.popcorn-tracker.org%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.dler.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fexodus.desync.com%3A6969&tr=udp%3A%2F%2Fopentracker.i2p.rocks%3A6969%2Fannounce";
     let magnet_link = url.parse().unwrap();
     let info = client.resolve_magnet_link(&magnet_link).await.unwrap();
     tracing::info!("Resolved magnet link: {}", info.name);
-    let mut handle = client
+    let all_files = (0..info.output_files("").len()).collect();
+    client
         .download(
             save_location,
             magnet_link.announce_list.unwrap(),
             info,
+            all_files,
             |p: DownloadProgress| {
                 println!("");
                 println!("");
@@ -46,5 +48,7 @@ async fn main() {
         )
         .await
         .unwrap();
-    handle.wait().await;
+    let _ = tokio::signal::ctrl_c().await;
+    client.shutdown().await;
+    println!("Done");
 }

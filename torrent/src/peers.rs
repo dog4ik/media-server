@@ -8,7 +8,10 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_stream::StreamExt;
-use tokio_util::codec::{Encoder, Framed};
+use tokio_util::{
+    codec::{Encoder, Framed},
+    sync::CancellationToken,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -342,24 +345,22 @@ impl Peer {
         Ok(())
     }
 
-    pub fn close(self) {}
-
-    pub async fn download(mut self, mut ipc: PeerIPC) -> (Uuid, Result<(), PeerError>) {
+    pub async fn download(
+        mut self,
+        mut ipc: PeerIPC,
+        cancellation_token: CancellationToken,
+    ) -> (Uuid, Result<(), PeerError>) {
         let mut afk_interval = tokio::time::interval(Duration::from_secs(1));
         let mut pex_update_interval = tokio::time::interval(Duration::from_secs(90));
         afk_interval.tick().await;
         pex_update_interval.tick().await;
-        loop {
+        let peer_result = loop {
             tokio::select! {
                 Some(command_msg) = ipc.commands_rx.recv() => {
                     afk_interval.reset();
                     match self.handle_peer_command(command_msg).await {
-                        Ok(should_break) => if should_break {
-                            let mut tcp = self.stream.into_inner();
-                            let _ = tcp.shutdown().await;
-                            break;
-                        },
-                        Err(e) => return (self.uuid, Err(e)),
+                        Ok(_) => {},
+                        Err(e) => break Err(e),
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
@@ -367,7 +368,7 @@ impl Peer {
                         afk_interval.reset();
                     }
                     if let Err(e) = self.handle_peer_msg(peer_msg, &mut ipc).await {
-                        return (self.uuid, Err(e));
+                        break Err(e);
                     }
                 },
                 _ = afk_interval.tick() => {
@@ -376,16 +377,21 @@ impl Peer {
                 _ = pex_update_interval.tick() => {
                     let _ = self.send_status(PeerStatusMessage::PexRequest, &mut ipc).await;
                 }
-                else => break
+                _ = cancellation_token.cancelled() => {
+                    tracing::debug!(ip = self.ip().to_string(), "Peer quit using cancellation token");
+                    break Ok(());
+                }
             };
-        }
-        (self.uuid, Ok(()))
+        };
+        let mut stream = self.stream.into_inner();
+        let _ = stream.shutdown().await;
+        (self.uuid, peer_result)
     }
 
     pub async fn handle_peer_command(
         &mut self,
         peer_command: PeerCommand,
-    ) -> Result<bool, PeerError> {
+    ) -> Result<(), PeerError> {
         match peer_command {
             PeerCommand::Start { block } => {
                 if !self.choked {
@@ -395,7 +401,7 @@ impl Peer {
                     tracing::warn!("ignoring new job (choked)");
                 }
             }
-            // Cancel does not provide guarentee that this piece will not arrive
+            // Cancel does not provide guarentee that this block will not arrive
             PeerCommand::Cancel { block } => {
                 self.send_peer_msg(PeerMessage::Cancel {
                     index: block.piece,
@@ -408,7 +414,6 @@ impl Peer {
                 let have_msg = PeerMessage::Have { index: piece };
                 self.send_peer_msg(have_msg).await?;
             }
-            PeerCommand::Abort => return Ok(true),
             PeerCommand::Interested => self.show_interest().await?,
             PeerCommand::Choke => self.send_peer_msg(PeerMessage::Choke).await?,
             PeerCommand::Unchoke => self.send_peer_msg(PeerMessage::Unchoke).await?,
@@ -449,7 +454,7 @@ impl Peer {
                 };
             }
         };
-        Ok(false)
+        Ok(())
     }
 
     pub async fn handle_peer_msg(
@@ -503,12 +508,6 @@ impl Peer {
                 begin,
                 block: bytes,
             } => {
-                tracing::trace!(
-                    "Got piece {} with offset {} with size({})",
-                    index,
-                    begin,
-                    bytes.len()
-                );
                 let block = Block {
                     piece: index,
                     offset: begin,

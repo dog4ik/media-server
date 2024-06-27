@@ -125,6 +125,7 @@ pub struct DownloadContentHint {
 pub struct TorrentDownloadPayload {
     pub save_location: Option<String>,
     pub content_hint: Option<DownloadContentHint>,
+    pub enabled_files: Option<Vec<usize>>,
     pub magnet_link: String,
 }
 

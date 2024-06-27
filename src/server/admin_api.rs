@@ -1245,12 +1245,16 @@ pub async fn download_torrent(
         None => return Err(AppError::bad_request("Couldn't choose output location")),
     };
     let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
+    let enabled_files = payload
+        .enabled_files
+        .unwrap_or((0..info.output_files("").len()).collect());
     let download_handle = torrent_client
         .client
         .download(
             save_location,
             magnet_link.announce_list.unwrap(),
             info,
+            enabled_files,
             progress_tx,
         )
         .await

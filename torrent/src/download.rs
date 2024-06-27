@@ -13,7 +13,7 @@ use tokio::{
     task::JoinSet,
     time::{timeout, Instant},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::{
@@ -23,7 +23,7 @@ use crate::{
         ut_metadata::{UtMessage, UtMetadata},
         Info,
     },
-    scheduler::{ScheduleStrategy, Scheduler},
+    scheduler::{PendingFiles, Priority, ScheduleStrategy, Scheduler},
     storage::{StorageFeedback, StorageHandle},
     NewPeer,
 };
@@ -31,6 +31,7 @@ use crate::{
 #[derive(Debug, Clone)]
 pub enum DownloadMessage {
     SetStategy(ScheduleStrategy),
+    SetFilePriority { file_idx: usize, priority: Priority },
     Abort,
     Pause,
     Resume,
@@ -173,10 +174,16 @@ pub struct ActivePeer {
     pub performance_history: PerformanceHistory,
     /// Current pointer to the relevant pex history
     pub pex_idx: usize,
+    pub cancellation_token: CancellationToken,
 }
 
 impl ActivePeer {
-    pub fn new(command: mpsc::Sender<PeerCommand>, peer: &Peer, pex_idx: usize) -> Self {
+    pub fn new(
+        command: mpsc::Sender<PeerCommand>,
+        peer: &Peer,
+        pex_idx: usize,
+        cancellation_token: CancellationToken,
+    ) -> Self {
         let choke_status = Status::default();
         Self {
             id: peer.uuid,
@@ -190,6 +197,7 @@ impl ActivePeer {
             pending_blocks: Vec::new(),
             performance_history: PerformanceHistory::new(),
             pex_idx,
+            cancellation_token,
         }
     }
 
@@ -408,6 +416,7 @@ impl Download {
     pub async fn new(
         storage: StorageHandle,
         t: Info,
+        enabled_files: Vec<usize>,
         new_peers: mpsc::Receiver<NewPeer>,
         cancellation_token: CancellationToken,
     ) -> Self {
@@ -417,8 +426,11 @@ impl Download {
         let (status_tx, status_rx) = mpsc::channel(100);
         let (storage_tx, storage_rx) = mpsc::channel(100);
         let total_pieces = t.pieces.len();
+        let output_files = t.output_files("");
+        let pending_files =
+            PendingFiles::from_output_files(t.piece_length, &output_files, enabled_files);
 
-        let scheduler = Scheduler::new(t);
+        let scheduler = Scheduler::new(t, pending_files);
 
         Self {
             new_peers,
@@ -440,14 +452,18 @@ impl Download {
         }
     }
 
-    pub fn start(self, progress: impl ProgressConsumer) -> DownloadHandle {
+    pub fn start(
+        self,
+        progress: impl ProgressConsumer,
+        task_tracker: &TaskTracker,
+    ) -> DownloadHandle {
         let (download_tx, download_rx) = mpsc::channel(100);
         let download_handle = DownloadHandle {
             download_tx,
             total_pieces: self.total_pieces,
             storage: self.storage.clone(),
         };
-        tokio::spawn(self.work(progress, download_rx));
+        task_tracker.spawn(self.work(progress, download_rx));
         download_handle
     }
 
@@ -496,6 +512,10 @@ impl Download {
                     }
                 },
                 Some(message) = commands_rx.recv() => self.handle_command(message).await,
+                _ = self.cancellation_token.cancelled() => {
+                    self.handle_shutdown().await;
+                    break Ok(());
+                },
                 else => {
                     break Err(anyhow!("Select branch"));
                 }
@@ -528,6 +548,7 @@ impl Download {
 
     async fn handle_new_peer(&mut self, peer: Peer) {
         let (peer_command_tx, peer_command_rx) = mpsc::channel(100);
+        let child_token = self.cancellation_token.child_token();
         let ipc = PeerIPC {
             status_tx: self.status_tx.clone(),
             commands_rx: peer_command_rx,
@@ -535,8 +556,9 @@ impl Download {
         self.pex_history
             .push_value(PexHistoryEntry::added(peer.ip()));
         let pex_tip = self.pex_history.tip();
-        let active_peer = ActivePeer::new(peer_command_tx, &peer, pex_tip);
-        self.peers_handles.spawn(peer.download(ipc));
+        let active_peer = ActivePeer::new(peer_command_tx, &peer, pex_tip, child_token.clone());
+        self.peers_handles
+            .spawn(peer.download(ipc, child_token.clone()));
         let initial_pex_message = PexMessage {
             added: self
                 .scheduler
@@ -565,6 +587,7 @@ impl Download {
             );
             return;
         };
+        let peer = &mut self.scheduler.peers[peer_idx];
 
         match status.message_type {
             PeerStatusMessage::Request { block } => {
@@ -596,33 +619,27 @@ impl Download {
                 let _ = self.scheduler.schedule(peer_idx);
             }
             PeerStatusMessage::Have { piece } => {
-                if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
-                    peer.bitfield.add(piece as usize).unwrap();
-                }
+                peer.bitfield.add(piece as usize).unwrap();
             }
             PeerStatusMessage::Afk => {
-                if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
-                    if !peer.pending_blocks.is_empty() {
-                        self.scheduler.choke_peer(peer_idx);
-                    }
+                if !peer.pending_blocks.is_empty() {
+                    self.scheduler.choke_peer(peer_idx);
                 }
             }
             PeerStatusMessage::UtMetadataBlockRequest { block } => {
                 if let Some(Some(bytes)) = self.ut_metadata.blocks.get(block) {
-                    if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
-                        let ut_message = UtMessage::Data {
-                            piece: block,
-                            total_size: self.ut_metadata.size,
-                        };
-                        peer.command
-                            .try_send(PeerCommand::UtMetadata {
-                                msg: ut_message,
-                                data: bytes.clone(),
-                            })
-                            .unwrap();
-                    }
+                    let ut_message = UtMessage::Data {
+                        piece: block,
+                        total_size: self.ut_metadata.size,
+                    };
+                    peer.command
+                        .try_send(PeerCommand::UtMetadata {
+                            msg: ut_message,
+                            data: bytes.clone(),
+                        })
+                        .unwrap();
                 } else {
-                    tracing::error!("Non existand ut metadata block {block}");
+                    tracing::error!("Peer requested missing ut_metadata {block}");
                 }
             }
             PeerStatusMessage::PexMessage { msg } => {
@@ -632,11 +649,9 @@ impl Download {
                 }
             }
             PeerStatusMessage::PexRequest => {
-                if let Some(peer) = self.scheduler.peers.get_mut(peer_idx) {
-                    let msg = self.pex_history.pex_message(peer.pex_idx);
-                    peer.pex_idx = self.pex_history.tip();
-                    peer.command.try_send(PeerCommand::Pex { msg }).unwrap();
-                }
+                let msg = self.pex_history.pex_message(peer.pex_idx);
+                peer.pex_idx = self.pex_history.tip();
+                peer.command.try_send(PeerCommand::Pex { msg }).unwrap();
             }
         }
     }
@@ -742,6 +757,11 @@ impl Download {
                 );
                 self.scheduler.schedule_stategy = strategy;
             }
+            DownloadMessage::SetFilePriority { file_idx, priority } => {
+                self.scheduler
+                    .pending_files
+                    .change_file_priority(file_idx, priority);
+            }
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
                 self.cancellation_token.cancel();
@@ -754,6 +774,12 @@ impl Download {
             }
         };
     }
+
+    pub async fn handle_shutdown(&mut self) {
+        tracing::info!("Gracefully shutting down download");
+        // wait for peers to close
+        while let Some(_) = self.peers_handles.join_next().await {}
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -765,7 +791,6 @@ pub enum PeerCommand {
     Pex { msg: PexMessage },
     UtMetadata { msg: UtMessage, data: Bytes },
     Interested,
-    Abort,
     Choke,
     Unchoke,
     NotInterested,

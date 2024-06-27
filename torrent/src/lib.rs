@@ -20,6 +20,7 @@ use file::MagnetLink;
 use peers::Peer;
 use protocol::Info;
 use reqwest::Url;
+use scheduler::{PendingFile, PendingFiles};
 use storage::{StorageMethod, TorrentStorage};
 use tokio::{
     net::TcpStream,
@@ -27,7 +28,7 @@ use tokio::{
     task::JoinSet,
     time::timeout,
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use tracker::{TrackerType, UdpTrackerChannel, UdpTrackerWorker};
 
 use crate::{
@@ -46,9 +47,9 @@ mod utils;
 
 #[derive(Debug)]
 pub struct ClientConfig {
-    port: u16,
-    udp_listener_port: u16,
-    cancellation_token: Option<CancellationToken>,
+    pub port: u16,
+    pub udp_listener_port: u16,
+    pub cancellation_token: Option<CancellationToken>,
 }
 
 impl Default for ClientConfig {
@@ -73,11 +74,15 @@ struct PeerListener {
 }
 
 impl PeerListener {
-    pub async fn spawn(port: u16) -> anyhow::Result<Self> {
-        let addr = SocketAddrV4::new(Ipv4Addr::LOCALHOST, port);
+    pub async fn spawn(
+        port: u16,
+        tracker: &TaskTracker,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<Self> {
+        let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
         let listener = utils::bind_tcp_listener(addr).await?;
         let (tx, mut rx) = mpsc::channel(100);
-        tokio::spawn(async move {
+        tracker.spawn(async move {
             let mut map: HashMap<[u8; 20], mpsc::Sender<NewPeer>> = HashMap::new();
             loop {
                 tokio::select! {
@@ -94,7 +99,6 @@ impl PeerListener {
                                     };
                                 } else {
                                     tracing::warn!(?info_hash, "Peer {ip} connected but torrent does not exist", );
-                                    peer.close();
                                 }
                             }
                             Ok(Err(e)) => {
@@ -109,7 +113,9 @@ impl PeerListener {
                     Some((info_hash, sender)) = rx.recv() => {
                         map.insert(info_hash, sender);
                     }
-                    else => break
+                    _ = cancellation_token.cancelled() => {
+                            break;
+                    }
                 };
             }
             tracing::warn!("Peer listener finished");
@@ -133,13 +139,16 @@ pub struct Client {
     peer_listener: PeerListener,
     udp_tracker_tx: UdpTrackerChannel,
     cancellation_token: CancellationToken,
+    task_tracker: TaskTracker,
 }
 
 impl Client {
     pub async fn new(config: ClientConfig) -> anyhow::Result<Self> {
-        let peer_listener = PeerListener::spawn(config.port).await?;
-        let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
+        let task_tracker = TaskTracker::new();
+        let peer_listener =
+            PeerListener::spawn(config.port, &task_tracker, cancellation_token.clone()).await?;
+        let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
         let udp_worker =
             UdpTrackerWorker::bind(udp_listener_addr, cancellation_token.clone()).await?;
         let udp_tracker_channel = udp_worker.spawn().await?;
@@ -149,7 +158,15 @@ impl Client {
             peer_listener,
             udp_tracker_tx: udp_tracker_channel,
             cancellation_token,
+            task_tracker,
         })
+    }
+
+    /// Call cancel on cancellation token and wait until all tasks are closed
+    pub async fn shutdown(&self) {
+        self.task_tracker.close();
+        self.cancellation_token.cancel();
+        self.task_tracker.wait().await
     }
 
     pub async fn download(
@@ -157,31 +174,35 @@ impl Client {
         save_location: impl AsRef<Path>,
         trackers: Vec<Url>,
         info: Info,
+        enabled_files: Vec<usize>,
         progress_consumer: impl ProgressConsumer,
     ) -> anyhow::Result<DownloadHandle> {
-        let child_cancellation_token = self.cancellation_token.child_token();
+        let child_token = self.cancellation_token.child_token();
         let hash = info.hash();
         // TODO: Trackers should know download/upload stats
         let (_, rx) = watch::channel(DownloadStat::empty(info.total_size()));
         let (peers_tx, peers_rx) = mpsc::channel(1000);
         tracing::info!("Connecting trackers");
-        let mut tracker_set = spawn_trackers(
+        spawn_trackers(
             trackers,
             hash,
             self.udp_tracker_tx.clone(),
             rx,
             peers_tx.clone(),
-            child_cancellation_token.clone(),
+            self.task_tracker.clone(),
+            child_token.clone(),
         )
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
         let storage = TorrentStorage::new(&info, save_location, StorageMethod::Preallocated);
-        let storage_handle = storage.spawn().await?;
-        tracker_set.detach_all();
+        let storage_handle = storage
+            .spawn(&self.task_tracker, child_token.clone())
+            .await?;
+
         let download =
-            Download::new(storage_handle, info, peers_rx, child_cancellation_token).await;
-        let download_handle = download.start(progress_consumer);
+            Download::new(storage_handle, info, enabled_files, peers_rx, child_token).await;
+        let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)
     }
 
@@ -258,10 +279,10 @@ async fn spawn_trackers(
     tracker_tx: UdpTrackerChannel,
     progress: watch::Receiver<DownloadStat>,
     peer_tx: mpsc::Sender<NewPeer>,
+    task_tracker: TaskTracker,
     cancellation_token: CancellationToken,
-) -> JoinSet<anyhow::Result<()>> {
+) {
     let mut tracker_init_set = JoinSet::new();
-    let mut tracker_set = JoinSet::new();
     for tracker in urls {
         let Ok(tracker_type) = TrackerType::from_url(&tracker, tracker_tx.clone()) else {
             continue;
@@ -281,7 +302,7 @@ async fn spawn_trackers(
         match tracker_result {
             Ok(Ok(Ok(tracker))) => {
                 tracing::info!("Connected to the tracker: {}", tracker.url);
-                tracker_set.spawn(tracker.work(cancellation_token.clone()));
+                task_tracker.spawn(tracker.work(cancellation_token.clone()));
             }
             Ok(Ok(Err(e))) => {
                 tracing::error!("Failed to construct tracker: {}", e);
@@ -294,5 +315,4 @@ async fn spawn_trackers(
             }
         };
     }
-    tracker_set
 }

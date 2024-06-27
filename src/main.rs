@@ -60,7 +60,10 @@ async fn main() {
         .allow_origin(Any)
         .allow_headers(Any);
 
-    let torrent_config = ClientConfig::default();
+    let torrent_config = ClientConfig {
+        cancellation_token: Some(cancellation_token.child_token()),
+        ..Default::default()
+    };
     let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
     let db = Db::connect(configuration.resources.database_path.clone())
@@ -315,6 +318,7 @@ async fn main() {
         _ = cancellation_token.cancelled() => {}
     }
     tracing::trace!("Waiting all tasks to finish");
+    torrent_client.client.shutdown().await;
     tracker.close();
     tracker.wait().await;
     tracing::info!("Gracefully shutted down");

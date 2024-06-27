@@ -16,6 +16,7 @@ async fn main() {
             ".",
             torrent_file.all_trackers(),
             torrent_file.info,
+            vec![0],
             |p: DownloadProgress| {
                 println!("Progress: {}", p.percent);
             },

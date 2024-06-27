@@ -12,8 +12,84 @@ use uuid::Uuid;
 use crate::{
     download::{ActivePeer, Block, PeerCommand, Performance},
     peers::BitField,
-    protocol::{Hashes, Info},
+    protocol::{Hashes, Info, OutputFile},
 };
+
+#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+pub enum Priority {
+    Disabled = 0,
+    Low = 1,
+    #[default]
+    Medium = 2,
+    High = 3,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct PendingFile {
+    pub priority: Priority,
+    pub index: usize,
+    pub start_piece: usize,
+    pub end_piece: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingFiles {
+    pub files: Vec<PendingFile>,
+}
+
+impl PendingFiles {
+    pub fn from_output_files(
+        piece_length: u32,
+        output_files: &Vec<OutputFile>,
+        enabled_files: Vec<usize>,
+    ) -> Self {
+        let mut offset = 0;
+        let mut files = Vec::with_capacity(output_files.len());
+        for (i, file) in output_files.iter().enumerate() {
+            let length = file.length();
+            let end = offset + length;
+            let start_piece = offset / piece_length as u64;
+            let end_piece = end / piece_length as u64;
+            let priority = if enabled_files.contains(&i) {
+                Priority::default()
+            } else {
+                Priority::Disabled
+            };
+            files.push(PendingFile {
+                priority,
+                start_piece: start_piece as usize,
+                index: i,
+                end_piece: end_piece as usize,
+            });
+            offset += length;
+        }
+        Self { files }
+    }
+
+    pub fn change_file_priority(&mut self, idx: usize, new_priority: Priority) {
+        if let Some(file) = self.files.iter_mut().find(|f| f.index == idx) {
+            if file.priority != new_priority {
+                file.priority = new_priority;
+                self.files.sort_unstable_by_key(|x| x.priority);
+            }
+        };
+    }
+
+    // Iterate over file pieces with repect to their priorities
+    pub fn piece_iterator(&self) -> impl Iterator<Item = usize> + '_ {
+        self.files
+            .iter()
+            .rev()
+            .filter_map(|file| {
+                if Priority::Disabled == file.priority {
+                    return None;
+                } else {
+                    Some(file.start_piece..=file.end_piece)
+                }
+            })
+            .flatten()
+    }
+}
 
 #[derive(Debug, Default, Clone)]
 pub enum ScheduleStrategy {
@@ -156,12 +232,13 @@ pub struct Scheduler {
     pub pending_saved_pieces: HashSet<usize>,
     pub peers: Vec<ActivePeer>,
     pub schedule_stategy: ScheduleStrategy,
+    pub pending_files: PendingFiles,
 }
 
 const BLOCK_LENGTH: u32 = 16 * 1024;
 
 impl Scheduler {
-    pub fn new(t: Info) -> Self {
+    pub fn new(t: Info, pending_files: PendingFiles) -> Self {
         let total_pieces = t.pieces.len();
         let bitfield = BitField::empty(total_pieces);
         Self {
@@ -175,6 +252,7 @@ impl Scheduler {
             pending_saved_pieces: HashSet::new(),
             bitfield,
             schedule_stategy: ScheduleStrategy::default(),
+            pending_files,
         }
     }
 
@@ -192,7 +270,7 @@ impl Scheduler {
     /// Schedules next piece linearly (the next missing piece from start)
     /// returing `None` if no more pieces left
     fn linear_next(&self) -> Option<usize> {
-        for i in 0..self.pieces.len() {
+        for i in self.pending_files.piece_iterator() {
             if self.can_scheudle_piece(i) {
                 tracing::debug!("Assigning next linear piece {i}");
                 return Some(i);
