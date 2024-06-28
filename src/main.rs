@@ -285,6 +285,15 @@ async fn main() {
             "/transcode/:id/manifest",
             get(admin_api::transcode_stream_manifest),
         )
+        .route("/file_browser/root_dirs", get(admin_api::root_dirs))
+        .route(
+            "/file_browser/browse/:key",
+            get(admin_api::browse_directory),
+        )
+        .route(
+            "/file_browser/parent/:key",
+            get(admin_api::parent_directory),
+        )
         .route("/clear_db", delete(admin_api::clear_db));
 
     let assets_service = ServeDir::new(program_files.join("dist"))

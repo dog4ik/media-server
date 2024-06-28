@@ -4,6 +4,7 @@ use crate::app_state;
 use crate::config;
 use crate::db;
 use crate::ffmpeg;
+use crate::file_browser;
 use crate::library;
 use crate::metadata;
 use crate::progress;
@@ -98,6 +99,9 @@ pub struct SerdeDuration {
         admin_api::create_transcode_stream,
         admin_api::transcode_stream_manifest,
         admin_api::transcoded_segment,
+        admin_api::browse_directory,
+        admin_api::parent_directory,
+        admin_api::root_dirs,
     ),
     components(
         schemas(
@@ -153,6 +157,9 @@ pub struct SerdeDuration {
             config::Codec,
             config::CodecType,
             ffmpeg::H264Preset,
+            file_browser::BrowseRootDirs,
+            file_browser::BrowseDirectory,
+            file_browser::BrowseFile,
             SerdeDuration
         )
     ),

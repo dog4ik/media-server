@@ -7,6 +7,7 @@ pub mod app_state;
 pub mod config;
 pub mod db;
 pub mod ffmpeg;
+pub mod file_browser;
 pub mod library;
 pub mod metadata;
 pub mod progress;

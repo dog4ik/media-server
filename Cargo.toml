@@ -20,6 +20,7 @@ bytes = "1.6.0"
 clap = { version = "4.5.4", features = ["derive"] }
 crc32fast = { version = "1.4.0", features = ["nightly"] }
 dirs = "5.0.1"
+sysinfo = "0.30.12"
 dotenvy = "0.15.7"
 notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
 rand = "0.8.5"
