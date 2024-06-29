@@ -289,8 +289,8 @@ impl PreviewAsset {
 
 // DIRECTORY ASSETS
 
-#[derive(Debug, Clone)]
 /// Directory of all video assets
+#[derive(Debug, Clone)]
 pub struct VideoAssetsDir {
     path: PathBuf,
     id: i64,
@@ -304,6 +304,74 @@ impl VideoAssetsDir {
     pub fn new(video_id: i64) -> Self {
         let path = video_sharded_path(video_id);
         Self { path, id: video_id }
+    }
+}
+
+/// Directory of all episode assets
+#[derive(Debug, Clone)]
+pub struct EpisodeAssetsDir {
+    path: PathBuf,
+}
+impl AssetDir for EpisodeAssetsDir {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+impl EpisodeAssetsDir {
+    pub fn new(episode_id: i64) -> Self {
+        let path = sharded_path(episode_id, AssetContentType::Episode);
+        Self { path }
+    }
+}
+
+/// Directory of all season assets
+#[derive(Debug, Clone)]
+pub struct SeasonAssetsDir {
+    path: PathBuf,
+}
+impl AssetDir for SeasonAssetsDir {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+impl SeasonAssetsDir {
+    pub fn new(season_id: i64) -> Self {
+        let path = sharded_path(season_id, AssetContentType::Season);
+        Self { path }
+    }
+}
+
+/// Directory of all show assets
+#[derive(Debug, Clone)]
+pub struct ShowAssetsDir {
+    path: PathBuf,
+}
+impl AssetDir for ShowAssetsDir {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+impl ShowAssetsDir {
+    pub fn new(show_id: i64) -> Self {
+        let path = sharded_path(show_id, AssetContentType::Show);
+        Self { path }
+    }
+}
+
+/// Directory of all movie assets
+#[derive(Debug, Clone)]
+pub struct MovieAssetsDir {
+    path: PathBuf,
+}
+impl AssetDir for MovieAssetsDir {
+    fn path(&self) -> PathBuf {
+        self.path.clone()
+    }
+}
+impl MovieAssetsDir {
+    pub fn new(movie_id: i64) -> Self {
+        let path = sharded_path(movie_id, AssetContentType::Movie);
+        Self { path }
     }
 }
 

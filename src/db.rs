@@ -9,6 +9,7 @@ use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
 
 use crate::{
     app_state::AppError,
+    library::assets::{self, AssetDir},
     metadata::{
         ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, MetadataImage,
         MetadataProvider, MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata,
@@ -348,6 +349,12 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         )
         .fetch_one(&self.pool)
         .await?;
+
+        let episode_assets = assets::EpisodeAssetsDir::new(id);
+        if let Err(e) = episode_assets.delete_dir().await {
+            tracing::warn!("Failed to clean up episode directory: {e}")
+        };
+
         let season_id = delete_episode_result.season_id;
 
         let siblings_count = sqlx::query!(
@@ -369,6 +376,12 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         let delete_result = sqlx::query!("DELETE FROM seasons WHERE id = ? RETURNING show_id", id)
             .fetch_one(&self.pool)
             .await?;
+
+        let season_assets = assets::SeasonAssetsDir::new(id);
+        if let Err(e) = season_assets.delete_dir().await {
+            tracing::warn!("Failed to clean up season directory: {e}")
+        };
+
         let show_id = delete_result.show_id;
         let siblings_count = sqlx::query!(
             "SELECT COUNT(*) as count FROM seasons WHERE show_id = ?",
@@ -384,10 +397,17 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
     }
 
     /// Relies on `ON DELETE CASCADE` to remove show's seasons and episodes.
+    /// This causes seasons/episodes assets to become orphaned and not cleaned up
     pub async fn remove_show(&self, id: i64) -> Result<(), Error> {
         tracing::debug!(id, "Removing show");
         let query = sqlx::query!("DELETE FROM shows WHERE id = ?", id);
         query.execute(&self.pool).await?;
+
+        let show_assets = assets::ShowAssetsDir::new(id);
+        if let Err(e) = show_assets.delete_dir().await {
+            tracing::warn!("Failed to clean up show directory: {e}")
+        };
+
         Ok(())
     }
 
@@ -395,6 +415,12 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         tracing::debug!(id, "Removing movie");
         let query = sqlx::query!("DELETE FROM movies WHERE id = ?", id);
         query.execute(&self.pool).await?;
+
+        let movie_assets = assets::MovieAssetsDir::new(id);
+        if let Err(e) = movie_assets.delete_dir().await {
+            tracing::warn!("Failed to clean up movie directory: {e}")
+        };
+
         Ok(())
     }
 
