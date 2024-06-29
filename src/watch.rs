@@ -1,18 +1,10 @@
-use std::{fmt::Display, path::PathBuf, sync::Mutex};
+use std::{fmt::Display, path::PathBuf};
 
-use tokio::sync::mpsc::{self, Receiver};
+use tokio::sync::mpsc::{self};
 
-use notify::{
-    event::{DataChange, ModifyKind, RenameMode},
-    Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-};
+use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-use crate::{
-    app_state::AppState,
-    config::ServerConfiguration,
-    library::{is_format_supported, MediaFolders, MediaType},
-    utils,
-};
+use crate::{app_state::AppState, library::is_format_supported, utils};
 
 #[derive(Debug, Clone)]
 enum EventType {
@@ -38,39 +30,98 @@ impl Display for FileEvent {
     }
 }
 
-fn watch_changes(
-    paths: Vec<&PathBuf>,
-) -> anyhow::Result<(RecommendedWatcher, Receiver<FileEvent>)> {
-    let (tx, rx) = mpsc::channel(100);
-    let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
-        if let Ok(event) = res {
-            tracing::debug!("folders change detected: {:?}", event);
-            let event_type = match event.kind {
-                EventKind::Create(_) => EventType::Create,
-                EventKind::Modify(kind) if kind == ModifyKind::Name(RenameMode::To) => {
-                    EventType::Create
-                }
-                EventKind::Modify(kind) if kind == ModifyKind::Data(DataChange::Content) => {
-                    EventType::Modify
-                }
-                EventKind::Remove(_) => EventType::Remove,
-                _ => {
-                    return;
-                }
-            };
-            tx.blocking_send(FileEvent {
-                event_type,
-                path: event.paths.first().unwrap().clone(),
-            })
-            .unwrap();
-        }
-    })?;
+#[derive(Debug, Clone)]
+enum WatchCommand {
+    Watch(PathBuf),
+    UnWatch(PathBuf),
+}
 
-    for path in paths {
-        watcher.watch(path, RecursiveMode::Recursive)?;
+#[derive(Debug)]
+struct FileWatcher {
+    tx: mpsc::Sender<WatchCommand>,
+}
+
+impl FileWatcher {
+    pub fn new(app_state: AppState) -> anyhow::Result<Self> {
+        let (notify_tx, mut notify_rx) = mpsc::channel(100);
+        let (command_tx, mut command_rx) = mpsc::channel(100);
+        let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
+            let _ = notify_tx.blocking_send(res);
+        })?;
+
+        let cancellation_token = app_state.cancelation_token.clone();
+
+        let (config_path, mut show_dirs, movie_dirs) = {
+            let config = app_state.configuration.lock().unwrap();
+            (
+                config.config_file.0.clone(),
+                config.show_folders.clone(),
+                config.movie_folders.clone(),
+            )
+        };
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    Some(event) = notify_rx.recv() => {
+                        match event {
+                            Ok(event) => match event.kind {
+                                EventKind::Remove(_)
+                                | EventKind::Create(_)
+                                | EventKind::Modify(_) => {
+                                    tracing::debug!("Recieved watcher event: {:?}", event);
+                                    for path in event.paths {
+                                        if path == config_path {
+                                            let mut config = app_state.configuration.lock().unwrap();
+                                            if let Ok(new_config) = config.config_file.read() {
+                                                tracing::info!("Detected config file changes");
+                                                config.apply_config_schema(new_config)
+                                            }
+                                        }
+                                        if show_dirs.contains(&path) {
+                                            app_state.partial_refresh().await;
+                                        }
+                                        if movie_dirs.contains(&path) {
+                                            app_state.partial_refresh().await;
+                                        }
+                                    }
+                                }
+                                _ => (),
+                            },
+                            Err(err) => {
+                                tracing::debug!("Config watcher errors: {:?}", err);
+                            }
+                        };
+                    }
+                    Some(command) = command_rx.recv() => {
+                        match command {
+                            WatchCommand::Watch(path) => {
+                                if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
+                                    tracing::error!("Failed to add {} to the watcher: {e}", path.display());
+                                } else {
+                                    show_dirs.push(path);
+                                };
+                            },
+                            WatchCommand::UnWatch(path) => {
+                                let _ = watcher.unwatch(&path);
+                                show_dirs.retain(|p| *p != path);
+                            },
+                        }
+                    }
+                    _ = cancellation_token.cancelled() => break,
+                }
+            }
+        });
+
+        Ok(Self { tx: command_tx })
     }
 
-    Ok((watcher, rx))
+    pub fn watch(&self, path: PathBuf) {
+        self.tx.try_send(WatchCommand::Watch(path)).unwrap();
+    }
+    pub fn unwatch(&self, path: PathBuf) {
+        self.tx.try_send(WatchCommand::UnWatch(path)).unwrap();
+    }
 }
 
 fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
@@ -86,64 +137,4 @@ fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
         flattened_paths.push(path.clone())
     }
     Ok(flattened_paths)
-}
-
-/// Monitor library changes (blocking)
-pub async fn monitor_library(app_state: AppState, folders: MediaFolders) {
-    let (_watcher, mut rx) = watch_changes(folders.all()).unwrap();
-    while let Some(event) = rx.recv().await {
-        if let Some(media_type) = folders.folder_type(&event.path) {
-            match event.event_type {
-                EventType::Create => {
-                    let _ = match media_type {
-                        MediaType::Show => {
-                            let files_paths = flatten_path(&event.path).unwrap();
-                            for path in files_paths {
-                                tracing::info!("Detected new show file: {}", path.display())
-                            }
-                        }
-                        MediaType::Movie => {
-                            let files_paths = flatten_path(&event.path).unwrap();
-                            for path in files_paths {
-                                tracing::info!("Detected new movie file: {}", path.display())
-                            }
-                        }
-                    };
-                }
-                EventType::Remove => {
-                    _ = app_state.reconciliate_library().await;
-                }
-                EventType::Modify => {}
-            };
-        }
-    }
-}
-
-pub async fn monitor_config(
-    configuration: &'static Mutex<ServerConfiguration>,
-    config_path: PathBuf,
-) {
-    let (mut watcher, mut rx) = watch_changes(vec![&config_path]).unwrap();
-    while let Some(event) = rx.recv().await {
-        match event.event_type {
-            EventType::Modify => {
-                let mut config = configuration.lock().unwrap();
-                if let Ok(new_config) = config.config_file.read() {
-                    tracing::info!("Detected config file changes");
-                    config.apply_config_schema(new_config)
-                }
-            }
-            EventType::Remove => {
-                watcher
-                    .watch(&config_path, RecursiveMode::NonRecursive)
-                    .unwrap();
-                let mut config = configuration.lock().unwrap();
-                if let Ok(new_config) = config.config_file.read() {
-                    tracing::info!("Detected config file changes");
-                    config.apply_config_schema(new_config)
-                }
-            }
-            _ => {}
-        }
-    }
 }

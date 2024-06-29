@@ -28,6 +28,7 @@ use uuid::Uuid;
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
+use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::{
@@ -736,13 +737,27 @@ pub async fn server_configuration_schema(
     tag = "Configuration",
 )]
 pub async fn update_server_configuration(
-    State(configuration): State<&'static Mutex<ServerConfiguration>>,
+    State(app_state): State<AppState>,
     Json(new_config): Json<FileConfigSchema>,
 ) -> Json<ServerConfiguration> {
-    let mut configuration = configuration.lock().unwrap();
-    configuration.apply_config_schema(new_config);
-    configuration.flush().unwrap();
-    Json(configuration.clone())
+    let mut configuration = app_state.configuration.lock().unwrap();
+    let mut should_refresh = false;
+    let new_configuration = {
+        if configuration.show_folders != new_config.show_folders
+            || configuration.movie_folders != new_config.movie_folders
+        {
+            should_refresh = true;
+        }
+        configuration.apply_config_schema(new_config);
+        configuration.flush().unwrap();
+        configuration.clone()
+    };
+    if should_refresh {
+        tracing::info!("Config change triggered library refresh");
+        tokio::spawn(async move { app_state.partial_refresh().await });
+    }
+
+    Json(new_configuration)
 }
 
 /// Reset server configuration to its defauts

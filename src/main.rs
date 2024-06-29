@@ -5,7 +5,7 @@ use dotenvy::dotenv;
 use media_server::app_state::AppState;
 use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
 use media_server::db::Db;
-use media_server::library::{explore_folder, Library, MediaFolders};
+use media_server::library::{explore_folder, Library};
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
@@ -13,7 +13,6 @@ use media_server::server::{admin_api, public_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
-use media_server::watch;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
@@ -95,14 +94,9 @@ async fn main() {
         movies.extend(explore_folder(dir, &db, &Vec::new()).await.unwrap());
     }
 
-    let media_folders = MediaFolders {
-        shows: shows_dirs,
-        movies: movies_dirs,
-    };
-
     let program_files = configuration.resources.base_path.clone();
 
-    let library = Library::new(media_folders.clone(), shows, movies);
+    let library = Library::new(shows, movies);
     let library = Box::leak(Box::new(Mutex::new(library)));
     let tmdb_api = TmdbApi::new(configuration.tmdb_token.clone().unwrap());
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
@@ -139,7 +133,7 @@ async fn main() {
     #[cfg(feature = "windows-tray")]
     tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
     // tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
-    tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
+    // tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
     let public_api = Router::new()
         .route("/local_shows", get(public_api::all_local_shows))

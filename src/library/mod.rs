@@ -67,7 +67,6 @@ const EXTRAS_FOLDERS: [&str; 11] = [
 pub struct Library {
     pub shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
     pub movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
-    pub media_folders: MediaFolders,
 }
 
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
@@ -262,12 +261,10 @@ impl LibraryFile<MovieIdentifier> {
 
 impl Library {
     pub fn new(
-        media_folders: MediaFolders,
         shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
         movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
     ) -> Self {
         Self {
-            media_folders,
             shows,
             movies,
         }
@@ -369,60 +366,6 @@ impl Library {
                 .map(|x| &mut x.source.video);
         }
         show
-    }
-
-    /// Full refresh of the library files.
-    pub async fn full_refresh(&mut self, db: crate::db::Db) {
-        let mut shows = HashMap::new();
-        for folder in &self.media_folders.shows {
-            if let Ok(items) = explore_folder(folder, &db.clone(), &Vec::new()).await {
-                shows.extend(items);
-            }
-        }
-        self.shows = shows;
-
-        let mut movies = HashMap::new();
-        for folder in &self.media_folders.movies {
-            if let Ok(items) = explore_folder(folder, &db.clone(), &Vec::new()).await {
-                movies.extend(items);
-            }
-        }
-        self.movies = movies;
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MediaFolders {
-    pub shows: Vec<PathBuf>,
-    pub movies: Vec<PathBuf>,
-}
-
-#[derive(Debug, Clone)]
-pub enum MediaType {
-    Show,
-    Movie,
-}
-
-impl MediaFolders {
-    pub fn all(&self) -> Vec<&PathBuf> {
-        let mut out = Vec::with_capacity(self.shows.len() + self.movies.len());
-        out.extend(self.shows.iter());
-        out.extend(self.movies.iter());
-        out
-    }
-
-    pub fn folder_type(&self, path: &PathBuf) -> Option<MediaType> {
-        for show_dir in &self.shows {
-            if path.starts_with(show_dir) {
-                return Some(MediaType::Show);
-            };
-        }
-        for movie_dir in &self.movies {
-            if path.starts_with(movie_dir) {
-                return Some(MediaType::Movie);
-            };
-        }
-        None
     }
 }
 

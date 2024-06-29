@@ -596,10 +596,6 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             });
         }
 
-        for missing_episode in missing_episodes {
-            let _ = self.db.remove_episode(missing_episode.episode_id).await;
-        }
-
         while let Some(result) = show_scan_handles.join_next().await {
             match result {
                 Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
@@ -667,17 +663,27 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         tracing::info!("Partially refreshing library");
         let mut shows = HashMap::new();
         let mut to_remove = Vec::new();
-        let media_folders = {
-            let library = self.library.lock().unwrap();
-            library.media_folders.clone()
+        let (show_folders, movie_folders) = {
+            let configuration = self.configuration.lock().unwrap();
+            (
+                configuration.show_folders.clone(),
+                configuration.movie_folders.clone(),
+            )
         };
-        for (id, file) in &self.library.lock().unwrap().shows {
-            if !file.source.video.path().try_exists().unwrap_or(false) {
-                to_remove.push(*id);
-            }
-        }
+        let mut show_paths = Vec::new();
         {
             let mut library = self.library.lock().unwrap();
+            for (id, file) in &library.shows {
+                let file_path = file.source.video.path();
+                if !show_folders.iter().any(|f| file_path.starts_with(f))
+                    || !file_path.try_exists().unwrap_or(false)
+                {
+                    to_remove.push(*id);
+                } else {
+                    show_paths.push(file.source.video.path().to_owned());
+                }
+            }
+
             for absent_id in &to_remove {
                 library.remove_show(*absent_id)
             }
@@ -686,16 +692,8 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let _ = self.db.remove_video(*absent_id).await;
         }
         to_remove.clear();
-        let show_paths = {
-            self.library
-                .lock()
-                .unwrap()
-                .shows
-                .values()
-                .map(|v| v.source.video.path().to_path_buf())
-                .collect()
-        };
-        for folder in media_folders.shows {
+
+        for folder in show_folders {
             if let Ok(items) = crate::library::explore_folder(&folder, self.db, &show_paths).await {
                 shows.extend(items);
             }
@@ -703,13 +701,20 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         self.library.lock().unwrap().shows.extend(shows);
 
         let mut movies = HashMap::new();
-        for (id, file) in &self.library.lock().unwrap().movies {
-            if !file.source.video.path().try_exists().unwrap_or(false) {
-                to_remove.push(*id);
-            }
-        }
+        let mut movie_paths = Vec::new();
         {
             let mut library = self.library.lock().unwrap();
+
+            for (id, file) in &library.movies {
+                let file_path = file.source.video.path();
+                if !movie_folders.iter().any(|f| file_path.starts_with(f))
+                    || !file_path.try_exists().unwrap_or(false)
+                {
+                    to_remove.push(*id);
+                } else {
+                    movie_paths.push(file.source.video.path().to_owned());
+                }
+            }
             for absent_id in &to_remove {
                 library.movies.remove(absent_id);
             }
@@ -717,16 +722,8 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         for absent_id in &to_remove {
             let _ = self.db.remove_video(*absent_id).await;
         }
-        let movie_paths = {
-            self.library
-                .lock()
-                .unwrap()
-                .movies
-                .values()
-                .map(|v| v.source.video.path().to_path_buf())
-                .collect()
-        };
-        for folder in media_folders.movies {
+
+        for folder in movie_folders {
             if let Ok(items) = crate::library::explore_folder(&folder, self.db, &movie_paths).await
             {
                 movies.extend(items);
