@@ -309,24 +309,28 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
 
     pub async fn remove_video(&self, id: i64) -> Result<(), Error> {
         tracing::debug!(id, "Removing video");
-        sqlx::query!("DELETE FROM videos WHERE id = ?;", id)
-            .execute(&self.pool)
-            .await?;
+        let remove_query = sqlx::query!("DELETE FROM videos WHERE id = ?;", id);
 
         if let Ok(episode) =
             sqlx::query!(r#"SELECT id as "id!" FROM episodes WHERE video_id = ?"#, id)
                 .fetch_one(&self.pool)
                 .await
         {
-            return self.remove_episode(episode.id).await;
+            let _ = self.remove_episode(episode.id).await;
+            remove_query.execute(&self.pool).await?;
+            return Ok(());
         }
 
         if let Ok(movie) = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
             .fetch_one(&self.pool)
             .await
         {
-            return self.remove_movie(movie.id).await;
+            let _ = self.remove_movie(movie.id).await;
+            remove_query.execute(&self.pool).await?;
+            return Ok(());
         }
+
+        remove_query.execute(&self.pool).await?;
 
         Ok(())
     }
