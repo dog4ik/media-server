@@ -204,12 +204,15 @@ impl TaskResource {
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let child_token = self.parent_cancellation_token.child_token();
-        let mut progress = job.progress();
+        let mut stdout = job.take_stdout().expect("stdout is not taken yet");
         let id = self.start_task(kind, Some(child_token.clone()))?;
         loop {
             tokio::select! {
-                Some(percent) = progress.recv() => {
-                    let _ = channel.send(ProgressChunk::pending(id,percent));
+                Some(chunk) = stdout.next_progress_chunk() => {
+                    let _ = channel.send(ProgressChunk::pending(
+                        id,
+                        chunk.percent(job.target_duration()),
+                    ));
                 },
                 res = job.wait() => {
                     match res {

@@ -8,9 +8,9 @@ use std::{path::Path, str::from_utf8};
 use base64::engine::general_purpose;
 use base64::Engine;
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::process::Child;
-use tokio::sync::{mpsc, Semaphore};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
+use tokio::process::{Child, ChildStdout};
+use tokio::sync::Semaphore;
 
 use crate::config::APP_RESOURCES;
 use crate::library::{
@@ -649,49 +649,114 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
         Ok(())
     }
 
-    /// Channel with job progress in percents. Consumes stdout of process
-    pub fn progress(&mut self) -> mpsc::Receiver<usize> {
-        let (tx, rx) = mpsc::channel(100);
-        let out = self.process.stdout.take().expect("ffmpeg to have stdout");
-        let reader = BufReader::new(out);
-        let mut lines = reader.lines();
-        let duration = self.duration;
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = lines.next_line().await {
-                let (key, value) = line.trim().split_once('=').expect("output to be key=value");
-                match key {
-                    "progress" => {
-                        // end | continue
-                        if value == "end" {
-                            break;
-                            // end logic is unhandled
-                            // how do we handle channel close?
-                        }
+    /// Take child's stdout.
+    pub fn take_stdout(&mut self) -> Option<FFmpegProgressStdout> {
+        let stdout = self.process.stdout.take()?;
+        Some(FFmpegProgressStdout::new(stdout))
+    }
+
+    pub fn target_duration(&self) -> Duration {
+        self.duration
+    }
+}
+
+#[derive(Debug)]
+pub struct FFmpegProgressStdout {
+    lines: Lines<BufReader<ChildStdout>>,
+    time: Option<Duration>,
+    speed: Option<f32>,
+}
+
+impl FFmpegProgressStdout {
+    pub fn new(stdout: ChildStdout) -> Self {
+        let lines = BufReader::new(stdout).lines();
+
+        Self {
+            lines,
+            time: None,
+            speed: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct FFmpegProgress {
+    /// Speed of operation relative to video playback
+    speed: f32,
+    /// Current time of the generated file
+    time: Duration,
+}
+
+impl FFmpegProgress {
+    /// Calculate percent of current point relative to given duration
+    pub fn percent(&self, total_duration: Duration) -> usize {
+        let current_duration = self.time.as_secs();
+        let percent = (current_duration as f64 / total_duration.as_secs() as f64) as f64 * 100.0;
+        let percent = percent.floor() as usize;
+        percent
+    }
+}
+
+impl FFmpegProgressStdout {
+    /// Yield next progress chunk.
+    /// This method is cancellation safe.
+    pub async fn next_progress_chunk(&mut self) -> Option<FFmpegProgress> {
+        while let Ok(Some(line)) = self.lines.next_line().await {
+            let (key, value) = line.trim().split_once('=').expect("output to be key=value");
+            // example output chunk:
+            // bitrate=5234.1kbits/s
+            // total_size=2456901632
+            // out_time_us=3755250000
+            // out_time_ms=3755250000
+            // out_time=01:02:35.250000
+            // dup_frames=0
+            // drop_frames=0
+            // speed=28.6x
+            // progress=continue
+
+            match key {
+                // The last key of a sequence of progress information is always "progress".
+                // end | continue
+                "progress" => {
+                    if let (Some(time), Some(speed)) = (self.time, self.speed) {
+                        (self.time, self.speed) = (None, None);
+                        return Some(FFmpegProgress { speed, time });
+                    } else {
+                        tracing::warn!(
+                            "Skipping incomplete progress: time: {:?}, speed: {:?}",
+                            self.time,
+                            self.speed
+                        );
+                        (self.time, self.speed) = (None, None);
                     }
-                    "speed" => {
-                        // speed looks like 10x
-                        // sometimes have space in front
-                    }
-                    "out_time_ms" => {
-                        // just a number
-                        let Ok(value) = value.parse() else {
-                            continue;
-                        };
-                        let current_duration = Duration::from_micros(value).as_secs();
-                        let percent =
-                            (current_duration as f64 / duration.as_secs() as f64) as f64 * 100.0;
-                        let percent = percent.floor() as usize;
-                        if percent == 100 {
-                            break;
-                        }
-                        let _ = tx.send(percent).await;
-                    }
-                    _ => {}
                 }
+                // speed looks like `10.3x`
+                // sometimes have space at the front
+                "speed" => match value[..value.len() - 1].trim_start().parse() {
+                    Ok(v) => self.speed = Some(v),
+                    Err(e) => {
+                        if value == "N/A" {
+                            self.speed = Some(f32::default());
+                        } else {
+                            tracing::debug!("Failed to parse {key}={value} in ffmpeg progress: {e}")
+                        }
+                    }
+                },
+                // just a number, time in microseconds
+                "out_time_ms" => match value.parse() {
+                    Ok(v) => self.time = Some(Duration::from_micros(v)),
+                    Err(e) => {
+                        if value == "N/A" {
+                            self.time = Some(Duration::default())
+                        } else {
+                            tracing::debug!("Failed to parse {key}={value} in ffmpeg progress: {e}")
+                        }
+                    }
+                },
+                _ => {}
             }
-            let _ = tx.send(100).await;
-        });
-        return rx;
+        }
+        None
     }
 }
 
