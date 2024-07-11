@@ -71,9 +71,9 @@ impl TmdbImage {
     }
 }
 
-impl Into<MetadataImage> for TmdbImage {
-    fn into(self) -> MetadataImage {
-        MetadataImage::new(self.url)
+impl From<TmdbImage> for MetadataImage {
+    fn from(val: TmdbImage) -> Self {
+        MetadataImage::new(val.url)
     }
 }
 
@@ -171,7 +171,7 @@ impl TmdbApi {
                 season,
                 episode
             );
-            return Ok(cache_episode);
+            Ok(cache_episode)
         } else {
             let response = self.tv_show_season(tmdb_show_id, season).await?;
             self.update_cache(tmdb_show_id, season, response.episodes);
@@ -264,79 +264,79 @@ impl TmdbApi {
     }
 }
 
-impl Into<MovieMetadata> for TmdbSearchMovieResult {
-    fn into(self) -> MovieMetadata {
-        let poster = self
+impl From<TmdbSearchMovieResult> for MovieMetadata {
+    fn from(val: TmdbSearchMovieResult) -> Self {
+        let poster = val
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
-        let backdrop = self
+        let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
         MovieMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(self.overview),
-            release_date: Some(self.release_date),
-            title: self.title,
+            plot: Some(val.overview),
+            release_date: Some(val.release_date),
+            title: val.title,
         }
     }
 }
 
-impl Into<ShowMetadata> for TmdbSearchShowResult {
-    fn into(self) -> ShowMetadata {
-        let poster = self
+impl From<TmdbSearchShowResult> for ShowMetadata {
+    fn from(val: TmdbSearchShowResult) -> Self {
+        let poster = val
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
-        let backdrop = self
+        let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
 
         ShowMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(self.overview),
-            release_date: Some(self.first_air_date),
-            title: self.name,
+            plot: Some(val.overview),
+            release_date: Some(val.first_air_date),
+            title: val.name,
             ..Default::default()
         }
     }
 }
 
-impl Into<SeasonMetadata> for TmdbShowSeason {
-    fn into(self) -> SeasonMetadata {
-        let poster = self
+impl From<TmdbShowSeason> for SeasonMetadata {
+    fn from(val: TmdbShowSeason) -> Self {
+        let poster = val
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         SeasonMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
-            release_date: Some(self.air_date),
-            plot: Some(self.overview),
-            episodes: self.episodes.into_iter().map(|e| e.into()).collect(),
+            release_date: Some(val.air_date),
+            plot: Some(val.overview),
+            episodes: val.episodes.into_iter().map(|e| e.into()).collect(),
             poster,
-            number: self.season_number,
+            number: val.season_number,
         }
     }
 }
 
-impl Into<EpisodeMetadata> for TmdbSeasonEpisode {
-    fn into(self) -> EpisodeMetadata {
-        let poster = self
+impl From<TmdbSeasonEpisode> for EpisodeMetadata {
+    fn from(val: TmdbSeasonEpisode) -> Self {
+        let poster = val
             .still_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
         EpisodeMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
-            release_date: Some(self.air_date),
-            number: self.episode_number,
-            title: self.name,
-            runtime: self.runtime.map(|t| Duration::from_mins(t as u64)),
-            plot: Some(self.overview),
-            season_number: self.season_number,
+            release_date: Some(val.air_date),
+            number: val.episode_number,
+            title: val.name,
+            runtime: val.runtime.map(|t| Duration::from_mins(t as u64)),
+            plot: Some(val.overview),
+            season_number: val.season_number,
             poster,
         }
     }
@@ -443,44 +443,44 @@ impl DiscoverMetadataProvider for TmdbApi {
     }
 }
 
-impl Into<MovieMetadata> for TmdbMovieDetails {
-    fn into(self) -> MovieMetadata {
-        let poster = self
+impl From<TmdbMovieDetails> for MovieMetadata {
+    fn from(val: TmdbMovieDetails) -> Self {
+        let poster = val
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
-        let backdrop = self
+        let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
         MovieMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(self.overview),
-            release_date: Some(self.release_date),
-            title: self.title,
+            plot: Some(val.overview),
+            release_date: Some(val.release_date),
+            title: val.title,
         }
     }
 }
 
-impl Into<ShowMetadata> for TmdbShowDetails {
-    fn into(self) -> ShowMetadata {
-        let poster = self
+impl From<TmdbShowDetails> for ShowMetadata {
+    fn from(val: TmdbShowDetails) -> Self {
+        let poster = val
             .poster_path
             .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
-        let backdrop = self
+        let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
         ShowMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(self.overview),
-            release_date: self.first_air_date,
-            title: self.name,
-            seasons: Some((1..=self.number_of_seasons).collect()),
-            episodes_amount: Some(self.number_of_episodes),
+            plot: Some(val.overview),
+            release_date: val.first_air_date,
+            title: val.name,
+            seasons: Some((1..=val.number_of_seasons).collect()),
+            episodes_amount: Some(val.number_of_episodes),
         }
     }
 }

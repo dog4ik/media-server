@@ -299,55 +299,55 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
     }
 }
 
-impl Into<MovieMetadata> for TvdbSearchResult {
-    fn into(self) -> MovieMetadata {
-        let poster = MetadataImage::new(self.image_url.parse().unwrap());
+impl From<TvdbSearchResult> for MovieMetadata {
+    fn from(val: TvdbSearchResult) -> Self {
+        let poster = MetadataImage::new(val.image_url.parse().unwrap());
 
         MovieMetadata {
-            metadata_id: self.tvdb_id,
+            metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
             poster: Some(poster),
             backdrop: None,
-            plot: self.overview,
-            release_date: self.first_air_time,
-            title: self.name,
+            plot: val.overview,
+            release_date: val.first_air_time,
+            title: val.name,
         }
     }
 }
 
-impl Into<ShowMetadata> for TvdbSearchResult {
-    fn into(self) -> ShowMetadata {
-        let poster = MetadataImage::new(self.image_url.parse().unwrap());
+impl From<TvdbSearchResult> for ShowMetadata {
+    fn from(val: TvdbSearchResult) -> Self {
+        let poster = MetadataImage::new(val.image_url.parse().unwrap());
 
         ShowMetadata {
-            metadata_id: self.tvdb_id,
+            metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
             poster: Some(poster),
             backdrop: None,
-            plot: self.overview,
-            release_date: self.first_air_time,
-            title: self.name,
+            plot: val.overview,
+            release_date: val.first_air_time,
+            title: val.name,
             ..Default::default()
         }
     }
 }
 
-impl Into<MetadataSearchResult> for TvdbSearchResult {
-    fn into(self) -> MetadataSearchResult {
-        let content_type = match self.search_type.as_ref() {
+impl From<TvdbSearchResult> for MetadataSearchResult {
+    fn from(val: TvdbSearchResult) -> Self {
+        let content_type = match val.search_type.as_ref() {
             "series" => ContentType::Show,
             "movie" => ContentType::Movie,
             rest => panic!("unknown content type: {}", rest),
         };
-        let poster = MetadataImage::new(self.image_url.parse().unwrap());
+        let poster = MetadataImage::new(val.image_url.parse().unwrap());
 
         MetadataSearchResult {
-            title: self.name,
+            title: val.name,
             poster: Some(poster),
-            plot: self.overview,
+            plot: val.overview,
             metadata_provider: MetadataProvider::Tvdb,
             content_type,
-            metadata_id: self.tvdb_id,
+            metadata_id: val.tvdb_id,
         }
     }
 }
