@@ -105,7 +105,7 @@ pub struct FFprobeTags {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeChapterTags {
-    pub title: String,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -116,7 +116,7 @@ pub struct FFprobeChapter {
     pub start_time: String,
     pub end: isize,
     pub end_time: String,
-    pub tags: FFprobeChapterTags,
+    pub tags: Option<FFprobeChapterTags>,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]

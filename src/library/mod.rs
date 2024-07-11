@@ -469,9 +469,11 @@ impl Video {
         self.metadata
             .chapters
             .iter()
-            .map(|ffprobe_chapter| Chapter {
-                title: ffprobe_chapter.tags.title.clone(),
-                start_time: ffprobe_chapter.start_time.clone(),
+            .filter_map(|ffprobe_chapter| {
+                Some(Chapter {
+                    title: ffprobe_chapter.tags.as_ref()?.title.as_ref()?.clone(),
+                    start_time: ffprobe_chapter.start_time.clone(),
+                })
             })
             .collect()
     }
