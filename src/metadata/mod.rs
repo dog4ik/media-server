@@ -571,6 +571,8 @@ pub struct MovieMetadata {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
+    #[schema(value_type = SerdeDuration)]
+    pub runtime: Option<Duration>,
     pub title: String,
 }
 

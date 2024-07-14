@@ -1,6 +1,7 @@
 use std::{
     collections::{HashMap, HashSet},
     sync::Mutex,
+    time::Duration,
 };
 
 use reqwest::{
@@ -294,6 +295,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             backdrop,
             plot: Some(plot),
             release_date: self.first_release.map(|r| r.date),
+            runtime: self.runtime.map(|t| Duration::from_mins(t as u64)),
             title: self.name,
         }
     }
@@ -310,6 +312,7 @@ impl From<TvdbSearchResult> for MovieMetadata {
             backdrop: None,
             plot: val.overview,
             release_date: val.first_air_time,
+            runtime: None,
             title: val.name,
         }
     }

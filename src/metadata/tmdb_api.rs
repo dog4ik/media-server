@@ -279,6 +279,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
             backdrop,
             plot: Some(val.overview),
             release_date: Some(val.release_date),
+            runtime: None,
             title: val.title,
         }
     }
@@ -458,6 +459,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             backdrop,
             plot: Some(val.overview),
             release_date: Some(val.release_date),
+            runtime: val.runtime.map(|t| Duration::from_mins(t as u64)),
             title: val.title,
         }
     }
