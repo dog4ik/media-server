@@ -13,12 +13,14 @@ use crate::torrent_index;
 use crate::tracing;
 use axum::response::IntoResponse;
 use axum_extra::{headers::Range, TypedHeader};
+use base64::Engine;
+use serde::de::Visitor;
 use serde::Deserialize;
 use utoipa::OpenApi;
 
 pub mod admin_api;
-pub mod content;
 pub mod public_api;
+pub mod torrent_api;
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 pub struct SerdeDuration {
@@ -102,6 +104,8 @@ pub struct SerdeDuration {
         admin_api::browse_directory,
         admin_api::parent_directory,
         admin_api::root_dirs,
+        public_api::video_content_metadata,
+        torrent_api::all_torrents,
     ),
     components(
         schemas(
@@ -125,11 +129,13 @@ pub struct SerdeDuration {
             public_api::VariantSummary,
             public_api::MovieHistory,
             public_api::ShowHistory,
+            public_api::VideoContentMetadata,
             admin_api::ProviderOrder,
             admin_api::UpdateHistoryPayload,
             public_api::ShowSuggestion,
             public_api::MovieHistory,
             admin_api::ProviderType,
+            admin_api::CursoredHistory,
             torrent::DownloadContentHint,
             torrent::TorrentDownloadPayload,
             torrent::TorrentInfo,
@@ -139,8 +145,12 @@ pub struct SerdeDuration {
             torrent::TorrentContent,
             torrent::TorrentContents,
             torrent::ResolvedTorrentFile,
+            torrent::TorrentDownload,
             progress::Task,
             progress::TaskKind,
+            progress::VideoTaskType,
+            progress::ProgressChunk,
+            progress::ProgressStatus,
             tracing::JsonTracingEvent,
             torrent_index::Torrent,
             db::DbHistory,
@@ -182,6 +192,55 @@ pub struct OpenApiDoc;
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct PageQuery {
     pub page: Option<usize>,
+}
+
+#[derive(utoipa::IntoParams)]
+pub struct CursorQuery {
+    pub cursor: Option<String>,
+}
+
+impl<'de> Deserialize<'de> for CursorQuery {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct CursorVisitor;
+        impl<'v> Visitor<'v> for CursorVisitor {
+            type Value = CursorQuery;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                write!(formatter, "base64 encoded string / cursor map")
+            }
+
+            fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+                let cursor = engine
+                    .decode(v)
+                    .ok()
+                    .and_then(|v| String::from_utf8(v).ok())
+                    .ok_or(E::custom("Failed to decode base64 string"))?;
+                Ok(CursorQuery {
+                    cursor: Some(cursor),
+                })
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: serde::de::MapAccess<'v>,
+            {
+                while let Some((key, val)) = map.next_entry::<String, String>()? {
+                    if key == "cursor" {
+                        return self.visit_str(&val);
+                    }
+                }
+                Ok(CursorQuery { cursor: None })
+            }
+        }
+        deserializer.deserialize_map(CursorVisitor)
+    }
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -305,9 +364,9 @@ async fn serve_video(
             .unwrap(),
     );
 
-    return (
+    (
         StatusCode::PARTIAL_CONTENT,
         headers,
         Body::from_stream(stream_of_bytes),
-    );
+    )
 }

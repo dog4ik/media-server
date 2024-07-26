@@ -5,7 +5,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use axum_extra::headers::Range;
 use axum_extra::TypedHeader;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::FromRow;
 
 use crate::app_state::AppError;
@@ -15,23 +15,21 @@ use crate::library::assets::{
     BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
     PreviewsDirAsset, VariantAsset,
 };
-use crate::library::{AudioCodec, Resolution, Source, SubtitlesCodec, VideoCodec};
+use crate::library::{
+    AudioCodec, ContentIdentifier, LibraryFile, Resolution, Source, SubtitlesCodec, VideoCodec,
+};
 use crate::metadata::{
-    ContentType, EpisodeMetadata, ExternalIdMetadata, MetadataProvider, MetadataProvidersStack,
-    MetadataSearchResult, MovieMetadata, SeasonMetadata, ShowMetadata,
+    ContentType, EpisodeMetadata, ExternalIdMetadata, MetadataProvidersStack, MetadataSearchResult,
+    MovieMetadata, SeasonMetadata, ShowMetadata,
 };
 use crate::torrent_index::Torrent;
 use crate::{app_state::AppState, db::Db};
 
+use super::admin_api::CursoredResponse;
 use super::{
-    ContentTypeQuery, IdQuery, NumberQuery, PageQuery, ProviderQuery, SearchQuery, VariantQuery,
+    ContentTypeQuery, CursorQuery, IdQuery, NumberQuery, ProviderQuery, SearchQuery, TakeParam,
+    VariantQuery,
 };
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct ContentRequestQuery {
-    origin: Option<MetadataProvider>,
-    id: String,
-}
 
 #[derive(Debug, Serialize, FromRow, utoipa::ToSchema)]
 pub struct DetailedVideo {
@@ -103,24 +101,24 @@ impl DetailedVideoTrack {
     }
 }
 
-impl Into<DetailedAudioTrack> for FFprobeAudioStream<'_> {
-    fn into(self) -> DetailedAudioTrack {
+impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
+    fn from(val: FFprobeAudioStream<'_>) -> Self {
         DetailedAudioTrack {
-            is_default: self.disposition.default == 1,
-            sample_rate: self.sample_rate.to_string(),
-            channels: self.channels,
-            profile: self.profile.map(|x| x.to_string()),
-            codec: self.codec(),
+            is_default: val.disposition.default == 1,
+            sample_rate: val.sample_rate.to_string(),
+            channels: val.channels,
+            profile: val.profile.map(|x| x.to_string()),
+            codec: val.codec(),
         }
     }
 }
 
-impl Into<DetailedSubtitleTrack> for FFprobeSubtitleStream<'_> {
-    fn into(self) -> DetailedSubtitleTrack {
+impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
+    fn from(val: FFprobeSubtitleStream<'_>) -> Self {
         DetailedSubtitleTrack {
-            is_default: self.is_defalut(),
-            language: self.language.map(|x| x.to_string()),
-            codec: self.codec(),
+            is_default: val.is_defalut(),
+            language: val.language.map(|x| x.to_string()),
+            codec: val.codec(),
         }
     }
 }
@@ -150,6 +148,77 @@ impl DetailedVariant {
             path: video.path().to_path_buf(),
         }
     }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "content_type", rename_all = "lowercase")]
+pub enum VideoContentMetadata {
+    Episode {
+        show: ShowMetadata,
+        episode: EpisodeMetadata,
+    },
+    Movie {
+        movie: MovieMetadata,
+    },
+}
+
+/// Get metadata related to the video
+#[utoipa::path(
+    get,
+    path = "/api/video/{id}/metadata",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200, description = "Metadata related to the video", body = VideoContentMetadata),
+    ),
+    tag = "Videos",
+)]
+pub async fn video_content_metadata(
+    Path(video_id): Path<i64>,
+    State(app_state): State<AppState>,
+) -> Result<Json<VideoContentMetadata>, AppError> {
+    let video = {
+        let library = app_state.library.lock().unwrap();
+        library
+            .videos
+            .get(&video_id)
+            .ok_or(AppError::not_found("Video is not found"))?
+            .clone()
+    };
+    let db = app_state.db;
+    let duration = video.source.video.duration();
+    let metadata = match video.identifier {
+        ContentIdentifier::Show(_) => {
+            let query = sqlx::query!(
+                r#"SELECT episodes.id as "episode_id!", seasons.show_id as "show_id!" FROM episodes
+            JOIN seasons ON seasons.id = episodes.season_id WHERE episodes.video_id = ?;"#,
+                video_id
+            )
+            .fetch_one(&db.pool)
+            .await?;
+            let episode_id = query.episode_id;
+            let show_id = query.show_id;
+            let episode_query = db.get_episode_by_id(episode_id);
+            let show_query = db.get_show(show_id);
+            let (episode, show) = tokio::join!(episode_query, show_query);
+            let (mut episode, show) = (episode?, show?);
+            episode.runtime = Some(duration);
+            VideoContentMetadata::Episode { show, episode }
+        }
+        ContentIdentifier::Movie(_) => {
+            let query = sqlx::query!(
+                r#"SELECT id as "id!" FROM movies WHERE movies.video_id = ?;"#,
+                video_id
+            )
+            .fetch_one(&db.pool)
+            .await?;
+            let mut movie = db.get_movie(query.id).await?;
+            movie.runtime = Some(duration);
+            VideoContentMetadata::Movie { movie }
+        }
+    };
+    Ok(Json(metadata))
 }
 
 /// Get preview by video id
@@ -228,7 +297,7 @@ pub async fn watch(
     {
         let variant_asset = VariantAsset::new(video_id, variant);
         let video = variant_asset.video().await?;
-        return Ok(video.serve(range).await);
+        Ok(video.serve(range).await)
     } else {
         let AppState { library, .. } = state;
         let video = {
@@ -238,7 +307,7 @@ pub async fn watch(
                 .map(|x| x.video.clone())
                 .ok_or(AppError::not_found("Video not found"))?
         };
-        return Ok(video.serve(range).await);
+        Ok(video.serve(range).await)
     }
 }
 
@@ -445,82 +514,79 @@ pub struct VariantSummary {
     tag = "Videos",
 )]
 pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<VariantSummary>> {
-    let (shows, movies): (Vec<_>, Vec<_>) = {
+    let videos: Vec<LibraryFile> = {
         let library = state.library.lock().unwrap();
-        (
-            library.shows.values().map(|x| x.source.clone()).collect(),
-            library.movies.values().map(|x| x.source.clone()).collect(),
-        )
+        library
+            .videos
+            .values()
+            .filter(|v| !v.source.variants.is_empty())
+            .cloned()
+            .collect()
     };
     let mut summary = Vec::new();
     let mut add_summary = |title: String,
                            content_type: ContentType,
                            content_id: i64,
                            poster: Option<String>,
-                           video_id: i64,
                            source: Source| {
         let variants: Vec<_> = source
             .variants
             .into_iter()
-            .map(|x| DetailedVariant::from_video(x))
+            .map(DetailedVariant::from_video)
             .collect();
         summary.push(VariantSummary {
             title,
             poster,
             content_type,
             content_id,
-            video_id,
+            video_id: source.id,
             variants,
         });
     };
-    for show_source in shows {
-        if show_source.variants.len() == 0 {
-            continue;
-        }
-        let db_show = sqlx::query!(
-            "SELECT episodes.title, episodes.poster, seasons.show_id FROM episodes
+    for video in videos {
+        match video.identifier {
+            ContentIdentifier::Show(_) => {
+                let db_show = sqlx::query!(
+                    "SELECT episodes.title, episodes.poster, seasons.show_id FROM episodes
         JOIN videos ON videos.id = episodes.video_id
         JOIN seasons ON seasons.id = episodes.season_id
         WHERE videos.id = ?",
-            show_source.id
-        )
-        .fetch_one(&state.db.pool)
-        .await;
-        if let Ok(db_show) = db_show {
-            add_summary(
-                db_show.title,
-                ContentType::Show,
-                db_show.show_id,
-                db_show.poster,
-                show_source.id,
-                show_source,
-            );
-        }
-    }
-
-    for movie_source in movies {
-        if movie_source.variants.len() == 0 {
-            continue;
-        }
-        let db_movie = sqlx::query!(
-            "SELECT movies.title, movies.poster FROM movies
+                    video.source.id
+                )
+                .fetch_one(&state.db.pool)
+                .await;
+                if let Ok(db_show) = db_show {
+                    add_summary(
+                        db_show.title,
+                        ContentType::Show,
+                        db_show.show_id,
+                        db_show.poster,
+                        video.source,
+                    );
+                }
+            }
+            ContentIdentifier::Movie(_) => {
+                let db_movie = sqlx::query!(
+                    "SELECT movies.title, movies.poster, movies.id FROM movies
         JOIN videos ON videos.id = movies.video_id
         WHERE videos.id = ?",
-            movie_source.id
-        )
-        .fetch_one(&state.db.pool)
-        .await;
-        if let Ok(db_movie) = db_movie {
-            add_summary(
-                db_movie.title,
-                ContentType::Movie,
-                movie_source.id,
-                db_movie.poster,
-                movie_source.id,
-                movie_source,
-            );
-        }
+                    video.source.id
+                )
+                .fetch_one(&state.db.pool)
+                .await;
+                if let Ok(db_movie) = db_movie {
+                    add_summary(
+                        db_movie.title,
+                        ContentType::Movie,
+                        db_movie.id.unwrap(),
+                        db_movie.poster,
+                        video.source,
+                    );
+                }
+            }
+        };
     }
+
     Json(summary)
 }
 
@@ -948,21 +1014,53 @@ pub async fn video_history(
     Ok(Json(history))
 }
 
-/// Get all watch history of the default user. Have hard coded limit of 50 rows for now.
+/// Get all watch history of the default user. Limit defaults to 50 if not specified
 #[utoipa::path(
     get,
     path = "/api/history",
     responses(
-        (status = 200, description = "All history", body = Vec<DbHistory>),
+        (status = 200, description = "All history", body = CursoredHistory),
+    ),
+    params(
+        TakeParam,
+        CursorQuery,
     ),
     tag = "History",
 )]
-pub async fn all_history(State(db): State<Db>) -> Result<Json<Vec<DbHistory>>, AppError> {
-    // todo: pagination
-    let history = sqlx::query_as!(DbHistory, "SELECT * FROM history LIMIT 50;")
-        .fetch_all(&db.pool)
-        .await?;
-    Ok(Json(history))
+pub async fn all_history(
+    Query(TakeParam { take }): Query<TakeParam>,
+    Query(CursorQuery { cursor }): Query<CursorQuery>,
+    State(db): State<Db>,
+) -> Result<Json<CursoredResponse<DbHistory>>, AppError> {
+    let take = take.unwrap_or(50) as i64;
+    let cursor: Option<i64> = cursor.map(|x| x.parse().unwrap());
+    let history = match cursor {
+        Some(cursor) => {
+            sqlx::query_as!(
+                DbHistory,
+                "SELECT * FROM history WHERE update_time < datetime(?, 'unixepoch') ORDER BY update_time DESC LIMIT ?;",
+                cursor,
+                take,
+            )
+            .fetch_all(&db.pool)
+            .await?
+        }
+        None => {
+            sqlx::query_as!(
+                DbHistory,
+                "SELECT * FROM history ORDER BY update_time DESC LIMIT ?;",
+                take,
+            )
+            .fetch_all(&db.pool)
+            .await?
+        }
+    };
+    let cursor = history.last().map(|x| {
+        let date = x.update_time;
+        date.unix_timestamp()
+    });
+    let response = CursoredResponse::new(history, cursor);
+    Ok(Json(response))
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

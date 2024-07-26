@@ -110,7 +110,7 @@ impl KeyFrames {
             .binary_search_by(|k| k.position.cmp(&position))
         {
             Ok(idx) => idx,
-            Err(insert_idx) => insert_idx.checked_sub(1).unwrap_or(0),
+            Err(insert_idx) => insert_idx.saturating_sub(1),
         };
         &self.key_frames[idx]
     }
@@ -158,7 +158,7 @@ pub async fn retrieve_keyframes(
         .as_ref()
         .context("ffprobe path")?;
     let mut child = tokio::process::Command::new(ffprobe)
-        .args(&[
+        .args([
             "-loglevel",
             "error",
             "-select_streams",
@@ -264,7 +264,7 @@ async fn transcode_stream(
             .collect();
         let segment_times = times.join(",");
         let mut command = tokio::process::Command::new("ffmpeg")
-            .args(&[
+            .args([
                 "-hide_banner",
                 "-ss",
                 &format!("{:.6}", frame.time),
@@ -322,7 +322,7 @@ async fn transcode_stream(
                     let (_, _) = tokio::join!(kill, remove_list);
                     history.clear();
                     pending_requests.retain(|_, v| !v.is_closed());
-                    let behind = idx.checked_sub(0).unwrap_or(0);
+                    let behind = idx.saturating_sub(0);
                     (log, command) = spawn_command(behind);
                     start_index = behind;
                 }

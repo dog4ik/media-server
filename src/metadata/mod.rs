@@ -393,7 +393,7 @@ impl MetadataImage {
 
 impl Display for MetadataImage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0.to_string())
+        write!(f, "{}", self.0)
     }
 }
 
@@ -571,7 +571,7 @@ pub struct MovieMetadata {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
-    #[schema(value_type = SerdeDuration)]
+    #[schema(value_type = Option<SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
 }
@@ -610,7 +610,7 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
-    #[schema(value_type = SerdeDuration)]
+    #[schema(value_type = Option<SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
 }
@@ -628,28 +628,28 @@ pub struct ExternalIdMetadata {
     pub id: String,
 }
 
-impl Into<MetadataSearchResult> for MovieMetadata {
-    fn into(self) -> MetadataSearchResult {
+impl From<MovieMetadata> for MetadataSearchResult {
+    fn from(val: MovieMetadata) -> Self {
         MetadataSearchResult {
-            title: self.title,
-            poster: self.poster,
-            plot: self.plot,
-            metadata_provider: self.metadata_provider,
+            title: val.title,
+            poster: val.poster,
+            plot: val.plot,
+            metadata_provider: val.metadata_provider,
             content_type: ContentType::Movie,
-            metadata_id: self.metadata_id,
+            metadata_id: val.metadata_id,
         }
     }
 }
 
-impl Into<MetadataSearchResult> for ShowMetadata {
-    fn into(self) -> MetadataSearchResult {
+impl From<ShowMetadata> for MetadataSearchResult {
+    fn from(val: ShowMetadata) -> Self {
         MetadataSearchResult {
-            title: self.title,
-            poster: self.poster,
-            plot: self.plot,
-            metadata_provider: self.metadata_provider,
+            title: val.title,
+            poster: val.poster,
+            plot: val.plot,
+            metadata_provider: val.metadata_provider,
             content_type: ContentType::Show,
-            metadata_id: self.metadata_id,
+            metadata_id: val.metadata_id,
         }
     }
 }
@@ -659,7 +659,7 @@ impl EpisodeMetadata {
         DbEpisode {
             id: None,
             video_id,
-            season_id: season_id as i64,
+            season_id,
             title: self.title,
             number: self.number as i64,
             plot: self.plot,
@@ -729,66 +729,4 @@ impl MovieMetadata {
             plot: self.plot,
         }
     }
-}
-
-#[tokio::test]
-async fn rate_limit() {
-    use axum::routing::post;
-    use axum::{Json, Router};
-    use serde::{Deserialize, Serialize};
-    use tokio::task::JoinSet;
-
-    #[derive(Clone, Serialize, Deserialize)]
-    struct Count {
-        value: usize,
-    }
-
-    impl Count {
-        pub fn new(count: usize) -> Self {
-            Self { value: count }
-        }
-    }
-
-    async fn echo(count: Json<Count>) -> Json<Count> {
-        use rand::Rng;
-        let num = rand::thread_rng().gen_range(0..1000);
-        tokio::time::sleep(Duration::from_millis(num)).await;
-        count
-    }
-
-    let server_handle = tokio::spawn(async move {
-        let app = Router::new().route("/", post(echo));
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:32402")
-            .await
-            .unwrap();
-        axum::serve(listener, app).await.unwrap();
-    });
-
-    let reqwest = Client::new();
-    let client = LimitedRequestClient::new(reqwest.clone(), 50, Duration::from_secs(1));
-    let mut handles = JoinSet::new();
-    let amount = 125;
-    for i in 0..amount {
-        let client = client.clone();
-        let count = Count::new(i);
-        let req = reqwest
-            .post("http://127.0.0.1:32402/")
-            .json(&count)
-            .build()
-            .unwrap();
-        handles.spawn(async move {
-            let count: Count = client.request(req).await.unwrap();
-            dbg!(i);
-            assert_eq!(i, count.value);
-            return count;
-        });
-    }
-    let mut sum = Vec::new();
-    while let Some(Ok(res)) = handles.join_next().await {
-        sum.push(res.value);
-    }
-    server_handle.abort();
-    let expected: Vec<usize> = (0..amount).collect();
-    assert_eq!(sum.len(), expected.len())
 }

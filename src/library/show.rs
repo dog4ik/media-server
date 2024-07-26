@@ -1,6 +1,6 @@
 use serde::Serialize;
 
-use super::Media;
+use super::{ContentIdentifier, Media};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ShowIdentifier {
@@ -9,14 +9,20 @@ pub struct ShowIdentifier {
     pub title: String,
 }
 
+impl From<ShowIdentifier> for ContentIdentifier {
+    fn from(val: ShowIdentifier) -> Self {
+        ContentIdentifier::Show(val)
+    }
+}
+
 impl Media for ShowIdentifier {
-    fn identify(tokens: &Vec<String>) -> Option<Self> {
+    fn identify(tokens: &[String]) -> Option<Self> {
         let mut name: Option<String> = None;
         let mut season: Option<u8> = None;
         let mut episode: Option<u8> = None;
 
         for token in tokens {
-            let chars: Vec<char> = token.chars().into_iter().collect();
+            let chars: Vec<char> = token.chars().collect();
             let is_year = token.len() == 6
                 && chars[0] == '('
                 && chars[1].is_ascii_digit()

@@ -1,19 +1,25 @@
 use serde::Serialize;
 
-use super::Media;
+use super::{ContentIdentifier, Media};
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct MovieIdentifier {
     pub title: String,
     pub year: Option<u32>,
 }
 
+impl From<MovieIdentifier> for ContentIdentifier {
+    fn from(val: MovieIdentifier) -> Self {
+        ContentIdentifier::Movie(val)
+    }
+}
+
 impl Media for MovieIdentifier {
-    fn identify(tokens: &Vec<String>) -> Option<Self> {
+    fn identify(tokens: &[String]) -> Option<Self> {
         let mut name: Option<String> = None;
         let mut year: Option<u32> = None;
         for token in tokens {
-            let chars: Vec<char> = token.chars().into_iter().collect();
+            let chars: Vec<char> = token.chars().collect();
             let is_year = token.len() == 6
                 && chars[0] == '('
                 && chars[1].is_ascii_digit()
@@ -23,7 +29,9 @@ impl Media for MovieIdentifier {
                 && chars[5] == ')'
                 && (chars[1] == '1' || chars[1] == '2');
             if is_year {
-                let _ = token[1..6].parse().map(|y| year = Some(y));
+                if let Ok(parsed_year) = token[1..6].parse() {
+                    year = Some(parsed_year);
+                }
                 continue;
             }
 
@@ -50,5 +58,36 @@ impl Media for MovieIdentifier {
     }
     fn title(&self) -> &str {
         &self.title
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{library::Media, utils};
+
+    use super::MovieIdentifier;
+
+    #[test]
+    fn identify_movies() {
+        let tests = [
+            (
+                "Inception.2010.1080p.BluRay.x264.YIFY",
+                MovieIdentifier {
+                    title: "inception".into(),
+                    year: None,
+                },
+            ),
+            (
+                "The.Matrix.1999.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ",
+                MovieIdentifier {
+                    title: "the matrix".into(),
+                    year: None,
+                },
+            ),
+        ];
+        for (input, expected) in tests {
+            let tokens = utils::tokenize_filename(input);
+            assert_eq!(MovieIdentifier::identify(&tokens).unwrap(), expected);
+        }
     }
 }

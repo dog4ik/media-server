@@ -260,7 +260,7 @@ impl FFprobeOutput {
 }
 
 impl FFprobeStream {
-    pub fn audio_stream<'a>(&'a self) -> Result<FFprobeAudioStream<'a>, anyhow::Error> {
+    pub fn audio_stream(&self) -> Result<FFprobeAudioStream<'_>, anyhow::Error> {
         Ok(FFprobeAudioStream {
             index: self.index,
             codec_name: &self.codec_name,
@@ -271,7 +271,7 @@ impl FFprobeStream {
                 .as_ref()
                 .ok_or(anyhow!("channels are absent"))?,
             profile: self.profile.as_deref(),
-            sample_rate: &self
+            sample_rate: self
                 .sample_rate
                 .as_ref()
                 .ok_or(anyhow!("sample rate is absent"))?,
@@ -279,7 +279,7 @@ impl FFprobeStream {
         })
     }
 
-    pub fn video_stream<'a>(&'a self) -> Result<FFprobeVideoStream<'a>, anyhow::Error> {
+    pub fn video_stream(&self) -> Result<FFprobeVideoStream<'_>, anyhow::Error> {
         let video = FFprobeVideoStream {
             index: self.index,
             codec_name: &self.codec_name,
@@ -298,10 +298,10 @@ impl FFprobeStream {
             height: self.height.ok_or(anyhow!("height is absent"))?,
             disposition: &self.disposition,
         };
-        return Ok(video);
+        Ok(video)
     }
 
-    pub fn subtitles_stream<'a>(&'a self) -> Result<FFprobeSubtitleStream<'a>, anyhow::Error> {
+    pub fn subtitles_stream(&self) -> Result<FFprobeSubtitleStream<'_>, anyhow::Error> {
         let tags = &self.tags.as_ref().ok_or(anyhow!("tags are absent"))?;
         let video = FFprobeSubtitleStream {
             index: self.index,
@@ -310,7 +310,7 @@ impl FFprobeStream {
             language: tags.language.as_deref(),
             disposition: &self.disposition,
         };
-        return Ok(video);
+        Ok(video)
     }
 }
 
@@ -364,7 +364,7 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
         .as_ref()
         .ok_or(anyhow!("ffprobe is missing in resources"))?;
     let output = Command::new(ffprobe)
-        .args(&[
+        .args([
             "-v",
             "quiet",
             "-print_format",
@@ -463,7 +463,7 @@ impl SubtitlesJob {
         input
             .subtitle_streams()
             .iter()
-            .find(|s| s.index == track as i32 && s.codec().supports_text())
+            .find(|s| s.index == track && s.codec().supports_text())
             .map(|s| Self {
                 source_path: input.path().to_path_buf(),
                 track: s.index as usize,
@@ -493,7 +493,7 @@ impl FFmpegTask for SubtitlesJob {
             "copy".into(),
             "-y".into(),
         ];
-        return args;
+        args
     }
 
     async fn cancel(self) -> Result<(), anyhow::Error> {
@@ -576,7 +576,7 @@ impl FFmpegTask for TranscodeJob {
         args.push("-c:s".into());
         args.push("copy".into());
         args.push(self.output_path.to_string_lossy().to_string());
-        return args;
+        args
     }
     async fn cancel(self) -> Result<(), anyhow::Error> {
         use tokio::fs;
@@ -632,7 +632,7 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
 
     /// Kill the job
     pub async fn kill(&mut self) {
-        if let Err(_) = self.process.kill().await {
+        if self.process.kill().await.is_err() {
             tracing::error!("Failed to kill ffmpeg job")
         };
     }
@@ -691,9 +691,14 @@ impl FFmpegProgress {
     /// Calculate percent of current point relative to given duration
     pub fn percent(&self, total_duration: Duration) -> usize {
         let current_duration = self.time.as_secs();
-        let percent = (current_duration as f64 / total_duration.as_secs() as f64) as f64 * 100.0;
-        let percent = percent.floor() as usize;
-        percent
+        let percent = (current_duration as f64 / total_duration.as_secs() as f64) * 100.0;
+
+        percent.floor() as usize
+    }
+
+    /// Get speed of operation relative to the video playback
+    pub fn relative_speed(&self) -> f32 {
+        self.speed
     }
 }
 
@@ -774,7 +779,7 @@ pub async fn resize_image_ffmpeg(
         .as_ref()
         .ok_or(anyhow!("ffmpeg is missing in resources"))?;
     let mut child = tokio::process::Command::new(ffmpeg)
-        .args(&[
+        .args([
             "-hide_banner",
             "-loglevel",
             "error",
@@ -813,7 +818,7 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
         .as_ref()
         .ok_or(anyhow!("ffmpeg is missing in resources"))?;
     let child = tokio::process::Command::new(ffmpeg)
-        .args(&[
+        .args([
             "-hide_banner",
             "-loglevel",
             "error",
@@ -872,10 +877,10 @@ pub async fn pull_frame(
         "-ss".as_ref(),
         time.as_ref(),
         "-i".as_ref(),
-        &input_file.as_ref().as_os_str(),
+        input_file.as_ref().as_os_str(),
         "-frames:v".as_ref(),
         "1".as_ref(),
-        &output_file.as_ref().as_os_str(),
+        output_file.as_ref().as_os_str(),
         "-y".as_ref(),
     ];
     let mut child = tokio::process::Command::new(ffmpeg)
@@ -896,7 +901,7 @@ pub async fn pull_frame(
 
 pub fn healthcheck_ffmpeg_command(path: impl AsRef<OsStr>) -> anyhow::Result<String> {
     let output = std::process::Command::new(&path)
-        .args(&["-version"])
+        .args(["-version"])
         .output()?;
     if output.status.success() {
         parse_version(std::str::from_utf8(&output.stdout).expect("output to be valid utf-8"))

@@ -21,7 +21,7 @@ impl<'de> Deserialize<'de> for FileKey {
             type Value = FileKey;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                write!(formatter, "Base64 encoded representation of path")
+                write!(formatter, "base64 encoded representation of path")
             }
 
             fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>

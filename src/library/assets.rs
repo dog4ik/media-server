@@ -48,7 +48,7 @@ pub(crate) trait FileAsset {
             .write(true)
             .open(&path)
             .await?;
-        file.write_all(&bytes).await?;
+        file.write_all(bytes).await?;
         Ok(())
     }
 
@@ -60,6 +60,7 @@ pub(crate) trait FileAsset {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .read(true)
+            .truncate(true)
             .open(&path)
             .await?;
         let length = file.metadata().await?.len();
@@ -76,6 +77,7 @@ pub(crate) trait FileAsset {
         let mut file = fs::OpenOptions::new()
             .create(true)
             .read(true)
+            .truncate(true)
             .open(&path)
             .await?;
         tokio::io::copy(&mut file, writer).await?;
@@ -171,9 +173,9 @@ pub enum PosterContentType {
     Episode,
     Season,
 }
-impl Into<AssetContentType> for PosterContentType {
-    fn into(self) -> AssetContentType {
-        match self {
+impl From<PosterContentType> for AssetContentType {
+    fn from(val: PosterContentType) -> Self {
+        match val {
             PosterContentType::Show => AssetContentType::Show,
             PosterContentType::Movie => AssetContentType::Movie,
             PosterContentType::Episode => AssetContentType::Episode,
@@ -203,9 +205,9 @@ pub enum BackdropContentType {
     Show,
     Movie,
 }
-impl Into<AssetContentType> for BackdropContentType {
-    fn into(self) -> AssetContentType {
-        match self {
+impl From<BackdropContentType> for AssetContentType {
+    fn from(val: BackdropContentType) -> Self {
+        match val {
             BackdropContentType::Show => AssetContentType::Show,
             BackdropContentType::Movie => AssetContentType::Movie,
         }
@@ -472,9 +474,9 @@ impl ShardedPath {
     }
 }
 
-impl Into<PathBuf> for ShardedPath {
-    fn into(self) -> PathBuf {
-        self.0
+impl From<ShardedPath> for PathBuf {
+    fn from(val: ShardedPath) -> Self {
+        val.0
     }
 }
 
@@ -485,7 +487,7 @@ impl AsRef<Path> for ShardedPath {
 }
 
 pub fn video_sharded_path(video_id: i64) -> PathBuf {
-    sharded_path(video_id, AssetContentType::Video).into()
+    sharded_path(video_id, AssetContentType::Video)
 }
 
 fn sharded_path(idx: i64, content_type: AssetContentType) -> PathBuf {

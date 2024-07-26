@@ -30,11 +30,7 @@ The project is designed to be a media library for easy searching and downloading
 
 1. Download installer from [releases](https://github.com/dog4ik/media-server/releases).
 2. Run installer and follow instructions, run the server.
-3. Add your show folders inside `C:\Users\%USERPROFILE%\AppData\Roaming\media-server\configuration.toml`
-   show_folders field should look like `show_folders = ["C:\\Users\\<Username>\\Videos\\Shows"]`.
-4. Restart the server and press Refresh Library in tray icon.
-
-Configuration page and initial setup helper will come later.
+3. Add shows/movies folders in settings
 
 ### Browser codec support
 
@@ -44,6 +40,7 @@ From my experience Microsoft Edge supports more audio codecs while chrome can pl
 
 You can download [custom chromium build](https://github.com/cjw1115/enable-chromium-ac3-ec3-system-decoding) or build chromium yourself with build flag `enable_platform_ac3_eac3_audio` enabled.
 This custom build can play almost any video format.
+Windows installation comes with fresh electron build, where flag `enable_platform_ac3_eac3_audio` enabled
 
 ### Related projcets
 

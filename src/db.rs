@@ -1,8 +1,4 @@
-use std::{
-    path::{Path, PathBuf},
-    str::FromStr,
-    time::Duration,
-};
+use std::{path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
@@ -335,7 +331,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         Ok(())
     }
 
-    pub async fn remove_video_by_path(&self, path: &PathBuf) -> Result<(), Error> {
+    pub async fn remove_video_by_path(&self, path: &Path) -> Result<(), Error> {
         let str_path = path.to_str().unwrap();
         let id = sqlx::query!(r#"SELECT id as "id!" FROM videos WHERE path = ?"#, str_path)
             .fetch_one(&self.pool)
@@ -889,30 +885,29 @@ impl DiscoverMetadataProvider for Db {
     }
 }
 
-impl Into<MovieMetadata> for DbMovie {
-    fn into(self) -> MovieMetadata {
-        let poster = self.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
-        let backdrop = self
-            .backdrop
-            .map(|b| MetadataImage::new(b.parse().unwrap()));
+impl From<DbMovie> for MovieMetadata {
+    fn from(val: DbMovie) -> Self {
+        let poster = val.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
+        let backdrop = val.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
 
         MovieMetadata {
-            metadata_id: self.id.unwrap().to_string(),
+            metadata_id: val.id.unwrap().to_string(),
             metadata_provider: MetadataProvider::Local,
             poster,
             backdrop,
-            plot: self.plot,
-            release_date: self.release_date,
-            title: self.title,
+            plot: val.plot,
+            release_date: val.release_date,
+            runtime: None,
+            title: val.title,
         }
     }
 }
 
-impl Into<ExternalIdMetadata> for DbExternalId {
-    fn into(self) -> ExternalIdMetadata {
+impl From<DbExternalId> for ExternalIdMetadata {
+    fn from(val: DbExternalId) -> Self {
         ExternalIdMetadata {
-            provider: MetadataProvider::from_str(&self.metadata_provider).unwrap(),
-            id: self.metadata_id,
+            provider: MetadataProvider::from_str(&val.metadata_provider).unwrap(),
+            id: val.metadata_id,
         }
     }
 }

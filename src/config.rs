@@ -85,7 +85,7 @@ impl ConfigFile {
             Err(ErrorKind::NotFound) => {
                 let default_config = FileConfigSchema::default();
                 let mut file = fs::File::create_new(&config_path)?;
-                let _ = file.write_all(&toml::to_string_pretty(&default_config)?.as_bytes());
+                let _ = file.write_all(toml::to_string_pretty(&default_config)?.as_bytes());
                 tracing::info!(
                     "Created configuration file with defaults: {}",
                     config_path.as_ref().display()
@@ -108,12 +108,12 @@ impl ConfigFile {
             tracing::info!("Resetting broken config");
             if let Ok(repaired_config) = repair_config(&buf) {
                 tracing::info!("Successfuly repaired config");
-                let _ = fs::write(&self.0, &toml::to_string_pretty(&repaired_config).unwrap());
+                let _ = fs::write(&self.0, toml::to_string_pretty(&repaired_config).unwrap());
                 repaired_config
             } else {
                 tracing::error!("Failed to repair config, creating default one");
                 let default_config = FileConfigSchema::default();
-                let _ = fs::write(&self.0, &toml::to_string_pretty(&default_config).unwrap());
+                let _ = fs::write(&self.0, toml::to_string_pretty(&default_config).unwrap());
                 default_config
             }
         }))
@@ -240,7 +240,7 @@ impl ServerConfiguration {
             port: file_config.port,
             capabilities: ffprobe_path
                 .as_ref()
-                .and_then(|x| Capabilities::parse(&x).ok())
+                .and_then(|x| Capabilities::parse(x).ok())
                 .unwrap_or_default(),
             movie_folders: file_config.movie_folders,
             show_folders: file_config.show_folders,
@@ -288,7 +288,7 @@ impl ServerConfiguration {
         let position = self
             .show_folders
             .iter()
-            .position(|x| x == &show_folder.as_ref())
+            .position(|x| x == show_folder.as_ref())
             .ok_or(anyhow::anyhow!("Could not find required folder"))?;
         self.show_folders.remove(position);
         self.flush()
@@ -301,7 +301,7 @@ impl ServerConfiguration {
         let position = self
             .movie_folders
             .iter()
-            .position(|x| x == &show_folder.as_ref())
+            .position(|x| x == show_folder.as_ref())
             .ok_or(anyhow::anyhow!("Could not find required folder"))?;
         self.movie_folders.remove(position);
         self.flush()
@@ -376,7 +376,7 @@ pub struct Codec {
 
 impl Codec {
     pub fn from_capability_line(line: String) -> Self {
-        let mut split = line.split_terminator(' ').filter(|chunk| chunk.len() != 0);
+        let mut split = line.split_terminator(' ').filter(|chunk| !chunk.is_empty());
         let mut params = split.next().unwrap().chars();
         let name = split.next().unwrap().to_string();
         let long_name: String = split.intersperse(" ").collect();

@@ -4,7 +4,7 @@ use tokio::sync::mpsc::{self};
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-use crate::{app_state::AppState, library::is_format_supported, utils};
+use crate::app_state::AppState;
 
 #[derive(Debug, Clone)]
 enum EventType {
@@ -122,19 +122,4 @@ impl FileWatcher {
     pub fn unwatch(&self, path: PathBuf) {
         self.tx.try_send(WatchCommand::UnWatch(path)).unwrap();
     }
-}
-
-fn flatten_path(path: &PathBuf) -> Result<Vec<PathBuf>, anyhow::Error> {
-    let mut flattened_paths = Vec::new();
-    let metadata = path.metadata()?;
-    if metadata.is_dir() {
-        flattened_paths.append(&mut utils::walk_recursive(
-            &path,
-            Some(is_format_supported),
-        )?);
-    }
-    if metadata.is_file() {
-        flattened_paths.push(path.clone())
-    }
-    Ok(flattened_paths)
 }

@@ -209,5 +209,5 @@ pub fn init_tracer() -> LogChannel {
             .finish();
         sub.with(pub_tracer).with(file_logger).init();
     };
-    return log_channel;
+    log_channel
 }

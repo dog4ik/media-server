@@ -24,6 +24,12 @@ pub struct TpbApi {
     base_url: Url,
 }
 
+impl Default for TpbApi {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TpbApi {
     pub fn new() -> Self {
         let client = Client::new();
@@ -89,36 +95,20 @@ impl TpbTorrent {
     }
 }
 
-impl Into<Torrent> for TpbTorrent {
-    fn into(self) -> Torrent {
-        let magnet_link = self.magnet_link();
-        let t: i64 = self.added.parse().unwrap();
+impl From<TpbTorrent> for Torrent {
+    fn from(val: TpbTorrent) -> Self {
+        let magnet_link = val.magnet_link();
+        let t: i64 = val.added.parse().unwrap();
         let created = OffsetDateTime::from_unix_timestamp(t).unwrap();
         Torrent {
-            name: self.name,
+            name: val.name,
             magnet: magnet_link,
-            author: Some(self.username),
-            leechers: self.leechers.parse().unwrap(),
-            seeders: self.seeders.parse().unwrap(),
-            size: self.size.parse().unwrap(),
+            author: Some(val.username),
+            leechers: val.leechers.parse().unwrap(),
+            seeders: val.seeders.parse().unwrap(),
+            size: val.size.parse().unwrap(),
             created,
-            imdb_id: self.imdb,
+            imdb_id: val.imdb,
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::torrent_index::{tpb::TpbApi, Torrent};
-
-    #[tokio::test]
-    async fn tpb_search() {
-        let client = TpbApi::new();
-        let result = client.search("halo").await.unwrap();
-        let t: Torrent = result.into_iter().next().unwrap().into();
-        dbg!(&t.magnet.to_string());
-        dbg!(&t.name);
-        dbg!(&t.created.to_string());
-        dbg!(&t.imdb_id);
     }
 }

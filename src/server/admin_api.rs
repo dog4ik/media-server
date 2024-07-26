@@ -1,12 +1,11 @@
+use std::convert::Infallible;
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Mutex;
-use std::{convert::Infallible, fmt::Display};
 
-use axum::body::Body;
-use axum::extract::rejection::JsonRejection;
-use axum::extract::{FromRequest, Multipart, Path, Query};
-use axum::http::{Request, StatusCode};
+use axum::extract::{Multipart, Path, Query};
+use axum::http::StatusCode;
 use axum::{
     extract::State,
     response::{
@@ -16,7 +15,9 @@ use axum::{
     Json,
 };
 use axum_extra::{headers, TypedHeader};
-use serde::Deserialize;
+use base64::Engine;
+use serde::ser::SerializeStruct;
+use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
@@ -28,6 +29,7 @@ use uuid::Uuid;
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
+use crate::db::DbHistory;
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -35,7 +37,7 @@ use crate::metadata::{
     ContentType, EpisodeMetadata, MetadataProvidersStack, MovieMetadata, SeasonMetadata,
     ShowMetadata,
 };
-use crate::progress::{Task, TaskKind, TaskResource};
+use crate::progress::{Task, TaskKind, TaskResource, VideoTaskType};
 use crate::stream::transcode_stream::TranscodeStream;
 use crate::torrent::{
     DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentContent,
@@ -79,80 +81,36 @@ pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, Statu
     Ok("done".into())
 }
 
-pub struct JsonExtractor(pub serde_json::Map<String, serde_json::Value>);
+#[derive(Debug, utoipa::ToSchema)]
+#[aliases(CursoredHistory = CursoredResponse<DbHistory>)]
+pub struct CursoredResponse<T> {
+    data: Vec<T>,
+    cursor: Option<String>,
+}
 
-impl JsonExtractor {
-    fn get_value(&self, key: &str) -> Result<&serde_json::Value, AppError> {
-        self.0
-            .get(key)
-            .ok_or(AppError::bad_request(format!("key {} is not found", key)))
-    }
-
-    pub fn i64(&self, key: &str) -> Result<i64, AppError> {
-        self.get_value(key)?
-            .as_i64()
-            .ok_or(AppError::bad_request("can't parse number"))
-    }
-
-    pub fn str(&self, key: &str) -> Result<&str, AppError> {
-        self.get_value(key)?
-            .as_str()
-            .ok_or(AppError::bad_request("can't parse string"))
+impl<T> CursoredResponse<T> {
+    pub fn new(data: Vec<T>, cursor: Option<impl Display>) -> Self {
+        let cursor = cursor.map(|x| x.to_string());
+        Self { data, cursor }
     }
 }
 
-#[axum::async_trait]
-impl<S: Send + Sync> FromRequest<S> for JsonExtractor {
-    type Rejection = JsonRejection;
-
-    async fn from_request(req: Request<Body>, state: &S) -> Result<Self, Self::Rejection> {
-        let Json(json): axum::Json<serde_json::Map<String, serde_json::Value>> =
-            Json::from_request(req, state).await?;
-        Ok(JsonExtractor(json))
-    }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct RefreshShowMetadataPayload {
-    pub metadata_provider: Option<Provider>,
-    pub show_id: i32,
-    pub season: Option<i32>,
-    pub episode: Option<i32>,
-}
-
-#[derive(Debug, Clone, Copy, Deserialize)]
-pub struct RefreshMovieMetadataPayload {
-    pub movie_id: usize,
-}
-
-#[derive(Debug, Clone, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Provider {
-    #[default]
-    Tmdb,
-}
-
-#[test]
-fn parse_transcode_payload() {
-    use crate::library::{AudioCodec, VideoCodec};
-    let json = serde_json::json!({
-        "audio_codec": "aac",
-        "audio_track": 2,
-        "video_codec": "hevc",
-        "resolution": "1920x1080",
-    })
-    .to_string();
-    let payload: TranscodePayload = serde_json::from_str(&json).unwrap();
-    assert_eq!(payload.audio_codec.unwrap(), AudioCodec::AAC);
-    assert_eq!(payload.video_codec.unwrap(), VideoCodec::Hevc);
-    assert_eq!(payload.resolution.unwrap(), (1920, 1080).into());
-}
-
-impl Display for Provider {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Provider::Tmdb => write!(f, "tmdb"),
-        }
+impl<T> Serialize for CursoredResponse<T>
+where
+    T: Serialize,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut out = serializer.serialize_struct("cursored_response", 2)?;
+        out.serialize_field("data", &self.data)?;
+        let encoded_cursor = self.cursor.as_ref().map(|cursor| {
+            let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+            engine.encode(cursor)
+        });
+        out.serialize_field("cursor", &encoded_cursor)?;
+        out.end()
     }
 }
 
@@ -543,7 +501,7 @@ pub struct CancelTaskPayload {
     delete,
     path = "/api/tasks/{id}",
     params(
-        ("id", description = "Video id"),
+        ("id", description = "Task id"),
     ),
     responses(
         (status = 200),
@@ -580,12 +538,7 @@ pub async fn mock_progress(
     debug!("Emitting fake progress with target: {}", target);
     let child_token = tasks.parent_cancellation_token.child_token();
     let task_id = tasks
-        .start_task(
-            TaskKind::Scan {
-                target: target.into(),
-            },
-            Some(child_token.clone()),
-        )
+        .start_task(TaskKind::Scan, Some(child_token.clone()))
         .unwrap();
     let ProgressChannel(channel) = &tasks.progress_channel;
     let channel = channel.clone();
@@ -594,7 +547,7 @@ pub async fn mock_progress(
             _ = async {
                 let mut progress = 0;
                 while progress <= 100 {
-                    let _ = channel.send(ProgressChunk::pending(task_id, progress));
+                    let _ = channel.send(ProgressChunk::pending(task_id, progress, 0.));
                     progress += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -1197,8 +1150,9 @@ pub async fn create_transcode_stream(
     let cancellation_token = tasks.parent_cancellation_token.child_token();
     let tracker = tasks.tracker.clone();
     let task_id = tasks.start_task(
-        TaskKind::LiveTranscode {
-            target: video_path.clone(),
+        TaskKind::Video {
+            video_id: id,
+            task_type: VideoTaskType::LiveTranscode,
         },
         Some(cancellation_token.clone()),
     )?;
@@ -1229,7 +1183,7 @@ pub async fn create_transcode_stream(
         ("id", description = "Task id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, body = String),
         (status = 400, description = "Task uuid is incorrect"),
         (status = 404, description = "Task is not found"),
     ),
@@ -1273,6 +1227,9 @@ pub async fn download_torrent(
     } = app_state;
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
         .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
+    let tracker_list = magnet_link.all_trackers().ok_or(AppError::bad_request(
+        "Magnet links without tracker list are not supported",
+    ))?;
     let info = torrent_client
         .resolve_magnet_link(&magnet_link)
         .await
@@ -1305,34 +1262,54 @@ pub async fn download_torrent(
         Some(ContentType::Movie) => payload
             .save_location
             .map(PathBuf::from)
-            .or_else(|| configuration.lock().unwrap().show_folders.first().cloned())
-            .unwrap_or(fallback_location.join("shows")),
+            .or_else(|| configuration.lock().unwrap().movie_folders.first().cloned())
+            .unwrap_or(fallback_location.join("movies")),
         None => return Err(AppError::bad_request("Couldn't choose output location")),
     };
-    let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
     let enabled_files = payload
         .enabled_files
         .unwrap_or((0..info.output_files("").len()).collect());
-    let download_handle = torrent_client
-        .client
-        .download(
-            save_location,
-            magnet_link.announce_list.unwrap(),
-            info,
-            enabled_files,
-            progress_tx,
-        )
-        .await
-        .unwrap();
+    let content = torrent_info.contents.content.clone();
+    let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
 
-    torrent_client.add_torrent_download(hash, download_handle.clone(), torrent_info);
+    let handle = torrent_client
+        .download(
+            progress_tx,
+            save_location,
+            tracker_list,
+            info,
+            torrent_info,
+            enabled_files,
+        )
+        .await?;
 
     tokio::spawn(async move {
         let _ = tasks
-            .observe_torrent_download(download_handle, progress_rx, hash)
+            .observe_torrent_download(handle, progress_rx, hash, content)
             .await;
-        torrent_client.remove_torrent_download(hash);
+        torrent_client.remove_download(hash);
     });
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::library::TranscodePayload;
+
+    #[test]
+    fn parse_transcode_payload() {
+        use crate::library::{AudioCodec, VideoCodec};
+        let json = serde_json::json!({
+            "audio_codec": "aac",
+            "audio_track": 2,
+            "video_codec": "hevc",
+            "resolution": "1920x1080",
+        })
+        .to_string();
+        let payload: TranscodePayload = serde_json::from_str(&json).unwrap();
+        assert_eq!(payload.audio_codec.unwrap(), AudioCodec::AAC);
+        assert_eq!(payload.video_codec.unwrap(), VideoCodec::Hevc);
+        assert_eq!(payload.resolution.unwrap(), (1920, 1080).into());
+    }
 }

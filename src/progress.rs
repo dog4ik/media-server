@@ -1,4 +1,4 @@
-use std::{fmt::Display, path::PathBuf, sync::Mutex};
+use std::{fmt::Display, sync::Mutex};
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -12,51 +12,91 @@ use crate::{
     app_state::AppError,
     ffmpeg::{FFmpegRunningJob, FFmpegTask},
     stream::transcode_stream::TranscodeStream,
+    torrent::TorrentContent,
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "task_kind")]
+pub enum VideoTaskType {
+    Transcode,
+    LiveTranscode,
+    Previews,
+    Subtitles,
+}
+
+impl Display for VideoTaskType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            VideoTaskType::Transcode => "Transcoding",
+            VideoTaskType::LiveTranscode => "Live transcoding",
+            VideoTaskType::Previews => "Previews generation",
+            VideoTaskType::Subtitles => "Subtitles extraction",
+        };
+        write!(f, "{msg}")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "task_kind")]
 pub enum TaskKind {
-    Transcode {
-        #[schema(value_type = String)]
-        target: PathBuf,
-    },
-    LiveTranscode {
-        #[schema(value_type = String)]
-        target: PathBuf,
-    },
-    Scan {
-        #[schema(value_type = String)]
-        target: PathBuf,
-    },
-    FullScan,
-    Previews {
-        #[schema(value_type = String)]
-        target: PathBuf,
-    },
-    Subtitles {
-        #[schema(value_type = String)]
-        target: PathBuf,
+    Video {
+        video_id: i64,
+        task_type: VideoTaskType,
     },
     Torrent {
         info_hash: [u8; 20],
+        content: Option<TorrentContent>,
     },
+    Scan,
+}
+
+impl PartialEq for TaskKind {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                TaskKind::Video {
+                    video_id,
+                    task_type,
+                },
+                TaskKind::Video {
+                    video_id: other_video_id,
+                    task_type: other_task_type,
+                },
+            ) => video_id == other_video_id && task_type == other_task_type,
+            (
+                TaskKind::Torrent { info_hash, .. },
+                TaskKind::Torrent {
+                    info_hash: other_info_hash,
+                    ..
+                },
+            ) => info_hash == other_info_hash,
+            (TaskKind::Scan, TaskKind::Scan) => true,
+            _ => false,
+        }
+    }
 }
 
 fn display_info_hash(hash: &[u8; 20]) -> String {
-    hash.into_iter().map(|x| format!("{:x}", x)).collect()
+    hash.iter().fold(String::with_capacity(40), |mut acc, x| {
+        let hex = format!("{:x}", x);
+        acc.push_str(&hex);
+        acc
+    })
 }
 
 impl Display for TaskKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TaskKind::Transcode { target } => write!(f, "transcode: {}", target.display()),
-            TaskKind::LiveTranscode { target } => write!(f, "live transcode: {}", target.display()),
-            TaskKind::Scan { target } => write!(f, "file scan: {}", target.display()),
-            TaskKind::FullScan => write!(f, "library scan"),
-            TaskKind::Previews { target } => write!(f, "previews: {}", target.display()),
-            TaskKind::Subtitles { target } => write!(f, "subtitles: {}", target.display()),
-            TaskKind::Torrent { info_hash } => write!(f, "{}", display_info_hash(info_hash)),
+            TaskKind::Scan => write!(f, "Library scan"),
+            TaskKind::Video {
+                video_id,
+                task_type,
+            } => write!(f, "{task_type} on video with id:{video_id}"),
+            TaskKind::Torrent { info_hash, .. } => write!(
+                f,
+                "Torrent with info_hash: {}",
+                display_info_hash(info_hash)
+            ),
         }
     }
 }
@@ -95,7 +135,7 @@ impl Task {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProgressStatus {
     Start,
@@ -106,10 +146,11 @@ pub enum ProgressStatus {
     Pause,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ProgressChunk {
     pub task_id: Uuid,
-    pub progress: usize,
+    pub percent: usize,
+    pub speed: f32,
     pub status: ProgressStatus,
 }
 
@@ -117,15 +158,17 @@ impl ProgressChunk {
     pub fn start(task_id: Uuid) -> Self {
         Self {
             task_id,
-            progress: 0,
+            percent: 0,
+            speed: 0.,
             status: ProgressStatus::Start,
         }
     }
 
-    pub fn pending(task_id: Uuid, progress: usize) -> Self {
+    pub fn pending(task_id: Uuid, percent: usize, speed: f32) -> Self {
         Self {
             task_id,
-            progress,
+            percent,
+            speed,
             status: ProgressStatus::Pending,
         }
     }
@@ -133,7 +176,8 @@ impl ProgressChunk {
     pub fn finish(task_id: Uuid) -> Self {
         Self {
             task_id,
-            progress: 100,
+            percent: 100,
+            speed: 0.,
             status: ProgressStatus::Finish,
         }
     }
@@ -141,7 +185,8 @@ impl ProgressChunk {
     pub fn cancel(task_id: Uuid) -> Self {
         Self {
             task_id,
-            progress: 0,
+            percent: 0,
+            speed: 0.,
             status: ProgressStatus::Cancel,
         }
     }
@@ -149,7 +194,8 @@ impl ProgressChunk {
     pub fn error(task_id: Uuid) -> Self {
         Self {
             task_id,
-            progress: 0,
+            percent: 0,
+            speed: 0.,
             status: ProgressStatus::Error,
         }
     }
@@ -212,6 +258,7 @@ impl TaskResource {
                     let _ = channel.send(ProgressChunk::pending(
                         id,
                         chunk.percent(job.target_duration()),
+                        chunk.relative_speed(),
                     ));
                 },
                 res = job.wait() => {
@@ -245,22 +292,30 @@ impl TaskResource {
         mut download_handle: DownloadHandle,
         mut progress_rx: mpsc::Receiver<torrent::DownloadProgress>,
         info_hash: [u8; 20],
+        content: Option<TorrentContent>,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let child_token = self.parent_cancellation_token.child_token();
-        let id = self.start_task(TaskKind::Torrent { info_hash }, Some(child_token.clone()))?;
+        let id = self.start_task(
+            TaskKind::Torrent { info_hash, content },
+            Some(child_token.clone()),
+        )?;
 
         loop {
             tokio::select! {
                 Some(progress) = progress_rx.recv() => {
-                    let _ = channel.send(ProgressChunk::pending(id, progress.percent as usize));
+                    let total_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
+                    let _ = channel.send(ProgressChunk::pending(id, progress.percent as usize, total_speed as f32));
                 },
                 _ = download_handle.wait() => {
                     let _ = self.finish_task(id);
+                    download_handle.abort().await.unwrap();
+                    return Ok(());
                 }
                 _ = child_token.cancelled() => {
                     download_handle.abort().await.unwrap();
-                    return Err(TaskError::Canceled)
+                    let _ = self.cancel_task(id);
+                    return Err(TaskError::Canceled);
                 }
             };
         }
@@ -290,6 +345,19 @@ impl TaskResource {
         let id = self.add_task(task)?;
         let _ = self.progress_channel.0.send(ProgressChunk::start(id));
         Ok(id)
+    }
+
+    pub fn start_video_task(
+        &self,
+        id: i64,
+        kind: VideoTaskType,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Result<Uuid, TaskError> {
+        let kind = TaskKind::Video {
+            video_id: id,
+            task_type: kind,
+        };
+        self.start_task(kind, cancellation_token)
     }
 
     fn remove_task(&self, id: Uuid) -> Option<Task> {
@@ -329,12 +397,18 @@ pub trait CancelJob {
 
 impl ProgressChunk {
     pub fn is_done(&self) -> bool {
-        self.progress == 100
+        self.percent == 100
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct ProgressChannel(pub broadcast::Sender<ProgressChunk>);
+
+impl Default for ProgressChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ProgressChannel {
     pub fn new() -> Self {

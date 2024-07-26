@@ -1,5 +1,3 @@
-use std::ops::Range;
-
 use axum::{
     body::Body,
     http::{HeaderMap, HeaderValue},
@@ -84,7 +82,7 @@ impl TorrentDownload {
                         piece_length
                     } as usize;
 
-                    if let Ok(_) = stream_tx.send(Ok(bytes.slice(start..end))).await {
+                    if stream_tx.send(Ok(bytes.slice(start..end))).await.is_ok() {
                         current_piece += 1;
                     } else {
                         // channel closed
@@ -114,10 +112,10 @@ impl TorrentDownload {
             HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size)).unwrap(),
         );
 
-        return (
+        (
             StatusCode::PARTIAL_CONTENT,
             headers,
             Body::from_stream(stream),
-        );
+        )
     }
 }

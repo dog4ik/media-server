@@ -24,11 +24,11 @@ use tokio::{
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
-    db::DbVideo,
+    db::{Db, DbVideo},
     ffmpeg::{
         get_metadata, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream, FFprobeVideoStream,
     },
-    metadata::{EpisodeMetadata, MovieMetadata},
+    metadata::ContentType,
     utils,
 };
 
@@ -63,17 +63,15 @@ const EXTRAS_FOLDERS: [&str; 11] = [
     "trailers",
 ];
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Library {
-    pub shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
-    pub movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
+    pub videos: HashMap<i64, LibraryFile>,
 }
 
 pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     let path = path.as_ref().to_path_buf();
     let is_extra = path
         .components()
-        .into_iter()
         .any(|c| EXTRAS_FOLDERS.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_ref()));
     let supports_extension = path
         .extension()
@@ -81,11 +79,12 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     !is_extra && supports_extension
 }
 
-pub async fn explore_folder<T: Media + Send + 'static>(
+pub async fn explore_folder(
     folder: &PathBuf,
+    folder_type: ContentType,
     db: &crate::db::Db,
-    exclude: &Vec<PathBuf>,
-) -> Result<HashMap<i64, LibraryFile<T>>, anyhow::Error> {
+    exclude: &[PathBuf],
+) -> Result<HashMap<i64, LibraryFile>, anyhow::Error> {
     let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
     let mut handles = Vec::with_capacity(paths.len());
     let semaphore = Arc::new(Semaphore::new(100));
@@ -95,25 +94,37 @@ pub async fn explore_folder<T: Media + Send + 'static>(
         }
         let semaphore = semaphore.clone();
         let db = db.clone();
-        handles.push(tokio::spawn(async move {
-            let _permit = semaphore.acquire().await;
-            LibraryFile::from_path(path, &db).await
-        }));
+        handles.push((
+            path.clone(),
+            tokio::spawn(async move {
+                let _permit = semaphore.acquire().await;
+                let file: Result<LibraryFile, anyhow::Error> = match folder_type {
+                    ContentType::Movie => LibraryItem::<MovieIdentifier>::from_path(path, &db)
+                        .await
+                        .map(Into::into),
+                    ContentType::Show => LibraryItem::<ShowIdentifier>::from_path(path, &db)
+                        .await
+                        .map(Into::into),
+                };
+                file
+            }),
+        ));
     }
 
     let mut result = HashMap::with_capacity(handles.len());
 
-    for handle in handles {
+    for (path, handle) in handles {
+        let path = format!("{}", path.display());
         match handle.await {
             Ok(Ok(item)) => {
                 result.insert(item.source.id, item);
             }
-            Ok(Err(e)) => tracing::warn!("One of the metadata collectors errored: {}", e),
-            Err(e) => tracing::error!("One of the metadata collectors paniced: {}", e),
+            Ok(Err(e)) => tracing::warn!(path, "One of the metadata collectors errored: {}", e),
+            Err(e) => tracing::error!(path, "One of the metadata collectors paniced: {}", e),
         }
     }
 
-    return Ok(result);
+    Ok(result)
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -124,9 +135,84 @@ pub enum ContentIdentifier {
 }
 
 #[derive(Debug, Clone)]
-pub struct LibraryFile<T: Media> {
+pub struct LibraryFile {
+    pub identifier: ContentIdentifier,
+    pub source: Source,
+}
+
+#[derive(Debug, Clone)]
+pub struct LibraryItem<T: Media> {
     pub identifier: T,
     pub source: Source,
+}
+
+impl From<LibraryItem<ShowIdentifier>> for LibraryFile {
+    fn from(value: LibraryItem<ShowIdentifier>) -> Self {
+        Self {
+            identifier: ContentIdentifier::Show(value.identifier),
+            source: value.source,
+        }
+    }
+}
+
+impl From<LibraryItem<MovieIdentifier>> for LibraryFile {
+    fn from(value: LibraryItem<MovieIdentifier>) -> Self {
+        Self {
+            identifier: ContentIdentifier::Movie(value.identifier),
+            source: value.source,
+        }
+    }
+}
+
+impl ContentIdentifier {
+    pub fn identify(content_type: ContentType, tokens: &[String]) -> Option<Self> {
+        match content_type {
+            ContentType::Movie => MovieIdentifier::identify(tokens).map(Into::into),
+            ContentType::Show => ShowIdentifier::identify(tokens).map(Into::into),
+        }
+    }
+    pub fn title(&self) -> &str {
+        match self {
+            ContentIdentifier::Show(i) => &i.title,
+            ContentIdentifier::Movie(i) => &i.title,
+        }
+    }
+
+    pub fn show_identifier(&self) -> Option<ShowIdentifier> {
+        match self {
+            ContentIdentifier::Show(s) => Some(s.clone()),
+            ContentIdentifier::Movie(_) => None,
+        }
+    }
+
+    pub fn movie_identifier(&self) -> Option<MovieIdentifier> {
+        match self {
+            ContentIdentifier::Show(_) => None,
+            ContentIdentifier::Movie(m) => Some(m.clone()),
+        }
+    }
+}
+
+impl LibraryFile {
+    pub fn into_movie(self) -> Option<LibraryItem<MovieIdentifier>> {
+        match self.identifier {
+            ContentIdentifier::Movie(m) => Some(LibraryItem {
+                identifier: m,
+                source: self.source,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn into_show(self) -> Option<LibraryItem<ShowIdentifier>> {
+        match self.identifier {
+            ContentIdentifier::Show(m) => Some(LibraryItem {
+                identifier: m,
+                source: self.source,
+            }),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -199,7 +285,7 @@ impl Source {
     }
 }
 
-impl<T: Media> LibraryFile<T> {
+impl<T: Media> LibraryItem<T> {
     pub async fn from_path(path: PathBuf, db: &crate::db::Db) -> Result<Self, anyhow::Error> {
         let video = Video::from_path(&path).await?;
         let metadata_title = video.metadata.format.tags.title.clone();
@@ -207,20 +293,16 @@ impl<T: Media> LibraryFile<T> {
         let file_name = path
             .file_name()
             .ok_or(anyhow::anyhow!("failed to get filename"))?
-            .to_string_lossy()
-            .to_string();
-        let path_tokens = utils::tokenize_filename(file_name);
+            .to_string_lossy();
+        let path_tokens = utils::tokenize_filename(&file_name);
         let identifier = T::identify(&path_tokens)
-            .or_else(|| {
-                metadata_title.and_then(|video_metadata_title| {
-                    T::identify(
-                        &video_metadata_title
-                            .split_whitespace()
-                            .map(|x| x.to_string())
-                            .collect(),
-                    )
-                })
-            })
+            .or(metadata_title.and_then(|video_metadata_title| {
+                let tokens: Vec<_> = video_metadata_title
+                    .split_whitespace()
+                    .map(|x| x.to_string())
+                    .collect();
+                T::identify(&tokens)
+            }))
             .ok_or(anyhow::anyhow!(
                 "Could not identify file: {}",
                 path.file_name().unwrap_or_default().display()
@@ -229,143 +311,106 @@ impl<T: Media> LibraryFile<T> {
     }
 }
 
-impl LibraryFile<ShowIdentifier> {
-    pub fn into_episode_metadata(&self) -> EpisodeMetadata {
-        EpisodeMetadata {
-            metadata_id: uuid::Uuid::new_v4().to_string(),
-            metadata_provider: crate::metadata::MetadataProvider::Local,
-            release_date: None,
-            number: self.identifier.episode.into(),
-            title: self.identifier.title.to_string(),
-            plot: None,
-            season_number: self.identifier.season.into(),
-            runtime: Some(self.source.video.duration()),
-            poster: None,
-        }
-    }
-}
-
-impl LibraryFile<MovieIdentifier> {
-    pub fn into_movie_metadata(&self) -> MovieMetadata {
-        MovieMetadata {
-            metadata_id: uuid::Uuid::new_v4().to_string(),
-            metadata_provider: crate::metadata::MetadataProvider::Local,
-            poster: None,
-            backdrop: None,
-            plot: None,
-            release_date: None,
-            title: self.identifier.title.clone(),
-        }
-    }
-}
-
 impl Library {
-    pub fn new(
-        shows: HashMap<i64, LibraryFile<ShowIdentifier>>,
-        movies: HashMap<i64, LibraryFile<MovieIdentifier>>,
+    pub fn new(videos: HashMap<i64, LibraryFile>) -> Self {
+        Self { videos }
+    }
+
+    pub async fn init_from_folders(
+        show_dirs: &Vec<PathBuf>,
+        movie_dirs: &Vec<PathBuf>,
+        db: &Db,
     ) -> Self {
-        Self {
-            shows,
-            movies,
+        let mut videos = HashMap::new();
+        for dir in show_dirs {
+            videos.extend(
+                explore_folder(dir, ContentType::Show, db, &Vec::new())
+                    .await
+                    .unwrap(),
+            );
         }
+
+        for dir in movie_dirs {
+            videos.extend(
+                explore_folder(dir, ContentType::Movie, db, &Vec::new())
+                    .await
+                    .unwrap(),
+            );
+        }
+        Self { videos }
     }
 
-    pub fn add_show(&mut self, id: i64, show: LibraryFile<ShowIdentifier>) {
-        self.shows.insert(id, show);
+    pub fn add_video(&mut self, id: i64, video: LibraryFile) {
+        self.videos.insert(id, video);
     }
 
-    pub fn add_movie(&mut self, id: i64, movie: LibraryFile<MovieIdentifier>) {
-        self.movies.insert(id, movie);
-    }
-
-    pub fn remove_show_by_path(&mut self, path: impl AsRef<Path>) {
+    pub fn remove_video_by_path(&mut self, path: impl AsRef<Path>) {
         if let Some(id) = self
-            .shows
+            .videos
             .iter()
             .find(|(_, f)| f.source.video.path() == path.as_ref())
             .map(|(i, _f)| *i)
         {
-            self.shows.remove(&id);
+            self.videos.remove(&id);
         };
     }
 
-    pub fn remove_movie_by_path(&mut self, path: impl AsRef<Path>) {
-        if let Some(id) = self
-            .movies
-            .iter()
-            .find(|(_, f)| f.source.video.path() == path.as_ref())
-            .map(|(i, _f)| *i)
-        {
-            self.movies.remove(&id);
-        };
-    }
-
-    pub fn remove_show(&mut self, id: i64) {
-        self.shows.remove(&id);
-    }
-
-    pub fn remove_movie(&mut self, id: i64) {
-        self.movies.remove(&id);
-    }
-
-    pub fn remove_file_by_path(&mut self, path: impl AsRef<Path>) {
-        self.remove_show_by_path(&path);
-        self.remove_movie_by_path(path);
-    }
-
-    /// Remove video from the library
-    /// NOTE: it does not physically delete video
-    pub fn remove_file(&mut self, id: i64) {
-        self.remove_show(id);
-        self.remove_movie(id);
+    pub fn remove_video(&mut self, id: i64) {
+        self.videos.remove(&id);
     }
 
     pub fn find_video_by_path(&self, path: impl AsRef<Path>) -> Option<&Video> {
-        let show = self
-            .shows
+        self.videos
             .values()
             .find(|f| f.source.video.path() == path.as_ref())
-            .map(|x| &x.source.video);
-        if show.is_none() {
-            return self
-                .movies
-                .values()
-                .find(|f| f.source.video.path() == path.as_ref())
-                .map(|x| &x.source.video);
-        }
-        show
+            .map(|x| &x.source.video)
     }
 
     pub fn get_source(&self, id: i64) -> Option<&Source> {
-        let show = self.shows.get(&id).map(|f| &f.source);
-        if show.is_none() {
-            return self.movies.get(&id).map(|f| &f.source);
-        }
-        show
+        self.videos.get(&id).map(|f| &f.source)
     }
 
     pub fn get_source_mut(&mut self, id: i64) -> Option<&mut Source> {
-        let show = self.shows.get_mut(&id).map(|f| &mut f.source);
-        if show.is_none() {
-            return self.movies.get_mut(&id).map(|f| &mut f.source);
-        }
-        show
+        self.videos.get_mut(&id).map(|f| &mut f.source)
     }
 
     pub fn find_video_mut(&mut self, path: impl AsRef<Path>) -> Option<&mut Video> {
-        let show = self
-            .shows
+        self.videos
             .values_mut()
             .find(|f| f.source.video.path() == path.as_ref())
-            .map(|x| &mut x.source.video);
-        if show.is_none() {
-            return self
-                .movies
-                .values_mut()
-                .find(|f| f.source.video.path() == path.as_ref())
-                .map(|x| &mut x.source.video);
-        }
-        show
+            .map(|x| &mut x.source.video)
+    }
+
+    pub fn episodes(&self) -> impl Iterator<Item = LibraryItem<ShowIdentifier>> + '_ {
+        self.videos.values().filter_map(|v| match &v.identifier {
+            ContentIdentifier::Show(i) => Some(LibraryItem {
+                identifier: i.clone(),
+                source: v.source.clone(),
+            }),
+            _ => None,
+        })
+    }
+
+    pub fn movies(&self) -> impl Iterator<Item = LibraryItem<MovieIdentifier>> + '_ {
+        self.videos.values().filter_map(|v| match &v.identifier {
+            ContentIdentifier::Movie(i) => Some(LibraryItem {
+                identifier: i.clone(),
+                source: v.source.clone(),
+            }),
+            _ => None,
+        })
+    }
+
+    pub fn get_movie(&self, video_id: i64) -> Option<LibraryItem<MovieIdentifier>> {
+        self.videos
+            .get(&video_id)
+            .and_then(|v| v.clone().into_movie())
+    }
+
+    pub fn get_show(&self, video_id: i64) -> Option<LibraryItem<ShowIdentifier>> {
+        self.videos
+            .get(&video_id)
+            .and_then(|v| v.clone().into_show())
     }
 }
 
@@ -376,7 +421,7 @@ pub struct Chapter {
 }
 
 pub trait Media {
-    fn identify(tokens: &Vec<String>) -> Option<Self>
+    fn identify(tokens: &[String]) -> Option<Self>
     where
         Self: Sized;
     fn title(&self) -> &str;
@@ -584,11 +629,11 @@ impl Video {
             HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size)).unwrap(),
         );
 
-        return (
+        (
             StatusCode::PARTIAL_CONTENT,
             headers,
             Body::from_stream(stream_of_bytes),
-        );
+        )
     }
 }
 
@@ -897,9 +942,9 @@ impl From<(usize, usize)> for Resolution {
     }
 }
 
-impl Into<(usize, usize)> for Resolution {
-    fn into(self) -> (usize, usize) {
-        self.0
+impl From<Resolution> for (usize, usize) {
+    fn from(val: Resolution) -> Self {
+        val.0
     }
 }
 

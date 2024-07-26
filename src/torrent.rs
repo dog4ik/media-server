@@ -1,11 +1,16 @@
-use std::{collections::HashMap, path::PathBuf, sync::Mutex};
+use std::{
+    collections::HashMap,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 
 use serde::{Deserialize, Serialize};
-use tokio::task::JoinSet;
+use tokio::{sync::mpsc, task::JoinSet};
 use torrent::{
     download::DownloadHandle,
     file::MagnetLink,
     protocol::{Info, OutputFile},
+    DownloadProgress,
 };
 
 use crate::{
@@ -19,10 +24,12 @@ use crate::{
     utils,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TorrentDownload {
     pub info_hash: [u8; 20],
+    #[serde(skip)]
     pub download_handle: DownloadHandle,
+    pub enabled_files: Vec<usize>,
     pub torrent_info: TorrentInfo,
 }
 
@@ -53,7 +60,7 @@ impl TorrentClient {
             tracing::debug!("Resolved cached magnet link: {}", magnet_link.to_string());
             return Ok(info);
         };
-        let info = self.client.resolve_magnet_link(&magnet_link).await?;
+        let info = self.client.resolve_magnet_link(magnet_link).await?;
         tracing::debug!("Resolved magnet link: {}", magnet_link.to_string());
 
         self.resolved_magnet_links
@@ -63,26 +70,57 @@ impl TorrentClient {
         Ok(info)
     }
 
-    pub fn add_torrent_download(
+    pub async fn download(
         &self,
-        info_hash: [u8; 20],
-        download_handle: DownloadHandle,
-        info: TorrentInfo,
-    ) {
+        progress_sender: mpsc::Sender<DownloadProgress>,
+        save_location: PathBuf,
+        trackers: Vec<reqwest::Url>,
+        info: Info,
+        torrent_metadata: TorrentInfo,
+        enabled_files: Vec<usize>,
+    ) -> anyhow::Result<DownloadHandle> {
+        let info_hash = info.hash();
+        let download_handle = self
+            .client
+            .download(
+                save_location,
+                trackers,
+                info,
+                enabled_files.clone(),
+                progress_sender,
+            )
+            .await?;
+
         let torrent = TorrentDownload {
             info_hash,
             download_handle,
-            torrent_info: info,
+            enabled_files,
+            torrent_info: torrent_metadata,
         };
+        let handle = torrent.download_handle.clone();
         self.pending_downloads.lock().unwrap().push(torrent);
+        Ok(handle)
     }
 
-    pub fn remove_torrent_download(&self, info_hash: [u8; 20]) -> Option<TorrentDownload> {
+    pub fn remove_download(&self, info_hash: [u8; 20]) -> Option<TorrentDownload> {
         let mut downloads = self.pending_downloads.lock().unwrap();
         downloads
             .iter()
             .position(|x| x.info_hash == info_hash)
             .map(|idx| downloads.remove(idx))
+    }
+
+    pub fn get_download(&self, info_hash: &[u8; 20]) -> Option<TorrentDownload> {
+        let downloads = self.pending_downloads.lock().unwrap();
+        downloads
+            .iter()
+            .find(|x| x.info_hash == *info_hash)
+            .cloned()
+    }
+
+    pub fn all_downloads(&self) -> Vec<TorrentDownload> {
+        let downloads = self.pending_downloads.lock().unwrap();
+        downloads.clone()
     }
 }
 
@@ -191,14 +229,11 @@ impl TorrentContents {
     }
 }
 
-fn path_components(path: &PathBuf) -> Vec<String> {
+fn path_components(path: impl AsRef<Path>) -> Vec<String> {
     let mut out = Vec::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::Normal(component) => {
-                out.push(component.to_string_lossy().to_string())
-            }
-            _ => {}
+    for component in path.as_ref().components() {
+        if let std::path::Component::Normal(component) = component {
+            out.push(component.to_string_lossy().to_string())
         }
     }
     out
@@ -206,14 +241,14 @@ fn path_components(path: &PathBuf) -> Vec<String> {
 
 async fn parse_torrent_files(
     providers_stack: &'static MetadataProvidersStack,
-    files: &Vec<OutputFile>,
+    files: &[OutputFile],
     content_hint: Option<DownloadContentHint>,
 ) -> TorrentContents {
     let mut all_files: Vec<ResolvedTorrentFile> = Vec::new();
     let mut show_identifiers: Vec<(usize, ShowIdentifier)> = Vec::new();
     let mut movie_identifiers: Vec<(usize, MovieIdentifier)> = Vec::new();
     let mut offset = 0;
-    for (i, output_file) in files.into_iter().enumerate() {
+    for (i, output_file) in files.iter().enumerate() {
         let path = output_file.path().to_path_buf();
         let resolved_file = ResolvedTorrentFile::from_output_file(output_file, offset);
         let Some(file_name) = path.file_stem() else {
@@ -223,19 +258,13 @@ async fn parse_torrent_files(
             continue;
         };
         if is_format_supported(&path) {
-            let name_tokens = utils::tokenize_filename(file_name.to_string_lossy().to_string());
+            let name_tokens = utils::tokenize_filename(&file_name.to_string_lossy());
             let content_identifier = match content_hint.as_ref().map(|h| h.content_type) {
                 None => ShowIdentifier::identify(&name_tokens)
-                    .map(|s| ContentIdentifier::Show(s))
-                    .or_else(|| {
-                        MovieIdentifier::identify(&name_tokens).map(|m| ContentIdentifier::Movie(m))
-                    }),
-                Some(ContentType::Movie) => {
-                    MovieIdentifier::identify(&name_tokens).map(|m| ContentIdentifier::Movie(m))
-                }
-                Some(ContentType::Show) => {
-                    ShowIdentifier::identify(&name_tokens).map(|s| ContentIdentifier::Show(s))
-                }
+                    .map(Into::into)
+                    .or_else(|| MovieIdentifier::identify(&name_tokens).map(Into::into)),
+                Some(ContentType::Movie) => MovieIdentifier::identify(&name_tokens).map(Into::into),
+                Some(ContentType::Show) => ShowIdentifier::identify(&name_tokens).map(Into::into),
             };
             match content_identifier {
                 Some(ContentIdentifier::Show(s)) => show_identifiers.push((i, s)),
@@ -331,7 +360,7 @@ async fn parse_torrent_files(
                     let resolved_season = providers_stack
                         .get_season(&show_id, season as usize, show_metadata_provider)
                         .await;
-                    return (resolved_season, chunk);
+                    (resolved_season, chunk)
                 });
             }
             while let Some(Ok((resolved_season, chunk))) = season_set.join_next().await {
@@ -361,13 +390,13 @@ async fn parse_torrent_files(
             for episodes in seasons_map.values_mut() {
                 episodes.sort_unstable_by_key(|x| x.metadata.number);
             }
-            return TorrentContents {
+            TorrentContents {
                 files: all_files,
                 content: Some(TorrentContent::Show(TorrentShow {
                     show_metadata: show,
                     seasons: seasons_map,
                 })),
-            };
+            }
         }
         ContentType::Movie => {
             let mut resolved_movies = Vec::new();
@@ -385,15 +414,15 @@ async fn parse_torrent_files(
                 };
             }
             if resolved_movies.is_empty() {
-                return TorrentContents {
+                TorrentContents {
                     files: all_files,
                     content: None,
-                };
+                }
             } else {
-                return TorrentContents {
+                TorrentContents {
                     files: all_files,
                     content: Some(TorrentContent::Movie(resolved_movies)),
-                };
+                }
             }
         }
     }

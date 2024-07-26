@@ -18,7 +18,7 @@ pub fn file_hash(file: &mut File) -> Result<u32, std::io::Error> {
     }
     let result = hasher.finalize();
 
-    return Ok(result);
+    Ok(result)
 }
 
 pub fn walk_recursive<F>(
@@ -29,7 +29,7 @@ where
     F: Fn(&PathBuf) -> bool + std::marker::Copy,
 {
     let mut local_paths = Vec::new();
-    let dir = fs::read_dir(&folder)?;
+    let dir = fs::read_dir(folder)?;
     for file in dir {
         let path = file?.path();
         if path.is_file() {
@@ -61,7 +61,7 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
     Ok(removed_files)
 }
 
-pub fn tokenize_filename(file_name: String) -> Vec<String> {
+pub fn tokenize_filename(file_name: &str) -> Vec<String> {
     let is_spaced = file_name.contains(' ');
     match is_spaced {
         true => file_name.split(' '),

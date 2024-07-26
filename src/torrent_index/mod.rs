@@ -7,7 +7,7 @@ use crate::app_state::AppError;
 pub mod tpb;
 
 fn serialize_url<S: Serializer>(url: &Url, serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&url.to_string())
+    serializer.serialize_str(url.as_ref())
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

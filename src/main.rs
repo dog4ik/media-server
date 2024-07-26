@@ -5,7 +5,7 @@ use dotenvy::dotenv;
 use media_server::app_state::AppState;
 use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
 use media_server::db::Db;
-use media_server::library::{explore_folder, Library};
+use media_server::library::Library;
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
@@ -13,7 +13,6 @@ use media_server::server::{admin_api, public_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
-use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -78,25 +77,16 @@ async fn main() {
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-    let mut shows = HashMap::new();
-    for dir in &shows_dirs {
-        shows.extend(explore_folder(dir, &db, &Vec::new()).await.unwrap());
-    }
-
     let movies_dirs: Vec<PathBuf> = configuration
         .movie_folders
         .clone()
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-    let mut movies = HashMap::new();
-    for dir in &movies_dirs {
-        movies.extend(explore_folder(dir, &db, &Vec::new()).await.unwrap());
-    }
 
     let program_files = configuration.resources.base_path.clone();
 
-    let library = Library::new(shows, movies);
+    let library = Library::init_from_folders(&shows_dirs, &movies_dirs, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
     let tmdb_api = TmdbApi::new(configuration.tmdb_token.clone().unwrap());
     let configuration = Box::leak(Box::new(Mutex::new(configuration)));
@@ -206,6 +196,10 @@ async fn main() {
         .route("/video/:id", get(public_api::get_video_by_id))
         .route("/video/:id", delete(admin_api::remove_video))
         .route(
+            "/video/:id/metadata",
+            get(public_api::video_content_metadata),
+        )
+        .route(
             "/video/:id/pull_subtitle",
             get(public_api::pull_video_subtitle),
         )
@@ -302,7 +296,13 @@ async fn main() {
         .with_state(app_state);
 
     let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = match tokio::net::TcpListener::bind(addr).await {
+        Ok(listener) => listener,
+        Err(e) => {
+            tracing::error!("Failed to start server on port {port}: {e}");
+            return;
+        }
+    };
     tracing::info!("Starting server on port {}", port);
 
     {

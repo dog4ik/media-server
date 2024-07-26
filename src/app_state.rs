@@ -1,6 +1,5 @@
 use std::{
-    collections::HashMap, error::Error, fmt::Display, num::ParseIntError, path::PathBuf,
-    str::FromStr, sync::Mutex,
+    collections::HashMap, error::Error, fmt::Display, num::ParseIntError, str::FromStr, sync::Mutex,
 };
 
 use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
@@ -18,14 +17,14 @@ use crate::{
         },
         movie::MovieIdentifier,
         show::ShowIdentifier,
-        Library, LibraryFile, Source, TranscodePayload, Video,
+        ContentIdentifier, Library, LibraryItem, Source, TranscodePayload, Video,
     },
     metadata::{
         tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
         MetadataProvider, MetadataProvidersStack, MovieMetadata, ShowMetadata,
         ShowMetadataProvider,
     },
-    progress::{TaskKind, TaskResource},
+    progress::{TaskKind, TaskResource, VideoTaskType},
     torrent::TorrentClient,
     torrent_index::tpb::TpbApi,
     utils,
@@ -71,9 +70,9 @@ impl Display for AppError {
     }
 }
 
-impl Into<StatusCode> for AppErrorKind {
-    fn into(self) -> StatusCode {
-        match self {
+impl From<AppErrorKind> for StatusCode {
+    fn from(val: AppErrorKind) -> Self {
+        match val {
             AppErrorKind::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
             AppErrorKind::NotFound => StatusCode::NOT_FOUND,
             AppErrorKind::Duplicate => StatusCode::BAD_REQUEST,
@@ -95,7 +94,7 @@ impl From<sqlx::Error> for AppError {
     fn from(value: sqlx::Error) -> Self {
         match value {
             sqlx::Error::RowNotFound => AppError {
-                message: format!("Database row not found"),
+                message: "Database row not found".to_string(),
                 kind: AppErrorKind::NotFound,
             },
             rest => AppError {
@@ -189,7 +188,7 @@ impl AppState {
         let _ = source.delete_all_resources().await;
         self.db.remove_video(id).await?;
         let mut library = self.library.lock().unwrap();
-        library.remove_file(id);
+        library.remove_video(id);
         Ok(())
     }
 
@@ -204,38 +203,6 @@ impl AppState {
                 .map(|idx| source.variants.swap_remove(idx));
         };
         Ok(())
-    }
-
-    pub async fn add_show<T>(
-        &self,
-        video_path: PathBuf,
-        metadata_provider: &T,
-    ) -> Result<(), AppError>
-    where
-        T: DiscoverMetadataProvider + ShowMetadataProvider,
-    {
-        let show = LibraryFile::from_path(video_path, &self.db).await?;
-        {
-            let mut library = self.library.lock().unwrap();
-            library.add_show(show.source.id, show);
-        }
-        // self.handle_show(show, metadata_provider).await
-        todo!();
-        Ok(())
-    }
-
-    pub async fn add_movie(
-        &self,
-        video_path: PathBuf,
-        metadata_provider: &impl DiscoverMetadataProvider,
-    ) -> Result<(), AppError> {
-        let movie = LibraryFile::from_path(video_path, &self.db).await?;
-        // the heck is going on here
-        {
-            let mut library = self.library.lock().unwrap();
-            library.add_movie(movie.source.id, movie.clone());
-        };
-        todo!();
     }
 
     pub async fn reset_show_metadata(&self, show_id: i64) -> Result<(), AppError> {
@@ -255,7 +222,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let library = self.library.lock().unwrap();
             orphans
                 .into_iter()
-                .map(|x| library.shows.get(&x.id).unwrap().clone())
+                .filter_map(|x| library.get_show(x.id))
                 .collect()
         };
 
@@ -274,7 +241,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let identifier = show_episodes.first().unwrap();
-                let local_show_id = handle_series(&identifier, &db, discover_providers).await?;
+                let local_show_id = handle_series(identifier, &db, discover_providers).await?;
                 handle_seasons_and_episodes(&db, local_show_id, show_episodes, &show_providers)
                     .await?;
                 Ok(())
@@ -302,10 +269,10 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         self.db.remove_movie(movie_id).await?;
         let movie = {
             let library = self.library.lock().unwrap();
-            library.movies.get(&video.id).unwrap().clone()
+            library.get_movie(video.id).unwrap()
         };
         let discover_providers = self.providers_stack.discover_providers();
-        handle_movie(movie, video.id, &self.db, discover_providers).await?;
+        handle_movie(movie, self.db, discover_providers).await?;
         Ok(())
     }
 
@@ -330,7 +297,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let library = self.library.lock().unwrap();
             orphans
                 .into_iter()
-                .map(|x| library.shows.get(&x.id).unwrap().clone())
+                .filter_map(|x| library.get_show(x.id))
                 .collect()
         };
 
@@ -351,7 +318,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                     provider: new_metadata.metadata_provider,
                     id: new_metadata.metadata_id.clone(),
                 });
-                ids.extend(external_ids.drain(..));
+                ids.append(&mut external_ids);
                 if let Some(id) = self
                     .db
                     .external_to_local_ids(&ids)
@@ -369,17 +336,17 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                         .discover_providers()
                         .into_iter()
                         .find(|p| {
-                            p.provider_identifier() == &new_metadata.metadata_provider.to_string()
+                            p.provider_identifier() == new_metadata.metadata_provider.to_string()
                         })
                         .unwrap();
                     tracing::info!("Fetching show as new");
-                    handle_show_metadata(&self.db, new_metadata, provider).await?
+                    handle_show_metadata(self.db, new_metadata, provider).await?
                 }
             }
         };
 
         let show_providers = self.providers_stack.show_providers();
-        handle_seasons_and_episodes(&self.db, local_show_id, orphans, &show_providers).await?;
+        handle_seasons_and_episodes(self.db, local_show_id, orphans, &show_providers).await?;
 
         Ok(())
     }
@@ -398,7 +365,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         self.db.remove_movie(target_movie_id).await?;
         let movie = {
             let library = self.library.lock().unwrap();
-            library.movies.get(&video.id).unwrap().clone()
+            library.get_movie(video.id).unwrap()
         };
         let external_ids = self
             .providers_stack
@@ -408,7 +375,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 new_metadata.metadata_provider,
             )
             .await?;
-        handle_movie_metadata(&self.db, new_metadata, movie, external_ids).await?;
+        handle_movie_metadata(self.db, new_metadata, movie, external_ids).await?;
 
         Ok(())
     }
@@ -418,12 +385,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         let mut jobs = Vec::new();
         let task_id = self
             .tasks
-            .start_task(
-                TaskKind::Subtitles {
-                    target: source.video.path().to_path_buf(),
-                },
-                None,
-            )
+            .start_video_task(video_id, VideoTaskType::Subtitles, None)
             .unwrap();
         let subtitles_dir = SubtitlesDirAsset::new(video_id);
         for stream in source.video.subtitle_streams() {
@@ -499,8 +461,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             .tracker
             .track_future(self.tasks.observe_ffmpeg_task(
                 job,
-                TaskKind::Transcode {
-                    target: source.video.path().to_path_buf(),
+                TaskKind::Video {
+                    video_id,
+                    task_type: VideoTaskType::Transcode,
                 },
             ))
             .await?;
@@ -530,8 +493,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             .tracker
             .track_future(self.tasks.observe_ffmpeg_task(
                 job,
-                TaskKind::Previews {
-                    target: source.video.path().to_path_buf(),
+                TaskKind::Video {
+                    video_id,
+                    task_type: VideoTaskType::Previews,
                 },
             ))
             .await?;
@@ -541,10 +505,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
         self.partial_refresh().await;
-        // TODO: refresh local library files
-        let local_episodes = {
+        let local_episodes: Vec<_> = {
             let library = self.library.lock().unwrap();
-            library.shows.clone()
+            library.episodes().collect()
         };
 
         let db_episodes_videos = sqlx::query!(
@@ -556,8 +519,12 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         let missing_episodes: Vec<_> = db_episodes_videos
             .iter()
-            .filter(|d| !local_episodes.contains_key(&d.video_id))
+            .filter(|d| {
+                !local_episodes
+                    .iter().any(|x| x.source.id == d.video_id)
+            })
             .collect();
+
         for missing_episode in &missing_episodes {
             if let Err(e) = self.db.remove_video(missing_episode.video_id).await {
                 tracing::error!("Failed to remove video: {e}");
@@ -565,14 +532,11 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         }
 
         let mut new_episodes: Vec<_> = local_episodes
-            .values()
+            .into_iter()
             .filter(|l| {
-                db_episodes_videos
-                    .iter()
-                    .find(|d| d.video_id == l.source.id)
-                    .is_none()
+                !db_episodes_videos
+                    .iter().any(|d| d.video_id == l.source.id)
             })
-            .cloned()
             .collect();
         new_episodes.sort_unstable_by_key(|x| x.identifier.title.clone());
 
@@ -589,7 +553,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let identifier = show_episodes.first().unwrap();
-                let local_show_id = handle_series(&identifier, &db, discover_providers).await?;
+                let local_show_id = handle_series(identifier, &db, discover_providers).await?;
                 handle_seasons_and_episodes(&db, local_show_id, show_episodes, &show_providers)
                     .await?;
                 Ok(())
@@ -604,9 +568,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             }
         }
 
-        let local_movies = {
+        let local_movies: Vec<_> = {
             let library = self.library.lock().unwrap();
-            library.movies.clone()
+            library.movies().collect()
         };
 
         let db_movies_videos = sqlx::query!(
@@ -618,7 +582,10 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         let missing_movies: Vec<_> = db_movies_videos
             .iter()
-            .filter(|d| !local_movies.contains_key(&d.video_id))
+            .filter(|d| {
+                !local_movies
+                    .iter().any(|x| x.source.id == d.video_id)
+            })
             .collect();
         for missing_movie in &missing_movies {
             if let Err(e) = self.db.remove_video(missing_movie.video_id).await {
@@ -627,14 +594,11 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         }
 
         let new_movies: Vec<_> = local_movies
-            .values()
+            .into_iter()
             .filter(|l| {
-                db_movies_videos
-                    .iter()
-                    .find(|d| d.video_id == l.source.id)
-                    .is_none()
+                !db_movies_videos
+                    .iter().any(|d| d.video_id == l.source.id)
             })
-            .cloned()
             .collect();
 
         let mut movie_scan_handles = JoinSet::new();
@@ -642,9 +606,8 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         for movie in new_movies {
             let discover_providers = discover_providers.clone();
             let db = self.db;
-            let video_id = movie.source.id;
             movie_scan_handles
-                .spawn(async move { handle_movie(movie, video_id, db, discover_providers).await });
+                .spawn(async move { handle_movie(movie, db, discover_providers).await });
         }
 
         while let Some(result) = movie_scan_handles.join_next().await {
@@ -661,7 +624,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
     pub async fn partial_refresh(&self) {
         tracing::info!("Partially refreshing library");
-        let mut shows = HashMap::new();
+        let mut videos = HashMap::new();
         let mut to_remove = Vec::new();
         let (show_folders, movie_folders) = {
             let configuration = self.configuration.lock().unwrap();
@@ -671,70 +634,64 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             )
         };
         let mut show_paths = Vec::new();
-        {
-            let mut library = self.library.lock().unwrap();
-            for (id, file) in &library.shows {
-                let file_path = file.source.video.path();
-                if !show_folders.iter().any(|f| file_path.starts_with(f))
-                    || !file_path.try_exists().unwrap_or(false)
-                {
-                    to_remove.push(*id);
-                } else {
-                    show_paths.push(file.source.video.path().to_owned());
-                }
-            }
-
-            for absent_id in &to_remove {
-                library.remove_show(*absent_id)
-            }
-        }
-        for absent_id in &to_remove {
-            let _ = self.db.remove_video(*absent_id).await;
-        }
-        to_remove.clear();
-
-        for folder in show_folders {
-            if let Ok(items) = crate::library::explore_folder(&folder, self.db, &show_paths).await {
-                shows.extend(items);
-            }
-        }
-        self.library.lock().unwrap().shows.extend(shows);
-
-        let mut movies = HashMap::new();
         let mut movie_paths = Vec::new();
         {
             let mut library = self.library.lock().unwrap();
-
-            for (id, file) in &library.movies {
+            for (id, file) in &library.videos {
                 let file_path = file.source.video.path();
-                if !movie_folders.iter().any(|f| file_path.starts_with(f))
-                    || !file_path.try_exists().unwrap_or(false)
-                {
+                if !file_path.try_exists().unwrap_or(false) {
                     to_remove.push(*id);
-                } else {
-                    movie_paths.push(file.source.video.path().to_owned());
+                }
+                match file.identifier {
+                    ContentIdentifier::Show(_) => {
+                        if !show_folders.iter().any(|p| file_path.starts_with(p)) {
+                            to_remove.push(*id);
+                        } else {
+                            show_paths.push(file.source.video.path().to_owned());
+                        }
+                    }
+                    ContentIdentifier::Movie(_) => {
+                        if !movie_folders.iter().any(|p| file_path.starts_with(p)) {
+                            to_remove.push(*id);
+                        } else {
+                            movie_paths.push(file.source.video.path().to_owned());
+                        }
+                    }
                 }
             }
+
             for absent_id in &to_remove {
-                library.movies.remove(absent_id);
+                library.remove_video(*absent_id)
             }
         }
         for absent_id in &to_remove {
             let _ = self.db.remove_video(*absent_id).await;
         }
 
-        for folder in movie_folders {
-            if let Ok(items) = crate::library::explore_folder(&folder, self.db, &movie_paths).await
+        for folder in show_folders {
+            if let Ok(items) =
+                crate::library::explore_folder(&folder, ContentType::Show, self.db, &show_paths)
+                    .await
             {
-                movies.extend(items);
+                videos.extend(items);
             }
         }
-        self.library.lock().unwrap().movies.extend(movies);
+
+        for folder in movie_folders {
+            if let Ok(items) =
+                crate::library::explore_folder(&folder, ContentType::Movie, self.db, &movie_paths)
+                    .await
+            {
+                videos.extend(items);
+            }
+        }
+
+        self.library.lock().unwrap().videos.extend(videos);
     }
 }
 
 async fn handle_series(
-    item: &LibraryFile<ShowIdentifier>,
+    item: &LibraryItem<ShowIdentifier>,
     db: &Db,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
@@ -823,13 +780,13 @@ async fn handle_show_metadata(
             tracing::error!("Failed to insert external id: {e}");
         };
     }
-    return Ok(local_id);
+    Ok(local_id)
 }
 
 async fn handle_movie_metadata(
     db: &Db,
     metadata: MovieMetadata,
-    movie: LibraryFile<MovieIdentifier>,
+    movie: LibraryItem<MovieIdentifier>,
     external_ids: Vec<ExternalIdMetadata>,
 ) -> anyhow::Result<i64> {
     let metadata_id = metadata.metadata_id.clone();
@@ -879,13 +836,13 @@ async fn handle_movie_metadata(
         };
         let _ = db.insert_external_id(db_external_id).await;
     }
-    return Ok(local_id);
+    Ok(local_id)
 }
 
 async fn handle_seasons_and_episodes(
     db: &Db,
     local_show_id: i64,
-    mut show_episodes: Vec<LibraryFile<ShowIdentifier>>,
+    mut show_episodes: Vec<LibraryItem<ShowIdentifier>>,
     show_providers: &Vec<&'static (dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<()> {
     show_episodes.sort_unstable_by_key(|x| x.identifier.season);
@@ -902,7 +859,7 @@ async fn handle_seasons_and_episodes(
         let show_providers = show_providers.clone();
         let db = db.clone();
         seasons_scan_handles.spawn(async move {
-            let season = season_episodes.first().unwrap();
+            let season = season_episodes.first().unwrap().clone();
             let local_season_id = handle_season(
                 local_show_id,
                 external_ids.clone(),
@@ -921,7 +878,6 @@ async fn handle_seasons_and_episodes(
                     handle_episode(
                         local_show_id,
                         external_ids.clone(),
-                        episode.source.id,
                         local_season_id,
                         episode,
                         &db,
@@ -960,7 +916,7 @@ async fn handle_seasons_and_episodes(
 async fn handle_season(
     local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
-    item: &LibraryFile<ShowIdentifier>,
+    item: LibraryItem<ShowIdentifier>,
     db: &Db,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
@@ -982,7 +938,7 @@ async fn handle_season(
         }
         // fallback
         tracing::warn!("Using season metadata fallback");
-        let id = season_metadata_fallback(db, item, local_show_id).await?;
+        let id = season_metadata_fallback(db, &item, local_show_id).await?;
         return Ok(id);
     };
     Ok(local_season.metadata_id.parse().unwrap())
@@ -991,9 +947,8 @@ async fn handle_season(
 async fn handle_episode(
     local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
-    db_video_id: i64,
     local_season_id: i64,
-    item: LibraryFile<ShowIdentifier>,
+    item: LibraryItem<ShowIdentifier>,
     db: &Db,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
@@ -1012,7 +967,7 @@ async fn handle_episode(
                 };
                 let poster = episode.poster.clone();
                 let local_id = db
-                    .insert_episode(episode.into_db_episode(local_season_id, db_video_id))
+                    .insert_episode(episode.into_db_episode(local_season_id, item.source.id))
                     .await?;
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);
@@ -1028,15 +983,14 @@ async fn handle_episode(
         }
         // fallback
         tracing::warn!("Using episode metadata fallback");
-        let id = episode_metadata_fallback(db, &item, db_video_id, local_season_id).await?;
+        let id = episode_metadata_fallback(db, &item, item.source.id, local_season_id).await?;
         return Ok(id);
     };
     Ok(local_episode.metadata_id.parse().unwrap())
 }
 
 async fn handle_movie(
-    item: LibraryFile<MovieIdentifier>,
-    db_video_id: i64,
+    item: LibraryItem<MovieIdentifier>,
     db: &Db,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
@@ -1059,7 +1013,7 @@ async fn handle_movie(
                 return Ok(local_id);
             }
         }
-        let id = movie_metadata_fallback(db, &item, db_video_id).await?;
+        let id = movie_metadata_fallback(db, &item, item.source.id).await?;
         return Ok(id);
     };
     Ok(db_movies.first().unwrap().metadata_id.parse().unwrap())
@@ -1067,7 +1021,7 @@ async fn handle_movie(
 
 pub async fn series_metadata_fallback(
     db: &Db,
-    file: &LibraryFile<ShowIdentifier>,
+    file: &LibraryItem<ShowIdentifier>,
 ) -> anyhow::Result<i64> {
     let show_fallback = DbShow {
         id: None,
@@ -1075,7 +1029,7 @@ pub async fn series_metadata_fallback(
         backdrop: None,
         plot: None,
         release_date: None,
-        title: file.identifier.title.clone(),
+        title: file.identifier.title.to_string(),
     };
     let id = db.insert_show(show_fallback).await.unwrap();
     let _ = db
@@ -1102,7 +1056,7 @@ pub async fn series_metadata_fallback(
 
 pub async fn season_metadata_fallback(
     db: &Db,
-    file: &LibraryFile<ShowIdentifier>,
+    file: &LibraryItem<ShowIdentifier>,
     show_id: i64,
 ) -> anyhow::Result<i64> {
     let fallback_season = DbSeason {
@@ -1119,7 +1073,7 @@ pub async fn season_metadata_fallback(
 
 pub async fn episode_metadata_fallback(
     db: &Db,
-    file: &LibraryFile<ShowIdentifier>,
+    file: &LibraryItem<ShowIdentifier>,
     video_id: i64,
     season_id: i64,
 ) -> anyhow::Result<i64> {
@@ -1144,12 +1098,12 @@ pub async fn episode_metadata_fallback(
         file.source.video.duration() / 2,
     )
     .await;
-    return Ok(id);
+    Ok(id)
 }
 
 pub async fn movie_metadata_fallback(
     db: &Db,
-    file: &LibraryFile<MovieIdentifier>,
+    file: &LibraryItem<MovieIdentifier>,
     video_id: i64,
 ) -> anyhow::Result<i64> {
     let title = file.identifier.title[..1].to_uppercase() + &file.identifier.title[1..];
@@ -1173,7 +1127,7 @@ pub async fn movie_metadata_fallback(
         file.source.video.duration() / 2,
     )
     .await;
-    return Ok(id);
+    Ok(id)
 }
 
 pub(crate) async fn save_asset_from_url(
