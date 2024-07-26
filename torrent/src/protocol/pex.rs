@@ -347,6 +347,12 @@ impl PexHistory {
     }
 }
 
+impl Default for PexHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};

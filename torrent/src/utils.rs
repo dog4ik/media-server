@@ -1,12 +1,12 @@
 use std::net::SocketAddrV4;
 
-use tokio::net::{TcpListener, TcpStream, UdpSocket};
+use tokio::net::{TcpListener, UdpSocket};
 
 pub fn verify_sha1(hash: [u8; 20], input: &[u8]) -> bool {
     use sha1::{Digest, Sha1};
     let mut hasher = <Sha1 as sha1::Digest>::new();
-    hasher.update(&input);
-    let result: [u8; 20] = hasher.finalize().try_into().unwrap();
+    hasher.update(input);
+    let result: [u8; 20] = hasher.finalize().into();
     hash == result
 }
 
@@ -23,17 +23,6 @@ pub fn piece_size(piece_i: usize, piece_length: usize, total_length: usize) -> u
     } else {
         piece_length
     }
-}
-
-pub async fn connect_socket_with_timeout(ip: SocketAddrV4) -> anyhow::Result<TcpStream> {
-    use anyhow::Context;
-    use std::time::Duration;
-    use tokio::time::timeout;
-    let timeout_duration = Duration::from_millis(500);
-    timeout(timeout_duration, TcpStream::connect(ip))
-        .await
-        .context("connection timed out")?
-        .context("failed to connect to the socket")
 }
 
 /// Create tcp listener with n + 1 port if it is taken

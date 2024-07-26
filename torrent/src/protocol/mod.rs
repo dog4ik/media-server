@@ -6,6 +6,7 @@ use std::{
 use serde::{de::Visitor, Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 
+#[allow(unused)]
 pub mod dht;
 pub mod peer;
 pub mod pex;
@@ -96,7 +97,7 @@ impl Info {
         let mut hasher = <Sha1 as sha1::Digest>::new();
         let bytes = serde_bencode::to_bytes(self).unwrap();
         hasher.update(&bytes);
-        hasher.finalize().try_into().unwrap()
+        hasher.finalize().into()
     }
 
     pub fn hex_hash(&self) -> String {
@@ -105,7 +106,7 @@ impl Info {
     }
 
     pub fn hex_peices_hashes(&self) -> Vec<String> {
-        self.pieces.0.iter().map(|x| hex::encode(x)).collect()
+        self.pieces.0.iter().map(hex::encode).collect()
     }
 }
 

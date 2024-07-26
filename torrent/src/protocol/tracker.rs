@@ -8,8 +8,6 @@ use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
-use crate::tracker::AnnounceResult;
-
 #[derive(Deserialize, Serialize, Debug, Copy, Clone)]
 #[serde(rename_all = "lowercase")]
 pub enum TrackerEvent {
@@ -244,53 +242,6 @@ impl UdpTrackerMessage {
     }
 }
 
-#[derive(Debug, Clone)]
-struct UdpAnnounceResponse {
-    action: u32,
-    transaction_id: u32,
-    interval: u32,
-    leechers: u32,
-    seeders: u32,
-    ips: Vec<SocketAddrV4>,
-}
-
-impl Into<AnnounceResult> for UdpAnnounceResponse {
-    fn into(self) -> AnnounceResult {
-        AnnounceResult {
-            interval: self.interval as usize,
-            leeachs: Some(self.leechers as usize),
-            seeds: Some(self.seeders as usize),
-            peers: self.ips.into_iter().map(|x| x.into()).collect(),
-        }
-    }
-}
-
-impl UdpAnnounceResponse {
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        let action = u32::from_be_bytes(bytes[0..4].try_into().unwrap());
-        let transaction_id = u32::from_be_bytes(bytes[4..8].try_into().unwrap());
-        let interval = u32::from_be_bytes(bytes[8..12].try_into().unwrap());
-        let leechers = u32::from_be_bytes(bytes[12..16].try_into().unwrap());
-        let seeders = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
-
-        let mut ips = Vec::new();
-        for slice in bytes[20..].array_chunks::<6>() {
-            let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
-            let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
-            let ip = Ipv4Addr::from_bits(ip);
-            ips.push(SocketAddrV4::new(ip, port));
-        }
-        Ok(Self {
-            action,
-            transaction_id,
-            interval,
-            leechers,
-            seeders,
-            ips,
-        })
-    }
-}
-
 #[derive(Debug, Clone, Copy)]
 pub struct UdpConnectRequest {
     pub protocol_id: u64,
@@ -318,6 +269,12 @@ impl UdpConnectRequest {
             .write_all(&self.transaction_id.to_be_bytes())
             .unwrap();
         bytes
+    }
+}
+
+impl Default for UdpConnectRequest {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

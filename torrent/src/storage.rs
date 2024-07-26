@@ -38,6 +38,7 @@ pub struct TorrentStorage {
     pub pieces: Hashes,
     pub bitfield: BitField,
     pub storage_method: StorageMethod,
+    pub enabled_files: BitField,
 }
 
 #[derive(Debug, Clone)]
@@ -80,6 +81,18 @@ impl StorageHandle {
             .unwrap();
         rx.await.unwrap()
     }
+    pub async fn enable_file(&self, file_idx: usize) {
+        self.piece_tx
+            .send(StorageMessage::EnableFile { file_idx })
+            .await
+            .unwrap();
+    }
+    pub async fn disable_file(&self, file_idx: usize) {
+        self.piece_tx
+            .send(StorageMessage::DisableFile { file_idx })
+            .await
+            .unwrap();
+    }
 }
 
 #[derive(Debug)]
@@ -88,6 +101,12 @@ pub enum StorageMessage {
         piece_i: usize,
         bytes: Bytes,
         response: mpsc::Sender<StorageFeedback>,
+    },
+    EnableFile {
+        file_idx: usize,
+    },
+    DisableFile {
+        file_idx: usize,
     },
     RetrievePiece {
         piece_i: usize,
@@ -114,15 +133,27 @@ pub enum StorageFeedback {
 }
 
 impl TorrentStorage {
-    pub fn new(info: &Info, output_dir: impl AsRef<Path>, storage_method: StorageMethod) -> Self {
+    pub fn new(
+        info: &Info,
+        output_dir: impl AsRef<Path>,
+        storage_method: StorageMethod,
+        enabled_files: &[usize],
+    ) -> Self {
+        let output_files = info.output_files(&output_dir);
+        let mut files_bitfield = BitField::empty(output_files.len());
+        for enabled_idx in enabled_files {
+            files_bitfield.add(*enabled_idx).unwrap();
+        }
+
         Self {
             output_dir: output_dir.as_ref().to_path_buf(),
-            output_files: info.output_files(output_dir),
+            output_files,
             piece_size: info.piece_length,
             total_length: info.total_size(),
             pieces: info.pieces.clone(),
             bitfield: BitField::empty(info.pieces.len()),
             storage_method,
+            enabled_files: files_bitfield,
         }
     }
 
@@ -193,12 +224,18 @@ impl TorrentStorage {
                 };
                 match save_result {
                     Ok(piece_i) => {
-                        let _ = response.send(StorageFeedback::Saved { piece_i }).await;
+                        response
+                            .send(StorageFeedback::Saved { piece_i })
+                            .await
+                            .unwrap();
                         self.bitfield.add(piece_i).unwrap();
                         state.send_modify(|old| old.add(piece_i).unwrap())
                     }
                     Err(piece_i) => {
-                        let _ = response.send(StorageFeedback::Failed { piece_i }).await;
+                        response
+                            .send(StorageFeedback::Failed { piece_i })
+                            .await
+                            .unwrap();
                     }
                 }
             }
@@ -218,7 +255,15 @@ impl TorrentStorage {
                         self.retrieve_piece_preallocated(piece_i).await.ok()
                     }
                 };
-                let _ = response.send(StorageFeedback::Data { piece_i, bytes });
+                let _ = response
+                    .send(StorageFeedback::Data { piece_i, bytes })
+                    .await;
+            }
+            StorageMessage::EnableFile { file_idx } => {
+                let _ = self.enabled_files.add(file_idx);
+            }
+            StorageMessage::DisableFile { file_idx } => {
+                let _ = self.enabled_files.remove(file_idx);
             }
         };
     }
@@ -249,8 +294,8 @@ impl TorrentStorage {
 
         let mut file_offset = 0;
         for file in &self.output_files {
-            let file_start = file_offset as u64;
-            let file_end = (file_offset + file.length()) as u64;
+            let file_start = file_offset;
+            let file_end = file_offset + file.length();
             let file_range = file_start..file_end;
             if file_start > piece_end || file_end < piece_start {
                 file_offset += file.length();
@@ -309,15 +354,13 @@ impl TorrentStorage {
                 .open(file.path())
                 .await?;
 
-            file_handle
-                .seek(SeekFrom::Start(insert_offset.into()))
-                .await?;
+            file_handle.seek(SeekFrom::Start(insert_offset)).await?;
 
             let mut buffer = Vec::new();
             file_handle.read_to_end(&mut buffer).await.unwrap();
 
             file_handle
-                .seek(SeekFrom::Start(insert_offset.into()))
+                .seek(SeekFrom::Start(insert_offset))
                 .await
                 .unwrap();
 
@@ -350,10 +393,11 @@ impl TorrentStorage {
         };
 
         let mut file_offset = 0;
-        for file in &self.output_files {
-            let file_start = file_offset as u64;
+        for (file_idx, file) in self.output_files.iter().enumerate() {
+            let file_start = file_offset;
             let file_end = file_offset + file.length();
-            if file_start > piece_end || file_end < piece_start {
+            if file_start > piece_end || file_end < piece_start || !self.enabled_files.has(file_idx)
+            {
                 file_offset += file.length();
                 continue;
             }
@@ -486,14 +530,14 @@ impl TorrentStorage {
             bail!("Piece {piece_i} is not available");
         };
         let piece_length = self.piece_length(piece_i);
-        let mut bytes = BytesMut::with_capacity(piece_length as usize);
+        let mut bytes = BytesMut::zeroed(piece_length as usize);
 
         let piece_start = piece_i as u64 * self.piece_size as u64;
         let piece_end = piece_start + piece_length as u64;
 
         let mut file_offset = 0;
         for file in &self.output_files {
-            let file_start = file_offset as u64;
+            let file_start = file_offset;
             let file_end = file_offset + file.length();
             if file_start > piece_end || file_end < piece_start {
                 file_offset += file.length();

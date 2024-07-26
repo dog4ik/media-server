@@ -45,11 +45,7 @@ impl TorrentFile {
             );
         }
         if let Some(list) = &self.announce_list {
-            trackers.extend(
-                list.into_iter()
-                    .flatten()
-                    .filter_map(|url| Url::parse(url).ok()),
-            );
+            trackers.extend(list.iter().flatten().filter_map(|url| Url::parse(url).ok()));
         };
         trackers
     }
@@ -78,7 +74,7 @@ impl Display for MagnetLink {
             query.finish();
         }
 
-        write!(f, "{}", url.to_string())
+        write!(f, "{}", url)
     }
 }
 

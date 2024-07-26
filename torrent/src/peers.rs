@@ -93,6 +93,13 @@ impl PeerError {
 }
 
 #[derive(Debug)]
+pub struct PeerJoin {
+    pub uuid: Uuid,
+    pub pending_blocks: Vec<Block>,
+    pub ready_blocks: Vec<(Block, bytes::Bytes)>,
+}
+
+#[derive(Debug)]
 pub struct Peer {
     pub uuid: Uuid,
     pub peer_ip: SocketAddr,
@@ -102,6 +109,8 @@ pub struct Peer {
     pub choked: bool,
     pub interested: bool,
     pub extension_handshake: Option<ExtensionHandshake>,
+    pub pending_blocks: Vec<Block>,
+    pub ready_blocks: Vec<(Block, bytes::Bytes)>,
 }
 
 impl Peer {
@@ -189,6 +198,8 @@ impl Peer {
             choked: true,
             interested: false,
             extension_handshake: his_extension_handshake,
+            pending_blocks: Vec::new(),
+            ready_blocks: Vec::new(),
         })
     }
 
@@ -276,6 +287,8 @@ impl Peer {
             choked: true,
             interested: false,
             extension_handshake: his_extension_handshake,
+            pending_blocks: Vec::new(),
+            ready_blocks: Vec::new(),
         })
     }
 
@@ -288,7 +301,7 @@ impl Peer {
     pub fn supports_ut_metadata(&self) -> bool {
         self.extension_handshake
             .as_ref()
-            .and_then(|handshake| UtMetadata::empty_from_handshake(&handshake))
+            .and_then(|x| x.ut_metadata_id())
             .is_some()
     }
 
@@ -349,15 +362,17 @@ impl Peer {
         mut self,
         mut ipc: PeerIPC,
         cancellation_token: CancellationToken,
-    ) -> (Uuid, Result<(), PeerError>) {
-        let mut afk_interval = tokio::time::interval(Duration::from_secs(1));
+    ) -> (PeerJoin, Result<(), PeerError>) {
         let mut pex_update_interval = tokio::time::interval(Duration::from_secs(90));
-        afk_interval.tick().await;
+        let mut timeout_interval = tokio::time::interval(Duration::from_secs(1));
         pex_update_interval.tick().await;
+        timeout_interval.tick().await;
         let peer_result = loop {
             tokio::select! {
                 Some(command_msg) = ipc.commands_rx.recv() => {
-                    afk_interval.reset();
+                    if let PeerCommand::StartMany { .. } = command_msg {
+                        timeout_interval.reset();
+                    }
                     match self.handle_peer_command(command_msg).await {
                         Ok(_) => {},
                         Err(e) => break Err(e),
@@ -365,17 +380,23 @@ impl Peer {
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
                     if let PeerMessage::Piece { .. } = peer_msg {
-                        afk_interval.reset();
+                        timeout_interval.reset();
                     }
                     if let Err(e) = self.handle_peer_msg(peer_msg, &mut ipc).await {
                         break Err(e);
                     }
                 },
-                _ = afk_interval.tick() => {
-                    let _ = self.send_status(PeerStatusMessage::Afk, &mut ipc).await;
-                }
                 _ = pex_update_interval.tick() => {
-                    let _ = self.send_status(PeerStatusMessage::PexRequest, &mut ipc).await;
+                    let _ = self.send_status(PeerStatusMessage::PexRequest, &mut ipc);
+                }
+                _ = timeout_interval.tick() => {
+                    if !self.pending_blocks.is_empty() {
+                        break Err(PeerError::timeout("Timeout"));
+                    }
+                    if !self.ready_blocks.is_empty() {
+                        let ready_blocks = std::mem::take(&mut self.ready_blocks);
+                        self.send_status(PeerStatusMessage::Flush { blocks: ready_blocks }, &mut ipc)
+                    }
                 }
                 _ = cancellation_token.cancelled() => {
                     tracing::debug!(ip = self.ip().to_string(), "Peer quit using cancellation token");
@@ -385,7 +406,14 @@ impl Peer {
         };
         let mut stream = self.stream.into_inner();
         let _ = stream.shutdown().await;
-        (self.uuid, peer_result)
+        let pending_blocks = std::mem::take(&mut self.pending_blocks);
+        let ready_blocks = std::mem::take(&mut self.ready_blocks);
+        let join_data = PeerJoin {
+            pending_blocks,
+            ready_blocks,
+            uuid: self.uuid,
+        };
+        (join_data, peer_result)
     }
 
     pub async fn handle_peer_command(
@@ -394,11 +422,13 @@ impl Peer {
     ) -> Result<(), PeerError> {
         match peer_command {
             PeerCommand::Start { block } => {
-                if !self.choked {
+                self.pending_blocks.push(block);
+                self.send_peer_msg(PeerMessage::request(block)).await?;
+            }
+            PeerCommand::StartMany { blocks } => {
+                for block in blocks {
+                    self.pending_blocks.push(block);
                     self.send_peer_msg(PeerMessage::request(block)).await?;
-                } else {
-                    self.send_peer_msg(PeerMessage::request(block)).await?;
-                    tracing::warn!("ignoring new job (choked)");
                 }
             }
             // Cancel does not provide guarentee that this block will not arrive
@@ -411,8 +441,8 @@ impl Peer {
                 .await?;
             }
             PeerCommand::Have { piece } => {
-                let have_msg = PeerMessage::Have { index: piece };
-                self.send_peer_msg(have_msg).await?;
+                self.send_peer_msg(PeerMessage::Have { index: piece })
+                    .await?;
             }
             PeerCommand::Interested => self.show_interest().await?,
             PeerCommand::Choke => self.send_peer_msg(PeerMessage::Choke).await?,
@@ -466,22 +496,31 @@ impl Peer {
             PeerMessage::HeatBeat => {}
             PeerMessage::Choke => {
                 self.choked = true;
-                self.send_status(PeerStatusMessage::Choked, ipc).await;
+                let pending_blocks = std::mem::take(&mut self.pending_blocks);
+                let ready_blocks = std::mem::take(&mut self.ready_blocks);
+                self.send_status(
+                    PeerStatusMessage::Choked {
+                        ready_blocks,
+                        pending_blocks,
+                    },
+                    ipc,
+                );
             }
             PeerMessage::Unchoke => {
                 self.choked = false;
-                self.send_status(PeerStatusMessage::Unchoked, ipc).await;
+                self.send_status(PeerStatusMessage::Unchoked, ipc);
             }
             PeerMessage::Interested => {
-                tracing::warn!(%peer_msg, "Not implemented")
+                self.interested = true;
+                self.send_status(PeerStatusMessage::Interested, ipc);
             }
             PeerMessage::NotInterested => {
-                tracing::warn!(%peer_msg, "Not implemented")
+                self.interested = false;
+                self.send_status(PeerStatusMessage::NotInterested, ipc);
             }
             PeerMessage::Have { index } => {
                 let _ = self.bitfield.add(index as usize);
-                self.send_status(PeerStatusMessage::Have { piece: index }, ipc)
-                    .await;
+                self.send_status(PeerStatusMessage::Have { piece: index }, ipc);
             }
             PeerMessage::Bitfield { .. } => {
                 return Err(PeerError::logic("Peer is sending bitfield"));
@@ -500,8 +539,7 @@ impl Peer {
                         },
                     },
                     ipc,
-                )
-                .await;
+                );
             }
             PeerMessage::Piece {
                 index,
@@ -513,14 +551,24 @@ impl Peer {
                     offset: begin,
                     length: bytes.len() as u32,
                 };
-                self.send_status(PeerStatusMessage::Data { block, bytes }, ipc)
-                    .await;
+                if let Some(block) = self
+                    .pending_blocks
+                    .iter()
+                    .position(|b| *b == block)
+                    .map(|idx| self.pending_blocks.swap_remove(idx))
+                {
+                    self.ready_blocks.push((block, bytes));
+                    if self.ready_blocks.len() > self.pending_blocks.len() / 2 {
+                        let blocks: Vec<_> = self.ready_blocks.drain(..).collect();
+                        self.send_status(PeerStatusMessage::Data { blocks }, ipc)
+                    }
+                };
             }
             PeerMessage::Cancel { .. } => {
                 tracing::warn!(%peer_msg, "Not implemented")
             }
             PeerMessage::ExtensionHandshake { .. } => {
-                tracing::warn!(%peer_msg, "Not implemented")
+                return Err(PeerError::logic("Peer is sending extension handshake"));
             }
             PeerMessage::Extension {
                 extension_id,
@@ -540,7 +588,6 @@ impl Peer {
                                         PeerStatusMessage::UtMetadataBlockRequest { block: piece },
                                         ipc,
                                     )
-                                    .await
                                 }
                                 UtMessage::Data { .. } => {
                                     tracing::warn!("Peer sent ut_metadata data message");
@@ -561,8 +608,7 @@ impl Peer {
                         },
                         "ut_pex" => match PexMessage::from_bytes(&payload) {
                             Ok(msg) => {
-                                self.send_status(PeerStatusMessage::PexMessage { msg }, ipc)
-                                    .await;
+                                self.send_status(PeerStatusMessage::PexMessage { msg }, ipc);
                             }
                             Err(e) => {
                                 tracing::error!("Failed to decode pex message: {e}");
@@ -602,13 +648,12 @@ impl Peer {
         }
     }
 
-    pub async fn send_status(&mut self, status: PeerStatusMessage, ipc: &mut PeerIPC) {
+    pub fn send_status(&mut self, status: PeerStatusMessage, ipc: &mut PeerIPC) {
         ipc.status_tx
-            .send(PeerStatus {
+            .try_send(PeerStatus {
                 peer_id: self.uuid,
                 message_type: status,
             })
-            .await
             .unwrap();
     }
 
@@ -676,7 +721,7 @@ impl BitField {
     pub fn pieces(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(|(i, byte)| {
             (0..8).filter_map(move |position| {
-                let piece_i = i * (8 as usize) + (position as usize);
+                let piece_i = i * 8 + (position as usize);
                 let mask = 1u8.rotate_right(position + 1);
                 (byte & mask != 0).then_some(piece_i)
             })

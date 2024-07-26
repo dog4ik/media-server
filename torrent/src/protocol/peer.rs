@@ -24,7 +24,7 @@ impl HandShake {
     pub fn new(info_hash: [u8; 20]) -> Self {
         let mut reserved = [0_u8; 8];
         // support extensions
-        reserved[5] = 0 | 0x10;
+        reserved[5] = 0x10;
 
         Self {
             info_hash,
@@ -39,7 +39,7 @@ impl HandShake {
 
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         let mut reader = bytes.reader();
-        let length = bytes.get(0).ok_or(anyhow!("length byte is not set"))?;
+        let length = bytes.first().ok_or(anyhow!("length byte is not set"))?;
         ensure!(*length == 19);
 
         let identifier =
@@ -66,10 +66,10 @@ impl HandShake {
         let mut writer = out.writer();
 
         writer.write_all(&[19]).unwrap();
-        writer.write(b"BitTorrent protocol").unwrap();
-        writer.write(&self.reserved).unwrap();
-        writer.write(&self.info_hash).unwrap();
-        writer.write(&self.peer_id).unwrap();
+        writer.write_all(b"BitTorrent protocol").unwrap();
+        writer.write_all(&self.reserved).unwrap();
+        writer.write_all(&self.info_hash).unwrap();
+        writer.write_all(&self.peer_id).unwrap();
         out
     }
 
@@ -300,7 +300,7 @@ impl PeerMessage {
                 let extension_id = payload[0];
                 if extension_id == 0 {
                     Ok(PeerMessage::ExtensionHandshake {
-                        payload: ExtensionHandshake::from_bytes(&payload[1..].as_ref())?,
+                        payload: ExtensionHandshake::from_bytes(payload[1..].as_ref())?,
                     })
                 } else {
                     Ok(PeerMessage::Extension {
@@ -359,7 +359,7 @@ impl PeerMessage {
                 bytes.extend_from_slice(&7_u8.to_be_bytes());
                 bytes.extend_from_slice(&index.to_be_bytes());
                 bytes.extend_from_slice(&begin.to_be_bytes());
-                bytes.extend_from_slice(&piece);
+                bytes.extend_from_slice(piece);
                 bytes.into()
             }
             PeerMessage::Cancel {
@@ -388,24 +388,24 @@ impl PeerMessage {
                 let mut bytes = BytesMut::with_capacity(payload.len() + 2);
                 bytes.extend_from_slice(&20u8.to_be_bytes());
                 bytes.extend_from_slice(&extension_id.to_be_bytes());
-                bytes.extend_from_slice(&payload);
+                bytes.extend_from_slice(payload);
                 bytes.into()
             }
         }
     }
 
-    pub fn request(piece: Block) -> Self {
+    pub fn request(block: Block) -> Self {
         Self::Request {
-            index: piece.piece,
-            begin: piece.offset,
-            length: piece.length,
+            index: block.piece,
+            begin: block.offset,
+            length: block.length,
         }
     }
-    pub fn cancel(piece: Block) -> Self {
+    pub fn cancel(block: Block) -> Self {
         Self::Cancel {
-            index: piece.piece,
-            begin: piece.offset,
-            length: piece.length,
+            index: block.piece,
+            begin: block.offset,
+            length: block.length,
         }
     }
 }
@@ -461,7 +461,7 @@ impl Decoder for MessageFramer {
         // Use advance to modify src such that it no longer contains
         // this frame.
         let data = &src[4..4 + length];
-        let message = match PeerMessage::from_slice(&data) {
+        let message = match PeerMessage::from_slice(data) {
             Ok(msg) => msg,
             Err(e) => return Err(anyhow!("failed to construct peer message: {}", e)),
         };

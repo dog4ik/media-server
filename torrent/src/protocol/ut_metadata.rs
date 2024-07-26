@@ -153,7 +153,7 @@ impl UtMetadata {
     }
 
     pub fn as_bytes(self) -> Bytes {
-        let iter = self.blocks.into_iter().map(|x| x.unwrap()).flatten();
+        let iter = self.blocks.into_iter().flat_map(|x| x.unwrap());
         Bytes::from_iter(iter)
     }
 

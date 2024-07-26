@@ -20,7 +20,6 @@ use file::MagnetLink;
 use peers::Peer;
 use protocol::Info;
 use reqwest::Url;
-use scheduler::{PendingFile, PendingFiles};
 use storage::{StorageMethod, TorrentStorage};
 use tokio::{
     net::TcpStream,
@@ -93,7 +92,7 @@ impl PeerListener {
                                 let info_hash = peer.handshake.info_hash();
                                 if let Some(channel) = map.get_mut(&info_hash) {
                                     tracing::trace!("Peer connected via listener {}", ip);
-                                    if let Err(_) = channel.send(NewPeer::ListenerOrigin(peer)).await {
+                                    if channel.send(NewPeer::ListenerOrigin(peer)).await.is_err() {
                                         tracing::warn!(?info_hash, "Peer connected to outdated torrent");
                                         map.remove(&info_hash);
                                     };
@@ -118,7 +117,7 @@ impl PeerListener {
                     }
                 };
             }
-            tracing::warn!("Peer listener finished");
+            tracing::debug!("Closed peer listener");
         });
         Ok(Self {
             new_torrent_channel: tx,
@@ -135,7 +134,6 @@ impl PeerListener {
 
 #[derive(Debug)]
 pub struct Client {
-    config: ClientConfig,
     peer_listener: PeerListener,
     udp_tracker_tx: UdpTrackerChannel,
     cancellation_token: CancellationToken,
@@ -154,7 +152,6 @@ impl Client {
         let udp_tracker_channel = udp_worker.spawn().await?;
 
         Ok(Self {
-            config,
             peer_listener,
             udp_tracker_tx: udp_tracker_channel,
             cancellation_token,
@@ -195,7 +192,12 @@ impl Client {
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let storage = TorrentStorage::new(&info, save_location, StorageMethod::Preallocated);
+        let storage = TorrentStorage::new(
+            &info,
+            save_location,
+            StorageMethod::Preallocated,
+            &enabled_files,
+        );
         let storage_handle = storage
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
@@ -232,7 +234,7 @@ impl Client {
                     )
                     .await?;
                     let announce = tracker.announce().await?;
-                    tracker.handle_announce(announce).await;
+                    tracker.handle_announce(announce).await?;
                     Ok(())
                 });
             }
@@ -282,37 +284,36 @@ async fn spawn_trackers(
     task_tracker: TaskTracker,
     cancellation_token: CancellationToken,
 ) {
-    let mut tracker_init_set = JoinSet::new();
     for tracker in urls {
         let Ok(tracker_type) = TrackerType::from_url(&tracker, tracker_tx.clone()) else {
             continue;
         };
-        tracker_init_set.spawn(timeout(
-            Duration::from_secs(5),
-            Tracker::new(
-                info_hash,
-                tracker_type,
-                tracker.clone(),
-                progress.clone(),
-                peer_tx.clone(),
-            ),
-        ));
-    }
-    while let Some(tracker_result) = tracker_init_set.join_next().await {
-        match tracker_result {
-            Ok(Ok(Ok(tracker))) => {
-                tracing::info!("Connected to the tracker: {}", tracker.url);
-                task_tracker.spawn(tracker.work(cancellation_token.clone()));
-            }
-            Ok(Ok(Err(e))) => {
-                tracing::error!("Failed to construct tracker: {}", e);
-            }
-            Ok(Err(_)) => {
-                tracing::error!("Failed to connect tracker: Timeout");
-            }
-            Err(e) => {
-                tracing::error!("Tracker task paniced: {e}");
-            }
-        };
+        let cancellation_token = cancellation_token.clone();
+        let progress = progress.clone();
+        let peer_tx = peer_tx.clone();
+        let tracker_url = tracker.to_string();
+        task_tracker.spawn(async move {
+            let tracker = timeout(
+                Duration::from_secs(2),
+                Tracker::new(info_hash, tracker_type, tracker, progress, peer_tx),
+            )
+            .await;
+            match tracker {
+                Ok(Ok(tracker)) => {
+                    let url = tracker.url.to_string();
+                    tracing::info!("Connected to the tracker: {url}");
+                    match tracker.work(cancellation_token).await {
+                        Ok(_) => tracing::info!(tracker_url, "Gracefully stopped tracker"),
+                        Err(e) => tracing::warn!(tracker_url, "Tracker errored: {e}"),
+                    };
+                }
+                Ok(Err(e)) => {
+                    tracing::error!(tracker_url, "Failed to construct tracker: {e}");
+                }
+                Err(_) => {
+                    tracing::error!(tracker_url, "Failed to connect tracker: Timeout");
+                }
+            };
+        });
     }
 }

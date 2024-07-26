@@ -162,13 +162,13 @@ struct HttpAnnounceResponse {
     peers: HttpPeerList,
 }
 
-impl Into<AnnounceResult> for HttpAnnounceResponse {
-    fn into(self) -> AnnounceResult {
+impl From<HttpAnnounceResponse> for AnnounceResult {
+    fn from(val: HttpAnnounceResponse) -> AnnounceResult {
         AnnounceResult {
-            interval: self.interval as usize,
+            interval: val.interval as usize,
             leeachs: None,
             seeds: None,
-            peers: self.peers(),
+            peers: val.peers(),
         }
     }
 }
@@ -239,12 +239,12 @@ impl UdpTrackerChannel {
     pub async fn connect(&self, addr: SocketAddr) -> anyhow::Result<u64> {
         let res = self.send(UdpTrackerRequestType::Connect, addr).await?;
         if let UdpTrackerMessageType::Connect { connection_id } = res.message_type {
-            return Ok(connection_id);
+            Ok(connection_id)
         } else {
-            return Err(anyhow::anyhow!(
+            Err(anyhow::anyhow!(
                 "Expected connect response, got {:?}",
                 res.message_type
-            ));
+            ))
         }
     }
 }
@@ -265,6 +265,8 @@ impl TrackerType {
     }
 }
 
+const MIN_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Debug)]
 pub struct Tracker {
     pub tracker_type: TrackerType,
@@ -284,7 +286,7 @@ impl Tracker {
         mut progress: watch::Receiver<DownloadStat>,
         peer_tx: mpsc::Sender<NewPeer>,
     ) -> anyhow::Result<Self> {
-        let stats = { progress.borrow_and_update().clone() };
+        let stats = { *progress.borrow_and_update() };
         let announce_payload = AnnouncePayload {
             announce: url.clone(),
             info_hash,
@@ -319,8 +321,9 @@ impl Tracker {
 
     pub async fn work(mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         let initial_announce = self.announce().await?;
-        let interval_duration = Duration::from_secs(initial_announce.interval as u64);
-        self.handle_announce(initial_announce).await;
+        let interval_duration =
+            Duration::from_secs(initial_announce.interval as u64).min(MIN_ANNOUNCE_INTERVAL);
+        self.handle_announce(initial_announce).await?;
         self.announce_payload.event = TrackerEvent::Empty;
 
         let mut reannounce_interval = tokio::time::interval(interval_duration);
@@ -331,7 +334,7 @@ impl Tracker {
             tokio::select! {
                 _ = reannounce_interval.tick() => {
                     let announce_result = self.announce().await?;
-                    self.handle_announce(announce_result).await;
+                    self.handle_announce(announce_result).await?;
                 }
                 Ok(_) = self.progress.changed() => self.handle_progress_update(),
                 _ = cancellation_token.cancelled() => {
@@ -354,15 +357,21 @@ impl Tracker {
         }
     }
 
-    pub async fn handle_announce(&mut self, announce_result: AnnounceResult) {
+    pub async fn handle_announce(&mut self, announce_result: AnnounceResult) -> anyhow::Result<()> {
         let mut count = 0;
         for ip in announce_result.peers {
             if self.peers.insert(ip) {
+                self.peer_tx.send(NewPeer::TrackerOrigin(ip)).await?;
                 count += 1;
-                self.peer_tx.send(NewPeer::TrackerOrigin(ip)).await.unwrap();
             };
         }
-        tracing::debug!("Tracker {} announced {count} new peers", self.url);
+        tracing::debug!(
+            seeds = announce_result.seeds,
+            leeachs = announce_result.leeachs,
+            "Tracker {} announced {count} new peers",
+            self.url
+        );
+        Ok(())
     }
 
     fn handle_progress_update(&mut self) {

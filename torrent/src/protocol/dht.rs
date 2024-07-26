@@ -126,7 +126,7 @@ impl DHTClient {
     pub fn closest_node(&self) -> Option<&SocketAddr> {
         self.routing_table
             .iter()
-            .min_by_key(|(x, _)| distance(&self.info_hash, *x))
+            .min_by_key(|(x, _)| distance(&self.info_hash, x))
             .map(|(_, addr)| addr)
     }
 }
