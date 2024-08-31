@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::Context;
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -196,7 +196,8 @@ impl UdpTrackerMessage {
                 let interval = read_u32(&mut cursor).context("read interval")?;
                 let leechers = read_u32(&mut cursor).context("read leechers")?;
                 let seeders = read_u32(&mut cursor).context("read seeders")?;
-                let remaining = cursor.remaining_slice();
+                let mut remaining = vec![0; cursor.remaining()];
+                cursor.read_exact(&mut remaining).unwrap();
                 let ips_len = remaining.len().checked_div(6).context("ip's dont add up")?;
                 let mut ips = Vec::with_capacity(ips_len);
                 for slice in remaining.array_chunks::<6>() {
@@ -213,7 +214,8 @@ impl UdpTrackerMessage {
                 }
             }
             2 => {
-                let remaining = cursor.remaining_slice();
+                let mut remaining = vec![0; cursor.remaining()];
+                cursor.read_exact(&mut remaining).unwrap();
                 let res_len = remaining.len().checked_div(12).context("incomplete data")?;
                 let mut units = Vec::with_capacity(res_len);
                 for slice in remaining.array_chunks::<12>() {
@@ -230,7 +232,9 @@ impl UdpTrackerMessage {
                 UdpTrackerMessageType::Scrape { units }
             }
             3 => {
-                let message = String::from_utf8(cursor.remaining_slice().to_vec())?;
+                let mut remaining = vec![0; cursor.remaining()];
+                cursor.read_exact(&mut remaining).unwrap();
+                let message = String::from_utf8(remaining)?;
                 UdpTrackerMessageType::Error { message }
             }
             rest => return Err(anyhow::anyhow!("Action {} is not recognized", rest)),

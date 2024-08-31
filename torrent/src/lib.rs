@@ -2,7 +2,6 @@
 #![feature(iter_repeat_n)]
 #![feature(assert_matches)]
 #![feature(iter_array_chunks)]
-#![feature(cursor_remaining)]
 #![feature(iter_collect_into)]
 
 use std::{
