@@ -20,7 +20,7 @@ bytes = "1.6.0"
 clap = { version = "4.5.4", features = ["derive"] }
 crc32fast = { version = "1.4.0", features = ["nightly"] }
 dirs = "5.0.1"
-sysinfo = "0.30.12"
+sysinfo = "0.31.2"
 dotenvy = "0.15.7"
 notify = { version = "6.1.1", default-features = false, features = ["macos_kqueue"] }
 rand = "0.8.5"
@@ -28,7 +28,7 @@ reqwest = { version = "0.12.4", features = ["json", "stream"] }
 serde = { version = "1.0.198", features = ["serde_derive"] }
 serde_json = "1.0.116"
 sha2 = "0.10.8"
-sqlx = { version = "0.7.4", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
+sqlx = { version = "0.8.0", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
 time = { version = "0.3.36", features = ["serde", "parsing"] }
 tokio = { version = "1.37.0", features = ["full"] }
 tokio-stream = { version = "0.1.15", features = ["full"] }
@@ -40,6 +40,8 @@ tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "se
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 utoipa = { version = "4.2.3", features = ["axum_extras", "time", "url", "uuid"] }
 utoipa-swagger-ui = { version = "7.0.1", features = ["axum"] }
+serde_plain = "1.0.2"
+toml_edit = { version = "0.22.20", features = ["serde"] }
 torrent = {path = "./torrent"}
 
 # Windows dependencies

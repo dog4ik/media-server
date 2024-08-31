@@ -16,10 +16,10 @@ use crate::library::assets::{
     PreviewsDirAsset, VariantAsset,
 };
 use crate::library::{
-    AudioCodec, ContentIdentifier, LibraryFile, Resolution, Source, SubtitlesCodec, VideoCodec,
+    AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
 use crate::metadata::{
-    ContentType, EpisodeMetadata, ExternalIdMetadata, MetadataProvidersStack, MetadataSearchResult,
+    EpisodeMetadata, ExternalIdMetadata, MetadataProvidersStack, MetadataSearchResult,
     MovieMetadata, SeasonMetadata, ShowMetadata,
 };
 use crate::torrent_index::Torrent;
@@ -46,6 +46,7 @@ pub struct DetailedVideo {
     pub variants: Vec<DetailedVariant>,
     pub scan_date: String,
     pub history: Option<DbHistory>,
+    pub intro: Option<Intro>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -87,6 +88,94 @@ pub struct DetailedVideoTrack {
     pub codec: VideoCodec,
 }
 
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct Intro {
+    start_sec: i64,
+    end_sec: i64,
+}
+
+impl DetailedVideo {
+    pub async fn new(db: Db, source: Source) -> anyhow::Result<Self> {
+        let id = source.id;
+
+        let db_video = sqlx::query!(
+            r#"SELECT videos.scan_date, videos.path, history.time,
+        history.id, history.update_time, history.is_finished,
+        episode_intro.start_sec, episode_intro.end_sec
+        FROM videos
+        LEFT JOIN history ON history.video_id = videos.id
+        LEFT JOIN episode_intro ON episode_intro.video_id = videos.id
+        WHERE videos.id = ?;"#,
+            id
+        )
+        .fetch_one(&db.pool)
+        .await?;
+        let video_metadata = source.video.metadata().await?;
+
+        let mut detailed_variants = Vec::with_capacity(source.variants.len());
+        for variant in &source.variants {
+            match DetailedVariant::from_video(variant).await {
+                Ok(variant) => detailed_variants.push(variant),
+                Err(err) => {
+                    tracing::warn!(
+                        "Failed to construct variant {}: {err}",
+                        variant.path().display()
+                    );
+                    continue;
+                }
+            };
+        }
+
+        let date = db_video.scan_date.expect("scan date always defined");
+
+        let history = db_video
+            .time
+            .zip(db_video.is_finished)
+            .zip(db_video.update_time)
+            .map(|((time, is_finished), update_time)| DbHistory {
+                id: Some(db_video.id),
+                time,
+                is_finished,
+                update_time,
+                video_id: db_video.id,
+            });
+
+        let intro = db_video
+            .start_sec
+            .zip(db_video.end_sec)
+            .map(|(start_sec, end_sec)| Intro { start_sec, end_sec });
+
+        let previews_count = PreviewsDirAsset::new(id).previews_count();
+
+        Ok(DetailedVideo {
+            id,
+            path: source.video.path().to_path_buf(),
+            previews_count,
+            size: source.video.file_size(),
+            duration: video_metadata.duration(),
+            variants: detailed_variants,
+            scan_date: date.to_string(),
+            video_tracks: video_metadata
+                .video_streams()
+                .into_iter()
+                .map(|s| DetailedVideoTrack::from_video_stream(s, video_metadata.bitrate()))
+                .collect(),
+            audio_tracks: video_metadata
+                .audio_streams()
+                .into_iter()
+                .map(|s| s.into())
+                .collect(),
+            subtitle_tracks: video_metadata
+                .subtitle_streams()
+                .into_iter()
+                .map(|s| s.into())
+                .collect(),
+            history,
+            intro,
+        })
+    }
+}
+
 impl DetailedVideoTrack {
     pub fn from_video_stream(stream: FFprobeVideoStream<'_>, bitrate: usize) -> Self {
         DetailedVideoTrack {
@@ -124,29 +213,30 @@ impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
 }
 
 impl DetailedVariant {
-    pub fn from_video(video: crate::library::Video) -> Self {
+    pub async fn from_video(video: &crate::library::Video) -> anyhow::Result<Self> {
         let id = video
             .path()
             .file_stem()
             .expect("file to have stem like {size}.{hash}")
             .to_string_lossy()
             .to_string();
-        Self {
+        let metadata = video.metadata().await?;
+        Ok(Self {
             id,
             size: video.file_size(),
-            duration: video.duration(),
-            video_tracks: video
+            duration: metadata.duration(),
+            video_tracks: metadata
                 .video_streams()
                 .into_iter()
-                .map(|s| DetailedVideoTrack::from_video_stream(s, video.bitrate()))
+                .map(|s| DetailedVideoTrack::from_video_stream(s, metadata.bitrate()))
                 .collect(),
-            audio_tracks: video
+            audio_tracks: metadata
                 .audio_streams()
                 .into_iter()
                 .map(|s| s.into())
                 .collect(),
             path: video.path().to_path_buf(),
-        }
+        })
     }
 }
 
@@ -187,11 +277,12 @@ pub async fn video_content_metadata(
             .clone()
     };
     let db = app_state.db;
-    let duration = video.source.video.duration();
+    let video_metadata = video.source.video.metadata().await?;
+    let duration = video_metadata.duration();
     let metadata = match video.identifier {
         ContentIdentifier::Show(_) => {
             let query = sqlx::query!(
-                r#"SELECT episodes.id as "episode_id!", seasons.show_id as "show_id!" FROM episodes
+                r#"SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id WHERE episodes.video_id = ?;"#,
                 video_id
             )
@@ -208,7 +299,7 @@ pub async fn video_content_metadata(
         }
         ContentIdentifier::Movie(_) => {
             let query = sqlx::query!(
-                r#"SELECT id as "id!" FROM movies WHERE movies.video_id = ?;"#,
+                r#"SELECT id FROM movies WHERE movies.video_id = ?;"#,
                 video_id
             )
             .fetch_one(&db.pool)
@@ -359,7 +450,7 @@ pub async fn local_episode_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
 ) -> Result<Json<EpisodeMetadata>, AppError> {
-    let episode_id = sqlx::query!(r#"SELECT id as "id!" FROM episodes WHERE video_id = ?"#, id)
+    let episode_id = sqlx::query!(r#"SELECT id FROM episodes WHERE video_id = ?"#, id)
         .fetch_one(&db.pool)
         .await?;
     Ok(Json(db.get_episode_by_id(episode_id.id).await?))
@@ -381,7 +472,7 @@ pub async fn local_movie_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
 ) -> Result<Json<MovieMetadata>, AppError> {
-    let movie_id = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
+    let movie_id = sqlx::query!(r#"SELECT id FROM movies WHERE video_id = ?"#, id)
         .fetch_one(&db.pool)
         .await?;
     Ok(Json(db.get_movie(movie_id.id).await?))
@@ -494,99 +585,35 @@ pub async fn contents_video(
     get_video_by_id(Path(video_id), State(state)).await
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct VariantSummary {
-    pub title: String,
-    pub poster: Option<String>,
-    pub video_id: i64,
-    pub content_type: ContentType,
-    pub content_id: i64,
-    pub variants: Vec<DetailedVariant>,
-}
-
-/// Get all variants in the library
+/// Get all videos that have transcoded variants
 #[utoipa::path(
     get,
     path = "/api/variants",
     responses(
-        (status = 200, description = "All variants", body = Vec<VariantSummary>),
+        (status = 200, body = Vec<DetailedVideo>),
     ),
     tag = "Videos",
 )]
-pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<VariantSummary>> {
-    let videos: Vec<LibraryFile> = {
+pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<DetailedVideo>> {
+    let videos: Vec<Source> = {
         let library = state.library.lock().unwrap();
         library
             .videos
             .values()
-            .filter(|v| !v.source.variants.is_empty())
+            .map(|v| &v.source)
+            .filter(|s| !s.variants.is_empty())
             .cloned()
             .collect()
     };
-    let mut summary = Vec::new();
-    let mut add_summary = |title: String,
-                           content_type: ContentType,
-                           content_id: i64,
-                           poster: Option<String>,
-                           source: Source| {
-        let variants: Vec<_> = source
-            .variants
-            .into_iter()
-            .map(DetailedVariant::from_video)
-            .collect();
-        summary.push(VariantSummary {
-            title,
-            poster,
-            content_type,
-            content_id,
-            video_id: source.id,
-            variants,
-        });
-    };
-    for video in videos {
-        match video.identifier {
-            ContentIdentifier::Show(_) => {
-                let db_show = sqlx::query!(
-                    "SELECT episodes.title, episodes.poster, seasons.show_id FROM episodes
-        JOIN videos ON videos.id = episodes.video_id
-        JOIN seasons ON seasons.id = episodes.season_id
-        WHERE videos.id = ?",
-                    video.source.id
-                )
-                .fetch_one(&state.db.pool)
-                .await;
-                if let Ok(db_show) = db_show {
-                    add_summary(
-                        db_show.title,
-                        ContentType::Show,
-                        db_show.show_id,
-                        db_show.poster,
-                        video.source,
-                    );
-                }
+    let mut summary = Vec::with_capacity(videos.len());
+    for video in videos.into_iter() {
+        match DetailedVideo::new(state.db.clone(), video).await {
+            Ok(v) => summary.push(v),
+            Err(e) => {
+                tracing::error!("Failed to construct detailed video: {e}");
             }
-            ContentIdentifier::Movie(_) => {
-                let db_movie = sqlx::query!(
-                    "SELECT movies.title, movies.poster, movies.id FROM movies
-        JOIN videos ON videos.id = movies.video_id
-        WHERE videos.id = ?",
-                    video.source.id
-                )
-                .fetch_one(&state.db.pool)
-                .await;
-                if let Ok(db_movie) = db_movie {
-                    add_summary(
-                        db_movie.title,
-                        ContentType::Movie,
-                        db_movie.id.unwrap(),
-                        db_movie.poster,
-                        video.source,
-                    );
-                }
-            }
-        };
+        }
     }
-
     Json(summary)
 }
 
@@ -607,90 +634,14 @@ pub async fn get_video_by_id(
     State(state): State<AppState>,
 ) -> Result<Json<DetailedVideo>, AppError> {
     let AppState { library, db, .. } = state;
-    let db_video = sqlx::query!(
-        r#"SELECT videos.scan_date, videos.path, history.time,
-        history.id, history.update_time, history.is_finished 
-        FROM videos
-        LEFT JOIN history ON history.video_id = videos.id
-        WHERE videos.id = ?;"#,
-        id
-    )
-    .fetch_one(&db.pool)
-    .await?;
     let source = {
         let library = library.lock().unwrap();
-        let file = library
+        library
             .get_source(id)
-            .ok_or(AppError::not_found("Library video is not found"))?;
-        file.clone()
+            .cloned()
+            .ok_or(AppError::not_found("Video is not found"))?
     };
-
-    let detailed_variants = source
-        .variants
-        .iter()
-        .map(|v| {
-            let id = v.path().file_stem().expect("file stem to be id");
-            DetailedVariant {
-                id: id.to_string_lossy().to_string(),
-                path: v.path().to_path_buf(),
-                size: v.file_size(),
-                duration: v.duration(),
-                video_tracks: v
-                    .video_streams()
-                    .into_iter()
-                    .map(|s| DetailedVideoTrack::from_video_stream(s, v.bitrate()))
-                    .collect(),
-                audio_tracks: v.audio_streams().into_iter().map(|s| s.into()).collect(),
-            }
-        })
-        .collect();
-
-    let date = db_video.scan_date.expect("scan date always defined");
-    let history = if let (Some(id), Some(time), Some(is_finished), Some(update_time)) = (
-        db_video.id,
-        db_video.time,
-        db_video.is_finished,
-        db_video.update_time,
-    ) {
-        Some(DbHistory {
-            id: Some(id),
-            time,
-            is_finished,
-            update_time,
-            video_id: db_video.id.unwrap(),
-        })
-    } else {
-        None
-    };
-    let previews_dir = PreviewsDirAsset::new(id);
-    let detailed_video = DetailedVideo {
-        id,
-        path: source.video.path().to_path_buf(),
-        previews_count: previews_dir.previews_count(),
-        size: source.video.file_size(),
-        duration: source.video.duration(),
-        variants: detailed_variants,
-        scan_date: date.to_string(),
-        video_tracks: source
-            .video
-            .video_streams()
-            .into_iter()
-            .map(|s| DetailedVideoTrack::from_video_stream(s, source.video.bitrate()))
-            .collect(),
-        audio_tracks: source
-            .video
-            .audio_streams()
-            .into_iter()
-            .map(|s| s.into())
-            .collect(),
-        subtitle_tracks: source
-            .video
-            .subtitle_streams()
-            .into_iter()
-            .map(|s| s.into())
-            .collect(),
-        history,
-    };
+    let detailed_video = DetailedVideo::new(db.clone(), source).await?;
     Ok(Json(detailed_video))
 }
 
@@ -1101,8 +1052,8 @@ pub struct ShowSuggestion {
 )]
 pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
     let history = sqlx::query!(
-        r#"SELECT history.id as history_id, history.time, history.is_finished, history.update_time,
-        history.video_id as video_id, movies.id as movie_id FROM history
+        r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
+        history.video_id AS video_id, movies.id AS movie_id FROM history
     JOIN movies ON movies.video_id = history.video_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 3;"#
     )
@@ -1111,7 +1062,7 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
 
     let mut movie_suggestions = Vec::with_capacity(history.len());
     for entry in history {
-        let Ok(movie_metadata) = db.get_movie(entry.movie_id.unwrap()).await else {
+        let Ok(movie_metadata) = db.get_movie(entry.movie_id).await else {
             tracing::error!("Failed to get movie connected to the history");
             continue;
         };
@@ -1140,9 +1091,9 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
 )]
 pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
     let history = sqlx::query!(
-        r#"SELECT history.id as history_id, history.time, history.is_finished, history.update_time,
-        history.video_id as video_id, episodes.number as episode_number, seasons.show_id as show_id,
-        seasons.number as season_number FROM history 
+        r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
+        history.video_id AS video_id, episodes.number AS episode_number, seasons.show_id AS show_id,
+        seasons.number AS season_number FROM history 
     JOIN episodes ON episodes.video_id = history.video_id
     JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 50;"#

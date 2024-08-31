@@ -93,6 +93,13 @@ impl Info {
         }
     }
 
+    pub fn files_amount(&self) -> usize {
+        match &self.file_descriptor {
+            SizeDescriptor::Files(f) => f.len(),
+            SizeDescriptor::Length(_) => 1,
+        }
+    }
+
     pub fn hash(&self) -> [u8; 20] {
         let mut hasher = <Sha1 as sha1::Digest>::new();
         let bytes = serde_bencode::to_bytes(self).unwrap();

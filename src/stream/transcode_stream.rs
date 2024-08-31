@@ -14,7 +14,7 @@ use tokio::{
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-use crate::config::APP_RESOURCES;
+use crate::config::{self};
 
 #[derive(Debug, Clone)]
 pub struct M3U8Manifest {
@@ -151,13 +151,8 @@ pub async fn retrieve_keyframes(
     video_track: usize,
     min_delay: f64,
 ) -> anyhow::Result<KeyFrames> {
-    let ffprobe = APP_RESOURCES
-        .get()
-        .unwrap()
-        .ffprobe_path
-        .as_ref()
-        .context("ffprobe path")?;
-    let mut child = tokio::process::Command::new(ffprobe)
+    let ffprobe: config::FFprobePath = config::CONFIG.get_value();
+    let mut child = tokio::process::Command::new(ffprobe.as_ref())
         .args([
             "-loglevel",
             "error",
@@ -255,6 +250,7 @@ async fn transcode_stream(
     pending_requests.retain(|_, v| !v.is_closed());
     let list_path = temp_path.join("list");
     let mut start_index = 0;
+    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
     let spawn_command = |current_index: usize| {
         let frame = key_frames.key_frames[current_index];
         let times: Vec<_> = key_frames
@@ -263,7 +259,7 @@ async fn transcode_stream(
             .map(|f| format!("{:.6}", f.time))
             .collect();
         let segment_times = times.join(",");
-        let mut command = tokio::process::Command::new("ffmpeg")
+        let mut command = tokio::process::Command::new(ffmpeg.as_ref())
             .args([
                 "-hide_banner",
                 "-ss",

@@ -4,6 +4,7 @@
 /dist
 /db
 /test-dir
+/tmp
 .env
 configuration.toml
 /*.log

@@ -1,15 +1,15 @@
-use axum::routing::{delete, get, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{AppResources, Args, ConfigFile, ServerConfiguration, APP_RESOURCES};
+use media_server::config::{self, AppResources, Args, ConfigFile, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::Library;
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::MetadataProvidersStack;
 use media_server::progress::TaskResource;
-use media_server::server::{admin_api, public_api, OpenApiDoc};
+use media_server::server::{admin_api, public_api, torrent_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
@@ -39,17 +39,22 @@ async fn main() {
     }
 
     let args = Args::parse();
+    args.apply_configuration();
     let config_path = args
         .config_path
         .clone()
-        .unwrap_or(AppResources::default_config_path());
-    tracing::debug!("Selected config path: {}", &config_path.display());
-    let config = ConfigFile::open(&config_path).unwrap();
-    let mut configuration = ServerConfiguration::new(config).unwrap();
-    configuration.apply_args(args);
+        .unwrap_or_else(AppResources::default_config_path);
+    tracing::debug!("Selected config path: {}", config_path.display());
+    let mut config_file = ConfigFile::open(&config_path).await.unwrap();
+    let app_resources = AppResources::new(config_path);
     APP_RESOURCES
-        .set(configuration.resources.clone())
+        .set(app_resources.clone())
         .expect("resources are not initiated yet");
+
+    match config_file.read().await {
+        Ok(toml) => config::CONFIG.apply_toml_settings(toml),
+        Err(err) => tracing::error!("Error reading config file: {err}"),
+    };
 
     let cancellation_token = CancellationToken::new();
 
@@ -64,32 +69,31 @@ async fn main() {
     };
     let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
-    let db = Db::connect(&configuration.resources.database_path)
+    let db = Db::connect(&app_resources.database_path)
         .await
         .expect("database to be found");
 
     let db = Box::leak(Box::new(db));
-    let port = configuration.port;
+    let port: config::Port = config::CONFIG.get_value();
+    let show_dirs: config::ShowFolders = config::CONFIG.get_value();
+    let movie_dirs: config::MovieFolders = config::CONFIG.get_value();
 
-    let shows_dirs: Vec<PathBuf> = configuration
-        .show_folders
-        .clone()
+    let shows_dirs: Vec<PathBuf> = show_dirs
+        .0
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-    let movies_dirs: Vec<PathBuf> = configuration
-        .movie_folders
-        .clone()
+    let movies_dirs: Vec<PathBuf> = movie_dirs
+        .0
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
 
-    let program_files = configuration.resources.base_path.clone();
+    let program_files = app_resources.base_path;
 
     let library = Library::init_from_folders(&shows_dirs, &movies_dirs, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
-    let tmdb_api = TmdbApi::new(configuration.tmdb_token.clone().unwrap());
-    let configuration = Box::leak(Box::new(Mutex::new(configuration)));
+    let tmdb_api = TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0.unwrap());
     let tmdb_api = Box::leak(Box::new(tmdb_api));
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
@@ -110,7 +114,6 @@ async fn main() {
 
     let app_state = AppState {
         library,
-        configuration,
         db,
         tasks,
         tmdb_api,
@@ -168,9 +171,10 @@ async fn main() {
         .route("/show/:show_id/backdrop", get(public_api::show_backdrop))
         .route("/show/:show_id/:season", get(public_api::get_season))
         .route(
-            "/show/:show_id/:season/poster",
-            put(public_api::season_poster),
+            "/show/:show_id/:season/detect_intros",
+            post(admin_api::detect_intros),
         )
+        .route("/season/:season_id/poster", get(public_api::season_poster))
         .route(
             "/show/:show_id/:season",
             put(admin_api::alter_season_metadata),
@@ -238,19 +242,20 @@ async fn main() {
             post(admin_api::parse_torrent_file),
         )
         .route("/torrent/download", post(admin_api::download_torrent))
+        .route("/torrent/all", get(torrent_api::all_torrents))
         .route("/search/content", get(public_api::search_content))
         .route("/configuration", get(admin_api::server_configuration))
         .route(
+            "/configuration/capabilities",
+            get(admin_api::server_capabilities),
+        )
+        .route(
             "/configuration",
-            put(admin_api::update_server_configuration),
+            patch(admin_api::update_server_configuration),
         )
         .route(
             "/configuration/reset",
             post(admin_api::reset_server_configuration),
-        )
-        .route(
-            "/configuration/schema",
-            get(admin_api::server_configuration_schema),
         )
         .route("/configuration/providers", put(admin_api::order_providers))
         .route("/configuration/providers", get(admin_api::providers_order))
@@ -295,15 +300,15 @@ async fn main() {
         .layer(cors)
         .with_state(app_state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port.0);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(e) => {
-            tracing::error!("Failed to start server on port {port}: {e}");
+            tracing::error!("Failed to start server on port {}: {e}", port.0);
             return;
         }
     };
-    tracing::info!("Starting server on port {}", port);
+    tracing::info!("Starting server on port {}", port.0);
 
     {
         let cancellation_token = cancellation_token.clone();

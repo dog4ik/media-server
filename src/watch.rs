@@ -4,7 +4,10 @@ use tokio::sync::mpsc::{self};
 
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 
-use crate::app_state::AppState;
+use crate::{
+    app_state::AppState,
+    config::{self, APP_RESOURCES},
+};
 
 #[derive(Debug, Clone)]
 enum EventType {
@@ -50,15 +53,9 @@ impl FileWatcher {
         })?;
 
         let cancellation_token = app_state.cancelation_token.clone();
-
-        let (config_path, mut show_dirs, movie_dirs) = {
-            let config = app_state.configuration.lock().unwrap();
-            (
-                config.config_file.0.clone(),
-                config.show_folders.clone(),
-                config.movie_folders.clone(),
-            )
-        };
+        let mut show_dirs: config::ShowFolders = config::CONFIG.get_value();
+        let mut movie_dirs: config::MovieFolders = config::CONFIG.get_value();
+        let config_path = APP_RESOURCES.get().unwrap().config_path.clone();
 
         tokio::spawn(async move {
             loop {
@@ -72,16 +69,12 @@ impl FileWatcher {
                                     tracing::debug!("Recieved watcher event: {:?}", event);
                                     for path in event.paths {
                                         if path == config_path {
-                                            let mut config = app_state.configuration.lock().unwrap();
-                                            if let Ok(new_config) = config.config_file.read() {
-                                                tracing::info!("Detected config file changes");
-                                                config.apply_config_schema(new_config)
-                                            }
+                                            // load config
                                         }
-                                        if show_dirs.contains(&path) {
+                                        if show_dirs.0.contains(&path) {
                                             app_state.partial_refresh().await;
                                         }
-                                        if movie_dirs.contains(&path) {
+                                        if movie_dirs.0.contains(&path) {
                                             app_state.partial_refresh().await;
                                         }
                                     }
@@ -99,12 +92,13 @@ impl FileWatcher {
                                 if let Err(e) = watcher.watch(&path, RecursiveMode::NonRecursive) {
                                     tracing::error!("Failed to add {} to the watcher: {e}", path.display());
                                 } else {
-                                    show_dirs.push(path);
+                                    show_dirs.add(path);
                                 };
                             },
                             WatchCommand::UnWatch(path) => {
                                 let _ = watcher.unwatch(&path);
-                                show_dirs.retain(|p| *p != path);
+                                show_dirs.0.retain(|p| *p != path);
+                                movie_dirs.0.retain(|p| *p != path);
                             },
                         }
                     }

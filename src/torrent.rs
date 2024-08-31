@@ -5,9 +5,12 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::{sync::mpsc, task::JoinSet};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinSet,
+};
 use torrent::{
-    download::DownloadHandle,
+    download::{DownloadHandle, DownloadState},
     file::MagnetLink,
     protocol::{Info, OutputFile},
     DownloadProgress,
@@ -21,6 +24,7 @@ use crate::{
         ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
         ShowMetadata,
     },
+    progress::{Progress, ProgressSpeed, ResourceTask, TaskError},
     utils,
 };
 
@@ -29,8 +33,49 @@ pub struct TorrentDownload {
     pub info_hash: [u8; 20],
     #[serde(skip)]
     pub download_handle: DownloadHandle,
-    pub enabled_files: Vec<usize>,
+    #[serde(skip)]
+    pub progress_watcher: watch::Receiver<DownloadProgress>,
     pub torrent_info: TorrentInfo,
+}
+
+impl TorrentDownload {
+    pub fn handle(&self) -> TorrentHandle {
+        TorrentHandle {
+            download_handle: self.download_handle.clone(),
+            progress: self.progress_watcher.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TorrentHandle {
+    pub download_handle: DownloadHandle,
+    progress: watch::Receiver<DownloadProgress>,
+}
+
+impl ResourceTask for TorrentHandle {
+    async fn progress(&mut self) -> Result<Progress, TaskError> {
+        if self.progress.changed().await.is_err() {
+            return Err(TaskError::Failure);
+        }
+        let progress = self.progress.borrow_and_update();
+        let progress = if progress.state == DownloadState::Pending {
+            let download_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
+            Progress {
+                is_finished: false,
+                percent: Some(progress.percent as f32),
+                speed: Some(ProgressSpeed::BytesPerSec(download_speed as usize)),
+            }
+        } else {
+            Progress::finished()
+        };
+        Ok(progress)
+    }
+
+    async fn on_cancel(&mut self) -> anyhow::Result<()> {
+        self.download_handle.abort();
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -72,42 +117,41 @@ impl TorrentClient {
 
     pub async fn download(
         &self,
-        progress_sender: mpsc::Sender<DownloadProgress>,
         save_location: PathBuf,
         trackers: Vec<reqwest::Url>,
         info: Info,
         torrent_metadata: TorrentInfo,
         enabled_files: Vec<usize>,
-    ) -> anyhow::Result<DownloadHandle> {
+    ) -> anyhow::Result<TorrentHandle> {
         let info_hash = info.hash();
+        let (progress_tx, progress_rx) = watch::channel(DownloadProgress::default());
+
         let download_handle = self
             .client
-            .download(
-                save_location,
-                trackers,
-                info,
-                enabled_files.clone(),
-                progress_sender,
-            )
+            .download(save_location, trackers, info, enabled_files, progress_tx)
             .await?;
 
         let torrent = TorrentDownload {
             info_hash,
             download_handle,
-            enabled_files,
+            progress_watcher: progress_rx,
             torrent_info: torrent_metadata,
         };
-        let handle = torrent.download_handle.clone();
+        let handle = torrent.handle();
         self.pending_downloads.lock().unwrap().push(torrent);
         Ok(handle)
     }
 
     pub fn remove_download(&self, info_hash: [u8; 20]) -> Option<TorrentDownload> {
         let mut downloads = self.pending_downloads.lock().unwrap();
-        downloads
+        let download = downloads
             .iter()
             .position(|x| x.info_hash == info_hash)
-            .map(|idx| downloads.remove(idx))
+            .map(|idx| downloads.swap_remove(idx));
+        if let Some(download) = &download {
+            download.download_handle.abort();
+        }
+        download
     }
 
     pub fn get_download(&self, info_hash: &[u8; 20]) -> Option<TorrentDownload> {
@@ -118,9 +162,9 @@ impl TorrentClient {
             .cloned()
     }
 
-    pub fn all_downloads(&self) -> Vec<TorrentDownload> {
+    pub fn all_downloads(&self) -> Vec<TorrentInfo> {
         let downloads = self.pending_downloads.lock().unwrap();
-        downloads.clone()
+        downloads.iter().map(|d| d.torrent_info.clone()).collect()
     }
 }
 
@@ -177,6 +221,7 @@ pub struct ResolvedTorrentFile {
     pub offset: u64,
     pub size: u64,
     pub path: Vec<String>,
+    pub enabled: bool,
 }
 
 impl ResolvedTorrentFile {
@@ -185,6 +230,7 @@ impl ResolvedTorrentFile {
             offset,
             size: output_file.length(),
             path: path_components(output_file.path()),
+            enabled: false,
         }
     }
 }
@@ -212,6 +258,15 @@ pub struct TorrentShow {
 pub enum TorrentContent {
     Show(TorrentShow),
     Movie(Vec<TorrentMovie>),
+}
+
+impl TorrentContent {
+    pub fn content_type(&self) -> ContentType {
+        match self {
+            TorrentContent::Show(_) => ContentType::Show,
+            TorrentContent::Movie(_) => ContentType::Movie,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

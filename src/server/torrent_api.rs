@@ -9,7 +9,7 @@ use torrent::scheduler::Priority;
 
 use crate::{
     app_state::AppError,
-    torrent::{TorrentClient, TorrentDownload},
+    torrent::{TorrentClient, TorrentInfo},
 };
 
 #[derive(Debug, Clone)]
@@ -90,15 +90,13 @@ pub struct PriorityPayload {
 /// Get list of all torrents
 #[utoipa::path(
     get,
-    path = "/api/torrents",
+    path = "/api/torrent/all",
     responses(
-        (status = 200, body = Vec<TorrentDownload>),
+        (status = 200, body = Vec<TorrentInfo>),
     ),
     tag = "Torrent",
 )]
-pub async fn all_torrents(
-    State(client): State<&'static TorrentClient>,
-) -> Json<Vec<TorrentDownload>> {
+pub async fn all_torrents(State(client): State<&'static TorrentClient>) -> Json<Vec<TorrentInfo>> {
     Json(client.all_downloads())
 }
 

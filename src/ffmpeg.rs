@@ -1,9 +1,9 @@
 use std::ffi::OsStr;
+use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
-use std::{path::Path, str::from_utf8};
 
 use base64::engine::general_purpose;
 use base64::Engine;
@@ -12,10 +12,11 @@ use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::Semaphore;
 
-use crate::config::APP_RESOURCES;
+use crate::config::{self};
 use crate::library::{
     AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, Video, VideoCodec,
 };
+use crate::progress::{Progress, ProgressSpeed, ResourceTask};
 use crate::utils;
 use anyhow::{anyhow, Context};
 
@@ -266,15 +267,9 @@ impl FFprobeStream {
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
             bit_rate: self.bit_rate.as_deref(),
-            channels: *self
-                .channels
-                .as_ref()
-                .ok_or(anyhow!("channels are absent"))?,
+            channels: self.channels.context("channel is absent")?,
             profile: self.profile.as_deref(),
-            sample_rate: self
-                .sample_rate
-                .as_ref()
-                .ok_or(anyhow!("sample rate is absent"))?,
+            sample_rate: self.sample_rate.as_ref().context("sample rate is absent")?,
             disposition: &self.disposition,
         })
     }
@@ -284,25 +279,25 @@ impl FFprobeStream {
             index: self.index,
             codec_name: &self.codec_name,
             codec_long_name: &self.codec_long_name,
-            profile: self.profile.as_ref().ok_or(anyhow!("profile is absent"))?,
-            level: self.level.ok_or(anyhow!("level is absent"))?,
+            profile: self.profile.as_ref().context("profile is absent")?,
+            level: self.level.context("level is absent")?,
             avg_frame_rate: self
                 .avg_frame_rate
                 .as_ref()
-                .ok_or(anyhow!("avg_frame_rate is absent"))?,
+                .context("avg_frame_rate is absent")?,
             display_aspect_ratio: self
                 .display_aspect_ratio
                 .as_ref()
-                .ok_or(anyhow!("aspect ratio is absent"))?,
-            width: self.width.ok_or(anyhow!("width is absent"))?,
-            height: self.height.ok_or(anyhow!("height is absent"))?,
+                .context("aspect ratio is absent")?,
+            width: self.width.context("width is absent")?,
+            height: self.height.context("height is absent")?,
             disposition: &self.disposition,
         };
         Ok(video)
     }
 
     pub fn subtitles_stream(&self) -> Result<FFprobeSubtitleStream<'_>, anyhow::Error> {
-        let tags = &self.tags.as_ref().ok_or(anyhow!("tags are absent"))?;
+        let tags = &self.tags.as_ref().context("tags are absent")?;
         let video = FFprobeSubtitleStream {
             index: self.index,
             codec_name: &self.codec_name,
@@ -345,7 +340,7 @@ impl FromStr for H264Preset {
             "slower" => Ok(H264Preset::Slower),
             "veryslow" => Ok(H264Preset::Veryslow),
             "placebo" => Ok(H264Preset::Placebo),
-            _ => Err(anyhow::anyhow!("{} is not valid h264 preset", s)),
+            _ => Err(anyhow!("{} is not valid h264 preset", s)),
         }
     }
 }
@@ -355,30 +350,23 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
     let path = path.as_ref();
     tracing::trace!(
         "Getting metadata for a file: {}",
-        path.iter().last().unwrap().to_str().unwrap()
+        path.file_name().unwrap().display()
     );
-    let ffprobe = &APP_RESOURCES
-        .get()
-        .unwrap()
-        .ffprobe_path
-        .as_ref()
-        .ok_or(anyhow!("ffprobe is missing in resources"))?;
-    let output = Command::new(ffprobe)
+    let ffprobe: config::FFprobePath = config::CONFIG.get_value();
+    let output = Command::new(ffprobe.as_ref())
         .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_chapters",
-            "-show_format",
-            path.to_str().unwrap(),
+            "-v".as_ref(),
+            "quiet".as_ref(),
+            "-print_format".as_ref(),
+            "json=compact=1".as_ref(),
+            "-show_streams".as_ref(),
+            "-show_chapters".as_ref(),
+            "-show_format".as_ref(),
+            path.as_os_str(),
         ])
         .output()
-        .await
-        .unwrap();
-    let output = from_utf8(&output.stdout)?;
-    let metadata: FFprobeOutput = serde_json::from_str(output)?;
+        .await?;
+    let metadata: FFprobeOutput = serde_json::from_slice(&output.stdout)?;
     Ok(metadata)
 }
 
@@ -392,26 +380,44 @@ pub enum JobType {
 
 pub trait FFmpegTask {
     fn args(&self) -> Vec<String>;
-    #[allow(async_fn_in_trait)]
-    async fn cancel(self) -> Result<(), anyhow::Error>;
-    fn run(self, source_path: PathBuf, duration: Duration) -> anyhow::Result<FFmpegRunningJob<Self>>
-    where
-        Self: Sized,
-    {
-        FFmpegRunningJob::new(self, source_path, duration)
+    fn cancel(&mut self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send;
+}
+
+impl<T: FFmpegTask + Send> ResourceTask for FFmpegRunningJob<T> {
+    async fn progress(&mut self) -> Result<crate::progress::Progress, crate::progress::TaskError> {
+        tokio::select! {
+            Some(progress) = self.stdout.next_progress_chunk() => {
+                Ok(Progress {
+                    is_finished: false,
+                    speed: Some(ProgressSpeed::RelativeSpeed(progress.relative_speed())),
+                    percent: Some(progress.percent(&self.duration)),
+                })
+            }
+            Ok(result) = self.process.wait() => {
+                if result.success() {
+                    Ok(Progress::finished())
+                } else {
+                    Err(crate::progress::TaskError::Failure)
+                }
+            }
+        }
+    }
+
+    async fn on_cancel(&mut self) -> anyhow::Result<()> {
+        self.job.cancel().await
     }
 }
 
 #[derive(Debug)]
 pub struct PreviewsJob {
-    output_folder: PathBuf,
+    output_path: PathBuf,
     source_path: PathBuf,
 }
 
 impl PreviewsJob {
-    pub fn new(source_path: impl AsRef<Path>, output_folder: PathBuf) -> Self {
+    pub fn new(source_path: impl AsRef<Path>, output_path: impl AsRef<Path>) -> Self {
         Self {
-            output_folder,
+            output_path: output_path.as_ref().to_path_buf(),
             source_path: source_path.as_ref().to_path_buf(),
         }
     }
@@ -426,14 +432,14 @@ impl FFmpegTask for PreviewsJob {
             "fps=1/10,scale=120:-1".into(),
             format!(
                 "{}{}%d.jpg",
-                self.output_folder.to_string_lossy().to_string(),
+                self.output_path.to_string_lossy().to_string(),
                 std::path::MAIN_SEPARATOR
             ),
         ]
     }
 
-    async fn cancel(self) -> Result<(), anyhow::Error> {
-        utils::clear_directory(self.output_folder).await?;
+    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
+        utils::clear_directory(&self.output_path).await?;
         Ok(())
     }
 }
@@ -446,30 +452,33 @@ pub struct SubtitlesJob {
 }
 
 impl SubtitlesJob {
-    pub fn from_source(
+    pub async fn from_source(
         input: &Video,
         output_dir: impl AsRef<Path>,
         track: i32,
-    ) -> Result<Self, anyhow::Error> {
-        let output_path = |lang: Option<String>| {
-            let file_name = lang.unwrap_or(uuid::Uuid::new_v4().to_string());
-            output_dir.as_ref().join(
+    ) -> anyhow::Result<Self> {
+        let video_metadata = input.metadata().await?;
+        let output_path = |lang: Option<&str>| {
+            let path = if let Some(lang) = lang {
+                PathBuf::new().with_file_name(lang).with_extension("srt")
+            } else {
                 PathBuf::new()
-                    .with_file_name(file_name)
-                    .with_extension("srt"),
-            )
+                    .with_file_name(uuid::Uuid::new_v4().to_string())
+                    .with_extension("srt")
+            };
+            output_dir.as_ref().join(path)
         };
 
-        input
+        video_metadata
             .subtitle_streams()
             .iter()
             .find(|s| s.index == track && s.codec().supports_text())
             .map(|s| Self {
                 source_path: input.path().to_path_buf(),
                 track: s.index as usize,
-                output_file_path: output_path(s.language.map(|x| x.to_string())),
+                output_file_path: output_path(s.language),
             })
-            .ok_or(anyhow::anyhow!("cant find track in file"))
+            .context("cant find track in file")
     }
 
     pub fn new(source_path: PathBuf, output_file: PathBuf, track: usize) -> Self {
@@ -496,9 +505,9 @@ impl FFmpegTask for SubtitlesJob {
         args
     }
 
-    async fn cancel(self) -> Result<(), anyhow::Error> {
+    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
         use tokio::fs;
-        fs::remove_file(self.output_file_path).await?;
+        fs::remove_file(&self.output_file_path).await?;
         Ok(())
     }
 }
@@ -519,15 +528,11 @@ impl TranscodeJob {
         hw_accel: bool,
     ) -> Result<Self, anyhow::Error> {
         let source_path = source.video.path().to_path_buf();
-        let extention = source_path.extension().context("file extension")?;
 
-        let file_name = PathBuf::new()
-            .with_file_name(uuid::Uuid::new_v4().to_string())
-            .with_extension(extention);
         Ok(Self {
             source_path,
             payload,
-            output_path: output.as_ref().join(file_name),
+            output_path: output.as_ref().to_path_buf(),
             hw_accel,
         })
     }
@@ -578,52 +583,45 @@ impl FFmpegTask for TranscodeJob {
         args.push(self.output_path.to_string_lossy().to_string());
         args
     }
-    async fn cancel(self) -> Result<(), anyhow::Error> {
+    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
         use tokio::fs;
-        fs::remove_file(self.output_path).await?;
+        fs::remove_file(&self.output_path).await?;
         Ok(())
     }
 }
 
-// NOTE: cleanup callback? (after job is done)
+// NOTE: resource move callback? (after job is done)
 #[derive(Debug)]
 pub struct FFmpegRunningJob<T: FFmpegTask> {
     process: Child,
-    pub target: PathBuf,
+    stdout: FFmpegProgressStdout,
     pub job: T,
     duration: Duration,
 }
 
 impl<T: FFmpegTask> FFmpegRunningJob<T> {
-    pub fn new(
-        job: T,
-        source_path: PathBuf,
-        duration: Duration,
-    ) -> anyhow::Result<FFmpegRunningJob<T>> {
-        let process = Self::run(&job.args())?;
+    pub fn spawn(job: T, duration: Duration) -> anyhow::Result<FFmpegRunningJob<T>> {
+        let mut process = Self::run(&job.args())?;
+        let stdout = FFmpegProgressStdout::new(process.stdout.take().unwrap());
         Ok(Self {
             process,
-            target: source_path,
+            stdout,
             duration,
             job,
         })
     }
 
-    /// Run ffmpeg command. Returns handle to process
+    /// Run ffmpeg command
     fn run<I, S>(args: I) -> anyhow::Result<Child>
     where
-        I: IntoIterator<Item = S> + Copy + std::fmt::Debug,
-        S: AsRef<std::ffi::OsStr>,
+        I: IntoIterator<Item = S> + std::fmt::Debug,
+        S: AsRef<OsStr>,
     {
-        let ffmpeg = &APP_RESOURCES
-            .get()
-            .unwrap()
-            .ffmpeg_path
-            .as_ref()
-            .ok_or(anyhow!("ffmpeg is missing in resources"))?;
-        Ok(tokio::process::Command::new(ffmpeg)
+        let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
+        tracing::debug!("Spawning ffmpeg with args: {:?}", args);
+        Ok(tokio::process::Command::new(ffmpeg.as_ref())
             .kill_on_drop(true)
-            .args(["-progress", "pipe:1", "-nostats"])
+            .args(["-progress", "pipe:1", "-nostats", "-y"])
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -689,11 +687,11 @@ pub struct FFmpegProgress {
 
 impl FFmpegProgress {
     /// Calculate percent of current point relative to given duration
-    pub fn percent(&self, total_duration: Duration) -> usize {
+    pub fn percent(&self, total_duration: &Duration) -> f32 {
         let current_duration = self.time.as_secs();
-        let percent = (current_duration as f64 / total_duration.as_secs() as f64) * 100.0;
+        let percent = (current_duration as f32 / total_duration.as_secs() as f32) * 100.0;
 
-        percent.floor() as usize
+        percent
     }
 
     /// Get speed of operation relative to the video playback
@@ -723,7 +721,7 @@ impl FFmpegProgressStdout {
                 // The last key of a sequence of progress information is always "progress".
                 // end | continue
                 "progress" => {
-                    if let (Some(time), Some(speed)) = (self.time, self.speed) {
+                    if let Some((time, speed)) = self.time.zip(self.speed) {
                         (self.time, self.speed) = (None, None);
                         return Some(FFmpegProgress { speed, time });
                     } else {
@@ -772,13 +770,8 @@ pub async fn resize_image_ffmpeg(
     height: Option<i32>,
 ) -> Result<String, anyhow::Error> {
     let scale = format!("scale={}:{}", width, height.unwrap_or(-1));
-    let ffmpeg = &APP_RESOURCES
-        .get()
-        .unwrap()
-        .ffmpeg_path
-        .as_ref()
-        .ok_or(anyhow!("ffmpeg is missing in resources"))?;
-    let mut child = tokio::process::Command::new(ffmpeg)
+    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
+    let mut child = tokio::process::Command::new(ffmpeg.as_ref())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -796,28 +789,21 @@ pub async fn resize_image_ffmpeg(
         .kill_on_drop(true)
         .spawn()?;
     {
-        let mut stdin = child.stdin.take().ok_or(anyhow!("failed to take stdin"))?;
+        let mut stdin = child.stdin.take().unwrap();
         stdin.write_all(&bytes).await?;
     }
     let output = child.wait_with_output().await?;
-    if output.status.code().unwrap_or(1) == 0 {
+    if output.status.success() {
         Ok(general_purpose::STANDARD_NO_PAD.encode(output.stdout))
     } else {
-        Err(anyhow::anyhow!(
-            "resize process was unexpectedly terminated"
-        ))
+        Err(anyhow!("resize process was unexpectedly terminated"))
     }
 }
 
 /// Extract subtitle track from provided file. Takes in desired track
 pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow::Result<String> {
-    let ffmpeg = &APP_RESOURCES
-        .get()
-        .unwrap()
-        .ffmpeg_path
-        .as_ref()
-        .ok_or(anyhow!("ffmpeg is missing in resources"))?;
-    let child = tokio::process::Command::new(ffmpeg)
+    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
+    let output = tokio::process::Command::new(ffmpeg.as_ref())
         .args([
             "-hide_banner",
             "-loglevel",
@@ -837,14 +823,12 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
-        .spawn()?;
-    let output = child.wait_with_output().await?;
-    if output.status.code().unwrap_or(1) == 0 {
+        .output()
+        .await?;
+    if output.status.success() {
         Ok(String::from_utf8(output.stdout).expect("ffmpeg output utf-8"))
     } else {
-        Err(anyhow::anyhow!(
-            "ffmpeg process was unexpectedly terminated"
-        ))
+        Err(anyhow!("ffmpeg process was unexpectedly terminated"))
     }
 }
 
@@ -857,12 +841,7 @@ pub async fn pull_frame(
     timing: Duration,
 ) -> anyhow::Result<()> {
     let _guard = PULL_FRAME_PERMITS.acquire().await.unwrap();
-    let ffmpeg = &APP_RESOURCES
-        .get()
-        .unwrap()
-        .ffmpeg_path
-        .as_ref()
-        .ok_or(anyhow!("ffmpeg is missing in resources"))?;
+    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
     let format_time = |duration: Duration| {
         let seconds = duration.as_secs();
         let minutes = seconds / 60;
@@ -883,39 +862,16 @@ pub async fn pull_frame(
         output_file.as_ref().as_os_str(),
         "-y".as_ref(),
     ];
-    let mut child = tokio::process::Command::new(ffmpeg)
+    let mut child = tokio::process::Command::new(ffmpeg.as_ref())
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
     let status = child.wait().await?;
-    if status.code().unwrap_or(1) == 0 {
+    if status.success() {
         Ok(())
     } else {
-        Err(anyhow::anyhow!(
-            "ffmpeg process was unexpectedly terminated"
-        ))
+        Err(anyhow!("ffmpeg process was unexpectedly terminated"))
     }
-}
-
-pub fn healthcheck_ffmpeg_command(path: impl AsRef<OsStr>) -> anyhow::Result<String> {
-    let output = std::process::Command::new(&path)
-        .args(["-version"])
-        .output()?;
-    if output.status.success() {
-        parse_version(std::str::from_utf8(&output.stdout).expect("output to be valid utf-8"))
-    } else {
-        Err(anyhow::anyhow!(
-            "{} errored with {} status code",
-            path.as_ref().to_string_lossy(),
-            output.status.code().expect("status code")
-        ))
-    }
-}
-
-fn parse_version(output: &str) -> anyhow::Result<String> {
-    let first_line = output.lines().next().expect("at least one line");
-    let version = first_line.split_ascii_whitespace().nth(2).unwrap();
-    Ok(version.to_string())
 }

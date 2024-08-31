@@ -42,6 +42,6 @@ You can download [custom chromium build](https://github.com/cjw1115/enable-chrom
 This custom build can play almost any video format.
 Windows installation comes with fresh electron build, where flag `enable_platform_ac3_eac3_audio` enabled
 
-### Related projcets
+### Related projects
 
 - [Web UI](https://github.com/dog4ik/media-server-web)

@@ -2,7 +2,6 @@ use std::convert::Infallible;
 use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::Mutex;
 
 use axum::extract::{Multipart, Path, Query};
 use axum::http::StatusCode;
@@ -28,8 +27,10 @@ use uuid::Uuid;
 
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use crate::app_state::AppError;
-use crate::config::{FileConfigSchema, ServerConfiguration, APP_RESOURCES};
-use crate::db::DbHistory;
+use crate::config::{
+    self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
+};
+use crate::db::{DbEpisodeIntro, DbHistory};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -40,8 +41,8 @@ use crate::metadata::{
 use crate::progress::{Task, TaskKind, TaskResource, VideoTaskType};
 use crate::stream::transcode_stream::TranscodeStream;
 use crate::torrent::{
-    DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentContent,
-    TorrentDownloadPayload, TorrentInfo,
+    DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentDownloadPayload,
+    TorrentInfo,
 };
 use crate::{
     app_state::AppState,
@@ -276,6 +277,58 @@ pub async fn alter_movie_metadata(
     Ok(())
 }
 
+/// Delete movie
+#[utoipa::path(
+    delete,
+    path = "/api/movie/{id}",
+    params(
+        ("id", description = "Movie id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "Movies",
+)]
+pub async fn delete_movie(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    // We can just remove video and refresh the library for cleanup instead of doing it manually
+    // for every content type in the library!
+    let AppState { db, library, .. } = state;
+    let video_id = sqlx::query!(
+        r#"SELECT videos.id FROM movies
+        JOIN videos ON movies.video_id = videos.id
+        WHERE movies.id = ?;"#,
+        id
+    )
+    .fetch_one(&db.pool)
+    .await?
+    .id;
+
+    // TODO: Fix not found errors when video assets do not exist
+
+    let library_file = {
+        let mut library = library.lock().unwrap();
+        library.videos.remove(&video_id)
+    };
+    if let Some(movie) = library_file {
+        let (resources_removal, video_removal) = tokio::join!(
+            movie.source.delete_all_resources(),
+            movie.source.video.delete(),
+        );
+        if let Err(err) = resources_removal {
+            tracing::warn!("Failed to cleanup video resources dir: {err}");
+        };
+
+        if let Err(err) = video_removal {
+            tracing::error!("Failed to delete video: {err}");
+        };
+    }
+    db.remove_movie(id).await?;
+    Ok(())
+}
+
 /// Fix show metadata match
 #[utoipa::path(
     post,
@@ -449,10 +502,9 @@ pub async fn transcode_video(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<TranscodePayload>,
-) {
-    tokio::spawn(async move {
-        let _ = app_state.transcode_video(id, payload).await;
-    });
+) -> Result<(), AppError> {
+    app_state.transcode_video(id, payload).await?;
+    Ok(())
 }
 
 /// Start previews generation job on video
@@ -467,10 +519,11 @@ pub async fn transcode_video(
     ),
     tag = "Videos",
 )]
-pub async fn generate_previews(State(app_state): State<AppState>, Path(id): Path<i64>) {
-    tokio::spawn(async move {
-        let _ = app_state.generate_previews(id).await;
-    });
+pub async fn generate_previews(
+    State(app_state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    app_state.generate_previews(id).await
 }
 
 /// Delete previews on video
@@ -547,7 +600,7 @@ pub async fn mock_progress(
             _ = async {
                 let mut progress = 0;
                 while progress <= 100 {
-                    let _ = channel.send(ProgressChunk::pending(task_id, progress, 0.));
+                    let _ = channel.send(ProgressChunk::pending(task_id, Some(progress as f32), None));
                     progress += 1;
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
                 }
@@ -652,65 +705,51 @@ pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String),
     get,
     path = "/api/configuration",
     responses(
-        (status = 200, body = ServerConfiguration),
+        (status = 200, body = UtoipaConfigSchema),
     ),
     tag = "Configuration",
 )]
-pub async fn server_configuration(
-    State(configuration): State<&'static Mutex<ServerConfiguration>>,
-) -> Json<ServerConfiguration> {
-    let configuration = configuration.lock().unwrap();
-    Json(configuration.clone())
+pub async fn server_configuration() -> Json<Vec<SerializedSetting>> {
+    Json(config::CONFIG.json())
 }
 
-/// Current server configuartion schema
+/// Server capabalities
 #[utoipa::path(
     get,
-    path = "/api/configuration/schema",
+    path = "/api/configuration/capabilities",
     responses(
-        (status = 200, body = FileConfigSchema),
+        (status = 200, body = Capabilities),
     ),
     tag = "Configuration",
 )]
-pub async fn server_configuration_schema(
-    State(configuration): State<&'static Mutex<ServerConfiguration>>,
-) -> Json<FileConfigSchema> {
-    let configuration = configuration.lock().unwrap();
-    Json(configuration.into_schema())
+pub async fn server_capabilities() -> Result<Json<Capabilities>, AppError> {
+    let capabilities = Capabilities::parse().await?;
+    Ok(Json(capabilities))
 }
 
 /// Update server configuartion
 #[utoipa::path(
-    put,
+    patch,
     path = "/api/configuration",
-    request_body = FileConfigSchema,
+    request_body(
+        content = serde_json::Value, description = "Key/value configuration pairs", content_type = "application/json"
+    ),
     responses(
-        (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
+        (status = 200, body = ConfigurationApplyResult),
     ),
     tag = "Configuration",
 )]
 pub async fn update_server_configuration(
-    State(app_state): State<AppState>,
-    Json(new_config): Json<FileConfigSchema>,
-) -> Json<ServerConfiguration> {
-    let mut configuration = app_state.configuration.lock().unwrap();
-    let mut should_refresh = false;
-    let new_configuration = {
-        if configuration.show_folders != new_config.show_folders
-            || configuration.movie_folders != new_config.movie_folders
-        {
-            should_refresh = true;
-        }
-        configuration.apply_config_schema(new_config);
-        configuration.flush().unwrap();
-        configuration.clone()
-    };
-    if should_refresh {
-        tracing::info!("Config change triggered library refresh");
-        tokio::spawn(async move { app_state.partial_refresh().await });
-    }
+    Json(new_config): Json<serde_json::Value>,
+) -> Result<Json<ConfigurationApplyResult>, AppError> {
+    let result = config::CONFIG.apply_json(new_config)?;
+    let table = config::CONFIG.construct_table();
 
-    Json(new_configuration)
+    let config_path = APP_RESOURCES.get().unwrap().config_path.to_owned();
+    let mut config_file = config::ConfigFile::open(config_path).await?;
+
+    config_file.write_toml(table).await?;
+    Ok(Json(result))
 }
 
 /// Reset server configuration to its defauts
@@ -718,17 +757,20 @@ pub async fn update_server_configuration(
     post,
     path = "/api/configuration/reset",
     responses(
-        (status = 200, body = ServerConfiguration, description = "Updated server configuration"),
+        (status = 200),
     ),
     tag = "Configuration",
 )]
-pub async fn reset_server_configuration(
-    State(configuration): State<&'static Mutex<ServerConfiguration>>,
-) -> Json<ServerConfiguration> {
-    let mut configuration = configuration.lock().unwrap();
-    configuration.apply_config_schema(FileConfigSchema::default());
-    configuration.flush().unwrap();
-    Json(configuration.clone())
+pub async fn reset_server_configuration() -> Result<(), AppError> {
+    config::CONFIG.reset_config_values();
+
+    let table = config::CONFIG.construct_table();
+
+    let config_path = APP_RESOURCES.get().unwrap().config_path.to_owned();
+    let mut config_file = config::ConfigFile::open(config_path).await?;
+
+    config_file.write_toml(table).await?;
+    Ok(())
 }
 
 /// Parse .torrent file
@@ -1204,6 +1246,69 @@ pub async fn transcode_stream_manifest(
     Ok(stream.manifest.as_ref().to_string())
 }
 
+/// Detect intros for given season
+#[utoipa::path(
+    post,
+    path = "/api/show/{show_id}/{season}/detect_intros",
+    params(
+        ("show_id", description = "Show id"),
+        ("season", description = "Season number"),
+    ),
+    responses(
+        (status = 200),
+        (status = 404, description = "Show or season are not found"),
+    ),
+    tag = "Shows",
+)]
+pub async fn detect_intros(
+    Path((show_id, season)): Path<(i64, i64)>,
+    State(app_state): State<AppState>,
+) -> Result<(), AppError> {
+    let AppState { db, library, .. } = app_state;
+    let video_ids = sqlx::query!(
+        r#"SELECT videos.id FROM episodes
+        JOIN seasons ON seasons.id = episodes.season_id
+        JOIN videos ON videos.id = episodes.video_id
+        WHERE seasons.show_id = ? AND seasons.number = ?;"#,
+        show_id,
+        season,
+    )
+    .fetch_all(&db.pool)
+    .await?;
+    let paths: Vec<PathBuf> = {
+        let library = library.lock().unwrap();
+        let mut paths = Vec::with_capacity(video_ids.len());
+        for id in &video_ids {
+            paths.push(
+                library
+                    .videos
+                    .get(&id.id)
+                    .map(|s| s.source.video.path().to_path_buf())
+                    .ok_or(AppError::internal_error("One of the episodes is not found"))?,
+            );
+        }
+        paths
+    };
+    let intros = crate::intro_detection::intro_detection(paths).await?;
+    for (i, intro) in intros.into_iter().enumerate() {
+        let id = video_ids[i].id;
+        if let Some(intro) = intro {
+            let db_intro = DbEpisodeIntro {
+                id: None,
+                video_id: id,
+                start_sec: intro.start.as_secs() as i64,
+                end_sec: intro.end.as_secs() as i64,
+            };
+            if let Err(e) = db.insert_intro(db_intro).await {
+                tracing::warn!("Failed to insert intro for video id({id}): {e}");
+            };
+        } else {
+            tracing::warn!("Could not detect intro for video with id {id}");
+        }
+    }
+    Ok(())
+}
+
 /// Download torrent
 #[utoipa::path(
     post,
@@ -1211,6 +1316,7 @@ pub async fn transcode_stream_manifest(
     request_body = TorrentDownloadPayload,
     responses(
         (status = 200),
+        (status = 400),
     ),
     tag = "Torrent",
 )]
@@ -1219,7 +1325,6 @@ pub async fn download_torrent(
     Json(payload): Json<TorrentDownloadPayload>,
 ) -> Result<(), AppError> {
     let AppState {
-        configuration,
         providers_stack,
         torrent_client,
         tasks,
@@ -1234,47 +1339,37 @@ pub async fn download_torrent(
         .resolve_magnet_link(&magnet_link)
         .await
         .map_err(|e| AppError::bad_request(e.to_string()))?;
-    let hash = info.hash();
-    let torrent_info = TorrentInfo::new(&info, None, providers_stack).await;
+    let info_hash = info.hash();
+    let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
 
-    let fallback_location = configuration
-        .lock()
-        .unwrap()
-        .resources
-        .resources_path
-        .join("torrents");
-
-    let save_location = match torrent_info
-        .contents
-        .content
-        .as_ref()
-        .map(|x| match x {
-            TorrentContent::Show(_) => ContentType::Show,
-            TorrentContent::Movie(_) => ContentType::Movie,
-        })
-        .or_else(|| payload.content_hint.as_ref().map(|h| h.content_type))
-    {
-        Some(ContentType::Show) => payload
-            .save_location
-            .map(PathBuf::from)
-            .or_else(|| configuration.lock().unwrap().show_folders.first().cloned())
-            .unwrap_or(fallback_location.join("shows")),
-        Some(ContentType::Movie) => payload
-            .save_location
-            .map(PathBuf::from)
-            .or_else(|| configuration.lock().unwrap().movie_folders.first().cloned())
-            .unwrap_or(fallback_location.join("movies")),
-        None => return Err(AppError::bad_request("Couldn't choose output location")),
-    };
     let enabled_files = payload
         .enabled_files
-        .unwrap_or((0..info.output_files("").len()).collect());
+        .unwrap_or_else(|| (0..info.files_amount()).collect());
+    for enabled_idx in &enabled_files {
+        torrent_info.contents.files[*enabled_idx].enabled = true;
+    }
+    let save_location = payload
+        .save_location
+        .map(PathBuf::from)
+        .or_else(|| {
+            let content_type = torrent_info
+                .contents
+                .content
+                .as_ref()
+                .map(|c| c.content_type())?;
+            let movie_folders: config::MovieFolders = config::CONFIG.get_value();
+            let show_folders: config::ShowFolders = config::CONFIG.get_value();
+            match content_type {
+                ContentType::Show => show_folders.first(),
+                ContentType::Movie => movie_folders.first(),
+            }
+            .map(|f| f.to_owned())
+        })
+        .ok_or(AppError::bad_request("Could not determine save location"))?;
+    tracing::debug!("Selected torrent output: {}", save_location.display());
     let content = torrent_info.contents.content.clone();
-    let (progress_tx, progress_rx) = tokio::sync::mpsc::channel(100);
-
     let handle = torrent_client
         .download(
-            progress_tx,
             save_location,
             tracker_list,
             info,
@@ -1283,11 +1378,11 @@ pub async fn download_torrent(
         )
         .await?;
 
-    tokio::spawn(async move {
+    tasks.tracker.spawn(async move {
         let _ = tasks
-            .observe_torrent_download(handle, progress_rx, hash, content)
+            .observe_task(handle, TaskKind::Torrent { info_hash, content })
             .await;
-        torrent_client.remove_download(hash);
+        torrent_client.remove_download(info_hash)
     });
 
     Ok(())

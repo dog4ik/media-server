@@ -2,17 +2,13 @@ use std::{fmt::Display, sync::Mutex};
 
 use serde::Serialize;
 use time::OffsetDateTime;
-use tokio::sync::{broadcast, mpsc};
+use tokio::sync::broadcast;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use torrent::download::DownloadHandle;
 use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    app_state::AppError,
-    ffmpeg::{FFmpegRunningJob, FFmpegTask},
-    stream::transcode_stream::TranscodeStream,
-    torrent::TorrentContent,
+    app_state::AppError, stream::transcode_stream::TranscodeStream, torrent::TorrentContent,
 };
 
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
@@ -136,11 +132,14 @@ impl Task {
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", tag = "progress_type")]
 pub enum ProgressStatus {
     Start,
     Finish,
-    Pending,
+    Pending {
+        speed: Option<ProgressSpeed>,
+        percent: Option<f32>,
+    },
     Cancel,
     Error,
     Pause,
@@ -149,8 +148,6 @@ pub enum ProgressStatus {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct ProgressChunk {
     pub task_id: Uuid,
-    pub percent: usize,
-    pub speed: f32,
     pub status: ProgressStatus,
 }
 
@@ -158,26 +155,20 @@ impl ProgressChunk {
     pub fn start(task_id: Uuid) -> Self {
         Self {
             task_id,
-            percent: 0,
-            speed: 0.,
             status: ProgressStatus::Start,
         }
     }
 
-    pub fn pending(task_id: Uuid, percent: usize, speed: f32) -> Self {
+    pub fn pending(task_id: Uuid, percent: Option<f32>, speed: Option<ProgressSpeed>) -> Self {
         Self {
             task_id,
-            percent,
-            speed,
-            status: ProgressStatus::Pending,
+            status: ProgressStatus::Pending { speed, percent },
         }
     }
 
     pub fn finish(task_id: Uuid) -> Self {
         Self {
             task_id,
-            percent: 100,
-            speed: 0.,
             status: ProgressStatus::Finish,
         }
     }
@@ -185,8 +176,6 @@ impl ProgressChunk {
     pub fn cancel(task_id: Uuid) -> Self {
         Self {
             task_id,
-            percent: 0,
-            speed: 0.,
             status: ProgressStatus::Cancel,
         }
     }
@@ -194,8 +183,6 @@ impl ProgressChunk {
     pub fn error(task_id: Uuid) -> Self {
         Self {
             task_id,
-            percent: 0,
-            speed: 0.,
             status: ProgressStatus::Error,
         }
     }
@@ -219,6 +206,8 @@ pub enum TaskError {
     NotFound,
 }
 
+impl std::error::Error for TaskError {}
+
 impl From<TaskError> for AppError {
     fn from(value: TaskError) -> Self {
         match value {
@@ -228,6 +217,64 @@ impl From<TaskError> for AppError {
             TaskError::NotFound => Self::not_found("Task was not found"),
             TaskError::Failure => Self::internal_error("Task failed"),
         }
+    }
+}
+
+impl Display for TaskError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            TaskError::Failure => "Failure",
+            TaskError::Duplicate => "Duplicate",
+            TaskError::NotCancelable => "Not cancelable",
+            TaskError::Canceled => "Canceled",
+            TaskError::NotFound => "Not found",
+        };
+        write!(f, "{msg}")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Copy, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum ProgressSpeed {
+    BytesPerSec(usize),
+    RelativeSpeed(f32),
+}
+
+impl From<usize> for ProgressSpeed {
+    fn from(value: usize) -> Self {
+        Self::BytesPerSec(value)
+    }
+}
+
+impl From<f32> for ProgressSpeed {
+    fn from(value: f32) -> Self {
+        Self::RelativeSpeed(value)
+    }
+}
+
+#[derive(Debug)]
+pub struct Progress {
+    pub is_finished: bool,
+    pub percent: Option<f32>,
+    pub speed: Option<ProgressSpeed>,
+}
+
+impl Progress {
+    pub fn finished() -> Self {
+        Self {
+            is_finished: true,
+            percent: None,
+            speed: None,
+        }
+    }
+}
+
+pub trait ResourceTask {
+    /// Required method. Must be cancellation safe
+    fn progress(&mut self)
+        -> impl std::future::Future<Output = Result<Progress, TaskError>> + Send;
+    fn on_cancel(&mut self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        std::future::ready(Ok(()))
     }
 }
 
@@ -242,82 +289,91 @@ impl TaskResource {
         }
     }
 
-    /// Wait until task is over while dispatching progress
-    pub async fn observe_ffmpeg_task(
+    pub async fn observe_task<T: ResourceTask>(
         &self,
-        mut job: FFmpegRunningJob<impl FFmpegTask>,
+        mut task: T,
         kind: TaskKind,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let child_token = self.parent_cancellation_token.child_token();
-        let mut stdout = job.take_stdout().expect("stdout is not taken yet");
         let id = self.start_task(kind, Some(child_token.clone()))?;
+
         loop {
             tokio::select! {
-                Some(chunk) = stdout.next_progress_chunk() => {
-                    let _ = channel.send(ProgressChunk::pending(
-                        id,
-                        chunk.percent(job.target_duration()),
-                        chunk.relative_speed(),
-                    ));
-                },
-                res = job.wait() => {
-                    match res {
-                        Err(_) => {
-                            let _ = self.error_task(id);
-                            return Err(TaskError::Failure);
-                        }
-                        Ok(status) => {
-                            if status.success() {
+                progress = task.progress() => {
+                    match progress {
+                        Ok(progress) => {
+                            if progress.is_finished {
                                 let _ = self.finish_task(id);
                                 return Ok(());
-                            } else {
-                                let _ = self.error_task(id);
-                                return Err(TaskError::Failure);
                             }
-                        }
+                            let _ = channel.send(ProgressChunk::pending(
+                                id,
+                                progress.percent,
+                                progress.speed,
+                            ));
+                        },
+                        Err(e) => {
+                            let _ = self.error_task(id);
+                            return Err(e);
+                        },
                     }
                 }
                 _ = child_token.cancelled() => {
-                    let _ = job.cancel().await;
-                    return Err(TaskError::Canceled)
+                    if let Err(err) = task.on_cancel().await {
+                        tracing::error!("Task cleanup failed: {err}")
+                    };
+                    let _ = self.cancel_task(id);
+                    return Ok(())
                 }
-            };
+            }
         }
     }
 
-    /// Wait until task is over while dispatching progress
-    pub async fn observe_torrent_download(
+    pub async fn run_future<F: std::future::Future>(
         &self,
-        mut download_handle: DownloadHandle,
-        mut progress_rx: mpsc::Receiver<torrent::DownloadProgress>,
-        info_hash: [u8; 20],
-        content: Option<TorrentContent>,
-    ) -> Result<(), TaskError> {
-        let ProgressChannel(channel) = self.progress_channel.clone();
+        fut: F,
+        kind: TaskKind,
+    ) -> Result<F::Output, TaskError> {
         let child_token = self.parent_cancellation_token.child_token();
-        let id = self.start_task(
-            TaskKind::Torrent { info_hash, content },
-            Some(child_token.clone()),
-        )?;
+        let id = self.start_task(kind, Some(child_token.clone()))?;
+        tokio::select! {
+            result = self.tracker.track_future(fut) => {
+                let _ = self.finish_task(id);
+                Ok(result)
+            },
+            _ = child_token.cancelled() => {
+                let _ = self.cancel_task(id);
+                Err(TaskError::Canceled)
+            },
+        }
+    }
 
-        loop {
-            tokio::select! {
-                Some(progress) = progress_rx.recv() => {
-                    let total_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
-                    let _ = channel.send(ProgressChunk::pending(id, progress.percent as usize, total_speed as f32));
-                },
-                _ = download_handle.wait() => {
-                    let _ = self.finish_task(id);
-                    download_handle.abort().await.unwrap();
-                    return Ok(());
+    pub async fn run_result_future<R, E, F: std::future::Future<Output = Result<R, E>>>(
+        &self,
+        fut: F,
+        kind: TaskKind,
+    ) -> Result<R, TaskError> {
+        let child_token = self.parent_cancellation_token.child_token();
+        let id = self.start_task(kind, Some(child_token.clone()))?;
+        tokio::select! {
+            result = self.tracker.track_future(fut) => {
+                self.finish_task(id);
+                match result {
+                    Ok(r) => {
+                        self.finish_task(id);
+                        Ok(r)
+                    },
+                    Err(_) => {
+                        self.error_task(id);
+                        Err(TaskError::Failure)
+                    },
                 }
-                _ = child_token.cancelled() => {
-                    download_handle.abort().await.unwrap();
-                    let _ = self.cancel_task(id);
-                    return Err(TaskError::Canceled);
-                }
-            };
+            },
+            _ = child_token.cancelled() => {
+                let _ = self.cancel_task(id);
+                Err(TaskError::Canceled)
+            },
         }
     }
 
@@ -384,20 +440,6 @@ impl TaskResource {
         cancel.cancel();
         let _ = self.progress_channel.0.send(ProgressChunk::cancel(id));
         Ok(())
-    }
-}
-
-pub trait ProgressJob {
-    fn progress(&mut self) -> Result<mpsc::Sender<usize>, anyhow::Error>;
-}
-
-pub trait CancelJob {
-    fn cancel(self) -> Result<(), anyhow::Error>;
-}
-
-impl ProgressChunk {
-    pub fn is_done(&self) -> bool {
-        self.percent == 100
     }
 }
 

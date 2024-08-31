@@ -1,335 +1,793 @@
 use std::{
-    ffi::OsStr,
-    fs,
-    io::{BufRead, ErrorKind, Write},
+    any::{type_name, Any, TypeId},
+    char,
+    collections::HashMap,
+    fmt::Display,
+    io::BufRead,
     path::{Path, PathBuf},
-    process::Command,
-    str::FromStr,
-    sync::OnceLock,
+    sync::{LazyLock, OnceLock},
 };
 
+use anyhow::Context;
 use clap::Parser;
-use serde::{Deserialize, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::{
+    fs,
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::watch,
+};
+use utoipa::openapi::RefOr;
 
-use crate::ffmpeg::{self, H264Preset};
-
-#[derive(Debug, Serialize, Deserialize, Clone, utoipa::ToSchema)]
-pub struct ServerConfiguration {
-    pub port: u16,
-    pub capabilities: Capabilities,
-    #[schema(value_type = Vec<String>)]
-    pub movie_folders: Vec<PathBuf>,
-    #[schema(value_type = Vec<String>)]
-    pub show_folders: Vec<PathBuf>,
-    pub resources: AppResources,
-    #[serde(skip)]
-    pub config_file: ConfigFile,
-    pub scan_max_concurrency: usize,
-    pub h264_preset: H264Preset,
-    #[schema(value_type = Option<String>)]
-    pub ffprobe_path: Option<PathBuf>,
-    #[schema(value_type = Option<String>)]
-    pub ffmpeg_path: Option<PathBuf>,
-    pub tmdb_token: Option<String>,
-    pub hw_accel: bool,
+fn camel_to_snake_case(input: &str) -> String {
+    let mut snake = String::new();
+    for (i, ch) in input.char_indices() {
+        if i > 0 && ch.is_uppercase() {
+            snake.push('_');
+        }
+        snake.push(ch.to_ascii_lowercase());
+    }
+    snake
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-/// Serializable config schema
-pub struct FileConfigSchema {
-    pub port: u16,
-    #[schema(value_type = Vec<String>)]
-    pub movie_folders: Vec<PathBuf>,
-    #[schema(value_type = Vec<String>)]
-    pub show_folders: Vec<PathBuf>,
-    pub scan_max_concurrency: usize,
-    pub h264_preset: H264Preset,
-    #[schema(value_type = String)]
-    pub ffprobe_path: PathBuf,
-    #[schema(value_type = String)]
-    pub ffmpeg_path: PathBuf,
-    pub hw_accel: bool,
+#[derive(Debug)]
+pub enum ValidationError {
+    Bounds,
 }
 
-impl Default for FileConfigSchema {
-    fn default() -> Self {
+impl Display for ValidationError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            ValidationError::Bounds => "bounds",
+        };
+        write!(f, "{}", msg)
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+// TODO: derive macro
+pub trait ConfigValue:
+    'static + Send + Sync + Default + Clone + Serialize + DeserializeOwned + utoipa::ToSchema<'static>
+{
+    const KEY: Option<&str> = None;
+    const ENV_KEY: Option<&str> = None;
+    const REQUIRE_RESTART: bool = false;
+
+    fn validate(&self) -> Result<(), ValidationError> {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct SettingValue<T> {
+    default: T,
+    config: Option<T>,
+    cli: Option<T>,
+    env: Option<T>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SerializedSetting {
+    require_restart: bool,
+    key: String,
+    default_value: serde_json::Value,
+    config_value: serde_json::Value,
+    cli_value: serde_json::Value,
+    env_value: serde_json::Value,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ConfigurationApplyError {
+    pub message: String,
+    pub key: String,
+}
+
+#[derive(Debug, Default, Serialize, utoipa::ToSchema)]
+pub struct ConfigurationApplyResult {
+    pub require_restart: bool,
+    pub errors: Vec<ConfigurationApplyError>,
+}
+
+impl<T: ConfigValue> SettingValue<T> {
+    pub fn new(val: T) -> Self {
+        use std::env::var;
+        let env = match T::ENV_KEY {
+            Some(key) => Some(key.to_string()),
+            None => Some(T::KEY.map(str::to_uppercase).unwrap_or_else(|| {
+                let (name, _) = T::schema();
+                camel_to_snake_case(name).to_uppercase()
+            })),
+        }
+        .and_then(|env_key| {
+            let val = var(env_key).ok()?;
+            match serde_plain::from_str(&val) {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    tracing::warn!(
+                        found = val,
+                        "Found env value but could not parse it as {}. {e}",
+                        type_name::<T>()
+                    );
+                    None
+                }
+            }
+        });
         Self {
-            show_folders: Vec::new(),
-            movie_folders: Vec::new(),
-            port: 6969,
-            scan_max_concurrency: 10,
-            h264_preset: H264Preset::default(),
-            // TODO: move to full path to local dependency in prod
-            ffprobe_path: "ffprobe".into(),
-            ffmpeg_path: "ffmpeg".into(),
-            hw_accel: false,
+            default: val,
+            config: None,
+            cli: None,
+            env,
+        }
+    }
+
+    /// Setting value with respect to it's source priority
+    pub fn customized(&self) -> &T {
+        self.cli
+            .as_ref()
+            .or(self.env.as_ref())
+            .or(self.config.as_ref())
+            .unwrap_or(&self.default)
+    }
+}
+
+trait AnySettingValue: 'static + Send + Sync {
+    fn key(&self) -> String;
+    fn require_restart(&self) -> bool;
+    fn type_name(&self) -> &'static str;
+
+    fn customized_value(&self) -> &dyn Any;
+    fn config_mut(&mut self) -> &mut dyn Any;
+    fn cli_mut(&mut self) -> &mut dyn Any;
+    fn reset_config_value(&mut self);
+
+    fn serialize_config(&self) -> Option<toml::Value>;
+    fn serialize_response(&self) -> SerializedSetting;
+
+    fn deserialize_toml(&mut self, from: toml::Value) -> Result<(), toml::de::Error>;
+    fn deserialize_json(&mut self, from: serde_json::Value) -> Result<(), serde_json::Error>;
+}
+
+impl<T: ConfigValue> AnySettingValue for SettingValue<T> {
+    fn key(&self) -> String {
+        T::KEY
+            .map(|k| k.to_string())
+            .unwrap_or_else(|| camel_to_snake_case(self.type_name()))
+    }
+
+    fn require_restart(&self) -> bool {
+        T::REQUIRE_RESTART
+    }
+
+    fn type_name(&self) -> &'static str {
+        T::schema().0
+    }
+
+    fn deserialize_toml(&mut self, from: toml::Value) -> Result<(), toml::de::Error> {
+        let value = T::deserialize(from)?;
+        self.config = Some(value);
+        Ok(())
+    }
+
+    fn deserialize_json(&mut self, json: serde_json::Value) -> Result<(), serde_json::Error> {
+        let value = serde_json::from_value(json)?;
+        self.config = Some(value);
+        Ok(())
+    }
+
+    fn serialize_config(&self) -> Option<toml::Value> {
+        let value = self.config.clone();
+        Some(toml::Value::try_from(value?).unwrap())
+    }
+
+    fn serialize_response(&self) -> SerializedSetting {
+        let serialize = |t: Option<&T>| {
+            let value = serde_json::to_value(t).unwrap();
+            value
+        };
+        SerializedSetting {
+            key: self.key(),
+            require_restart: T::REQUIRE_RESTART,
+            default_value: serialize(Some(&self.default)),
+            config_value: serialize(self.config.as_ref()),
+            cli_value: serialize(self.cli.as_ref()),
+            env_value: serialize(self.env.as_ref()),
+        }
+    }
+
+    fn customized_value(&self) -> &dyn Any {
+        self.customized()
+    }
+
+    fn config_mut(&mut self) -> &mut dyn Any {
+        &mut self.config
+    }
+
+    fn cli_mut(&mut self) -> &mut dyn Any {
+        &mut self.cli
+    }
+
+    fn reset_config_value(&mut self) {
+        self.config = None;
+    }
+}
+
+pub static CONFIG: LazyLock<ConfigStore> = LazyLock::new(ConfigStore::construct);
+
+#[derive(Clone)]
+pub struct ConfigStore {
+    settings: watch::Sender<HashMap<TypeId, Box<dyn AnySettingValue>>>,
+}
+
+impl std::fmt::Debug for ConfigStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ConfigStore").finish()
+    }
+}
+
+impl ConfigStore {
+    pub fn construct() -> Self {
+        let store = Self::new();
+
+        store.register_value::<Port>();
+        store.register_value::<HwAccel>();
+        store.register_value::<ShowFolders>();
+        store.register_value::<MovieFolders>();
+        store.register_value::<FFmpegPath>();
+        store.register_value::<FFprobePath>();
+        store.register_value::<TmdbKey>();
+        store.register_value::<TvdbKey>();
+        store.register_value::<IntroMinDuration>();
+        store.register_value::<IntroDetectionFfmpegBuild>();
+
+        store
+    }
+
+    pub fn new() -> Self {
+        let (settings_tx, _) = watch::channel(HashMap::new());
+        Self {
+            settings: settings_tx,
+        }
+    }
+
+    pub fn register_value<T: ConfigValue>(&self) {
+        let default = T::default();
+        self.settings.send_modify(|setting| {
+            setting.insert(TypeId::of::<T>(), Box::new(SettingValue::new(default)));
+        });
+    }
+
+    pub fn get_value<T: ConfigValue>(&self) -> T {
+        let settings = self.settings.borrow();
+        let setting = settings
+            .get(&TypeId::of::<T>())
+            .unwrap_or_else(|| panic!("unregistered setting type {}", type_name::<T>()));
+        let t: &T = setting.customized_value().downcast_ref().unwrap();
+        t.clone()
+    }
+
+    pub fn update_value<T: ConfigValue>(&self, new: T) {
+        self.settings.send_modify(|settings| {
+            let setting = settings
+                .get_mut(&TypeId::of::<T>())
+                .unwrap_or_else(|| panic!("unregistered setting type {}", type_name::<T>()));
+            let value = setting.config_mut();
+            let value = value.downcast_mut().unwrap();
+            *value = Some(new);
+        });
+    }
+
+    pub fn construct_table(&self) -> toml::Table {
+        let mut table = toml::Table::new();
+        let settings = self.settings.borrow();
+        for setting in settings.values() {
+            let Some(value) = setting.serialize_config() else {
+                continue;
+            };
+            table.insert(setting.key(), value);
+        }
+        table
+    }
+
+    pub fn json(&self) -> Vec<SerializedSetting> {
+        let settings = self.settings.borrow();
+        let mut out = Vec::with_capacity(settings.len());
+        for setting in settings.values() {
+            // CHANGE FROM ARRAY TO SETTINGS OBJECT?
+            let value = setting.serialize_response();
+            out.push(value);
+        }
+        out
+    }
+
+    pub fn apply_toml_settings(&self, table: toml::Table) {
+        self.settings.send_modify(|settings| {
+            for setting in settings.values_mut() {
+                let key = setting.key();
+                if let Some(val) = table.get(&key).cloned() {
+                    if let Err(err) = setting.deserialize_toml(val) {
+                        tracing::warn!(
+                            "Failed to deserialize toml value for {}: {err}",
+                            setting.type_name()
+                        )
+                    };
+                }
+            }
+        });
+    }
+
+    pub fn apply_json(&self, value: serde_json::Value) -> anyhow::Result<ConfigurationApplyResult> {
+        let mut result = ConfigurationApplyResult::default();
+        let value = serde_json::to_value(&value)?;
+        let obj = match value {
+            serde_json::Value::Object(obj) => obj,
+            _ => return Err(anyhow::anyhow!("Provided json must be object")),
+        };
+
+        self.settings.send_modify(|settings| {
+            for setting in settings.values_mut() {
+                if let Some(val) = obj.get(&setting.key()).cloned() {
+                    match setting.deserialize_json(val) {
+                        Ok(_) if setting.require_restart() => result.require_restart = true,
+                        Err(err) => {
+                            tracing::warn!(
+                                "Failed to deserialize json value for {}: {err}",
+                                setting.type_name()
+                            );
+                            result.errors.push(ConfigurationApplyError {
+                                key: setting.key(),
+                                message: err.to_string(),
+                            });
+                        }
+                        _ => (),
+                    };
+                }
+            }
+        });
+        Ok(result)
+    }
+
+    pub fn apply_config_value<T: ConfigValue>(&self, value: T) {
+        self.settings.send_modify(|settings| {
+            let setting = settings.get_mut(&value.type_id()).unwrap();
+            let setting = setting.config_mut();
+            let val = setting.downcast_mut().unwrap();
+            *val = Some(value);
+        });
+    }
+
+    pub fn apply_cli_value<T: ConfigValue>(&self, value: T) {
+        self.settings.send_modify(|settings| {
+            let setting = settings.get_mut(&value.type_id()).unwrap();
+            let setting = setting.cli_mut();
+            let val = setting.downcast_mut().unwrap();
+            *val = Some(value);
+        });
+    }
+
+    pub fn reset_config_values(&self) {
+        self.settings.send_modify(|settings| {
+            for setting in settings.values_mut() {
+                setting.reset_config_value();
+            }
+        });
+    }
+
+    pub fn watch_value<T: ConfigValue>(&self) -> ConfigValueWatcher<T> {
+        let rx = self.settings.subscribe();
+        let current_value = self.get_value::<T>();
+        ConfigValueWatcher {
+            current_value,
+            t_id: std::any::TypeId::of::<T>(),
+            rx,
         }
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct ConfigFile(pub PathBuf);
+impl Default for ConfigStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub struct ConfigValueWatcher<T> {
+    rx: watch::Receiver<HashMap<TypeId, Box<dyn AnySettingValue>>>,
+    current_value: T,
+    t_id: std::any::TypeId,
+}
+
+impl<T: ConfigValue + PartialEq> ConfigValueWatcher<T> {
+    /// Future resolves with the new value when it changes
+    /// Cancellation safe
+    pub async fn watch_change(&mut self) -> T {
+        let changed_config = self
+            .rx
+            .wait_for(|map| {
+                let val = map.get(&self.t_id).expect("config values be registered");
+                let new = val.customized_value().downcast_ref::<T>().unwrap();
+                *new != self.current_value
+            })
+            .await
+            .expect("config is static so channel is never dropped");
+        let new_value = changed_config
+            .get(&self.t_id)
+            .unwrap()
+            .customized_value()
+            .downcast_ref::<T>()
+            .unwrap()
+            .clone();
+        self.current_value = new_value.clone();
+        new_value
+    }
+}
+
+// Shady utoipa manual implementation
+
+impl<T: ConfigValue> utoipa::ToSchema<'static> for UtoipaConfigValue<T> {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        use utoipa::openapi::schema;
+        use utoipa::PartialSchema;
+        let (name, inner_schema) = T::schema();
+        let snake_name = camel_to_snake_case(name);
+        let optional: RefOr<utoipa::openapi::Schema> = match &inner_schema {
+            RefOr::T(schema::Schema::Object(obj)) => {
+                let mut obj = obj.clone();
+                obj.nullable = true;
+                obj.into()
+            }
+            RefOr::T(schema::Schema::Array(obj)) => {
+                let mut obj = obj.clone();
+                obj.nullable = true;
+                obj.into()
+            }
+            RefOr::T(schema) => match schema {
+                schema::Schema::Array(_) => panic!("Can't handle array schema type"),
+                schema::Schema::Object(_) => panic!("Can't handle object schema type"),
+                schema::Schema::OneOf(_) => panic!("Can't handle one_of schema type"),
+                schema::Schema::AllOf(_) => panic!("Can't handle all_of schema type"),
+                schema::Schema::AnyOf(_) => panic!("Can't handle any_of schema type"),
+                _ => panic!("Can't handle other schema type"),
+            },
+            RefOr::Ref(r) => panic!("Can't ref type: {}", r.ref_location),
+        };
+        let key = T::KEY.unwrap_or(&snake_name);
+        let key_schema = schema::ObjectBuilder::new()
+            .nullable(false)
+            .schema_type(schema::SchemaType::String)
+            .enum_values(Some([key]));
+
+        let out = schema::ObjectBuilder::new()
+            .schema_type(schema::SchemaType::Object)
+            .nullable(false)
+            .property("require_restart", bool::schema())
+            .required("require_restart")
+            .property("key", key_schema)
+            .required("key")
+            .property("default_value", inner_schema.clone())
+            .required("default_value")
+            .property("config_value", optional.clone())
+            .required("config_value")
+            .property("cli_value", optional.clone())
+            .required("cli_value")
+            .property("env_value", optional)
+            .required("env_value")
+            .into();
+        (name, out)
+    }
+}
+
+impl utoipa::ToSchema<'static> for UtoipaConfigSchema {
+    fn schema() -> (
+        &'static str,
+        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
+    ) {
+        use utoipa::openapi::schema;
+        let schema = schema::OneOfBuilder::new()
+            .item(UtoipaConfigValue::<Port>::schema().1)
+            .item(UtoipaConfigValue::<ShowFolders>::schema().1)
+            .item(UtoipaConfigValue::<MovieFolders>::schema().1)
+            .item(UtoipaConfigValue::<TmdbKey>::schema().1)
+            .item(UtoipaConfigValue::<TvdbKey>::schema().1)
+            .item(UtoipaConfigValue::<FFmpegPath>::schema().1)
+            .item(UtoipaConfigValue::<FFprobePath>::schema().1)
+            .item(UtoipaConfigValue::<HwAccel>::schema().1)
+            .item(UtoipaConfigValue::<IntroMinDuration>::schema().1)
+            .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema().1);
+        let array = schema::ArrayBuilder::new().items(schema).build();
+        ("UtoipaConfigSchema", array.into())
+    }
+}
+
+#[derive(Debug)]
+#[allow(unused)]
+pub struct UtoipaConfigValue<T> {
+    _t: std::marker::PhantomData<T>,
+}
+
+#[derive(Debug)]
+pub struct UtoipaConfigSchema;
+
+// Settings
+
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Serialize, utoipa::ToSchema)]
+pub struct Port(pub u16);
+
+impl AsRef<u16> for Port {
+    fn as_ref(&self) -> &u16 {
+        &self.0
+    }
+}
+
+impl Default for Port {
+    fn default() -> Self {
+        Self(6969)
+    }
+}
+
+impl ConfigValue for Port {
+    const REQUIRE_RESTART: bool = true;
+}
+
+#[derive(Deserialize, Clone, Copy, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct HwAccel(pub bool);
+impl ConfigValue for HwAccel {}
+
+impl AsRef<bool> for HwAccel {
+    fn as_ref(&self) -> &bool {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+#[schema(value_type = Vec<String>)]
+pub struct MovieFolders(pub Vec<PathBuf>);
+impl ConfigValue for MovieFolders {}
+
+impl AsRef<[PathBuf]> for MovieFolders {
+    fn as_ref(&self) -> &[PathBuf] {
+        &self.0
+    }
+}
+
+impl MovieFolders {
+    pub fn add(&mut self, path: impl AsRef<Path>) {
+        let path = path.as_ref().to_path_buf();
+        if !self.0.contains(&path) {
+            self.0.push(path);
+        }
+    }
+
+    pub fn remove(&mut self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        self.0.retain(|p| p != path)
+    }
+
+    pub fn first(&self) -> Option<&PathBuf> {
+        self.0.first()
+    }
+
+    pub fn existing(&self) -> Vec<&PathBuf> {
+        self.0
+            .iter()
+            .filter(|path| {
+                let exists = path.try_exists().unwrap_or(false);
+                if !exists {
+                    tracing::warn!(
+                        "Failed to check existance for movie directory: {}",
+                        path.display()
+                    );
+                }
+                exists
+            })
+            .collect()
+    }
+}
+
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+#[schema(value_type = Vec<String>)]
+pub struct ShowFolders(pub Vec<PathBuf>);
+impl ConfigValue for ShowFolders {}
+
+impl AsRef<[PathBuf]> for ShowFolders {
+    fn as_ref(&self) -> &[PathBuf] {
+        &self.0
+    }
+}
+impl ShowFolders {
+    pub fn add(&mut self, path: impl AsRef<Path>) {
+        let path = path.as_ref().to_path_buf();
+        if !self.0.contains(&path) {
+            self.0.push(path);
+        }
+    }
+
+    pub fn remove(&mut self, path: impl AsRef<Path>) {
+        let path = path.as_ref();
+        self.0.retain(|p| p != path)
+    }
+
+    pub fn first(&self) -> Option<&PathBuf> {
+        self.0.first()
+    }
+
+    pub fn existing(&self) -> Vec<&PathBuf> {
+        self.0
+            .iter()
+            .filter(|path| {
+                let exists = path.try_exists().unwrap_or(false);
+                if !exists {
+                    tracing::warn!(
+                        "Failed to check existance for show directory: {}",
+                        path.display()
+                    );
+                }
+                exists
+            })
+            .collect()
+    }
+}
+
+#[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
+#[schema(value_type = String)]
+pub struct FFmpegPath(PathBuf);
+impl ConfigValue for FFmpegPath {
+    const KEY: Option<&str> = Some("ffmpeg_path");
+}
+
+impl Default for FFmpegPath {
+    fn default() -> Self {
+        Self(PathBuf::from("ffmpeg"))
+    }
+}
+
+impl AsRef<Path> for FFmpegPath {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
+#[schema(value_type = String)]
+pub struct FFprobePath(PathBuf);
+impl ConfigValue for FFprobePath {
+    const KEY: Option<&str> = Some("ffprobe_path");
+}
+
+impl Default for FFprobePath {
+    fn default() -> Self {
+        Self(PathBuf::from("ffprobe"))
+    }
+}
+
+impl AsRef<Path> for FFprobePath {
+    fn as_ref(&self) -> &Path {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct TmdbKey(pub Option<String>);
+impl ConfigValue for TmdbKey {
+    const ENV_KEY: Option<&str> = Some("TMDB_TOKEN");
+}
+
+impl AsRef<Option<String>> for TmdbKey {
+    fn as_ref(&self) -> &Option<String> {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct TvdbKey(pub Option<String>);
+impl ConfigValue for TvdbKey {
+    const ENV_KEY: Option<&str> = Some("TVDB_TOKEN");
+}
+
+impl AsRef<Option<String>> for TvdbKey {
+    fn as_ref(&self) -> &Option<String> {
+        &self.0
+    }
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+/// Minimal intro duration from seconds
+pub struct IntroMinDuration(pub usize);
+impl ConfigValue for IntroMinDuration {}
+impl Default for IntroMinDuration {
+    fn default() -> Self {
+        Self(20)
+    }
+}
+
+/// Path to FFmpeg build that supports chromparint audio fingerprinting
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+#[schema(value_type = String)]
+pub struct IntroDetectionFfmpegBuild(pub PathBuf);
+impl ConfigValue for IntroDetectionFfmpegBuild {}
+impl Default for IntroDetectionFfmpegBuild {
+    fn default() -> Self {
+        Self(PathBuf::from("ffmpeg"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::{ConfigStore, HwAccel, Port};
+
+    const TEST_TOML_CONFIG: &str = r#"
+port = 8000
+hw_accel = true
+    "#;
+
+    #[test]
+    fn setting_store() {
+        let store = ConfigStore::construct();
+        let mut port = Port::default();
+        let stored_port: Port = store.get_value();
+        assert_eq!(port, stored_port);
+        port = Port(8000);
+        store.update_value(port);
+        let stored_port: Port = store.get_value();
+        assert_eq!(port, stored_port);
+    }
+
+    #[test]
+    fn apply_settings() {
+        let store = ConfigStore::construct();
+        let port: Port = store.get_value();
+        let hw_accel: HwAccel = store.get_value();
+        assert_eq!(port.0, Port::default().0);
+        assert_eq!(hw_accel.0, HwAccel::default().0);
+        let toml = toml::from_str(TEST_TOML_CONFIG).unwrap();
+        store.apply_toml_settings(toml);
+        let port: Port = store.get_value();
+        let hw_accel: HwAccel = store.get_value();
+        assert_eq!(port.0, 8000);
+        assert_eq!(hw_accel.0, true);
+    }
+}
+
+#[derive(Debug)]
+pub struct ConfigFile(pub fs::File);
 
 impl ConfigFile {
-    pub fn open(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
-        let path = config_path.as_ref().to_path_buf();
+    pub async fn open(config_path: impl AsRef<Path>) -> Result<Self, anyhow::Error> {
         if let Some(parent) = config_path.as_ref().parent() {
-            fs::create_dir_all(parent)?;
+            fs::create_dir_all(parent).await?;
         }
-        match fs::OpenOptions::new()
+        let file = fs::OpenOptions::new()
             .read(true)
             .write(true)
+            .create(true)
             .open(&config_path)
-            .map_err(|e| e.kind())
-        {
-            Err(ErrorKind::NotFound) => {
-                let default_config = FileConfigSchema::default();
-                let mut file = fs::File::create_new(&config_path)?;
-                let _ = file.write_all(toml::to_string_pretty(&default_config)?.as_bytes());
-                tracing::info!(
-                    "Created configuration file with defaults: {}",
-                    config_path.as_ref().display()
-                );
-                Ok(ConfigFile(path))
-            }
-            Err(e) => Err(anyhow::anyhow!(
-                "Unknown fs error occured while creating config: {e}"
-            )),
-            Ok(_) => Ok(ConfigFile(path)),
-        }
+            .await?;
+        tracing::debug!("Opened config file {}", config_path.as_ref().display());
+        Ok(Self(file))
     }
 
-    /// Reads contents of config and resets it to defaults in case of parse error
-    pub fn read(&self) -> Result<FileConfigSchema, anyhow::Error> {
-        tracing::info!("Reading config file {}", self.0.display());
-        let buf = fs::read_to_string(&self.0)?;
-        Ok(toml::from_str(&buf).unwrap_or_else(|e| {
-            tracing::error!("Failed to read config: {}", e);
-            tracing::info!("Resetting broken config");
-            if let Ok(repaired_config) = repair_config(&buf) {
-                tracing::info!("Successfuly repaired config");
-                let _ = fs::write(&self.0, toml::to_string_pretty(&repaired_config).unwrap());
-                repaired_config
-            } else {
-                tracing::error!("Failed to repair config, creating default one");
-                let default_config = FileConfigSchema::default();
-                let _ = fs::write(&self.0, toml::to_string_pretty(&default_config).unwrap());
-                default_config
-            }
-        }))
+    /// Read config file
+    pub async fn read(&mut self) -> Result<toml::Table, anyhow::Error> {
+        let mut raw = String::new();
+        let read = self.0.read_to_string(&mut raw).await?;
+        tracing::debug!("Read {read} bytes from config file");
+        let table: toml::Table = toml::from_str(&raw)?;
+        Ok(table)
     }
 
-    fn flush(&self, config: FileConfigSchema) -> Result<(), anyhow::Error> {
-        let config_text = toml::to_string_pretty(&config)?;
-        fs::write(&self.0, &config_text)?;
+    /// Write config file
+    pub async fn write_toml(&mut self, table: toml::Table) -> Result<(), anyhow::Error> {
+        self.0.set_len(0).await?;
+        let raw = toml::to_string_pretty(&table)?;
+        self.0.write_all(raw.as_bytes()).await?;
         Ok(())
     }
 }
 
-//NOTE: I hope to find solution to this mess
-fn repair_config(raw: &str) -> Result<FileConfigSchema, anyhow::Error> {
-    tracing::trace!("Trying to repair config");
-    let default = FileConfigSchema::default();
-    let parsed: toml::Table = toml::from_str(raw)?;
-    let port: u16 = parsed
-        .get("port")
-        .and_then(|v| v.as_integer())
-        .map_or(default.port, |v| v as u16);
-    let movie_folders = parsed
-        .get("movie_folders")
-        .and_then(|v| v.as_array())
-        .map(|v| {
-            v.iter()
-                .filter_map(|v| v.as_str())
-                .map(|x| x.into())
-                .collect()
-        })
-        .unwrap_or(default.movie_folders);
-    let show_folders = parsed
-        .get("show_folders")
-        .and_then(|v| v.as_array())
-        .map(|v| {
-            v.iter()
-                .filter_map(|v| v.as_str())
-                .map(|x| x.into())
-                .collect()
-        })
-        .unwrap_or(default.show_folders);
-    let scan_max_concurrency = parsed
-        .get("scan_max_concurrency")
-        .and_then(|v| v.as_integer())
-        .map_or(default.scan_max_concurrency, |v| v as usize);
-    let h264_preset = parsed
-        .get("h264_preset")
-        .and_then(|v| v.as_str())
-        .and_then(|v| H264Preset::from_str(v).ok())
-        .unwrap_or(default.h264_preset);
-    let ffmpeg_path = parsed
-        .get("ffmpeg_path")
-        .and_then(|v| v.as_str())
-        .and_then(|v| PathBuf::from_str(v).ok())
-        .unwrap_or(default.ffmpeg_path);
-    let ffprobe_path = parsed
-        .get("ffprobe_path")
-        .and_then(|v| v.as_str())
-        .and_then(|v| PathBuf::from_str(v).ok())
-        .unwrap_or(default.ffprobe_path);
-    let hw_accel = parsed
-        .get("hw_accel")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(default.hw_accel);
-
-    let repaired_config = FileConfigSchema {
-        port,
-        movie_folders,
-        show_folders,
-        scan_max_concurrency,
-        h264_preset,
-        ffmpeg_path,
-        ffprobe_path,
-        hw_accel,
-    };
-    Ok(repaired_config)
-}
-
-impl ServerConfiguration {
-    /// Into Json Config
-    pub fn into_schema(&self) -> FileConfigSchema {
-        FileConfigSchema {
-            port: self.port,
-            movie_folders: self.movie_folders.clone(),
-            show_folders: self.show_folders.clone(),
-            scan_max_concurrency: self.scan_max_concurrency,
-            h264_preset: self.h264_preset,
-            ffmpeg_path: self.ffmpeg_path.clone().unwrap_or("ffmpeg".into()),
-            ffprobe_path: self.ffprobe_path.clone().unwrap_or("ffprobe".into()),
-            hw_accel: self.hw_accel,
-        }
-    }
-    /// Try to load config or creates default config file
-    /// Errors when can't create or read file
-    pub fn new(config: ConfigFile) -> Result<Self, anyhow::Error> {
-        let file_config = config.read()?;
-        let ffmpeg_path = ffmpeg::healthcheck_ffmpeg_command(&file_config.ffmpeg_path)
-            .map(|version| {
-                tracing::info!(version, "Found ffmpeg");
-                file_config.ffmpeg_path
-            })
-            .map_err(|e| {
-                tracing::warn!("Could not find ffmpeg: {}", e);
-                e
-            })
-            .ok();
-        let ffprobe_path = ffmpeg::healthcheck_ffmpeg_command(&file_config.ffprobe_path)
-            .map(|version| {
-                tracing::info!(version, "Found ffprobe");
-                file_config.ffprobe_path
-            })
-            .map_err(|e| {
-                tracing::error!("Could not find ffprobe: {}", e);
-                e
-            })
-            .ok();
-
-        let config = ServerConfiguration {
-            resources: AppResources::new(
-                config.0.clone(),
-                ffmpeg_path.clone(),
-                ffprobe_path.clone(),
-            ),
-            port: file_config.port,
-            capabilities: ffprobe_path
-                .as_ref()
-                .and_then(|x| Capabilities::parse(x).ok())
-                .unwrap_or_default(),
-            movie_folders: file_config.movie_folders,
-            show_folders: file_config.show_folders,
-            config_file: config,
-            scan_max_concurrency: file_config.scan_max_concurrency,
-            h264_preset: H264Preset::default(),
-            ffprobe_path,
-            ffmpeg_path,
-            tmdb_token: std::env::var("TMDB_TOKEN").ok(),
-            hw_accel: file_config.hw_accel,
-        };
-        Ok(config)
-    }
-
-    pub fn apply_config_schema(&mut self, other: FileConfigSchema) {
-        self.port = other.port;
-        self.movie_folders = other.movie_folders;
-        self.show_folders = other.show_folders;
-        self.scan_max_concurrency = other.scan_max_concurrency;
-        self.h264_preset = other.h264_preset;
-        self.ffprobe_path = Some(other.ffprobe_path);
-        self.ffmpeg_path = Some(other.ffmpeg_path);
-        self.hw_accel = other.hw_accel;
-    }
-
-    pub fn apply_args(&mut self, args: Args) {
-        args.port.map(|x| self.port = x);
-        args.tmdb_token.map(|x| self.tmdb_token = Some(x));
-    }
-
-    pub fn add_show_folder(&mut self, show_folder: PathBuf) -> Result<(), anyhow::Error> {
-        self.show_folders.push(show_folder);
-        self.flush()
-    }
-
-    pub fn add_movie_folder(&mut self, movie_folder: PathBuf) -> Result<(), anyhow::Error> {
-        self.movie_folders.push(movie_folder);
-        self.flush()
-    }
-
-    pub fn remove_show_folder(
-        &mut self,
-        show_folder: impl AsRef<Path>,
-    ) -> Result<(), anyhow::Error> {
-        let position = self
-            .show_folders
-            .iter()
-            .position(|x| x == show_folder.as_ref())
-            .ok_or(anyhow::anyhow!("Could not find required folder"))?;
-        self.show_folders.remove(position);
-        self.flush()
-    }
-
-    pub fn remove_movie_folder(
-        &mut self,
-        show_folder: impl AsRef<Path>,
-    ) -> Result<(), anyhow::Error> {
-        let position = self
-            .movie_folders
-            .iter()
-            .position(|x| x == show_folder.as_ref())
-            .ok_or(anyhow::anyhow!("Could not find required folder"))?;
-        self.movie_folders.remove(position);
-        self.flush()
-    }
-
-    pub fn set_resources_folder(&mut self, resources: AppResources) -> Result<(), anyhow::Error> {
-        self.resources = resources;
-        self.flush()
-    }
-
-    pub fn set_port(&mut self, port: u16) -> Result<(), anyhow::Error> {
-        self.port = port;
-        self.flush()
-    }
-
-    pub fn set_h264_preset(&mut self, preset: H264Preset) -> Result<(), anyhow::Error> {
-        self.h264_preset = preset;
-        self.flush()
-    }
-
-    /// Flush current configuration in config file
-    pub fn flush(&mut self) -> Result<(), anyhow::Error> {
-        self.config_file.flush(self.into_schema())?;
-        Ok(())
-    }
-}
-
-#[derive(Debug, Parser)]
+#[derive(Debug, Parser, Deserialize, Serialize)]
 pub struct Args {
     /// Override port
     #[arg(short, long)]
@@ -340,6 +798,17 @@ pub struct Args {
     /// Override tmdb api token
     #[arg(long)]
     pub tmdb_token: Option<String>,
+}
+
+impl Args {
+    pub fn apply_configuration(&self) {
+        if let Some(port) = self.port {
+            CONFIG.apply_cli_value(Port(port));
+        }
+        if let Some(token) = self.tmdb_token.clone() {
+            CONFIG.apply_cli_value(TmdbKey(Some(token)));
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
@@ -396,20 +865,26 @@ impl Codec {
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct Capabilities {
     pub codecs: Vec<Codec>,
+    pub ffmpeg_version: String,
+    pub chromaprint_enabled: bool,
 }
 
 impl Capabilities {
-    pub fn parse(ffmpeg_path: impl AsRef<OsStr>) -> Result<Self, anyhow::Error> {
-        let output = Command::new(ffmpeg_path)
-            .args(["-hide_banner", "-codecs"])
-            .output()?;
-        let lines = if output.status.code().unwrap_or(1) != 0 {
-            return Err(anyhow::anyhow!("ffmpeg -codces command failed"));
-        } else {
-            output.stdout.lines()
-        };
+    pub async fn parse() -> Result<Self, anyhow::Error> {
+        let ffmpeg: FFmpegPath = CONFIG.get_value();
+        let chromaprint_ffmpeg: IntroDetectionFfmpegBuild = CONFIG.get_value();
+        let output = Command::new(ffmpeg.as_ref())
+            .args(["-codecs"])
+            .output()
+            .await?;
 
-        // skip ffmpeg heading
+        if !output.status.success() {
+            return Err(anyhow::anyhow!("ffmpeg -codces command failed"));
+        }
+
+        let lines = output.stdout.lines();
+
+        // skip description header
         let mut lines = lines.skip_while(|line| {
             !line
                 .as_ref()
@@ -423,7 +898,36 @@ impl Capabilities {
             codecs.push(Codec::from_capability_line(line));
         }
 
-        Ok(Self { codecs })
+        let mut lines = output.stderr.lines();
+        let version_line = lines.next().context("version line")??;
+        let _build_line = lines.next();
+        let configuration_line = lines.next().context("configuration line")??;
+
+        let version = version_line.split_ascii_whitespace().nth(2).unwrap();
+        let chromaprint_enabled = if ffmpeg.0 == chromaprint_ffmpeg.0 {
+            configuration_line
+                .split_ascii_whitespace()
+                .skip(1)
+                .any(|flag| flag == "--enable-chromaprint")
+        } else {
+            let out = Command::new(chromaprint_ffmpeg.0)
+                .arg("-version")
+                .output()
+                .await?;
+            let mut lines = out.stdout.lines();
+            let _ = lines.next().context("version line")??;
+            let _ = lines.next();
+            let configuration_line = lines.next().context("configuration line")??;
+            configuration_line
+                .split_ascii_whitespace()
+                .skip(1)
+                .any(|flag| flag == "--enable-chromaprint")
+        };
+        Ok(Self {
+            codecs,
+            ffmpeg_version: version.to_string(),
+            chromaprint_enabled,
+        })
     }
 }
 
@@ -440,10 +944,6 @@ pub struct AppResources {
     pub temp_path: PathBuf,
     #[schema(value_type = String)]
     pub cache_path: PathBuf,
-    #[schema(value_type = Option<String>)]
-    pub ffmpeg_path: Option<PathBuf>,
-    #[schema(value_type = Option<String>)]
-    pub ffprobe_path: Option<PathBuf>,
     #[schema(value_type = Option<String>)]
     pub binary_path: Option<PathBuf>,
     #[schema(value_type = String)]
@@ -484,7 +984,7 @@ impl AppResources {
     }
 
     fn temp_storage() -> PathBuf {
-        std::env::temp_dir().join(Self::APP_NAME)
+        Self::data_storage().join("tmp")
     }
 
     fn cache_storage() -> PathBuf {
@@ -508,6 +1008,7 @@ impl AppResources {
     }
 
     pub fn initiate() -> Result<(), std::io::Error> {
+        use std::fs;
         fs::create_dir_all(Self::resources())?;
         fs::create_dir_all(Self::database_directory())?;
         fs::create_dir_all(Self::temp_storage())?;
@@ -525,11 +1026,7 @@ impl AppResources {
         Ok(())
     }
 
-    pub fn new(
-        config_path: PathBuf,
-        ffmpeg_path: Option<PathBuf>,
-        ffprobe_path: Option<PathBuf>,
-    ) -> Self {
+    pub fn new(config_path: PathBuf) -> Self {
         let resources_path = Self::resources();
         let database_path = Self::database();
         let temp_path = Self::temp_storage();
@@ -550,19 +1047,9 @@ impl AppResources {
             resources_path,
             temp_path,
             cache_path,
-            ffmpeg_path,
-            ffprobe_path,
             binary_path,
             base_path,
             log_path,
-        }
-    }
-    pub fn ffmpeg(&self) -> &PathBuf {
-        if let Some(path) = &self.ffmpeg_path {
-            path
-        } else {
-            tracing::error!("Cannot operate without ffmpeg");
-            panic!("ffmpeg required");
         }
     }
 }
@@ -570,12 +1057,6 @@ impl AppResources {
 impl Default for AppResources {
     fn default() -> Self {
         let config_path = Self::default_config_path();
-        Self::new(config_path, None, None)
+        Self::new(config_path)
     }
-}
-
-#[test]
-fn parse_capabilities() {
-    let capabilities = Capabilities::parse("ffmpeg");
-    assert!(capabilities.is_ok())
 }

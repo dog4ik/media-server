@@ -22,7 +22,7 @@ pub fn file_hash(file: &mut File) -> Result<u32, std::io::Error> {
 }
 
 pub fn walk_recursive<F>(
-    folder: &PathBuf,
+    folder: impl AsRef<Path>,
     filter_fn: Option<F>,
 ) -> Result<Vec<PathBuf>, std::io::Error>
 where

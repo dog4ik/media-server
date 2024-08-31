@@ -364,7 +364,7 @@ impl Peer {
         cancellation_token: CancellationToken,
     ) -> (PeerJoin, Result<(), PeerError>) {
         let mut pex_update_interval = tokio::time::interval(Duration::from_secs(90));
-        let mut timeout_interval = tokio::time::interval(Duration::from_secs(1));
+        let mut timeout_interval = tokio::time::interval(Duration::from_secs(5));
         pex_update_interval.tick().await;
         timeout_interval.tick().await;
         let peer_result = loop {

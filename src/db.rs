@@ -1,7 +1,10 @@
 use std::{path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
-use sqlx::{sqlite::SqlitePoolOptions, Error, FromRow, Sqlite, SqlitePool};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Error, FromRow, Sqlite, SqlitePool,
+};
 
 use crate::{
     app_state::AppError,
@@ -35,12 +38,15 @@ pub struct Db {
 impl Db {
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, sqlx::Error> {
         let url = path_to_url(path.as_ref());
+        let options = SqliteConnectOptions::from_str(&url)
+            .unwrap()
+            .busy_timeout(Duration::from_secs(10));
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
-            .connect(&url)
+            .max_connections(30)
+            .connect_with(options)
             .await?;
         sqlx::query!(
-r#"CREATE TABLE IF NOT EXISTS shows (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+r#"CREATE TABLE IF NOT EXISTS shows (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     title TEXT NOT NULL, 
                                     release_date TEXT,
                                     poster TEXT,
@@ -59,14 +65,14 @@ CREATE TRIGGER IF NOT EXISTS shows_tbl_au AFTER UPDATE ON shows BEGIN
   INSERT INTO shows_fts_idx(rowid, title, plot) VALUES (new.id, new.title, new.plot);
 END;
 
-CREATE TABLE IF NOT EXISTS seasons (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+CREATE TABLE IF NOT EXISTS seasons (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     show_id INTEGER NOT NULL,
                                     number INTEGER NOT NULL,
                                     release_date TEXT,
                                     plot TEXT,
                                     poster TEXT,
                                     FOREIGN KEY (show_id) REFERENCES shows (id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+CREATE TABLE IF NOT EXISTS episodes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     video_id INTEGER NOT NULL UNIQUE,
                                     season_id INTEGER NOT NULL,
                                     title TEXT NOT NULL, 
@@ -76,7 +82,7 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     release_date TEXT,
                                     FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS movies (id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS movies (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     video_id INTEGER NOT NULL UNIQUE,
                                     title TEXT NOT NULL,
                                     backdrop TEXT,
@@ -97,25 +103,25 @@ CREATE TRIGGER IF NOT EXISTS movies_tbl_au AFTER UPDATE ON movies BEGIN
   INSERT INTO movies_fts_idx(rowid, title, plot) VALUES (new.id, new.title, new.plot);
 END;
 
-CREATE TABLE IF NOT EXISTS videos (id INTEGER PRIMARY KEY AUTOINCREMENT, 
+CREATE TABLE IF NOT EXISTS videos (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
                                     duration INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS subtitles (id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS subtitles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,
                                     hash TEXT NOT NULL,
                                     path TEXT NOT NULL,
                                     size INTEGER NOT NULL,
                                     video_id INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS history (id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS history (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     time INTEGER NOT NULL,
                                     is_finished BOOL NOT NULL,
                                     video_id INTEGER NOT NULL UNIQUE,
                                     update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
-CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS external_ids (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     metadata_provider TEXT NOT NULL,
                                     metadata_id TEXT NOT NULL,
                                     show_id INTEGER,
@@ -126,7 +132,12 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                                     FOREIGN KEY (show_id) REFERENCES shows (id) ON DELETE CASCADE,
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE,
                                     FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE,
-                                    FOREIGN KEY (movie_id) REFERENCES movies (id) ON DELETE CASCADE);"#)
+                                    FOREIGN KEY (movie_id) REFERENCES movies (id) ON DELETE CASCADE);
+CREATE TABLE IF NOT EXISTS episode_intro (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                                    video_id INTEGER NOT NULL UNIQUE,
+                                    start_sec INTEGER NOT NULL,
+                                    end_sec INTEGER NOT NULL,
+                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);"#)
         .execute(&pool)
         .await
         .unwrap();
@@ -145,6 +156,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         DELETE FROM subtitles;
         DELETE FROM history;
         DELETE FROM external_ids;
+        DELETE FROM episode_intro;
         ",
         )
         .execute(&self.pool)
@@ -270,6 +282,18 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
     }
 
+    pub async fn insert_intro(&self, intro: DbEpisodeIntro) -> Result<i64, Error> {
+        let subtitles_query = sqlx::query!(
+            "INSERT INTO episode_intro
+            (video_id, start_sec, end_sec)
+            VALUES (?, ?, ?) RETURNING id;",
+            intro.video_id,
+            intro.start_sec,
+            intro.end_sec,
+        );
+        subtitles_query.fetch_one(&self.pool).await.map(|x| x.id)
+    }
+
     pub async fn external_to_local_id(
         &self,
         external_id: &str,
@@ -307,17 +331,16 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         tracing::debug!(id, "Removing video");
         let remove_query = sqlx::query!("DELETE FROM videos WHERE id = ?;", id);
 
-        if let Ok(episode) =
-            sqlx::query!(r#"SELECT id as "id!" FROM episodes WHERE video_id = ?"#, id)
-                .fetch_one(&self.pool)
-                .await
+        if let Ok(episode) = sqlx::query!(r#"SELECT id FROM episodes WHERE video_id = ?"#, id)
+            .fetch_one(&self.pool)
+            .await
         {
             let _ = self.remove_episode(episode.id).await;
             remove_query.execute(&self.pool).await?;
             return Ok(());
         }
 
-        if let Ok(movie) = sqlx::query!(r#"SELECT id as "id!" FROM movies WHERE video_id = ?"#, id)
+        if let Ok(movie) = sqlx::query!(r#"SELECT id FROM movies WHERE video_id = ?"#, id)
             .fetch_one(&self.pool)
             .await
         {
@@ -328,16 +351,6 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
 
         remove_query.execute(&self.pool).await?;
 
-        Ok(())
-    }
-
-    pub async fn remove_video_by_path(&self, path: &Path) -> Result<(), Error> {
-        let str_path = path.to_str().unwrap();
-        let id = sqlx::query!(r#"SELECT id as "id!" FROM videos WHERE path = ?"#, str_path)
-            .fetch_one(&self.pool)
-            .await?
-            .id;
-        self.remove_video(id).await?;
         Ok(())
     }
 
@@ -358,7 +371,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         let season_id = delete_episode_result.season_id;
 
         let siblings_count = sqlx::query!(
-            "SELECT COUNT(*) as count FROM episodes WHERE season_id = ?",
+            "SELECT COUNT(*) AS count FROM episodes WHERE season_id = ?",
             season_id
         )
         .fetch_one(&self.pool)
@@ -384,7 +397,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
 
         let show_id = delete_result.show_id;
         let siblings_count = sqlx::query!(
-            "SELECT COUNT(*) as count FROM seasons WHERE show_id = ?",
+            "SELECT COUNT(*) AS count FROM seasons WHERE show_id = ?",
             show_id
         )
         .fetch_one(&self.pool)
@@ -530,7 +543,7 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
                     .filter_map(|x| x.parse().ok())
                     .collect();
                 ShowMetadata {
-                    metadata_id: show.id.unwrap().to_string(),
+                    metadata_id: show.id.to_string(),
                     metadata_provider: MetadataProvider::Local,
                     poster,
                     backdrop,
@@ -565,11 +578,11 @@ CREATE TABLE IF NOT EXISTS external_ids (id INTEGER PRIMARY KEY AUTOINCREMENT,
         let mut seasons: Vec<_> = show
             .seasons
             .split(',')
-            .map(|x| x.parse().unwrap())
+            .filter_map(|x| x.parse().ok())
             .collect();
         seasons.sort_unstable();
         Ok(ShowMetadata {
-            metadata_id: show.id.unwrap().to_string(),
+            metadata_id: show.id.to_string(),
             metadata_provider: MetadataProvider::Local,
             poster,
             backdrop,
@@ -677,7 +690,7 @@ WHERE season_id = ? ORDER BY number ASC",
 
     pub async fn get_episode_by_id(&self, episode_id: i64) -> Result<EpisodeMetadata, AppError> {
         let episode = sqlx::query!(
-            r#"SELECT episodes.*, seasons.number as "season_number" FROM episodes 
+            r#"SELECT episodes.*, seasons.number AS season_number FROM episodes 
             JOIN seasons ON seasons.id = episodes.season_id
             WHERE episodes.id = ?;"#,
             episode_id,
@@ -736,10 +749,10 @@ WHERE season_id = ? ORDER BY number ASC",
                 let seasons = show
                     .seasons
                     .split(',')
-                    .map(|x| x.parse().unwrap())
+                    .filter_map(|x| x.parse().ok())
                     .collect();
                 ShowMetadata {
-                    metadata_id: show.id.unwrap().to_string(),
+                    metadata_id: show.id.to_string(),
                     metadata_provider: MetadataProvider::Local,
                     poster,
                     backdrop,
@@ -756,7 +769,7 @@ WHERE season_id = ? ORDER BY number ASC",
     pub async fn search_episode(&self, query: &str) -> anyhow::Result<Vec<EpisodeMetadata>> {
         let query = query.trim().to_lowercase();
         let episodes = sqlx::query!(
-            r#"SELECT episodes.*, seasons.number as "season_number", videos.duration FROM episodes
+            r#"SELECT episodes.*, seasons.number AS season_number, videos.duration FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN videos ON videos.id = episodes.video_id
             WHERE title = ? COLLATE NOCASE"#,
@@ -997,4 +1010,12 @@ pub struct DbExternalId {
     pub episode_id: Option<i64>,
     pub movie_id: Option<i64>,
     pub is_prime: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
+pub struct DbEpisodeIntro {
+    pub id: Option<i64>,
+    pub video_id: i64,
+    pub start_sec: i64,
+    pub end_sec: i64,
 }

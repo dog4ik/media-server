@@ -41,15 +41,15 @@ pub enum DownloadMessage {
 #[derive(Debug, Clone)]
 pub struct DownloadHandle {
     pub download_tx: mpsc::Sender<DownloadMessage>,
+    pub cancellation_token: CancellationToken,
     pub storage: StorageHandle,
     total_pieces: usize,
 }
 
 impl DownloadHandle {
     /// Abort download
-    pub async fn abort(&self) -> anyhow::Result<()> {
-        self.download_tx.send(DownloadMessage::Abort).await?;
-        Ok(())
+    pub fn abort(&self) {
+        self.cancellation_token.cancel();
     }
 
     /// Pause download
@@ -95,7 +95,7 @@ impl DownloadHandle {
     }
 
     /// Resolves when storage bitfield becomes full
-    /// Cancel safe
+    /// This method is cancellation safe
     pub async fn wait(&mut self) {
         while let Ok(_) = self.storage.bitfield.changed().await {
             let bf = self.storage.bitfield.borrow_and_update();
@@ -369,7 +369,7 @@ pub struct PeerDownloadStats {
     pub upload_speed: u64,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, Default)]
 pub struct DownloadProgress {
     pub peers: Vec<PeerDownloadStats>,
     pub pending_pieces: usize,
@@ -420,7 +420,7 @@ impl ProgressConsumer for tokio::sync::watch::Sender<DownloadProgress> {
     }
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, Default)]
+#[derive(Debug, Clone, Copy, serde::Serialize, Default, PartialEq)]
 pub enum DownloadState {
     Paused,
     #[default]
@@ -512,6 +512,7 @@ impl Download {
         let download_handle = DownloadHandle {
             download_tx,
             total_pieces: self.total_pieces,
+            cancellation_token: self.cancellation_token.clone(),
             storage: self.storage.clone(),
         };
         task_tracker.spawn(self.work(progress, download_rx));

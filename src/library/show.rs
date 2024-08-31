@@ -51,7 +51,7 @@ impl Media for ShowIdentifier {
             {
                 let s: Option<u8> = token[1..3].parse().ok();
                 let e: Option<u8> = token[4..6].parse().ok();
-                if let (Some(se), Some(ep)) = (s, e) {
+                if let Some((se, ep)) = s.zip(e) {
                     season = Some(se);
                     episode = Some(ep);
                     break;

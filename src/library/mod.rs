@@ -6,7 +6,6 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
-    time::Duration,
 };
 
 use anyhow::Context;
@@ -19,15 +18,14 @@ use axum_extra::{headers::Range, TypedHeader};
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
-    sync::Semaphore,
+    sync::{OnceCell, Semaphore},
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
+    app_state::AppError,
     db::{Db, DbVideo},
-    ffmpeg::{
-        get_metadata, FFprobeAudioStream, FFprobeOutput, FFprobeSubtitleStream, FFprobeVideoStream,
-    },
+    ffmpeg::{get_metadata, FFprobeOutput},
     metadata::ContentType,
     utils,
 };
@@ -80,14 +78,14 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
 }
 
 pub async fn explore_folder(
-    folder: &PathBuf,
+    folder: impl AsRef<Path>,
     folder_type: ContentType,
     db: &crate::db::Db,
     exclude: &[PathBuf],
 ) -> Result<HashMap<i64, LibraryFile>, anyhow::Error> {
     let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
     let mut handles = Vec::with_capacity(paths.len());
-    let semaphore = Arc::new(Semaphore::new(100));
+    let semaphore = Arc::new(Semaphore::new(200));
     for path in paths {
         if exclude.contains(&path) {
             continue;
@@ -288,25 +286,28 @@ impl Source {
 impl<T: Media> LibraryItem<T> {
     pub async fn from_path(path: PathBuf, db: &crate::db::Db) -> Result<Self, anyhow::Error> {
         let video = Video::from_path(&path).await?;
-        let metadata_title = video.metadata.format.tags.title.clone();
-        let source = Source::from_video(video, db).await?;
-        let file_name = path
-            .file_name()
-            .ok_or(anyhow::anyhow!("failed to get filename"))?
-            .to_string_lossy();
+        let file_name = path.file_name().context("get filename")?.to_string_lossy();
         let path_tokens = utils::tokenize_filename(&file_name);
-        let identifier = T::identify(&path_tokens)
-            .or(metadata_title.and_then(|video_metadata_title| {
-                let tokens: Vec<_> = video_metadata_title
-                    .split_whitespace()
-                    .map(|x| x.to_string())
-                    .collect();
-                T::identify(&tokens)
-            }))
-            .ok_or(anyhow::anyhow!(
-                "Could not identify file: {}",
-                path.file_name().unwrap_or_default().display()
-            ))?;
+        let identifier = match T::identify(&path_tokens) {
+            Some(val) => val,
+            None => {
+                let metadata = video.metadata().await?;
+                metadata
+                    .format
+                    .tags
+                    .title
+                    .as_ref()
+                    .and_then(|metadata_title| {
+                        let tokens: Vec<_> = metadata_title
+                            .split_whitespace()
+                            .map(|t| t.to_owned())
+                            .collect();
+                        T::identify(&tokens)
+                    })
+                    .context("Try to identify content from container metadata")?
+            }
+        };
+        let source = Source::from_video(video, db).await?;
         Ok(Self { identifier, source })
     }
 }
@@ -427,10 +428,34 @@ pub trait Media {
     fn title(&self) -> &str;
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct Video {
     path: PathBuf,
-    metadata: FFprobeOutput,
+    metadata: LazyFFprobeOutput,
+}
+
+/// Lazily evaluated ffprobe metadata
+#[derive(Debug, Clone)]
+struct LazyFFprobeOutput {
+    metadata: Arc<OnceCell<FFprobeOutput>>,
+}
+
+impl LazyFFprobeOutput {
+    fn new() -> Self {
+        Self {
+            metadata: Arc::new(OnceCell::new()),
+        }
+    }
+
+    async fn get_or_init(&self, path: impl AsRef<Path>) -> anyhow::Result<&FFprobeOutput> {
+        self.metadata
+            .get_or_try_init(|| async { get_metadata(path).await })
+            .await
+    }
+
+    fn get(&self) -> Option<&FFprobeOutput> {
+        self.metadata.get()
+    }
 }
 
 /// Ignores failed Video::new results
@@ -458,9 +483,14 @@ async fn get_variants(folder: impl AsRef<Path>) -> anyhow::Result<Vec<Video>> {
 
 impl Video {
     /// Returns struct compatible with database Video table
-    pub fn into_db_video(&self) -> DbVideo {
+    pub async fn into_db_video(&self) -> DbVideo {
         let now = time::OffsetDateTime::now_utc();
-        let duration = self.duration().as_secs() as i64;
+        let duration = self
+            .metadata()
+            .await
+            .map(FFprobeOutput::duration)
+            .unwrap_or_default()
+            .as_secs() as i64;
 
         DbVideo {
             id: None,
@@ -477,9 +507,9 @@ impl Video {
             .fetch_one(&db.pool)
             .await;
         let video_id: Result<i64, anyhow::Error> = match res {
-            Ok(r) => Ok(r.id.unwrap()),
+            Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
-                let db_video = self.into_db_video();
+                let db_video = self.into_db_video().await;
                 let id = db.insert_video(db_video).await?;
                 Ok(id)
             }
@@ -494,10 +524,21 @@ impl Video {
 
     /// Create self from path
     pub async fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        get_metadata(&path).await.map(|metadata| Self {
-            path: path.as_ref().to_path_buf(),
-            metadata,
-        })
+        if tokio::fs::try_exists(&path).await? {
+            Ok(Self {
+                path: path.as_ref().to_path_buf(),
+                metadata: LazyFFprobeOutput::new(),
+            })
+        } else {
+            Err(anyhow::anyhow!(
+                "Video {} does not exist",
+                path.as_ref().display()
+            ))
+        }
+    }
+
+    pub async fn metadata(&self) -> anyhow::Result<&FFprobeOutput> {
+        self.metadata.get_or_init(self.path()).await
     }
 
     /// Calculate hash for the video
@@ -509,80 +550,14 @@ impl Video {
         Ok(hash)
     }
 
-    /// Chapters
-    pub fn chapters(&self) -> Vec<Chapter> {
-        self.metadata
-            .chapters
-            .iter()
-            .filter_map(|ffprobe_chapter| {
-                Some(Chapter {
-                    title: ffprobe_chapter.tags.as_ref()?.title.as_ref()?.clone(),
-                    start_time: ffprobe_chapter.start_time.clone(),
-                })
-            })
-            .collect()
-    }
-
     /// Get file size in bytes
     pub fn file_size(&self) -> u64 {
         std::fs::metadata(&self.path).expect("to have access").len()
     }
 
-    /// Get video duration
-    pub fn duration(&self) -> Duration {
-        self.metadata.duration()
-    }
-
     /// Delete self
     pub async fn delete(&self) -> Result<(), std::io::Error> {
         tokio::fs::remove_file(&self.path).await
-    }
-
-    pub fn video_streams(&self) -> Vec<FFprobeVideoStream> {
-        self.metadata.video_streams()
-    }
-
-    pub fn audio_streams(&self) -> Vec<FFprobeAudioStream> {
-        self.metadata.audio_streams()
-    }
-
-    pub fn subtitle_streams(&self) -> Vec<FFprobeSubtitleStream> {
-        self.metadata.subtitle_streams()
-    }
-
-    /// Default audio stream
-    pub fn default_audio(&self) -> Option<FFprobeAudioStream> {
-        self.metadata.default_audio()
-    }
-
-    /// Default video stream
-    pub fn default_video(&self) -> Option<FFprobeVideoStream> {
-        self.metadata.default_video()
-    }
-
-    /// Default subtitles stream
-    pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream> {
-        self.metadata.default_subtitles()
-    }
-
-    /// Video resoultion
-    pub fn resolution(&self) -> Option<Resolution> {
-        self.metadata.resolution()
-    }
-
-    /// Video bitrate
-    pub fn bitrate(&self) -> usize {
-        self.metadata.bitrate()
-    }
-
-    /// Title included in file metadata
-    pub fn metadata_title(&self) -> Option<String> {
-        self.metadata.format.tags.title.clone()
-    }
-
-    /// Video mime type
-    pub fn guess_mime_type(&self) -> &'static str {
-        self.metadata.guess_mime()
     }
 
     pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
@@ -603,12 +578,18 @@ impl Video {
             std::ops::Bound::Excluded(val) => val,
             std::ops::Bound::Unbounded => file_size,
         };
-        let mut file = tokio::fs::File::open(&self.path)
-            .await
-            .expect("file to be open");
+
+        let Ok(metadata) = self.metadata().await else {
+            return AppError::internal_error("Failed to get file metadata").into_response();
+        };
+        let Ok(mut file) = tokio::fs::File::open(&self.path).await else {
+            return AppError::internal_error("Failed to open file").into_response();
+        };
+        if file.seek(SeekFrom::Start(start)).await.is_err() {
+            return AppError::bad_request("Failed to seek file to requested range").into_response();
+        };
 
         let chunk_size = end - start + 1;
-        file.seek(SeekFrom::Start(start)).await.unwrap();
         let stream_of_bytes = FramedRead::new(file.take(chunk_size), BytesCodec::new());
         let mut headers = HeaderMap::new();
         headers.insert(
@@ -617,7 +598,7 @@ impl Video {
         );
         headers.insert(
             header::CONTENT_TYPE,
-            HeaderValue::from_static(self.guess_mime_type()),
+            HeaderValue::from_static(metadata.guess_mime()),
         );
         headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
         headers.insert(
@@ -634,6 +615,7 @@ impl Video {
             headers,
             Body::from_stream(stream_of_bytes),
         )
+            .into_response()
     }
 }
 
