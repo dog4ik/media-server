@@ -3,7 +3,7 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{self, AppResources, Args, ConfigFile, APP_RESOURCES};
+use media_server::config::{self, AppResources, Args, ConfigFile, ConfigValue, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::Library;
 use media_server::metadata::tmdb_api::TmdbApi;
@@ -93,7 +93,10 @@ async fn main() {
 
     let library = Library::init_from_folders(&shows_dirs, &movies_dirs, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
-    let tmdb_api = TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0.unwrap());
+    let Some(tmdb_key) = config::CONFIG.get_value::<config::TmdbKey>().0 else {
+        panic!("Missing tmdb api token, consider passing it in cli, configuration file or {} environment variable", config::TmdbKey::ENV_KEY.unwrap());
+    };
+    let tmdb_api = TmdbApi::new(tmdb_key);
     let tmdb_api = Box::leak(Box::new(tmdb_api));
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
