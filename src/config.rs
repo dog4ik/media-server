@@ -958,7 +958,7 @@ impl AppResources {
     pub const APP_NAME: &'static str = "media-server";
 
     fn prod_storage() -> PathBuf {
-        dirs::data_dir()
+        dirs::data_local_dir()
             .expect("target to have data directory")
             .join(Self::APP_NAME)
     }
