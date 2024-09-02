@@ -530,10 +530,11 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 .await;
             if job_result.is_ok() {
                 let resources_dir = previews_dir.path();
-                fs::create_dir_all(&resources_dir).await.unwrap();
-                fs::rename(dbg!(temp_dir), dbg!(resources_dir))
+                fs::create_dir_all(&resources_dir.parent().unwrap())
                     .await
                     .unwrap();
+                let _ = fs::remove_dir_all(&resources_dir).await;
+                fs::rename(temp_dir, resources_dir).await.unwrap();
             } else {
                 let _ = fs::remove_dir(temp_dir).await;
             }
