@@ -1,4 +1,4 @@
-# Media server / Library manager
+# Media server
 
 The project is designed to be a media library for easy searching and downloading any media content.
 
@@ -10,7 +10,7 @@ The project is designed to be a media library for easy searching and downloading
 
 ### Required dependencies
 
-- `ffmpeg` and `ffprobe` are required.
+- `ffmpeg` and `ffprobe` are required. `--enable-chromaprint` ffmpeg build flag is required for intro detection feature.
 
 ### Supported metadata providers
 
@@ -23,8 +23,8 @@ The project is designed to be a media library for easy searching and downloading
 
 ### Build from source
 
-1. Install required dependencies and init database with `init.sql` file.
-2. Run `cargo b`. To build with tray icon for Windows run `cargo b --features windows-tray`
+1. Install required dependencies and run database migrations.
+2. Run `cargo b -r`. To build with tray icon for Windows run `cargo b -r --features windows-tray`
 
 ### Windows installation
 
@@ -36,7 +36,7 @@ The project is designed to be a media library for easy searching and downloading
 
 Many videos might not work because of browser limited codecs support. Your options are to either transcode the video
 or try using a different browser.
-From my experience Microsoft Edge supports more audio codecs while chrome can play higher video profiles.
+From my experience Microsoft Edge supports more audio codecs while Chrome can play higher video profiles.
 
 You can download [custom chromium build](https://github.com/cjw1115/enable-chromium-ac3-ec3-system-decoding) or build chromium yourself with build flag `enable_platform_ac3_eac3_audio` enabled.
 This custom build can play almost any video format.
