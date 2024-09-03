@@ -3,14 +3,17 @@ use std::{collections::HashMap, path::Path};
 use tokio::sync::mpsc;
 use tray_icon::{
     menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
-    TrayIconBuilder, TrayIconEvent,
+    TrayIcon, TrayIconBuilder,
 };
 use winit::{
-    event_loop::{ControlFlow, EventLoopBuilder},
+    application::ApplicationHandler,
+    event::WindowEvent,
+    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     platform::windows::EventLoopBuilderExtWindows,
+    window::WindowId,
 };
 
-use crate::app_state::AppState;
+use crate::{app_state::AppState, config};
 use crate::config::APP_RESOURCES;
 
 #[derive(Debug, Clone, Copy)]
@@ -27,7 +30,15 @@ pub struct ButtonRegistry {
     pub menu: Menu,
 }
 
-/// Important to setup registry BEFORE moving it in event loop
+impl Default for ButtonRegistry {
+    fn default() -> Self {
+        Self {
+            registry: HashMap::new(),
+            menu: Menu::new(),
+        }
+    }
+}
+
 impl ButtonRegistry {
     pub fn new() -> Self {
         Self {
@@ -43,59 +54,65 @@ impl ButtonRegistry {
         self.menu.append(&PredefinedMenuItem::separator()).unwrap();
     }
 
-    pub fn get_element(&self, id: &MenuId) -> Option<&ButtonType> {
+    pub fn button_type(&self, id: &MenuId) -> Option<&ButtonType> {
         self.registry.get(id)
+    }
+}
+
+struct Tray {
+    tray_icon: Option<TrayIcon>,
+    tx: mpsc::Sender<ButtonType>,
+}
+
+impl Tray {
+    pub fn new(sender: mpsc::Sender<ButtonType>) -> Self {
+        Self {
+            tx: sender,
+            tray_icon: None,
+        }
+    }
+}
+
+impl ApplicationHandler for Tray {
+    fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
+        if self.tray_icon.is_none() {
+            let registry = menu();
+            let mut builder = TrayIconBuilder::new()
+                .with_menu(Box::new(registry.menu))
+                .with_title("Media server");
+            let base_path = APP_RESOURCES.get().unwrap().base_path.clone();
+            if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
+                builder = builder.with_icon(icon);
+            }
+            let tray = builder.build().unwrap();
+            let tx = self.tx.clone();
+            MenuEvent::set_event_handler(Some(move |menu_event: MenuEvent| {
+                let element = *registry
+                    .registry
+                    .get(&menu_event.id)
+                    .expect("All elements are registered");
+                tx.blocking_send(element).unwrap();
+            }));
+            self.tray_icon = Some(tray);
+        }
+    }
+
+    fn window_event(
+        &mut self,
+        _event_loop: &ActiveEventLoop,
+        _window_id: WindowId,
+        _event: WindowEvent,
+    ) {
     }
 }
 
 #[cfg(target_os = "windows")]
 fn windows_tray_icon(sender: mpsc::Sender<ButtonType>) {
-    let event_loop = EventLoopBuilder::new()
-        .with_any_thread(true)
-        .build()
-        .unwrap();
+    let event_loop = EventLoop::builder().with_any_thread(true).build().unwrap();
+    event_loop.set_control_flow(ControlFlow::Wait);
 
-    let mut tray_icon = None;
-
-    let menu_channel = MenuEvent::receiver();
-    let tray_channel = TrayIconEvent::receiver();
-    let registry = menu();
-    let base_path = APP_RESOURCES.get().unwrap().base_path.clone();
-
-    event_loop
-        .run(move |event, event_loop| {
-            event_loop.set_control_flow(ControlFlow::Wait);
-
-            if let winit::event::Event::NewEvents(winit::event::StartCause::Init) = event {
-                let mut builder = TrayIconBuilder::new()
-                    .with_menu(Box::new(registry.menu.clone()))
-                    .with_tooltip("Media server")
-                    .with_title("Media server");
-                if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
-                    builder = builder.with_icon(icon);
-                }
-                tray_icon = Some(builder.build().unwrap());
-            }
-
-            if let Ok(event) = tray_channel.try_recv() {
-                // NOTE: this dont work as expected when control flow set to Wait
-                match event.click_type {
-                    tray_icon::ClickType::Right => (),
-                    tray_icon::ClickType::Left => {
-                        sender.blocking_send(ButtonType::IconLeftClick).unwrap();
-                    }
-                    tray_icon::ClickType::Double => {
-                        sender.blocking_send(ButtonType::IconDoubleClick).unwrap();
-                    }
-                }
-            }
-            if let Ok(event) = menu_channel.try_recv() {
-                if let Some(btn) = registry.get_element(event.id()) {
-                    sender.blocking_send(btn.clone()).unwrap();
-                }
-            }
-        })
-        .unwrap();
+    let mut tray = Tray::new(sender);
+    event_loop.run_app(&mut tray).unwrap();
 }
 
 pub async fn spawn_tray_icon(app_state: AppState) {
@@ -110,8 +127,8 @@ pub async fn spawn_tray_icon(app_state: AppState) {
                 app_state.reconciliate_library().await.unwrap();
             }
             ButtonType::Exit => {
-                app_state.cancelation_token.cancel();
                 tracing::trace!("Exit tray button pressed");
+                app_state.cancelation_token.cancel();
             }
             ButtonType::IconDoubleClick => {
                 tracing::trace!("Icon doubleclicked");
@@ -121,7 +138,8 @@ pub async fn spawn_tray_icon(app_state: AppState) {
             }
             ButtonType::Open => {
                 tracing::trace!("Open tray button pressed");
-                open::that("http://localhost:6969").unwrap();
+                let port: config::Port = config::CONFIG.get_value();
+                open::that(format!("http://127.0.0.1:{}", port.0)).unwrap();
             }
         }
     }
