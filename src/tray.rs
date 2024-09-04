@@ -3,7 +3,7 @@ use std::{collections::HashMap, path::Path};
 use tokio::sync::mpsc;
 use tray_icon::{
     menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
-    TrayIcon, TrayIconBuilder,
+    TrayIcon, TrayIconBuilder, TrayIconEvent,
 };
 use winit::{
     application::ApplicationHandler,
@@ -13,8 +13,8 @@ use winit::{
     window::WindowId,
 };
 
-use crate::{app_state::AppState, config};
 use crate::config::APP_RESOURCES;
+use crate::{app_state::AppState, config};
 
 #[derive(Debug, Clone, Copy)]
 pub enum ButtonType {
@@ -75,26 +75,41 @@ impl Tray {
 
 impl ApplicationHandler for Tray {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {
-        if self.tray_icon.is_none() {
-            let registry = menu();
-            let mut builder = TrayIconBuilder::new()
-                .with_menu(Box::new(registry.menu))
-                .with_title("Media server");
-            let base_path = APP_RESOURCES.get().unwrap().base_path.clone();
-            if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
-                builder = builder.with_icon(icon);
-            }
-            let tray = builder.build().unwrap();
+        if self.tray_icon.is_some() {
+            return;
+        }
+        let registry = menu();
+        let mut builder = TrayIconBuilder::new()
+            .with_menu(Box::new(registry.menu))
+            .with_menu_on_left_click(false)
+            .with_title("Media server");
+        let base_path = APP_RESOURCES.get().unwrap().base_path.clone();
+        if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
+            builder = builder.with_icon(icon);
+        }
+        let tray = builder.build().unwrap();
+        {
             let tx = self.tx.clone();
             MenuEvent::set_event_handler(Some(move |menu_event: MenuEvent| {
                 let element = *registry
                     .registry
-                    .get(&menu_event.id)
+                    .get(&menu_event.id())
                     .expect("All elements are registered");
                 tx.blocking_send(element).unwrap();
             }));
-            self.tray_icon = Some(tray);
         }
+        {
+            let tx = self.tx.clone();
+            TrayIconEvent::set_event_handler(Some(move |tray_event| {
+                match tray_event {
+                    TrayIconEvent::DoubleClick { .. } => {
+                        tx.blocking_send(ButtonType::Open).unwrap();
+                    }
+                    _ => {}
+                };
+            }));
+        }
+        self.tray_icon = Some(tray);
     }
 
     fn window_event(
