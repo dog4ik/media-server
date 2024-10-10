@@ -2,9 +2,10 @@ use core::str;
 use std::{
     borrow::Cow,
     fmt::Display,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     str::FromStr,
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -13,8 +14,6 @@ use rand::Rng;
 use socket2::{Domain, Protocol, Type};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
-
-use crate::config;
 
 use super::{
     device_description::{self, UDN},
@@ -62,31 +61,42 @@ async fn resolve_local_addr() -> anyhow::Result<SocketAddr> {
     socket.local_addr().context("get local addr")
 }
 
+pub static LOCAL_ADDR: LazyLock<std::io::Result<SocketAddr>> = LazyLock::new(|| {
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))?;
+    socket.connect(SSDP_ADDR)?;
+    socket.local_addr()
+});
+
+#[derive(Debug, Clone)]
+pub struct SsdpListenerConfig {
+    pub location_port: u16,
+    pub ttl: Option<u32>,
+}
+
 #[derive(Debug)]
 pub struct SsdpListener {
     socket: UdpSocket,
-    local_addr: SocketAddr,
     boot_id: usize,
     location: String,
     unicast_port: u16,
 }
 
 impl SsdpListener {
-    pub async fn bind(ttl: Option<u32>) -> anyhow::Result<Self> {
-        let socket = bind_ssdp_socket(ttl).context("failed to bind ssdp socket")?;
+    pub async fn bind(config: SsdpListenerConfig) -> anyhow::Result<Self> {
+        let socket = bind_ssdp_socket(config.ttl).context("failed to bind ssdp socket")?;
+        // NOTE: mabye pass location via config?
         let local_addr = resolve_local_addr().await?;
         tracing::debug!("Resolved local ip address {local_addr}");
-        let port: config::Port = config::CONFIG.get_value();
         let location = format!(
             "http://{addr}:{port}/upnp{path}",
             addr = local_addr.ip(),
-            port = port.0,
+            port = config.location_port,
             path = router::DESC_PATH
         );
 
         Ok(Self {
             socket,
-            local_addr,
             boot_id: 0,
             location,
             unicast_port: 18398,
@@ -95,20 +105,19 @@ impl SsdpListener {
 
     pub async fn announce(&mut self, receiver: SocketAddr) -> anyhow::Result<()> {
         let sleep_range = 0..100;
-        let local_ip = self.local_addr.ip();
-        let first = NotifyAliveMessage::first_server_message(local_ip);
+        let first = NotifyAliveMessage::first_server_message(&self.location);
         self.socket
             .send_to(first.to_string().as_bytes(), &receiver)
             .await?;
         sleep_rand_millis_duration(&sleep_range).await;
 
-        let second = NotifyAliveMessage::second_server_message(local_ip);
+        let second = NotifyAliveMessage::second_server_message(&self.location);
         self.socket
             .send_to(second.to_string().as_bytes(), &receiver)
             .await?;
         sleep_rand_millis_duration(&sleep_range).await;
 
-        let third = NotifyAliveMessage::third_server_message(local_ip);
+        let third = NotifyAliveMessage::third_server_message(&self.location);
         self.socket
             .send_to(third.to_string().as_bytes(), &receiver)
             .await?;
@@ -118,7 +127,7 @@ impl SsdpListener {
             version: 1,
             urn_type: urn::UrnType::Service(urn::ServiceType::ContentDirectory),
         };
-        let content_directory = NotifyAliveMessage::service_message(local_ip, urn);
+        let content_directory = NotifyAliveMessage::service_message(&self.location, urn);
         self.socket
             .send_to(content_directory.to_string().as_bytes(), &receiver)
             .await?;
@@ -189,11 +198,14 @@ impl SsdpListener {
                 NotificationType::All => {
                     self.musticast_search_response(sender, msg).await?;
                 }
-                NotificationType::RootDevice => todo!(),
-                NotificationType::Uuid(uuid) if uuid == SERVER_UUID => {
+                NotificationType::RootDevice => {
                     self.musticast_search_response(sender, msg).await?;
                 }
-                NotificationType::Uuid(_) => {}
+                NotificationType::Uuid(uuid) => {
+                    if uuid == SERVER_UUID {
+                        self.musticast_search_response(sender, msg).await?;
+                    }
+                }
                 NotificationType::Urn(ref urn) => match urn.urn_type {
                     urn::UrnType::Device(urn::DeviceType::MediaServer) => {
                         self.musticast_search_response(sender, msg).await?;
@@ -549,18 +561,11 @@ pub struct NotifyAliveMessage<'a> {
     pub server: &'a str,
 }
 
-impl NotifyAliveMessage<'_> {
-    pub fn new(addr: IpAddr, nt: NotificationType, usn: USN) -> Self {
-        let port: config::Port = config::CONFIG.get_value();
-        let location = format!(
-            "http://{addr}:{port}/upnp{path}",
-            addr = addr,
-            port = port.0,
-            path = router::DESC_PATH
-        );
+impl<'a> NotifyAliveMessage<'a> {
+    pub fn new(location: &'a str, nt: NotificationType, usn: USN) -> Self {
         Self {
             host: SSDP_ADDR,
-            location: Cow::Owned(location),
+            location: Cow::Borrowed(location),
             usn,
             nt,
             nts: NotificationSubType::Alive,
@@ -569,30 +574,38 @@ impl NotifyAliveMessage<'_> {
         }
     }
 
-    pub fn first_server_message(addr: IpAddr) -> Self {
-        let udn = UDN::new(SERVER_UUID);
-        Self::new(addr, NotificationType::RootDevice, USN::root_device(udn))
-    }
-
-    pub fn second_server_message(addr: IpAddr) -> Self {
+    pub fn first_server_message(location: &'a str) -> Self {
         let udn = UDN::new(SERVER_UUID);
         Self::new(
-            addr,
+            location,
+            NotificationType::RootDevice,
+            USN::root_device(udn),
+        )
+    }
+
+    pub fn second_server_message(location: &'a str) -> Self {
+        let udn = UDN::new(SERVER_UUID);
+        Self::new(
+            location,
             NotificationType::Uuid(SERVER_UUID),
             USN::device_uuid(udn),
         )
     }
 
-    pub fn third_server_message(addr: IpAddr) -> Self {
+    pub fn third_server_message(location: &'a str) -> Self {
         let udn = UDN::new(SERVER_UUID);
         let urn = urn::URN::media_server();
-        Self::new(addr, NotificationType::Urn(urn.clone()), USN::urn(udn, urn))
+        Self::new(
+            location,
+            NotificationType::Urn(urn.clone()),
+            USN::urn(udn, urn),
+        )
     }
 
-    pub fn service_message(addr: IpAddr, service_urn: urn::URN) -> Self {
+    pub fn service_message(location: &'a str, service_urn: urn::URN) -> Self {
         let udn = UDN::new(SERVER_UUID);
         let usn = USN::urn(udn, service_urn.clone());
-        Self::new(addr, NotificationType::Urn(service_urn), usn)
+        Self::new(location, NotificationType::Urn(service_urn), usn)
     }
 }
 

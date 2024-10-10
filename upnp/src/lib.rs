@@ -1,8 +1,6 @@
-use std::{fmt::Display, io::Write};
+use std::fmt::Display;
 
-pub struct DeviceDiscoverer {}
-
-mod action;
+pub mod action;
 pub mod content_directory;
 mod device_description;
 pub mod router;
@@ -43,12 +41,6 @@ impl Display for UpnpAgent<'_> {
             product_version = self.product_version
         )
     }
-}
-
-#[derive(Debug)]
-pub struct Device {
-    pub url: String,
-    pub name: String,
 }
 
 pub trait XmlReaderExt {
