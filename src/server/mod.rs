@@ -70,6 +70,8 @@ pub struct SerdeDuration {
         admin_api::delete_previews,
         admin_api::transcode_video,
         public_api::watch,
+        public_api::watch_episode,
+        public_api::watch_movie,
         admin_api::remove_variant,
         public_api::all_history,
         admin_api::update_video_history,

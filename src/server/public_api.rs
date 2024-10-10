@@ -402,6 +402,61 @@ pub async fn watch(
     }
 }
 
+/// Watch episode video
+#[utoipa::path(
+    get,
+    path = "/api/local_episode/{episode_id}/watch",
+    params(
+        ("episode_id", description = "episode id"),
+        VariantQuery,
+    ),
+    responses(
+        (status = 200, description = "Video stream", body = [u8]),
+        (status = 404, description = "Video is not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn watch_episode(
+    Path(episode_id): Path<i64>,
+    variant: Query<VariantQuery>,
+    State(state): State<AppState>,
+    range: Option<TypedHeader<Range>>,
+) -> Result<impl IntoResponse, AppError> {
+    let video_id = sqlx::query!("SELECT video_id FROM episodes WHERE id = ?;", episode_id)
+        .fetch_one(&state.db.pool)
+        .await?
+        .video_id;
+
+    watch(Path(video_id), variant, State(state), range).await
+}
+
+/// Watch movie video
+#[utoipa::path(
+    get,
+    path = "/api/local_movie/{episode_id}/watch",
+    params(
+        ("episode_id", description = "episode id"),
+        VariantQuery,
+    ),
+    responses(
+        (status = 200, description = "Video stream", body = [u8]),
+        (status = 404, description = "Video is not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn watch_movie(
+    Path(movie_id): Path<i64>,
+    variant: Query<VariantQuery>,
+    State(state): State<AppState>,
+    range: Option<TypedHeader<Range>>,
+) -> Result<impl IntoResponse, AppError> {
+    let video_id = sqlx::query!("SELECT video_id FROM movies WHERE id = ?;", movie_id)
+        .fetch_one(&state.db.pool)
+        .await?
+        .video_id;
+    watch(Path(video_id), variant, State(state), range).await
+}
+
 #[utoipa::path(
     get,
     path = "/api/local_shows",

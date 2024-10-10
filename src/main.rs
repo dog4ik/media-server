@@ -139,8 +139,16 @@ async fn main() {
             get(public_api::local_episode_by_video_id),
         )
         .route(
+            "/local_episode/:episode_id/watch",
+            get(public_api::watch_episode),
+        )
+        .route(
             "/local_movie/by_video",
             get(public_api::local_movie_by_video_id),
+        )
+        .route(
+            "/local_movie/:movie_id/watch",
+            get(public_api::watch_movie),
         )
         .route("/local_movies", get(public_api::all_local_movies))
         .route(
