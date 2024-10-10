@@ -1,7 +1,16 @@
-use std::{fmt::Display, str::FromStr};
+use std::{
+    fmt::Display,
+    str::FromStr,
+    sync::{
+        atomic::{AtomicU32, Ordering},
+        Arc,
+    },
+};
 
 use anyhow::Context;
 use quick_xml::events::BytesText;
+
+use crate::action::{ActionError, IntoArgumentList};
 
 use super::{
     action::{Action, OutArgument},
@@ -12,13 +21,35 @@ use super::{
     IntoXml, XmlWriter,
 };
 
-#[derive(Debug, Clone)]
-pub struct ContentDirectoryService {
-    pub db: Db,
+pub trait ContentDirectoryHandler {
+    fn browse_direct_children(
+        &self,
+        object_id: &str,
+        requested_count: u32,
+    ) -> impl std::future::Future<Output = Result<properties::DidlResponse, ActionError>> + Send;
+    fn browse_metadata(
+        &self,
+        object_id: &str,
+    ) -> impl std::future::Future<Output = Result<properties::DidlResponse, ActionError>> + Send + Sync;
 }
 
-impl ContentDirectoryService {
-    pub async fn browse(
+#[derive(Debug, Clone)]
+pub struct ContentDirectoryService<T: ContentDirectoryHandler> {
+    pub handler: T,
+    pub update_id: Arc<AtomicU32>,
+}
+
+impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
+    pub fn new(handler: T) -> Self {
+        Self {
+            handler,
+            update_id: Arc::new(AtomicU32::new(0)),
+        }
+    }
+}
+
+impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
+    async fn browse(
         &self,
         object_id: OutArgument<ObjectID>,
         browse_flag: OutArgument<BrowseFlag>,
@@ -32,25 +63,18 @@ impl ContentDirectoryService {
         OutArgument<Count>,
         OutArgument<UpdateID>,
     )> {
-        let id = object_id.as_ref().as_str();
-        let result = match id {
-            "0" => properties::DidlResponse::root(),
-            "shows" => {
-
-            },
-            "movies" => ,
+        let result = match browse_flag.as_ref() {
+            BrowseFlag::BrowseDirectChildren => {
+                self.handler
+                    .browse_direct_children(object_id.as_ref(), requested_count.var)
+                    .await?
+            }
+            BrowseFlag::BrowseMetadata => self.handler.browse_metadata(object_id.as_ref()).await?,
         };
-
         let number_returned = result.len();
         let total_matches = result.len();
         let result = result.into_xml().unwrap();
-        let update_id = 1;
-        match browse_flag.as_ref() {
-            BrowseFlag::BrowseDirectChildren => {
-
-            }
-            BrowseFlag::BrowseMetadata => {}
-        };
+        let update_id = self.update_id.load(Ordering::Acquire);
         Ok((
             OutArgument::new("Result", result),
             OutArgument::new("NumberReturned", number_returned as u32),
@@ -58,8 +82,6 @@ impl ContentDirectoryService {
             OutArgument::new("UpdateID", update_id),
         ))
     }
-
-    async fn browse_direct_children(id: &str) -> Result<properties::DidlResponse, AppError> {}
 }
 
 #[derive(Debug)]
@@ -197,7 +219,7 @@ impl SVariable for Filter {
     const VAR_NAME: &str = "A_ARG_TYPE_Filter";
 }
 
-impl Service for ContentDirectoryService {
+impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDirectoryService<T> {
     const NAME: &str = "content_directory";
     const URN: URN = URN {
         version: 1,
@@ -254,7 +276,7 @@ impl Service for ContentDirectoryService {
     }
 
     async fn control_handler(
-        &mut self,
+        &self,
         action: super::action::ActionPayload,
     ) -> anyhow::Result<impl IntoArgumentList> {
         tracing::debug!("Got action: {name}", name = action.name());
@@ -292,15 +314,17 @@ impl Service for ContentDirectoryService {
 }
 
 pub mod properties {
-    use std::{any::TypeId, collections::HashMap};
+    use std::{
+        any::TypeId,
+        collections::{hash_map::Entry, HashMap},
+    };
 
     use quick_xml::{
         events::{BytesDecl, BytesStart, BytesText, Event},
         Writer,
     };
-    use upnp_class::ItemType;
 
-    use crate::upnp::IntoXml;
+    use crate::IntoXml;
 
     use super::Resource;
 
@@ -308,7 +332,7 @@ pub mod properties {
         ($name:literal for $type:ident) => {
             impl ObjectProperty for $type {}
             impl IntoXml for $type {
-                fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+                fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
                     use super::service_variables::IntoUpnpValue;
                     use quick_xml::events::BytesText;
 
@@ -324,7 +348,7 @@ pub mod properties {
                 const MULTIVALUE: bool = true;
             }
             impl IntoXml for $type {
-                fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+                fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
                     use super::service_variables::IntoUpnpValue;
                     use quick_xml::events::BytesText;
 
@@ -338,7 +362,7 @@ pub mod properties {
         (container only $name:literal for $type:ident) => {
             impl ContainerProperty for $type {}
             impl IntoXml for $type {
-                fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+                fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
                     use super::service_variables::IntoUpnpValue;
                     use quick_xml::events::BytesText;
 
@@ -354,7 +378,7 @@ pub mod properties {
                 const MULTIVALUE: bool = true;
             }
             impl IntoXml for $type {
-                fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+                fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
                     use super::service_variables::IntoUpnpValue;
                     use quick_xml::events::BytesText;
 
@@ -475,103 +499,70 @@ pub mod properties {
         impl UpnpClass {
             pub fn as_str(&self) -> &'static str {
                 match self {
-                    UpnpClass::Container(None) => "object.container",
-                    UpnpClass::Container(Some(ContainerType::Album(None))) => {
-                        "object.container.album"
-                    }
-                    UpnpClass::Container(Some(ContainerType::Album(Some(
-                        AlbumType::MusicAlbum,
-                    )))) => "object.container.album.musicAlbum",
-                    UpnpClass::Container(Some(ContainerType::Album(Some(
-                        AlbumType::PhotoAlbum,
-                    )))) => "object.container.album.photoAlbum",
-
-                    UpnpClass::Container(Some(ContainerType::Genre(None))) => {
-                        "object.container.genre"
-                    }
-                    UpnpClass::Container(Some(ContainerType::Genre(Some(
-                        GenreType::MusicGenre,
-                    )))) => "object.container.genre.musicGenre",
-                    UpnpClass::Container(Some(ContainerType::Genre(Some(
-                        GenreType::MovieGenre,
-                    )))) => "object.container.genre.movieGenre",
-
-                    UpnpClass::Container(Some(ContainerType::Person(None))) => {
-                        "object.container.person"
-                    }
-                    UpnpClass::Container(Some(ContainerType::Person(Some(
-                        PersonType::MusicArtist,
-                    )))) => "object.container.person.musicArtist",
-
-                    UpnpClass::Container(Some(ContainerType::ChannelGroup(None))) => {
-                        "object.container.channelGroup"
-                    }
-                    UpnpClass::Container(Some(ContainerType::ChannelGroup(Some(
-                        ChannelGroupType::AudioChannelGroup,
-                    )))) => "object.container.channelGroup.audioChannelGroup",
-                    UpnpClass::Container(Some(ContainerType::ChannelGroup(Some(
-                        ChannelGroupType::VideoChannelGroup,
-                    )))) => "object.container.channelGroup.videoChannelGroup",
-
-                    UpnpClass::Container(Some(ContainerType::PlaylistContainer)) => {
-                        "object.container.playlistContainer"
-                    }
-
-                    UpnpClass::Container(Some(ContainerType::BookmarkFolder)) => {
-                        "object.container.bookmarkFolder"
-                    }
-
-                    UpnpClass::Container(Some(ContainerType::StorageFolder)) => {
-                        "object.container.storageFolder"
-                    }
-
-                    UpnpClass::Container(Some(ContainerType::StorageVolume)) => {
-                        "object.container.storageVolume"
-                    }
-
-                    UpnpClass::Container(Some(ContainerType::StorageSystem)) => {
-                        "object.container.storageSystem"
-                    }
-
-                    UpnpClass::Container(Some(ContainerType::EpgContainer)) => {
-                        "object.container.epgContainer"
-                    }
-
-                    UpnpClass::Item(None) => "object.item",
-
-                    UpnpClass::Item(Some(ItemType::VideoItem(None))) => "object.item.videoItem",
-                    UpnpClass::Item(Some(ItemType::VideoItem(Some(VideoItemType::Movie)))) => {
-                        "object.item.videoItem.movie"
-                    }
-                    UpnpClass::Item(Some(ItemType::VideoItem(Some(
-                        VideoItemType::VideoBroadcast,
-                    )))) => "object.item.videoItem.videoBroadcast",
-                    UpnpClass::Item(Some(ItemType::VideoItem(Some(
-                        VideoItemType::MusicVideoClip,
-                    )))) => "object.item.videoItem.musicVideoClip",
-
-                    UpnpClass::Item(Some(ItemType::AudioItem(None))) => "object.item.audioItem",
-                    UpnpClass::Item(Some(ItemType::AudioItem(Some(AudioItemType::AudioBook)))) => {
-                        "object.item.audioItem.audioBook"
-                    }
-                    UpnpClass::Item(Some(ItemType::AudioItem(Some(AudioItemType::MusicTrack)))) => {
-                        "object.item.audioItem.musicTrack"
-                    }
-                    UpnpClass::Item(Some(ItemType::AudioItem(Some(
-                        AudioItemType::AudioBroadcast,
-                    )))) => "object.item.audioItem.audioBroadcast",
-
-                    UpnpClass::Item(Some(ItemType::ImageItem(None))) => "object.item.imageItem",
-                    UpnpClass::Item(Some(ItemType::ImageItem(Some(ImageItemType::Photo)))) => {
-                        "object.item.imageItem.photo"
-                    }
-
-                    UpnpClass::Item(Some(ItemType::TextItem)) => "object.item.textItem",
-
-                    UpnpClass::Item(Some(ItemType::PlaylistItem)) => "object.item.playlistItem",
-
-                    UpnpClass::Item(Some(ItemType::BookmarkItem)) => "object.item.bookmarkItem",
-
+                    UpnpClass::Container(container_type) => match container_type {
+                        None => "object.container",
+                        Some(ContainerType::Album(album_type)) => match album_type {
+                            None => "object.container.album",
+                            Some(AlbumType::MusicAlbum) => "object.container.album.musicAlbum",
+                            Some(AlbumType::PhotoAlbum) => "object.container.album.photoAlbum",
+                        },
+                        Some(ContainerType::Genre(genre_type)) => match genre_type {
+                            None => "object.container.genre",
+                            Some(GenreType::MusicGenre) => "object.container.genre.musicGenre",
+                            Some(GenreType::MovieGenre) => "object.container.genre.movieGenre",
+                        },
+                        Some(ContainerType::Person(person_type)) => match person_type {
+                            None => "object.container.person",
+                            Some(PersonType::MusicArtist) => "object.container.person.musicArtist",
+                        },
+                        Some(ContainerType::ChannelGroup(channel_group_type)) => {
+                            match channel_group_type {
+                                None => "object.container.channelGroup",
+                                Some(ChannelGroupType::AudioChannelGroup) => {
+                                    "object.container.channelGroup.audioChannelGroup"
+                                }
+                                Some(ChannelGroupType::VideoChannelGroup) => {
+                                    "object.container.channelGroup.videoChannelGroup"
+                                }
+                            }
+                        }
+                        Some(ContainerType::PlaylistContainer) => {
+                            "object.container.playlistContainer"
+                        }
+                        Some(ContainerType::BookmarkFolder) => "object.container.bookmarkFolder",
+                        Some(ContainerType::StorageFolder) => "object.container.storageFolder",
+                        Some(ContainerType::StorageVolume) => "object.container.storageVolume",
+                        Some(ContainerType::StorageSystem) => "object.container.storageSystem",
+                        Some(ContainerType::EpgContainer) => "object.container.epgContainer",
+                    },
+                    UpnpClass::Item(item_type) => match item_type {
+                        None => "object.item",
+                        Some(ItemType::VideoItem(video_item_type)) => match video_item_type {
+                            None => "object.item.videoItem",
+                            Some(VideoItemType::Movie) => "object.item.videoItem.movie",
+                            Some(VideoItemType::VideoBroadcast) => {
+                                "object.item.videoItem.videoBroadcast"
+                            }
+                            Some(VideoItemType::MusicVideoClip) => {
+                                "object.item.videoItem.musicVideoClip"
+                            }
+                        },
+                        Some(ItemType::AudioItem(audio_item_type)) => match audio_item_type {
+                            None => "object.item.audioItem",
+                            Some(AudioItemType::AudioBook) => "object.item.audioItem.audioBook",
+                            Some(AudioItemType::MusicTrack) => "object.item.audioItem.musicTrack",
+                            Some(AudioItemType::AudioBroadcast) => {
+                                "object.item.audioItem.audioBroadcast"
+                            }
+                        },
+                        Some(ItemType::ImageItem(image_item_type)) => match image_item_type {
+                            None => "object.item.imageItem",
+                            Some(ImageItemType::Photo) => "object.item.imageItem.photo",
+                        },
+                        Some(ItemType::TextItem) => "object.item.textItem",
+                        Some(ItemType::PlaylistItem) => "object.item.playlistItem",
+                        Some(ItemType::BookmarkItem) => "object.item.bookmarkItem",
+                    },
                     UpnpClass::VendorDefined(s) => s,
                 }
             }
@@ -619,8 +610,8 @@ pub mod properties {
             }
         }
 
-        pub fn set_upnp_class(&mut self, upnp_class: Option<upnp_class::ItemType>) {
-            self.upnp_class = upnp_class;
+        pub fn set_upnp_class(&mut self, upnp_class: impl Into<Option<upnp_class::ItemType>>) {
+            self.upnp_class = upnp_class.into();
         }
 
         pub fn set_restricted(&mut self, restricted: bool) {
@@ -629,7 +620,7 @@ pub mod properties {
     }
 
     pub struct Item {
-        base: ItemBase,
+        pub base: ItemBase,
         properties: HashMap<TypeId, Box<dyn IntoXml>>,
         multivalue_properties: HashMap<TypeId, Vec<Box<dyn IntoXml>>>,
     }
@@ -643,7 +634,7 @@ pub mod properties {
             }
         }
 
-        fn set_property<T>(&mut self, p: T)
+        pub fn set_property<T>(&mut self, p: T)
         where
             T: ItemProperty + IntoXml + 'static,
         {
@@ -678,7 +669,7 @@ pub mod properties {
     }
 
     impl IntoXml for Item {
-        fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
             let item_tag = BytesStart::new("item").with_attributes([
                 ("id", self.base.id.as_str()),
                 ("parentID", self.base.parent_id.as_str()),
@@ -760,7 +751,7 @@ pub mod properties {
             }
         }
 
-        fn set_property<T>(&mut self, p: T)
+        pub fn set_property<T>(&mut self, p: T)
         where
             T: ContainerProperty + IntoXml + 'static,
         {
@@ -769,10 +760,8 @@ pub mod properties {
             if T::MULTIVALUE {
                 let entry = self.multivalue_properties.entry(type_id);
                 match entry {
-                    std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
-                        occupied_entry.get_mut().push(value)
-                    }
-                    std::collections::hash_map::Entry::Vacant(vacant_entry) => {
+                    Entry::Occupied(mut occupied_entry) => occupied_entry.get_mut().push(value),
+                    Entry::Vacant(vacant_entry) => {
                         vacant_entry.insert(vec![value]);
                     }
                 }
@@ -795,7 +784,7 @@ pub mod properties {
     }
 
     impl IntoXml for Container {
-        fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
             let mut container_tag = BytesStart::new("container").with_attributes([
                 ("id", self.base.id.as_str()),
                 ("parentID", self.base.parent_id.as_str()),
@@ -839,13 +828,106 @@ pub mod properties {
     pub struct StorageTotal(pub u64);
     impl_basic_property!(container only "upnp:storageTotal" for StorageTotal);
 
+    /// The upnp:episodeCount property contains the total number of episodes in the
+    /// series to which this content belongs.
+    #[derive(Debug, Clone, Copy)]
+    pub struct EpisodeCount(pub u32);
+    impl_basic_property!("upnp:episodeCount" for EpisodeCount);
+
+    /// The upnp:episodeCount property contains the episode number of this recorded
+    /// content within the series to which this content belongs.
+    #[derive(Debug, Clone, Copy)]
+    pub struct EpisodeNumber(pub u32);
+    impl_basic_property!("upnp:episodeNumber" for EpisodeNumber);
+
+    /// The upnp:episodeSeason property indicates the season of the episode
+    #[derive(Debug, Clone, Copy)]
+    pub struct EpisodeSeason(pub u32);
+    impl_basic_property!("upnp:episodeSeason" for EpisodeSeason);
+
+    /// The upnp:programTitle property contains the name of the program. This is most
+    /// likely obtained from a database that contains program -related information, such as an
+    /// Electronic Program Guide.
+    /// Example: “Friends Series Finale”.
+    /// Note: To be precise, this is different from the dc:title property which indicates a friendly name
+    /// for the ContentDirectory service object. However, in many cases, the dc:title property will be
+    /// set to the same value as the upnp:programTitle property.
+    #[derive(Debug, Clone)]
+    pub struct ProgramTitle(pub String);
+    impl_basic_property!("upnp:programTitle" for ProgramTitle);
+
+    /// The upnp:seriesTitle property contains the name of the series.
+    #[derive(Debug, Clone)]
+    pub struct SeriesTitle(pub String);
+    impl_basic_property!("upnp:seriesTitle" for SeriesTitle);
+
+    /// Contains a brief description of the content item
+    #[derive(Debug, Clone)]
+    pub struct Description(pub String);
+    impl_basic_property!("dc:description" for Description);
+
+    /// The upnp:longDescription property contains a few lines of description of the
+    /// content item (longer than the dc:description property).
+    #[derive(Debug, Clone)]
+    pub struct LongDescription(pub String);
+    impl_basic_property!("dc:long_description" for LongDescription);
+
+    /// The dc:date property contains the primary date of the content.
+    /// Examples:
+    /// - `2004-05-14`
+    /// - `2004-05-14T14:30:05`
+    /// - `2004-05-14T14:30:05+09:00`
+    #[derive(Debug)]
+    pub struct Date {
+        date: time::PrimitiveDateTime,
+    }
+    impl Date {
+        pub const FORMAT: time::format_description::well_known::Rfc3339 =
+            time::format_description::well_known::Rfc3339;
+    }
+
+    impl ObjectProperty for Date {}
+    impl IntoXml for Date {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+            let formatted = self.date.format(&Self::FORMAT).expect("infallable");
+            w.create_element("dc:date")
+                .write_text_content(BytesText::new(&formatted))?;
+            Ok(())
+        }
+    }
+
+    /// The upnp:longDescription property contains a few lines of description of the
+    /// content item (longer than the dc:description property).
+    #[derive(Debug, Clone)]
+    pub struct Language(pub String);
+    impl_basic_property!("dc:language" for Language);
+
+    /// The read-only upnp:playbackCount property contains the number of times the
+    /// content has been played. The special value -1 means that the content has been played bu
+    #[derive(Debug, Clone)]
+    pub struct PlaybackCount(pub String);
+    impl_basic_property!("upnp:playbackCount" for PlaybackCount);
+
+    /// The upnp:recordedDuration property contains the duration of the recorded content
+    #[derive(Debug, Clone)]
+    pub struct RecordedDuration(pub std::time::Duration);
+    impl ObjectProperty for RecordedDuration {}
+    impl IntoXml for RecordedDuration {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+            let upnp_duration = super::UpnpDuration::new(self.0);
+            w.create_element("upnp:recordedDuration")
+                .write_text_content(BytesText::new(&upnp_duration.to_string()))?;
+            Ok(())
+        }
+    }
+
     impl ObjectProperty for Resource {
         const MULTIVALUE: bool = true;
     }
 
     pub struct DidlResponse {
-        containers: Vec<Container>,
-        items: Vec<Item>,
+        pub containers: Vec<Container>,
+        pub items: Vec<Item>,
     }
 
     impl DidlResponse {
@@ -896,7 +978,7 @@ pub mod properties {
 pub mod res {
     use quick_xml::events::BytesText;
 
-    use crate::upnp::IntoXml;
+    use crate::IntoXml;
 
     #[derive(Debug)]
     struct ResourceProperty {
@@ -923,7 +1005,7 @@ pub mod res {
     }
 
     impl IntoXml for Resource {
-        fn write_xml(&self, w: &mut crate::upnp::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
             w.create_element("res")
                 .with_attributes(self.properties.iter().map(|v| (v.key, v.value.as_str())))
                 .write_text_content(BytesText::new(&self.uri))?;
@@ -935,7 +1017,7 @@ pub mod res {
 #[derive(Debug)]
 pub struct Resource {
     uri: String,
-    protocol_info: String,
+    protocol_info: ProtocolInfo,
     import_uri: Option<String>,
     /// The size in bytes of the resource.
     size: Option<u64>,
@@ -958,6 +1040,87 @@ pub struct Resource {
     record_quality: Option<String>,
     daylight_saving: Option<String>,
     framerate: Option<UpnpFramerate>,
+}
+
+impl Resource {
+    pub fn new(uri: String, protocol_info: ProtocolInfo) -> Self {
+        Self {
+            uri,
+            protocol_info,
+            import_uri: None,
+            size: None,
+            duration: None,
+            protection: None,
+            bitrate: None,
+            bits_per_sample: None,
+            sample_frequency: None,
+            nr_audio_channels: None,
+            resolution: None,
+            color_depth: None,
+            tspec: None,
+            allowed_use: None,
+            validity_start: None,
+            validity_end: None,
+            remaining_time: None,
+            usage_info: None,
+            rights_info_uri: None,
+            content_info_uri: None,
+            record_quality: None,
+            daylight_saving: None,
+            framerate: None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub struct ProtocolInfo {
+    protcol: String,
+    network: String,
+    content_format: String,
+    additional_info: String,
+}
+
+impl ProtocolInfo {
+    pub fn http_get(mime: String) -> Self {
+        Self {
+            protcol: "http-get".into(),
+            network: "*".into(),
+            content_format: mime,
+            additional_info: "*".into(),
+        }
+    }
+}
+
+impl Display for ProtocolInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{protocol}:{network}:{content_format}:{additional_info}",
+            protocol = self.protcol,
+            network = self.network,
+            content_format = self.content_format,
+            additional_info = self.additional_info,
+        )
+    }
+}
+
+impl FromStr for ProtocolInfo {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let mut split = s.splitn(4, ':');
+        let protcol = split.next().context("get protocol part")?;
+        let network = split.next().context("get network part")?;
+        let content_format = split.next().context("get content format part")?;
+        let additional_info = split.next().context("get additional info part")?;
+        anyhow::ensure!(split.next().is_none());
+        Ok(Self {
+            protcol: protcol.to_owned(),
+            network: network.to_owned(),
+            content_format: content_format.to_owned(),
+            additional_info: additional_info.to_owned(),
+        })
+    }
 }
 
 #[derive(Debug)]
@@ -1127,7 +1290,7 @@ impl FromStr for UpnpFramerate {
 impl IntoXml for Resource {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
         let mut attributes = Vec::new();
-        attributes.push(("protocolInfo", self.protocol_info.to_owned()));
+        attributes.push(("protocolInfo", self.protocol_info.to_string()));
         if let Some(import_uri) = &self.import_uri {
             attributes.push(("importUri", import_uri.to_owned()));
         }

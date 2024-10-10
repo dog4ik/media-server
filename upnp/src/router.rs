@@ -6,12 +6,22 @@ use axum::{
 };
 use axum_extra::headers::{self, HeaderMapExt};
 
-pub struct UpnpRouter(pub Router<AppState>);
+#[derive(Debug)]
+pub struct UpnpRouter<S> {
+    path: String,
+    router: Router<S>,
+}
 
-use crate::{
-    app_state::AppState,
-    upnp::action::{ActionError, ActionPayload},
-};
+impl<S> From<UpnpRouter<S>> for Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    fn from(upnp_router: UpnpRouter<S>) -> Self {
+        Router::new().nest(&upnp_router.path, upnp_router.router)
+    }
+}
+
+use crate::action::{ActionError, ActionPayload};
 
 use super::{
     action::{ActionResponse, IntoArgumentList, SoapMessage},
@@ -24,22 +34,21 @@ async fn handle_description() -> (HeaderMap, String) {
     let desc = device_description::DeviceDescription::new("Media server".into());
     let mut headers = HeaderMap::new();
     headers.typed_insert(headers::ContentType::xml());
-    (
-        headers,
-        quick_xml::se::to_string_with_root("root", &desc).unwrap(),
-    )
+    (headers, desc.into_xml().unwrap())
 }
 
 pub const DESC_PATH: &str = "/devicedesc.xml";
 
-impl UpnpRouter {
-    pub fn new() -> Self {
+impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
+    pub fn new(path: &str) -> Self {
         let router = Router::new().route(DESC_PATH, get(handle_description));
-
-        Self(router)
+        Self {
+            path: path.to_string(),
+            router,
+        }
     }
 
-    pub fn register_service<S: Service + Send + Clone + 'static>(&mut self, mut service: S) {
+    pub fn register_service<S: Service + Send + Clone + 'static>(mut self, service: S) -> Self {
         let base_path = format!("/{}", S::NAME);
         let control_path = format!("{base_path}/control.xml");
         let scpd_path = format!("{base_path}/scpd.xml");
@@ -86,7 +95,8 @@ impl UpnpRouter {
             let response = String::from_utf8(scpd).unwrap();
             Ok::<_, ActionError>((headers, response))
         };
-        self.0 = self.0.clone().route(&scpd_path, get(scpd_handler));
-        self.0 = self.0.clone().route(&control_path, post(action_handler));
+        self.router = self.router.route(&scpd_path, get(scpd_handler));
+        self.router = self.router.route(&control_path, post(action_handler));
+        self
     }
 }

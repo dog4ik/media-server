@@ -7,7 +7,7 @@ use axum_extra::headers::{self, HeaderMapExt};
 use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
 use reqwest::StatusCode;
 
-use crate::upnp::XmlReaderExt;
+use crate::XmlReaderExt;
 
 use super::{
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
@@ -175,7 +175,7 @@ impl IntoXml for Action {
 }
 
 #[derive(Debug)]
-pub struct SoapMessage<T> {
+pub(crate) struct SoapMessage<T> {
     inner: T,
 }
 
@@ -312,6 +312,8 @@ impl ActionPayload {
 
     /// Finds and parses argument from action argument list
     pub fn find_argument<T: SVariable>(&self, name: &str) -> anyhow::Result<OutArgument<T>> {
+        // TODO: Return ActionError with errors when argument is not found/out of order and
+        // errors when parsing failed
         let arg = self
             .arguments
             .iter()
@@ -472,58 +474,122 @@ impl_for_tuples! {
     (A, B, C, D, E, F, G, H, I, J, K, L)
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ActionErrorCode {
+    /// No action by that name at this service.
+    InvalidAction,
+    /// Could be any of the following: not enough in args, args in the wrong
+    /// order, one or more in args are of the wrong data type.
+    InvalidArguments,
+    /// Is allowed to be returned if current state of service prevents invoking
+    /// that action
+    ActionFailed,
+    /// The argument value is invalid
+    ArgumentInvalid,
+    /// An argument value is less than the minimum or more than the
+    /// maximum value of the allowed value range, or is not in the allowed
+    /// value list
+    ArgumentValueOutOfRange,
+    /// Optional Action Not
+    /// Implemented
+    OptionalActionNotImplmented,
+    /// The device does not have sufficient memory available to complete the
+    /// action.  
+    OutOfMemory,
+    /// The device has encountered an error condition which it cannot resolve
+    /// itself and required human intervention such as a reset or power cycle.
+    HumanInterventionRequired,
+    /// A string argument is too long for the device to handle properly.
+    StringArgumentTooLong,
+    Other(u16),
+}
+
+impl ActionErrorCode {
+    pub fn code(&self) -> u16 {
+        match self {
+            ActionErrorCode::InvalidAction => 401,
+            ActionErrorCode::InvalidArguments => 402,
+            ActionErrorCode::ActionFailed => 501,
+            ActionErrorCode::ArgumentInvalid => 600,
+            ActionErrorCode::ArgumentValueOutOfRange => 601,
+            ActionErrorCode::OptionalActionNotImplmented => 602,
+            ActionErrorCode::OutOfMemory => 603,
+            ActionErrorCode::HumanInterventionRequired => 604,
+            ActionErrorCode::StringArgumentTooLong => 605,
+            ActionErrorCode::Other(code) => *code,
+        }
+    }
+}
+
+impl From<ActionErrorCode> for ActionError {
+    fn from(code: ActionErrorCode) -> Self {
+        Self {
+            code,
+            description: None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ActionError {
-    pub code: u16,
-    pub description: String,
+    pub code: ActionErrorCode,
+    pub description: Option<String>,
 }
 
 impl From<anyhow::Error> for ActionError {
     fn from(err: anyhow::Error) -> Self {
         Self {
-            code: 500,
-            description: err.to_string(),
+            code: ActionErrorCode::ActionFailed,
+            description: Some(err.to_string()),
         }
     }
 }
 
 impl std::fmt::Display for ActionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Error({}): {}", self.code, self.description)
+        if let Some(description) = &self.description {
+            write!(f, "Error({}): {}", self.code.code(), description)
+        } else {
+            write!(f, "Error({})", self.code.code())
+        }
     }
 }
 impl std::error::Error for ActionError {}
 
 impl IntoXml for ActionError {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
-        let parent = BytesStart::new("Fault");
+        let parent = BytesStart::new("s:Fault");
+        let parent_end = parent.to_end().into_owned();
         w.write_event(Event::Start(parent.clone()))?;
 
         w.create_element("faultcode")
-            .write_text_content(BytesText::new("Client"))?;
+            .write_text_content(BytesText::new("s:Client"))?;
         w.create_element("faultstring")
             .write_text_content(BytesText::new("UPnPError"))?;
         let detail = BytesStart::new("detail");
+        let detail_end = detail.to_end().into_owned();
         w.write_event(Event::Start(detail.clone()))?;
 
         w.create_element("UPnPError")
             .with_attribute(("xmlns", "schemas-upnp-org:control-1-0"))
             .write_inner_content::<_, quick_xml::Error>(|w| {
                 w.create_element("errorCode")
-                    .write_text_content(BytesText::new(&self.code.to_string()))?;
-                w.create_element("errorDescription")
-                    .write_text_content(BytesText::new(&self.description))?;
+                    .write_text_content(BytesText::new(&self.code.code().to_string()))?;
+                if let Some(description) = &self.description {
+                    w.create_element("errorDescription")
+                        .write_text_content(BytesText::new(description))?;
+                }
                 Ok(())
             })?;
 
-        w.write_event(Event::End(detail.to_end()))?;
-        w.write_event(Event::End(parent.to_end()))
+        w.write_event(Event::End(detail_end))?;
+        w.write_event(Event::End(parent_end))
     }
 }
 
 impl IntoResponse for ActionError {
     fn into_response(self) -> axum::response::Response {
-        let status_code = StatusCode::from_u16(self.code).expect("status codes be always valid");
+        let status_code = StatusCode::INTERNAL_SERVER_ERROR;
         let body = SoapMessage::new(self);
         (status_code, body).into_response()
     }
@@ -532,7 +598,7 @@ impl IntoResponse for ActionError {
 #[cfg(test)]
 mod tests {
 
-    use crate::upnp::action::SoapMessage;
+    use crate::action::SoapMessage;
 
     use super::ActionPayload;
 
