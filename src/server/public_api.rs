@@ -371,7 +371,7 @@ pub async fn pull_video_subtitle(
         VariantQuery,
     ),
     responses(
-        (status = 200, description = "Video stream", body = [u8]),
+        (status = 206, description = "Video progressive download stream", body = [u8], content_type = "video/x-matroska"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
@@ -411,10 +411,10 @@ pub async fn watch(
         VariantQuery,
     ),
     responses(
-        (status = 200, description = "Video stream", body = [u8]),
+        (status = 206, description = "Video progressive download stream", content_type = "video/x-matroska"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Shows",
 )]
 pub async fn watch_episode(
     Path(episode_id): Path<i64>,
@@ -433,16 +433,16 @@ pub async fn watch_episode(
 /// Watch movie video
 #[utoipa::path(
     get,
-    path = "/api/local_movie/{episode_id}/watch",
+    path = "/api/local_movie/{movie_id}/watch",
     params(
-        ("episode_id", description = "episode id"),
+        ("movie_id", description = "movie id"),
         VariantQuery,
     ),
     responses(
-        (status = 200, description = "Video stream", body = [u8]),
+        (status = 206, description = "Movie video progressive download stream", content_type = "video/x-matroska"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Movies",
 )]
 pub async fn watch_movie(
     Path(movie_id): Path<i64>,
@@ -754,7 +754,7 @@ pub async fn get_movie(
         ("id", description = "Show id"),
     ),
     responses(
-        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -779,7 +779,7 @@ pub async fn show_poster(
         ("id", description = "Season id"),
     ),
     responses(
-        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -804,7 +804,7 @@ pub async fn season_poster(
         ("id", description = "Show id"),
     ),
     responses(
-        (status = 200, description = "Response with image", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, description = "Image not found", body = AppError)
     ),
@@ -829,7 +829,7 @@ pub async fn show_backdrop(
         ("id", description = "Movie id"),
     ),
     responses(
-        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -854,7 +854,7 @@ pub async fn movie_poster(
         ("id", description = "Movie id"),
     ),
     responses(
-        (status = 200, description = "Backdrop bytes", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -879,7 +879,7 @@ pub async fn movie_backdrop(
         ("id", description = "Episode id"),
     ),
     responses(
-        (status = 200, description = "Poster bytes", body = [u8]),
+        (status = 200, content_type = "image/jpeg"),
         (status = 304),
         (status = 404, body = AppError)
     ),
