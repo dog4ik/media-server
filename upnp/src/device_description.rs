@@ -1,27 +1,42 @@
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Context;
+use quick_xml::events::{BytesDecl, BytesStart, Event};
 use serde::{Deserialize, Serialize};
 
 use super::{templates::SpecVersion, SERVER_UUID};
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 pub struct DeviceDescription<'a> {
-    #[serde(rename = "@xmlns")]
-    pub xmlns: &'a str,
-    #[serde(rename = "@xmlns:dlna")]
     pub xmlns_dlna: &'a str,
-    #[serde(rename = "@configId")]
     pub config_id: &'a str,
-    #[serde(rename = "specVersion")]
     pub spec_version: SpecVersion,
     pub device: Device<'a>,
 }
 
 impl DeviceDescription<'_> {
+    pub fn into_xml(&self) -> anyhow::Result<String> {
+        use quick_xml::Writer;
+        let mut w = Writer::new(Vec::new());
+        w.write_event(Event::Decl(BytesDecl::new("1.0", None, None)))?;
+        let root = BytesStart::new("root").with_attributes([
+            ("xmlns", "urn:schemas-upnp-org:device-1-0"),
+            ("configId", self.config_id),
+        ]);
+        let root_end = root.to_end().into_owned();
+        w.write_event(Event::Start(root))?;
+
+        w.write_serializable("specVersion", &self.spec_version)?;
+        w.write_serializable("device", &self.device)?;
+
+        w.write_event(Event::End(root_end))?;
+        Ok(String::from_utf8(w.into_inner())?)
+    }
+}
+
+impl DeviceDescription<'_> {
     pub fn new(friendly_name: String) -> Self {
         Self {
-            xmlns: "urn:schemas-upnp-org:device-1-0",
             xmlns_dlna: "urn:schemas-dlna-org:device-1-0",
             config_id: "1",
             spec_version: SpecVersion::upnp_v2(),

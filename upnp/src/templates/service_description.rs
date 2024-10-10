@@ -3,7 +3,7 @@ use quick_xml::{
     Writer,
 };
 
-use crate::upnp::{action::Action, service_variables::StateVariableDescriptor, IntoXml};
+use crate::{action::Action, service_variables::StateVariableDescriptor, IntoXml};
 
 use super::SpecVersion;
 
