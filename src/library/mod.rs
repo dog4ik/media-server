@@ -24,7 +24,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
     app_state::AppError,
-    db::{Db, DbVideo},
+    db::{Db, DbVideo, DbActions},
     ffmpeg::{get_metadata, FFprobeOutput},
     metadata::ContentType,
     utils,
@@ -510,7 +510,7 @@ impl Video {
             Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
                 let db_video = self.into_db_video().await;
-                let id = db.insert_video(db_video).await?;
+                let id = db.pool.insert_video(db_video).await?;
                 Ok(id)
             }
             Err(e) => Err(e.into()),

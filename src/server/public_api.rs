@@ -9,7 +9,7 @@ use serde::Serialize;
 use sqlx::FromRow;
 
 use crate::app_state::AppError;
-use crate::db::{DbExternalId, DbHistory};
+use crate::db::{DbActions, DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::library::assets::{
     BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
@@ -467,7 +467,7 @@ pub async fn watch_movie(
 )]
 /// All local shows
 pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetadata>>, AppError> {
-    Ok(Json(db.all_shows().await?))
+    Ok(Json(db.pool.all_shows().await?))
 }
 
 #[utoipa::path(

@@ -30,7 +30,7 @@ use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
-use crate::db::{DbEpisodeIntro, DbHistory};
+use crate::db::{DbEpisodeIntro, DbHistory, DbActions};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -76,6 +76,7 @@ pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, Statu
     info!("Clearing database");
     app_state
         .db
+        .pool
         .clear()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -325,7 +326,7 @@ pub async fn delete_movie(
             tracing::error!("Failed to delete video: {err}");
         };
     }
-    db.remove_movie(id).await?;
+    db.pool.remove_movie(id).await?;
     Ok(())
 }
 
@@ -1034,7 +1035,7 @@ pub async fn update_video_history(
     if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
             sqlx::Error::RowNotFound => {
-                db.insert_history(crate::db::DbHistory {
+                db.pool.insert_history(crate::db::DbHistory {
                     id: None,
                     time: payload.time,
                     is_finished: payload.is_finished,
@@ -1299,7 +1300,7 @@ pub async fn detect_intros(
                 start_sec: intro.start.as_secs() as i64,
                 end_sec: intro.end.as_secs() as i64,
             };
-            if let Err(e) = db.insert_intro(db_intro).await {
+            if let Err(e) = db.pool.insert_intro(db_intro).await {
                 tracing::warn!("Failed to insert intro for video id({id}): {e}");
             };
         } else {

@@ -8,7 +8,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{self},
-    db::{Db, DbEpisode, DbExternalId, DbMovie, DbSeason, DbShow, DbSubtitles},
+    db::{Db, DbActions, DbEpisode, DbExternalId, DbMovie, DbSeason, DbShow, DbSubtitles},
     ffmpeg::{self, FFmpegRunningJob, SubtitlesJob, TranscodeJob},
     library::{
         assets::{
@@ -183,7 +183,9 @@ impl AppState {
             .await
             .map_err(|_| AppError::internal_error("Failed to remove video"))?;
         let _ = source.delete_all_resources().await;
-        self.db.remove_video(id).await?;
+        let mut remove_tx = self.db.begin().await?;
+        remove_tx.remove_video(id).await?;
+        remove_tx.commit().await?;
         let mut library = self.library.lock().unwrap();
         library.remove_video(id);
         Ok(())
