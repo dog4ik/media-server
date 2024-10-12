@@ -9,7 +9,7 @@ use upnp::{
     },
 };
 
-use crate::db::Db;
+use crate::db::{Db, DbActions};
 
 #[derive(Clone)]
 pub struct MediaServerContentDirectory {
