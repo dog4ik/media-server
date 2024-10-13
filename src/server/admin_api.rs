@@ -30,7 +30,7 @@ use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
-use crate::db::{DbEpisodeIntro, DbHistory, DbActions};
+use crate::db::{DbActions, DbEpisodeIntro, DbHistory};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -1035,14 +1035,15 @@ pub async fn update_video_history(
     if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
             sqlx::Error::RowNotFound => {
-                db.pool.insert_history(crate::db::DbHistory {
-                    id: None,
-                    time: payload.time,
-                    is_finished: payload.is_finished,
-                    update_time: OffsetDateTime::now_utc(),
-                    video_id: id,
-                })
-                .await?;
+                db.pool
+                    .insert_history(crate::db::DbHistory {
+                        id: None,
+                        time: payload.time,
+                        is_finished: payload.is_finished,
+                        update_time: OffsetDateTime::now_utc(),
+                        video_id: id,
+                    })
+                    .await?;
                 return Ok(StatusCode::CREATED);
             }
             rest => return Err(rest.into()),

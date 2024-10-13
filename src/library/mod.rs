@@ -24,7 +24,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
     app_state::AppError,
-    db::{Db, DbVideo, DbActions},
+    db::{Db, DbActions, DbVideo},
     ffmpeg::{get_metadata, FFprobeOutput},
     metadata::ContentType,
     utils,
