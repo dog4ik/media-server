@@ -225,7 +225,7 @@ impl MetadataProvidersStack {
                     tracing::warn!("Torrent index timed out");
                 }
                 Err(e) => {
-                    tracing::error!("Torrent index task paniced: {e}");
+                    tracing::error!("Torrent index task panicked: {e}");
                 }
             };
         }
@@ -498,7 +498,7 @@ impl LimitedRequestClient {
                 tracing::error!("Request in {} failed: {}", url, e);
                 anyhow::anyhow!("Request failed: {}", e)
             })?;
-        tracing::trace!("Succeded request: {}", url);
+        tracing::trace!("Succeeded request: {}", url);
         match response.status().as_u16() {
             200 => Ok(response.json().await.context("Parse response in json")?),
             404 => Err(AppError::not_found("Provider responded with 404")),

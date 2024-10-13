@@ -24,7 +24,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 
 use crate::{
     app_state::AppError,
-    db::{Db, DbVideo, DbActions},
+    db::{Db, DbActions, DbVideo},
     ffmpeg::{get_metadata, FFprobeOutput},
     metadata::ContentType,
     utils,
@@ -118,7 +118,7 @@ pub async fn explore_folder(
                 result.insert(item.source.id, item);
             }
             Ok(Err(e)) => tracing::warn!(path, "One of the metadata collectors errored: {}", e),
-            Err(e) => tracing::error!(path, "One of the metadata collectors paniced: {}", e),
+            Err(e) => tracing::error!(path, "One of the metadata collectors panicked: {}", e),
         }
     }
 
@@ -936,7 +936,7 @@ impl FromStr for Resolution {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let (x, y) = s
             .split_once('x')
-            .ok_or(anyhow::anyhow!("str must be seperated with 'x'"))?;
+            .ok_or(anyhow::anyhow!("str must be separated with 'x'"))?;
         let x = x.parse()?;
         let y = y.parse()?;
         Ok((x, y).into())

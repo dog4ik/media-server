@@ -126,7 +126,7 @@ impl Peer {
         socket
             .read_exact(&mut handshake_response)
             .await
-            .context("recieve peer handshake")?;
+            .context("receive peer handshake")?;
         let his_handshake = HandShake::from_bytes(&handshake_response)?;
         ensure!(his_handshake.info_hash == info_hash);
 
@@ -210,7 +210,7 @@ impl Peer {
         socket
             .read_exact(&mut handshake_response)
             .await
-            .context("recieve peer handshake")?;
+            .context("receive peer handshake")?;
         let his_handshake = HandShake::from_bytes(&handshake_response)?;
 
         let my_handshake = HandShake::new(his_handshake.info_hash).as_bytes();
@@ -431,7 +431,7 @@ impl Peer {
                     self.send_peer_msg(PeerMessage::request(block)).await?;
                 }
             }
-            // Cancel does not provide guarentee that this block will not arrive
+            // Cancel does not provide guarantee that this block will not arrive
             PeerCommand::Cancel { block } => {
                 self.send_peer_msg(PeerMessage::Cancel {
                     index: block.piece,
@@ -840,10 +840,10 @@ mod test {
     #[test]
     fn parse_extension_handshake() {
         let data = b"d1:md11:LT_metadatai1e6:qT_PEXi2ee1:pi6881e1:v13:\xc2\xb5Torreet 1.2e";
-        let extenstion_handshake: ExtensionHandshake = serde_bencode::from_bytes(data).unwrap();
-        let back = serde_bencode::to_string(&extenstion_handshake).unwrap();
-        assert_eq!(*extenstion_handshake.dict.get("LT_metadata").unwrap(), 1);
-        assert_eq!(*extenstion_handshake.dict.get("qT_PEX").unwrap(), 2);
+        let extension_handshake: ExtensionHandshake = serde_bencode::from_bytes(data).unwrap();
+        let back = serde_bencode::to_string(&extension_handshake).unwrap();
+        assert_eq!(*extension_handshake.dict.get("LT_metadata").unwrap(), 1);
+        assert_eq!(*extension_handshake.dict.get("qT_PEX").unwrap(), 2);
         assert_eq!(std::str::from_utf8(data).unwrap(), back);
     }
 

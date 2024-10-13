@@ -180,7 +180,7 @@ impl DetailedVideoTrack {
     pub fn from_video_stream(stream: FFprobeVideoStream<'_>, bitrate: usize) -> Self {
         DetailedVideoTrack {
             is_default: stream.is_default(),
-            resolution: stream.resoultion(),
+            resolution: stream.resolution(),
             profile: stream.profile.to_string(),
             level: stream.level,
             bitrate,
@@ -205,7 +205,7 @@ impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
 impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
     fn from(val: FFprobeSubtitleStream<'_>) -> Self {
         DetailedSubtitleTrack {
-            is_default: val.is_defalut(),
+            is_default: val.is_default(),
             language: val.language.map(|x| x.to_string()),
             codec: val.codec(),
         }
@@ -329,11 +329,11 @@ pub async fn video_content_metadata(
 )]
 pub async fn previews(
     Path((video_id, number)): Path<(i64, usize)>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let preview_asset = PreviewAsset::new(video_id, number);
     let response = preview_asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -762,11 +762,11 @@ pub async fn get_movie(
 )]
 pub async fn show_poster(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = PosterAsset::new(id, PosterContentType::Show);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -787,11 +787,11 @@ pub async fn show_poster(
 )]
 pub async fn season_poster(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = PosterAsset::new(id, PosterContentType::Season);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -812,11 +812,11 @@ pub async fn season_poster(
 )]
 pub async fn show_backdrop(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = BackdropAsset::new(id, BackdropContentType::Show);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -837,11 +837,11 @@ pub async fn show_backdrop(
 )]
 pub async fn movie_poster(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = PosterAsset::new(id, PosterContentType::Movie);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -862,11 +862,11 @@ pub async fn movie_poster(
 )]
 pub async fn movie_backdrop(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = BackdropAsset::new(id, BackdropContentType::Movie);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }
@@ -887,11 +887,11 @@ pub async fn movie_backdrop(
 )]
 pub async fn episode_poster(
     Path(id): Path<i64>,
-    is_modified_sience: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = PosterAsset::new(id, PosterContentType::Episode);
     let response = asset
-        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_sience)
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
 }

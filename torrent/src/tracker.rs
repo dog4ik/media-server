@@ -233,7 +233,7 @@ impl UdpTrackerChannel {
         let (tx, rx) = oneshot::channel();
         let request = UdpTrackerRequest::new(request, addr, tx);
         self.sender.send(request).await?;
-        rx.await.context("recieve response")
+        rx.await.context("receive response")
     }
 
     pub async fn connect(&self, addr: SocketAddr) -> anyhow::Result<u64> {
@@ -418,7 +418,7 @@ impl UdpTrackerWorker {
             let mut buffer = BytesMut::with_capacity(1024 * 10);
             tokio::select! {
                 Ok((read, addr)) = self.socket.recv_buf_from(&mut buffer) => {
-                    tracing::debug!("Recieved {read} bytes from UDP worker from {:?} address", addr);
+                    tracing::debug!("Received {read} bytes from UDP worker from {:?} address", addr);
                     let message = match UdpTrackerMessage::from_bytes(&buffer[..read]) {
                         Ok(msg) => msg,
                         Err(e) => {
@@ -430,7 +430,7 @@ impl UdpTrackerWorker {
                         let _ = chan.send(message);
                     } else {
                         tracing::error!(
-                            "Recieved message {:?} for non existant transaction: {}",
+                            "Received message {:?} for non existent transaction: {}",
                             message.message_type,
                             message.transaction_id
                         );

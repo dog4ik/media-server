@@ -271,7 +271,7 @@ pub struct Scheduler {
     pieces: Hashes,
     failed_blocks: Vec<Block>,
     pub peers: Vec<ActivePeer>,
-    pub schedule_stategy: ScheduleStrategy,
+    pub schedule_strategy: ScheduleStrategy,
     pub pending_files: PendingFiles,
     pub piece_table: Vec<SchedulerPiece>,
 }
@@ -303,7 +303,7 @@ impl Scheduler {
             failed_blocks: Vec::new(),
             max_pending_pieces: 40,
             peers: Vec::new(),
-            schedule_stategy: ScheduleStrategy::default(),
+            schedule_strategy: ScheduleStrategy::default(),
             pending_files,
             piece_table,
         }
@@ -314,12 +314,12 @@ impl Scheduler {
         crate::utils::piece_size(piece_i, self.piece_size, self.total_length as usize) as u32
     }
 
-    fn can_scheudle_piece(&self, i: usize) -> bool {
+    fn can_schedule_piece(&self, i: usize) -> bool {
         self.piece_table[i].can_schedule()
     }
 
     /// Schedules next piece linearly (the next missing piece from start)
-    /// returing `None` if no more pieces left
+    /// returning `None` if no more pieces left
     fn linear_next(&self) -> Option<usize> {
         self.piece_table
             .iter()
@@ -334,13 +334,13 @@ impl Scheduler {
 
     fn request_piece_next(&self, piece: usize) -> Option<usize> {
         for i in piece..self.pieces.len() {
-            if self.can_scheudle_piece(i) {
+            if self.can_schedule_piece(i) {
                 tracing::debug!("Assigning next request({piece}) piece {i}");
                 return Some(i);
             }
         }
         for i in 0..piece {
-            if self.can_scheudle_piece(i) {
+            if self.can_schedule_piece(i) {
                 tracing::debug!("Assigning fallback request({piece}) piece {i}");
                 return Some(i);
             }
@@ -349,7 +349,7 @@ impl Scheduler {
     }
 
     fn schedule_next(&mut self) -> Option<usize> {
-        let new_piece = match &self.schedule_stategy {
+        let new_piece = match &self.schedule_strategy {
             ScheduleStrategy::Linear => self.linear_next(),
             ScheduleStrategy::RareFirst => self.rare_first_next(),
             ScheduleStrategy::PieceRequest { piece } => self.request_piece_next(*piece),
@@ -451,7 +451,7 @@ impl Scheduler {
                 schedule_amount
             );
             // Add more pending blocks to fulfil peer rate if strategy is not piece request
-            match self.schedule_stategy {
+            match self.schedule_strategy {
                 ScheduleStrategy::PieceRequest { .. } => {
                     // self.steal_work(peer_idx, schedule_amount - assigned_blocks.len());
                 }

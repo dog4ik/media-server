@@ -64,7 +64,7 @@ impl Display for AppError {
         match self.kind {
             AppErrorKind::InternalError => write!(f, "Internal Error: {}", self.message),
             AppErrorKind::NotFound => write!(f, "Not Found Error: {}", self.message),
-            AppErrorKind::Duplicate => write!(f, "Dublicate Error: {}", self.message),
+            AppErrorKind::Duplicate => write!(f, "Duplicate Error: {}", self.message),
             AppErrorKind::BadRequest => write!(f, "Bad Request: {}", self.message),
         }
     }
@@ -250,7 +250,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         while let Some(result) = show_scan_handles.join_next().await {
             match result {
                 Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
-                Err(_) => tracing::error!("Show reconciliation task paniced"),
+                Err(_) => tracing::error!("Show reconciliation task panicked"),
                 Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
             }
         }
@@ -599,7 +599,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         while let Some(result) = show_scan_handles.join_next().await {
             match result {
                 Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
-                Err(_) => tracing::error!("Show reconciliation task paniced"),
+                Err(_) => tracing::error!("Show reconciliation task panicked"),
                 Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
             }
         }
@@ -643,7 +643,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         while let Some(result) = movie_scan_handles.join_next().await {
             match result {
                 Ok(Err(e)) => tracing::error!("Movie reconciliation task failed with err {}", e),
-                Err(_) => tracing::error!("Movie reconciliation task paniced"),
+                Err(_) => tracing::error!("Movie reconciliation task panicked"),
                 Ok(Ok(_)) => tracing::trace!("Joined movie reconciliation task"),
             }
         }
@@ -925,7 +925,7 @@ async fn handle_seasons_and_episodes(
                     Ok(Err(e)) => {
                         tracing::error!("Episode reconciliation task failed with err {e}",)
                     }
-                    Err(e) => tracing::error!("Episode reconciliation task paniced: {e}"),
+                    Err(e) => tracing::error!("Episode reconciliation task panicked: {e}"),
                     Ok(Ok(_)) => tracing::trace!("Joined episode reconciliation task"),
                 }
             }
@@ -939,7 +939,7 @@ async fn handle_seasons_and_episodes(
             Ok(Err(e)) => {
                 tracing::error!("Season Reconciliation task failed with err {}", e)
             }
-            Err(_) => tracing::error!("Season reconciliation task paniced"),
+            Err(_) => tracing::error!("Season reconciliation task panicked"),
             Ok(Ok(_)) => tracing::trace!("Joined season reconciliation task"),
         }
     }

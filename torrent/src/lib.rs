@@ -259,13 +259,13 @@ impl Client {
                             if ut_metadata_set.is_empty() {
                                 bail!("No one managed to send metadata");
                             }
-                            tracing::warn!("ut_metadata retrival task failed: {e}");
+                            tracing::warn!("ut_metadata retrieval task failed: {e}");
                         },
                         Err(e) => {
                             if ut_metadata_set.is_empty() {
                                 bail!("No one managed to send metadata");
                             }
-                            tracing::error!("ut_metadata retrieval task paniced: {e}");
+                            tracing::error!("ut_metadata retrieval task panicked: {e}");
                         },
                     }
                 }

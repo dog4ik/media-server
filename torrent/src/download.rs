@@ -30,7 +30,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub enum DownloadMessage {
-    SetStategy(ScheduleStrategy),
+    SetStrategy(ScheduleStrategy),
     SetFilePriority { file_idx: usize, priority: Priority },
     Abort,
     Pause,
@@ -64,10 +64,10 @@ impl DownloadHandle {
         Ok(())
     }
 
-    /// Notifiy scheduler about disired piece
+    /// Notify scheduler about desired piece
     pub async fn ask_piece(&self, piece: usize) -> anyhow::Result<()> {
         self.download_tx
-            .send(DownloadMessage::SetStategy(
+            .send(DownloadMessage::SetStrategy(
                 ScheduleStrategy::PieceRequest { piece },
             ))
             .await?;
@@ -77,7 +77,7 @@ impl DownloadHandle {
     /// Change scheduling strategy
     pub async fn set_strategy(&self, strategy: ScheduleStrategy) -> anyhow::Result<()> {
         self.download_tx
-            .send(DownloadMessage::SetStategy(strategy))
+            .send(DownloadMessage::SetStrategy(strategy))
             .await?;
         Ok(())
     }
@@ -108,7 +108,7 @@ impl DownloadHandle {
 
 #[derive(Debug, Clone)]
 pub struct PerformanceHistory {
-    /// Contains data that reperesents how difference between two measurments changed
+    /// Contains data that represents how difference between two measurements changed
     history: VecDeque<Performance>,
     // Snapshot of latest measuremnts. Used to calculate new measurements
     snapshot: Performance,
@@ -136,16 +136,7 @@ impl PerformanceHistory {
         self.history.push_front(perf);
     }
 
-    /// Lastest measurement
-    pub fn before_last(&self) -> Option<&Performance> {
-        if self.history.len() > 2 {
-            self.history.get(self.history.len() - 2)
-        } else {
-            None
-        }
-    }
-
-    /// Lastest measurement
+    /// Latest measurement
     pub fn last(&self) -> Option<&Performance> {
         self.history.front()
     }
@@ -197,7 +188,7 @@ pub struct ActivePeer {
     pub downloaded: u64,
     /// Amount of bytes uploaded to peer
     pub uploaded: u64,
-    /// Peer's perfomance history (holds diff rates) useful to say how peer is performing
+    /// Peer's performance history (holds diff rates) useful to say how peer is performing
     pub performance_history: PerformanceHistory,
     /// Current pointer to the relevant pex history
     pub pex_idx: usize,
@@ -287,7 +278,7 @@ impl Status {
         self.interested
     }
 
-    /// Get duration of being choked returing 0 Duration if currently choked
+    /// Get duration of being choked returning 0 Duration if currently choked
     pub fn choke_duration(&self) -> Duration {
         if self.is_choked() {
             Duration::ZERO
@@ -528,7 +519,7 @@ impl Download {
         let mut choke_interval = tokio::time::interval(Duration::from_secs(10));
         let mut progress_dispatch_interval = tokio::time::interval(Duration::from_secs(1));
 
-        // immidiate ticks
+        // immediate ticks
         optimistic_unchoke_interval.tick().await;
         choke_interval.tick().await;
 
@@ -593,7 +584,7 @@ impl Download {
                 }
             });
         } else {
-            tracing::warn!("Recieved duplicate peer with ip {}", ip);
+            tracing::warn!("Received duplicate peer with ip {}", ip);
         }
     }
 
@@ -708,7 +699,7 @@ impl Download {
                 }
             }
             PeerStatusMessage::PexMessage { msg } => {
-                tracing::trace!("Recieved pex message with {} new peers", msg.added.len());
+                tracing::trace!("Received pex message with {} new peers", msg.added.len());
                 for added_peer in msg.added {
                     self.handle_tracker_peer(added_peer.addr);
                 }
@@ -760,7 +751,7 @@ impl Download {
                 };
             }
             Err(e) => {
-                panic!("Peer process paniced: {e}");
+                panic!("Peer process panicked: {e}");
             }
         };
     }
@@ -824,18 +815,18 @@ impl Download {
 
     pub async fn handle_command(&mut self, command: DownloadMessage) {
         match command {
-            DownloadMessage::SetStategy(strategy) => {
+            DownloadMessage::SetStrategy(strategy) => {
                 if let ScheduleStrategy::PieceRequest { .. } = strategy {
                     self.scheduler.max_pending_pieces = 2;
                 } else {
                     self.scheduler.max_pending_pieces = 40;
                 };
                 tracing::debug!(
-                    "Switching schedule startegy from {} to {}",
-                    self.scheduler.schedule_stategy,
+                    "Switching schedule strategy from {} to {}",
+                    self.scheduler.schedule_strategy,
                     strategy,
                 );
-                self.scheduler.schedule_stategy = strategy;
+                self.scheduler.schedule_strategy = strategy;
             }
             DownloadMessage::SetFilePriority { file_idx, priority } => {
                 self.scheduler.change_file_priority(file_idx, priority);

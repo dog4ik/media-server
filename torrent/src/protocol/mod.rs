@@ -58,7 +58,7 @@ impl OutputFile {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Info {
-    /// In the single file case is the name of a file, in the muliple file case, it's the name of a directory.
+    /// In the single file case is the name of a file, in the multiple file case, it's the name of a directory.
     pub name: String,
     pub pieces: Hashes,
     #[serde(rename = "piece length")]
@@ -112,7 +112,7 @@ impl Info {
         hex::encode(result)
     }
 
-    pub fn hex_peices_hashes(&self) -> Vec<String> {
+    pub fn hex_pieces_hashes(&self) -> Vec<String> {
         self.pieces.0.iter().map(hex::encode).collect()
     }
 }
@@ -149,7 +149,7 @@ impl Visitor<'_> for HashesVisitor {
     {
         if v.len() % 20 != 0 {
             return Err(serde::de::Error::custom(
-                "payload is not muliple of 20 bytes long",
+                "payload is not multiple of 20 bytes long",
             ));
         }
         let chunks = v.array_chunks::<20>().cloned().collect();

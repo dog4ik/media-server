@@ -30,7 +30,7 @@ use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
-use crate::db::{DbEpisodeIntro, DbHistory, DbActions};
+use crate::db::{DbActions, DbEpisodeIntro, DbHistory};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -701,7 +701,7 @@ pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String),
     Ok((TypedHeader(headers::ContentType::json()), json))
 }
 
-/// Server configuartion
+/// Server configuration
 #[utoipa::path(
     get,
     path = "/api/configuration",
@@ -728,7 +728,7 @@ pub async fn server_capabilities() -> Result<Json<Capabilities>, AppError> {
     Ok(Json(capabilities))
 }
 
-/// Update server configuartion
+/// Update server configuration
 #[utoipa::path(
     patch,
     path = "/api/configuration",
@@ -753,7 +753,7 @@ pub async fn update_server_configuration(
     Ok(Json(result))
 }
 
-/// Reset server configuration to its defauts
+/// Reset server configuration to its defaults
 #[utoipa::path(
     post,
     path = "/api/configuration/reset",
@@ -1035,14 +1035,15 @@ pub async fn update_video_history(
     if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
             sqlx::Error::RowNotFound => {
-                db.pool.insert_history(crate::db::DbHistory {
-                    id: None,
-                    time: payload.time,
-                    is_finished: payload.is_finished,
-                    update_time: OffsetDateTime::now_utc(),
-                    video_id: id,
-                })
-                .await?;
+                db.pool
+                    .insert_history(crate::db::DbHistory {
+                        id: None,
+                        time: payload.time,
+                        is_finished: payload.is_finished,
+                        update_time: OffsetDateTime::now_utc(),
+                        video_id: id,
+                    })
+                    .await?;
                 return Ok(StatusCode::CREATED);
             }
             rest => return Err(rest.into()),
@@ -1134,7 +1135,7 @@ pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<Brows
     responses(
         (status = 200),
         (status = 404, description = "Transcode job is not found"),
-        (status = 500, description = "Worker is not avialable"),
+        (status = 500, description = "Worker is not available"),
     ),
     tag = "Transcoding",
 )]
@@ -1160,7 +1161,7 @@ pub async fn transcoded_segment(
         Ok(bytes)
     } else {
         Err(AppError::internal_error(
-            "Transcode worker is not avaiblable",
+            "Transcode worker is not available",
         ))
     }
 }

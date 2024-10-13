@@ -27,7 +27,7 @@ use utoipa_swagger_ui::SwaggerUi;
 async fn main() {
     if let Err(err) = AppResources::initiate() {
         tracing::error!("Failed to initiate resources {}", err);
-        panic!("Could not initate app resources");
+        panic!("Could not initiate app resources");
     };
     let log_channel = init_tracer();
     tracing::info!("Selected log location: {}", AppResources::log().display());
@@ -146,10 +146,7 @@ async fn main() {
             "/local_movie/by_video",
             get(public_api::local_movie_by_video_id),
         )
-        .route(
-            "/local_movie/:movie_id/watch",
-            get(public_api::watch_movie),
-        )
+        .route("/local_movie/:movie_id/watch", get(public_api::watch_movie))
         .route("/local_movies", get(public_api::all_local_movies))
         .route(
             "/external_to_local/:id",
@@ -340,5 +337,5 @@ async fn main() {
     torrent_client.client.shutdown().await;
     tracker.close();
     tracker.wait().await;
-    tracing::info!("Gracefully shutted down");
+    tracing::info!("Gracefully shut down");
 }

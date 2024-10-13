@@ -158,7 +158,7 @@ impl<'a> FFprobeVideoStream<'a> {
         VideoCodec::from_str(self.codec_name).expect("video stream codec")
     }
 
-    pub fn resoultion(&self) -> Resolution {
+    pub fn resolution(&self) -> Resolution {
         (self.width as usize, self.height as usize).into()
     }
 
@@ -181,7 +181,7 @@ impl<'a> FFprobeSubtitleStream<'a> {
         SubtitlesCodec::from_str(self.codec_name).expect("subtitles stream codec")
     }
 
-    pub fn is_defalut(&self) -> bool {
+    pub fn is_default(&self) -> bool {
         self.disposition.default == 1
     }
 }
@@ -225,12 +225,12 @@ impl FFprobeOutput {
 
     /// Default subtitles stream
     pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream> {
-        self.subtitle_streams().into_iter().find(|s| s.is_defalut())
+        self.subtitle_streams().into_iter().find(|s| s.is_default())
     }
 
-    /// Video resoultion
+    /// Video resolution
     pub fn resolution(&self) -> Option<Resolution> {
-        self.default_video().map(|v| v.resoultion())
+        self.default_video().map(|v| v.resolution())
     }
 
     /// Video bitrate

@@ -66,7 +66,7 @@ impl FileWatcher {
                                 EventKind::Remove(_)
                                 | EventKind::Create(_)
                                 | EventKind::Modify(_) => {
-                                    tracing::debug!("Recieved watcher event: {:?}", event);
+                                    tracing::debug!("Received watcher event: {:?}", event);
                                     for path in event.paths {
                                         if path == config_path {
                                             // load config

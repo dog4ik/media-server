@@ -382,7 +382,7 @@ impl TaskResource {
         let duplicate = tasks.iter().find(|t| t.task == task.task);
         if let Some(duplicate) = duplicate {
             error!(
-                "Failed to create task(): dublicate {} ({})",
+                "Failed to create task(): duplicate {} ({})",
                 task.task, duplicate.id
             );
             return Err(TaskError::Duplicate);

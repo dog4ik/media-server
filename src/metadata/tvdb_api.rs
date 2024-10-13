@@ -497,7 +497,7 @@ struct TvdbSeriesExtendedRecord {
     genres: Vec<TvdbGenre>,
     trailers: Vec<TvdbTrailer>,
     remote_ids: Vec<TvdbRemoteIds>,
-    characeters: Vec<TvdbCharacter>,
+    characters: Vec<TvdbCharacter>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

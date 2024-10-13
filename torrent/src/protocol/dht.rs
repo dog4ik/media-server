@@ -132,11 +132,7 @@ impl DHTClient {
 }
 
 fn distance(from: &[u8; 20], to: &[u8; 20]) -> [u8; 20] {
-    let xor_result: Vec<u8> = from
-        .iter()
-        .zip(to.iter())
-        .map(|(b1, b2)| b1 ^ b2)
-        .collect();
+    let xor_result: Vec<u8> = from.iter().zip(to.iter()).map(|(b1, b2)| b1 ^ b2).collect();
     xor_result.try_into().unwrap()
 }
 
@@ -157,7 +153,7 @@ mod tests {
             err_response.payload,
             KRPCPayload::Error {
                 error: (status, msg)
-            } if status == 201 && msg == "A Generic Error Ocurred"
+            } if status == 201 && msg == "A Generic Error Occurred"
         );
     }
 

@@ -20,7 +20,7 @@ use crate::{
 };
 
 #[derive(Debug, Clone, Copy)]
-/// Methods of storing and retriving pieces
+/// Methods of storing and retrieving pieces
 pub enum StorageMethod {
     /// Crate all files before download start and fill them with null byte
     Preallocated,
@@ -277,7 +277,7 @@ impl TorrentStorage {
         ) as u32
     }
 
-    /// Save piece reallocating every time "gap" occures
+    /// Save piece reallocating every time "gap" occurs
     pub async fn save_piece(&mut self, piece_i: usize, bytes: Bytes) -> anyhow::Result<()> {
         let piece_length = bytes.len() as u32;
         ensure!(piece_length == self.piece_length(piece_i));
@@ -575,7 +575,7 @@ impl TorrentStorage {
     }
 }
 
-pub async fn verify_integrety(path: impl AsRef<Path>, info: &Info) -> anyhow::Result<()> {
+pub async fn verify_integrity(path: impl AsRef<Path>, info: &Info) -> anyhow::Result<()> {
     let workers_amount = 5;
     let chunk_size = std::cmp::max(info.pieces.len() / workers_amount, 1);
 
@@ -593,7 +593,7 @@ pub async fn verify_integrety(path: impl AsRef<Path>, info: &Info) -> anyhow::Re
         match result {
             Ok(Err(e)) => return Err(anyhow::anyhow!("failed to verify file: {e}")),
             Ok(_) => continue,
-            Err(e) => return Err(anyhow::anyhow!("worker paniced: {e}")),
+            Err(e) => return Err(anyhow::anyhow!("worker panicked: {e}")),
         }
     }
     Ok(())

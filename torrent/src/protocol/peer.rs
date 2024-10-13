@@ -309,7 +309,7 @@ impl PeerMessage {
                     })
                 }
             }
-            t => Err(anyhow!("unsupproted tag: {}", t)),
+            t => Err(anyhow!("unsupported tag: {}", t)),
         }
     }
 

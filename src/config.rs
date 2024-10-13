@@ -576,7 +576,7 @@ impl MovieFolders {
                 let exists = path.try_exists().unwrap_or(false);
                 if !exists {
                     tracing::warn!(
-                        "Failed to check existance for movie directory: {}",
+                        "Failed to check existence for movie directory: {}",
                         path.display()
                     );
                 }
@@ -620,7 +620,7 @@ impl ShowFolders {
                 let exists = path.try_exists().unwrap_or(false);
                 if !exists {
                     tracing::warn!(
-                        "Failed to check existance for show directory: {}",
+                        "Failed to check existence for show directory: {}",
                         path.display()
                     );
                 }

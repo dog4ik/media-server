@@ -6,14 +6,14 @@ use crate::config::{self};
 
 const TAKE_TIME: Duration = Duration::from_secs(300);
 
-// Higher value means less percision. Represents bytes
+// Higher value means less precision. Represents bytes
 const WINDOW_SIZE: usize = 15;
-// Higher value means less percision. Represents percent
+// Higher value means less precision. Represents percent
 const ACCEPT_ERROR_RATE: usize = 15;
-// Higher value means less percision
+// Higher value means less precision
 const ALLOWED_SKIPS: usize = 3;
 
-/// Canculate duration of signle byte in fingerprint
+/// Canculate duration of the single byte in fingerprint
 const fn byte_duration(fingerprint_len: usize) -> Duration {
     Duration::from_millis(TAKE_TIME.as_millis() as u64 / fingerprint_len as u64)
 }

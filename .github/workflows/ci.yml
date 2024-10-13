@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  DATABASE_URL: "sqlite:database.sqlite"
 
 jobs:
   build:
@@ -16,6 +17,20 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4    
+    - name: Check spelling
+      uses: crate-ci/typos@master
+    - name: Rust setup
+      run: rustup toolchain install nightly --profile minimal
+    - name: Set rust nightly
+      run: rustup default nightly
+    - name: Install rustfmt
+      run: rustup component add rustfmt
+    - name: Install sqlx-cli
+      run: cargo install sqlx-cli
+    - name: Create database file
+      run: sqlx database create
+    - name: Run migrations
+      run: sqlx migrate run
     - name: Check code formatting
       run: cargo fmt --check
     - name: Build
