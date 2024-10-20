@@ -218,8 +218,7 @@ impl Client {
         let mut tracker_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
         let mut ut_metadata_set: JoinSet<anyhow::Result<Info>> = JoinSet::new();
         for tracker_url in tracker_list.clone() {
-            let tracker_type = TrackerType::from_url(&tracker_url, self.udp_tracker_tx.clone())
-                .expect("http | udp | https scheme");
+            let tracker_type = TrackerType::from_url(&tracker_url, &self.udp_tracker_tx)?;
             {
                 let new_peers_tx = new_peers_tx.clone();
                 let download_rx = download_rx.clone();
@@ -284,7 +283,7 @@ async fn spawn_trackers(
     cancellation_token: CancellationToken,
 ) {
     for tracker in urls {
-        let Ok(tracker_type) = TrackerType::from_url(&tracker, tracker_tx.clone()) else {
+        let Ok(tracker_type) = TrackerType::from_url(&tracker, &tracker_tx) else {
             continue;
         };
         let cancellation_token = cancellation_token.clone();

@@ -1,12 +1,19 @@
 use std::{cmp::Reverse, collections::HashSet, fmt::Display, ops::Range};
 
-use anyhow::anyhow;
-use bytes::{BufMut, Bytes, BytesMut};
+use anyhow::{anyhow, ensure, Context};
+use bytes::Bytes;
 use uuid::Uuid;
 
 use crate::{
-    download::{ActivePeer, Block, PeerCommand, Performance},
-    protocol::{Hashes, Info, OutputFile},
+    download::{ActivePeer, Block, BlockGlobalLocation, BlockPosition, DataBlock, Performance},
+    peers::PeerLogicError,
+    protocol::{
+        extension::Extension,
+        peer::PeerMessage,
+        pex::PexMessage,
+        ut_metadata::{UtMessage, UtMetadata},
+        Info, OutputFile,
+    },
 };
 
 #[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
@@ -16,6 +23,12 @@ pub enum Priority {
     #[default]
     Medium = 2,
     High = 3,
+}
+
+impl Priority {
+    pub fn is_disabled(&self) -> bool {
+        *self == Priority::Disabled
+    }
 }
 
 impl TryFrom<usize> for Priority {
@@ -49,7 +62,7 @@ impl PendingFile {
 
 #[derive(Debug, Clone)]
 pub struct PendingFiles {
-    pub files: Vec<PendingFile>,
+    files: Vec<PendingFile>,
 }
 
 impl PendingFiles {
@@ -82,17 +95,20 @@ impl PendingFiles {
         Self { files }
     }
 
+    /// Change file priority returning previous priority and changed file
+    /// `None` if priority is the same or file index out of bounds
     pub fn change_file_priority(
         &mut self,
         idx: usize,
         new_priority: Priority,
-    ) -> Option<PendingFile> {
+    ) -> Option<(Priority, PendingFile)> {
         if let Some(file) = self.files.iter_mut().find(|f| f.index == idx) {
             if file.priority != new_priority {
+                let old_priority = file.priority;
                 file.priority = new_priority;
                 let file_copy = *file;
                 self.files.sort_unstable_by_key(|x| x.priority);
-                return Some(file_copy);
+                return Some((old_priority, file_copy));
             }
             return None;
         };
@@ -101,6 +117,11 @@ impl PendingFiles {
             self.files.len()
         );
         None
+    }
+
+    /// Iterator over enabled files in Priority order
+    pub fn enabled_files(&self) -> impl Iterator<Item = PendingFile> + '_ {
+        self.files.iter().copied().rev()
     }
 }
 
@@ -115,11 +136,19 @@ pub enum ScheduleStrategy {
 }
 
 impl ScheduleStrategy {
-    /// Allow expanding pending blocks to satifsfy scheduler
+    /// Allow expanding pending pieces list to satifsfy scheduler
     pub fn allow_expansion(&self) -> bool {
         match self {
             ScheduleStrategy::PieceRequest { .. } => false,
             _ => true,
+        }
+    }
+
+    pub fn create_piece_queue(&self, table: &Vec<SchedulerPiece>) -> Vec<usize> {
+        match self {
+            ScheduleStrategy::Linear => (0..table.len()).rev().collect(),
+            ScheduleStrategy::RareFirst => todo!("rare first strategy"),
+            ScheduleStrategy::PieceRequest { piece: _ } => todo!("piece request strategy"),
         }
     }
 }
@@ -135,96 +164,104 @@ impl Display for ScheduleStrategy {
 }
 
 #[derive(Debug, Clone)]
-pub struct PendingBlock {
-    pub offset: u32,
-    pub length: u32,
-    pub bytes: Option<Bytes>,
-}
-
-impl PendingBlock {
-    pub fn new(offset: u32, length: u32) -> Self {
-        Self {
-            offset,
-            length,
-            bytes: None,
-        }
-    }
-
-    pub fn as_block(&self, piece_i: u32) -> Block {
-        Block {
-            piece: piece_i,
-            offset: self.offset,
-            length: self.length,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingBlocks {
-    pub piece_len: u32,
+pub struct PendingPieceV2 {
+    pub piece: Vec<Option<Bytes>>,
+    pub piece_length: u32,
     pub participants: HashSet<Uuid>,
-    pub blocks: Vec<PendingBlock>,
+    pub blocks: Vec<BlockPosition>,
+    /// Amount of blocks are saved in piece
+    pub saved_amount: u8,
 }
 
-impl PendingBlocks {
-    pub fn new(piece_len: u32) -> Self {
+impl PendingPieceV2 {
+    pub fn new(piece_size: usize) -> Self {
+        let piece_size = piece_size as u32;
+        // same as (piece_size + BLOCK_LENGTH - 1) / BLOCK_LENGTH;
+        let blocks_amount = piece_size.div_ceil(BLOCK_LENGTH);
+        let piece = vec![None; blocks_amount as usize];
+        let blocks: Vec<_> = (0..blocks_amount)
+            .into_iter()
+            .map(|i| {
+                let offset = BLOCK_LENGTH * i;
+                let length = if i == blocks_amount - 1 {
+                    piece_size - offset
+                } else {
+                    BLOCK_LENGTH
+                };
+                BlockPosition { offset, length }
+            })
+            .rev()
+            .collect();
         Self {
-            piece_len,
+            piece,
+            piece_length: piece_size,
             participants: HashSet::new(),
-            blocks: Vec::new(),
+            blocks,
+            saved_amount: 0,
         }
-    }
-
-    pub fn pending_block_mut(&mut self, offset: u32) -> Option<&mut PendingBlock> {
-        let index = offset / BLOCK_LENGTH;
-        self.blocks.get_mut(index as usize)
-    }
-
-    pub fn is_full(&self) -> bool {
-        self.is_filled() && self.blocks.iter().all(|b| b.bytes.is_some())
     }
 
     pub fn is_filled(&self) -> bool {
-        (self.piece_len + BLOCK_LENGTH - 1) / BLOCK_LENGTH == self.blocks.len() as u32
+        self.blocks.is_empty()
     }
 
-    pub fn as_bytes(mut self) -> Bytes {
-        self.blocks
-            .drain(..)
-            .fold(
-                BytesMut::with_capacity(self.piece_len as usize),
-                |mut acc, block| {
-                    acc.put(&mut block.bytes.expect("block to be full"));
-                    acc
-                },
-            )
-            .into()
+    pub fn is_full(&self) -> bool {
+        self.saved_amount == self.piece.len() as u8
     }
 
-    pub fn pend_block(&mut self, piece_i: u32) -> Option<Block> {
-        let insert_offset = self.blocks.last().map(|x| x.length + x.offset).unwrap_or(0);
-        let length = std::cmp::min(self.piece_len - insert_offset, BLOCK_LENGTH);
-        if length == 0 {
-            return None;
-        }
+    /// Panics if piece is not full
+    pub fn as_bytes(self) -> Vec<Bytes> {
+        self.piece.into_iter().map(|x| x.unwrap()).collect()
+    }
 
-        self.blocks.push(PendingBlock::new(insert_offset, length));
-        let block = Block {
-            piece: piece_i,
-            offset: insert_offset,
-            length,
+    pub fn pend_block(&mut self) -> Option<BlockPosition> {
+        self.blocks.pop()
+    }
+
+    /// Position of the first None block Does not affect the block queue.
+    pub fn pend_blocks_endgame(&self, take: usize) -> impl IntoIterator<Item = BlockPosition> + '_ {
+        self.piece
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, x)| {
+                if x.is_some() {
+                    return None;
+                }
+                let offset = idx as u32 * BLOCK_LENGTH;
+                let length = if idx == self.piece.len() - 1 {
+                    self.piece_length - offset
+                } else {
+                    BLOCK_LENGTH
+                };
+                Some(BlockPosition { offset, length })
+            })
+            .take(take)
+    }
+
+    pub fn unpend_block(&mut self, block: BlockPosition) {
+        self.blocks.push(block);
+    }
+
+    pub fn save_block(&mut self, data_block: DataBlock) -> anyhow::Result<()> {
+        ensure!(data_block.offset + data_block.len() as u32 <= self.piece_length);
+
+        let index = data_block.offset / BLOCK_LENGTH;
+        let block = &mut self.piece[index as usize];
+        if block.is_none() {
+            *block = Some(data_block.block);
+            self.saved_amount += 1;
         };
-        Some(block)
+        Ok(())
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SchedulerPiece {
     pub rarity: u8,
     pub is_finished: bool,
     pub is_saving: bool,
     pub priority: Priority,
-    pub pending_blocks: Option<PendingBlocks>,
+    pub pending_blocks: Option<PendingPieceV2>,
 }
 
 impl SchedulerPiece {
@@ -265,284 +302,183 @@ impl Ord for SchedulerPiece {
 
 #[derive(Debug)]
 pub struct Scheduler {
-    piece_size: usize,
+    piece_size: u32,
+    /// Low latency mode
+    stream_mode: bool,
+    /// Full ut_metadata used to share it
+    ut_metadata: UtMetadata,
     pub max_pending_pieces: usize,
     total_length: u64,
-    pieces: Hashes,
-    failed_blocks: Vec<Block>,
     pub peers: Vec<ActivePeer>,
     pub schedule_strategy: ScheduleStrategy,
     pub pending_files: PendingFiles,
     pub piece_table: Vec<SchedulerPiece>,
+    pub pending_pieces: Vec<usize>,
+    /// Must be reversed so we can pop with O(1)
+    pub piece_queue: Vec<usize>,
+    pub downloaded_pieces: usize,
 }
 
-const BLOCK_LENGTH: u32 = 16 * 1024;
+pub const BLOCK_LENGTH: u32 = 16 * 1024;
 
 impl Scheduler {
     pub fn new(t: Info, pending_files: PendingFiles) -> Self {
+        let ut_metadata = UtMetadata::full_from_info(&t);
         let total_pieces = t.pieces.len();
-        let mut piece_table = vec![
-            SchedulerPiece {
-                rarity: 0,
-                priority: Priority::default(),
-                is_finished: false,
-                is_saving: false,
-                pending_blocks: None,
-            };
-            total_pieces
-        ];
+        let mut piece_table = vec![SchedulerPiece::default(); total_pieces];
         for file in &pending_files.files {
             for p in file.pieces_range() {
                 piece_table[p].priority = file.priority;
             }
         }
+        let schedule_strategy = ScheduleStrategy::default();
+        let piece_queue = schedule_strategy.create_piece_queue(&piece_table);
         Self {
-            piece_size: t.piece_length as usize,
+            piece_size: t.piece_length,
+            stream_mode: false,
+            ut_metadata,
             total_length: t.total_size(),
-            pieces: t.pieces,
-            failed_blocks: Vec::new(),
             max_pending_pieces: 40,
             peers: Vec::new(),
-            schedule_strategy: ScheduleStrategy::default(),
+            schedule_strategy,
             pending_files,
             piece_table,
+            pending_pieces: Vec::new(),
+            piece_queue,
+            downloaded_pieces: 0,
         }
     }
 
     /// Helper function to get piece length with consideration of the last piece
     fn piece_length(&self, piece_i: usize) -> u32 {
-        crate::utils::piece_size(piece_i, self.piece_size, self.total_length as usize) as u32
-    }
-
-    fn can_schedule_piece(&self, i: usize) -> bool {
-        self.piece_table[i].can_schedule()
-    }
-
-    /// Schedules next piece linearly (the next missing piece from start)
-    /// returning `None` if no more pieces left
-    fn linear_next(&self) -> Option<usize> {
-        self.piece_table
-            .iter()
-            .enumerate()
-            .find(|(_, x)| x.can_schedule())
-            .map(|(i, _)| i)
-    }
-
-    fn rare_first_next(&self) -> Option<usize> {
-        todo!()
-    }
-
-    fn request_piece_next(&self, piece: usize) -> Option<usize> {
-        for i in piece..self.pieces.len() {
-            if self.can_schedule_piece(i) {
-                tracing::debug!("Assigning next request({piece}) piece {i}");
-                return Some(i);
-            }
-        }
-        for i in 0..piece {
-            if self.can_schedule_piece(i) {
-                tracing::debug!("Assigning fallback request({piece}) piece {i}");
-                return Some(i);
-            }
-        }
-        None
+        crate::utils::piece_size(piece_i, self.piece_size, self.total_length) as u32
     }
 
     fn schedule_next(&mut self) -> Option<usize> {
-        let new_piece = match &self.schedule_strategy {
-            ScheduleStrategy::Linear => self.linear_next(),
-            ScheduleStrategy::RareFirst => self.rare_first_next(),
-            ScheduleStrategy::PieceRequest { piece } => self.request_piece_next(*piece),
-        };
+        let new_piece = self.piece_queue.pop();
         if let Some(new_piece) = new_piece {
             let piece_len = self.piece_length(new_piece);
-            self.piece_table[new_piece].pending_blocks = Some(PendingBlocks::new(piece_len));
+            self.piece_table[new_piece].pending_blocks =
+                Some(PendingPieceV2::new(piece_len as usize));
+            self.pending_pieces.push(new_piece);
         }
         new_piece
     }
 
-    pub fn save_blocks(
-        &mut self,
-        sender_idx: usize,
-        blocks: Vec<(Block, Bytes)>,
-    ) -> Vec<(usize, Bytes)> {
-        let mut full_pieces = Vec::new();
-        for (block, data) in blocks {
-            let piece = block.piece as usize;
-            let pending_piece = &mut self.piece_table[piece];
-            let Some(pending_blocks) = pending_piece.pending_blocks.as_mut() else {
-                continue;
-            };
-
-            if let Some(block) = pending_blocks.pending_block_mut(block.offset) {
-                block.bytes = Some(data);
-            }
-            if pending_blocks.is_full() {
-                let blocks = pending_piece.pending_blocks.take().unwrap();
-                pending_piece.is_saving = true;
-                let bytes = blocks.as_bytes();
-                if self.max_pending_pieces > self.count_pending_pieces() {
-                    _ = self.schedule_next();
-                }
-                full_pieces.push((piece, bytes));
-            }
-            self.peers[sender_idx].downloaded += block.length as u64;
-        }
-        full_pieces
+    /// Get next scheduled piece without scheduling it
+    fn schedule_peek(&self) -> Option<usize> {
+        self.piece_queue.last().copied()
     }
 
-    pub fn count_pending_pieces(&self) -> usize {
-        self.piece_table
-            .iter()
-            .filter(|x| x.pending_blocks.is_some())
-            .count()
+    pub fn save_block(&mut self, sender_idx: usize, data_block: DataBlock) {
+        let piece = data_block.piece as usize;
+        let scheduler_piece = &mut self.piece_table[piece];
+        let Some(pending_blocks) = scheduler_piece.pending_blocks.as_mut() else {
+            tracing::error!(
+                "Peer sent block of piece that is not pending: {}",
+                data_block
+            );
+            return;
+        };
+
+        let peer = &mut self.peers[sender_idx];
+        peer.downloaded += data_block.block.len() as u64;
+        let block = data_block.block();
+        let global_location = BlockGlobalLocation::from_block(&block, self.piece_size);
+        if !peer.pending_blocks.remove(&global_location) {
+            tracing::error!("Peer sent block we did'n ask: {}", data_block);
+        }
+        if let Err(e) = pending_blocks.save_block(data_block) {
+            // peer logic error
+            tracing::error!("{e}");
+        }
     }
 
     /// Schedules next batch for peer
-    pub fn schedule(&mut self, peer_idx: usize, pending_blocks_amount: usize) {
-        let available_pieces = self.available_pieces();
+    pub fn schedule(&mut self, peer_idx: usize, tick_duration: &std::time::Duration) {
         let peer = &mut self.peers[peer_idx];
 
-        let performance_kb = peer.performance_history.avg_down_speed() as usize / 1024;
+        let performance_kb = peer.performance_history.avg_down_speed_sec(tick_duration) / 1024;
+        // currently it is 32 Mb (2048 blocks) in pipeline if peer uploading 10MB/s
         let rate = if performance_kb < 20 {
             performance_kb + 2
         } else {
             performance_kb / 5 + 18
         };
-        let schedule_amount = rate as isize - pending_blocks_amount as isize;
-        if schedule_amount <= 0 {
+        let schedule_amount = rate.saturating_sub(peer.pending_blocks.len());
+        if schedule_amount == 0 {
             return;
         }
-        let schedule_amount = schedule_amount as usize;
 
-        let mut assigned_blocks = Vec::with_capacity(schedule_amount);
-        for block in self
-            .failed_blocks
-            .iter()
-            .filter(|b| peer.bitfield.has(b.piece as usize))
-            .take(schedule_amount - assigned_blocks.len())
-        {
-            assigned_blocks.push(*block);
-        }
-        self.failed_blocks.retain(|x| !assigned_blocks.contains(x));
+        let mut assigned = self.assign_n_blocks(schedule_amount, peer_idx);
 
-        if assigned_blocks.len() < schedule_amount {
-            for piece in available_pieces
-                .into_iter()
-                .filter(|p| peer.bitfield.has(*p))
-            {
-                let pending_blocks = self.piece_table[piece].pending_blocks.as_mut().unwrap();
-                while let Some(new_block) = pending_blocks.pend_block(piece as u32) {
-                    assigned_blocks.push(new_block);
-                    if assigned_blocks.len() == schedule_amount {
-                        break;
-                    }
-                }
-                if assigned_blocks.len() == schedule_amount {
-                    break;
-                }
-            }
-        }
+        // ISSUE: Check wheather we couldn't assign piece to peer because no more blocks available, not because
+        // he just doesn't have these pieces
+        // If any peer have single piece available he will force scheduling pending_piece
 
-        if assigned_blocks.len() < schedule_amount {
-            tracing::trace!(
+        if assigned < schedule_amount {
+            tracing::warn!(
                 "Couldn't fulfill peer's rate {}/{}",
-                assigned_blocks.len(),
+                assigned,
                 schedule_amount
             );
-            // Add more pending blocks to fulfil peer rate if strategy is not piece request
-            match self.schedule_strategy {
-                ScheduleStrategy::PieceRequest { .. } => {
-                    // self.steal_work(peer_idx, schedule_amount - assigned_blocks.len());
-                }
-                _ => {
-                    if self.schedule_next().is_none() {
-                        let available_pieces: Vec<_> = self
-                            .piece_table
-                            .iter()
-                            .enumerate()
-                            .filter(|p| p.1.pending_blocks.is_some())
-                            .map(|p| p.0)
-                            .collect();
-                        // self.steal_work(peer_idx, schedule_amount - assigned_blocks.len());
-                        for piece in available_pieces {
-                            let pending_blocks =
-                                self.piece_table[piece].pending_blocks.as_ref().unwrap();
-                            let mut avialbale_blocks: Vec<_> = pending_blocks
-                                .blocks
-                                .iter()
-                                .filter_map(|b| {
-                                    let block = b.as_block(piece as u32);
-                                    if b.bytes.is_none()
-                                        && !assigned_blocks.contains(&b.as_block(piece as u32))
-                                    {
-                                        Some(block)
-                                    } else {
-                                        None
+            // Add more pending blocks to fulfill peer rate
+            match self.schedule_next() {
+                Some(_) => {}
+                // If no more pieces in queue we can run endgame mode
+                None => {
+                    // this is the implementation of endgame mode.
+                    // we are just taking the first None blocks we see
+                    let peer = &self.peers[peer_idx];
+                    for piece_idx in self
+                        .pending_pieces
+                        .iter()
+                        .filter(|p| peer.bitfield.has(**p))
+                    {
+                        let pending_piece = &self.piece_table[*piece_idx];
+                        let pending_blocks = pending_piece.pending_blocks.as_ref().unwrap();
+                        for position in
+                            pending_blocks.pend_blocks_endgame(schedule_amount - assigned)
+                        {
+                            let block = Block::from_position(*piece_idx as u32, position);
+                            let global_location =
+                                BlockGlobalLocation::from_block(&block, self.piece_size);
+                            if !peer.pending_blocks.contains(&global_location) {
+                                match peer.message_tx.try_send(PeerMessage::request(block)) {
+                                    Ok(_) => {
+                                        assigned += 1;
                                     }
-                                })
-                                .take(schedule_amount - assigned_blocks.len())
-                                .collect();
-                            assigned_blocks.append(&mut avialbale_blocks);
-                            if assigned_blocks.len() == schedule_amount {
-                                break;
+                                    Err(e) => {
+                                        tracing::error!("Send error: {e}");
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Send error: {e}");
+                                        return;
+                                    }
+                                }
                             }
                         }
-                    };
+                        if assigned == schedule_amount {
+                            break;
+                        }
+                    }
                 }
-            }
-        }
-
-        if !assigned_blocks.is_empty() {
-            let peer = &mut self.peers[peer_idx];
-            if peer
-                .command
-                .try_send(PeerCommand::StartMany {
-                    blocks: assigned_blocks.clone(),
-                })
-                .is_err()
-            {
-                self.failed_blocks.extend(assigned_blocks.iter());
             };
         }
     }
 
-    /// Steal blocks from less productive peers
-    pub fn steal_work(&mut self, thief_idx: usize, amount: usize) {
-        let thief = &self.peers[thief_idx];
-        let thief_performance = thief.performance_history.avg_down_speed();
-
-        let mut worse_peers: Vec<_> = self
-            .peers
-            .iter_mut()
-            .enumerate()
-            .filter(|(idx, p)| {
-                !p.in_status.is_choked()
-                    && *idx != thief_idx
-                    && p.performance_history.avg_down_speed() < thief_performance
-            })
-            .collect();
-
-        worse_peers.sort_by_key(|(_, p)| p.performance_history.avg_down_speed());
-        for (piece_i, blocks) in self
-            .piece_table
-            .iter()
-            .enumerate()
-            .filter_map(|p| Some((p.0, p.1.pending_blocks.as_ref()?)))
-        {}
-    }
-
-    pub async fn send_block_to_peer(&mut self, peer_id: &Uuid, block: Block, bytes: Bytes) {
+    pub fn send_block_to_peer(&mut self, peer_id: &Uuid, block: Block, bytes: Bytes) {
         if let Some(idx) = self.get_peer_idx(peer_id) {
             let peer = &mut self.peers[idx];
             let start = block.offset as usize;
             let end = (block.offset + block.length) as usize;
-            peer.command
-                .send(PeerCommand::Block {
-                    block,
-                    data: bytes.slice(start..end),
+            peer.message_tx
+                .try_send(PeerMessage::Piece {
+                    begin: block.offset,
+                    index: block.piece,
+                    block: bytes.slice(start..end),
                 })
-                .await
                 .unwrap();
             peer.uploaded += block.length as u64;
         }
@@ -552,67 +488,133 @@ impl Scheduler {
     pub fn add_piece(&mut self, piece: usize) {
         self.piece_table[piece].is_finished = true;
         self.piece_table[piece].is_saving = false;
+        self.downloaded_pieces += 1;
         for peer in &mut self.peers {
             if peer.bitfield.has(piece) {
                 peer.interested_pieces -= 1;
             }
-            let _ = peer.command.try_send(PeerCommand::Have {
-                piece: piece as u32,
+            let _ = peer.message_tx.try_send(PeerMessage::Have {
+                index: piece as u32,
             });
         }
     }
 
-    pub fn handle_peer_choke(&mut self, peer_idx: usize, mut peer_blocks: Vec<Block>) {
+    /// Handle failed piece save
+    pub fn fail_piece(&mut self, piece_idx: usize) {
+        tracing::warn!("Failed to save piece {piece_idx}");
+        let piece_len = self.piece_length(piece_idx);
+        let piece = &mut self.piece_table[piece_idx];
+        piece.is_saving = false;
+        piece.pending_blocks = Some(PendingPieceV2::new(piece_len as usize));
+        self.piece_queue.push(piece_idx);
+    }
+
+    pub fn handle_peer_choke(&mut self, peer_idx: usize) {
         let peer = &mut self.peers[peer_idx];
-        self.failed_blocks.append(&mut peer_blocks);
-        peer.in_status.choke();
+        for pending_block in peer.pending_blocks.iter() {
+            let pending_block = pending_block.block(self.piece_size, self.total_length);
+            let piece_idx = pending_block.piece as usize;
+            if let Some(pending_blocks) = &mut self.piece_table[piece_idx].pending_blocks {
+                pending_blocks.unpend_block(pending_block.position());
+            }
+        }
+        peer.pending_blocks.clear();
+        peer.in_status.set_choke(true);
     }
 
     pub fn handle_peer_unchoke(&mut self, peer_idx: usize) {
         let peer = &mut self.peers[peer_idx];
-        peer.in_status.unchoke();
-        if peer.out_status.is_interested() {
-            self.schedule(peer_idx, 0);
+        peer.in_status.set_choke(false);
+    }
+
+    pub fn handle_peer_have_msg(&mut self, peer_idx: usize, piece: usize) {
+        if piece >= self.piece_table.len() {
+            tracing::warn!("peer have piece out of bounds");
+            return;
+        }
+        let peer = &mut self.peers[peer_idx];
+        if peer.bitfield.has(piece) {
+            tracing::warn!("peer sending have message with piece that is already in his bitfield");
+            // logic error
+        }
+        peer.bitfield.add(piece).expect("bounds checked above");
+        let piece = &mut self.piece_table[piece];
+        piece.rarity += 1;
+        if !piece.is_finished && piece.priority != Priority::Disabled {
+            peer.interested_pieces += 1;
         }
     }
 
     pub fn handle_peer_interest(&mut self, peer_idx: usize) {
         let peer = &mut self.peers[peer_idx];
-        peer.in_status.interest();
+        peer.in_status.set_interest(true);
     }
 
     pub fn handle_peer_uninterest(&mut self, peer_idx: usize) {
         let peer = &mut self.peers[peer_idx];
-        peer.in_status.uninterest();
+        peer.in_status.set_interest(false);
     }
 
-    pub fn remove_peer(
+    pub fn handle_peer_extension(
         &mut self,
         peer_idx: usize,
-        mut peer_blocks: Vec<Block>,
-    ) -> Option<ActivePeer> {
+        ext_id: u8,
+        payload: Bytes,
+    ) -> Result<(), PeerLogicError> {
+        let peer = &mut self.peers[peer_idx];
+        match ext_id {
+            PexMessage::CLIENT_ID => {
+                let pex_message = PexMessage::from_bytes(&payload).context("parse pex message")?;
+            }
+            UtMessage::CLIENT_ID => {
+                let ut_message =
+                    UtMessage::from_bytes(&payload).context("parse ut_metadata message")?;
+                match ut_message {
+                    UtMessage::Request { piece } => {
+                        if let Some(block) = self.ut_metadata.get_piece(piece) {
+                            peer.send_ut_metadata_block(
+                                UtMessage::Data {
+                                    piece,
+                                    total_size: self.ut_metadata.size,
+                                },
+                                block,
+                            )?
+                        } else {
+                            peer.send_extension_message(UtMessage::Reject { piece })?
+                        };
+                    }
+                    _ => {}
+                }
+            }
+            _ => {
+                // unknown extension
+            }
+        }
+        Ok(())
+    }
+
+    pub fn remove_peer(&mut self, peer_idx: usize) -> Option<std::net::SocketAddr> {
         let peer = self.peers.swap_remove(peer_idx);
-        self.failed_blocks.append(&mut peer_blocks);
+        for pending_block in peer.pending_blocks.into_iter() {
+            let pending_block = pending_block.block(self.piece_size, self.total_length);
+            let piece_idx = pending_block.piece as usize;
+            if let Some(pending_blocks) = &mut self.piece_table[piece_idx].pending_blocks {
+                // BUG: this will break during endgame mode!
+                pending_blocks.unpend_block(pending_block.position());
+            }
+        }
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity -= 1;
         }
-        Some(peer)
-    }
-
-    pub fn choke_peer(&mut self, peer_idx: usize) {
-        let peer = &mut self.peers[peer_idx];
-        peer.command.try_send(PeerCommand::Choke).unwrap();
-        peer.out_status.choke();
+        Some(peer.ip)
     }
 
     pub fn add_peer(&mut self, mut peer: ActivePeer) {
-        peer.out_status.unchoke();
-        peer.command.try_send(PeerCommand::Unchoke).unwrap();
-        let interested_amount = self.calculate_interested_amount(&peer);
-        peer.interested_pieces = interested_amount;
-        if interested_amount > 0 {
-            peer.out_status.interest();
-            peer.command.try_send(PeerCommand::Interested).unwrap();
+        let interseted_pieces = self.calculate_interested_amount(&peer);
+        peer.interested_pieces = interseted_pieces;
+        if interseted_pieces > 0 {
+            peer.set_out_choke(false).unwrap();
+            peer.set_out_interset(true).unwrap();
         }
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity += 1;
@@ -635,38 +637,68 @@ impl Scheduler {
     }
 
     pub fn calculate_interested_amount(&self, peer: &ActivePeer) -> usize {
-        let interested_amount = self
-            .piece_table
+        self.piece_table
             .iter()
             .enumerate()
             .filter(|(i, p)| {
                 p.priority != Priority::Disabled && !p.is_finished && peer.bitfield.has(*i)
             })
-            .count();
-        interested_amount
+            .count()
     }
 
     pub fn change_file_priority(&mut self, idx: usize, new_priority: Priority) {
-        self.pending_files.change_file_priority(idx, new_priority);
-        for file in &self.pending_files.files {
-            for p in file.pieces_range() {
-                self.piece_table[p].priority = file.priority;
+        if let Some((old, file)) = self.pending_files.change_file_priority(idx, new_priority) {
+            let is_disabled = !old.is_disabled() && new_priority.is_disabled();
+            for piece in file.pieces_range() {
+                self.piece_table[piece].priority = file.priority;
             }
-        }
+            if is_disabled {
+                self.pending_pieces.retain(|p| {
+                    let disabled = !file.pieces_range().contains(p);
+                    if disabled {
+                        self.piece_table[*p].pending_blocks = None;
+                    }
+                    disabled
+                });
+            }
+
+            // TODO: rebuild piece queue
+        };
     }
 
-    /// Pending pieces that are not filled
-    fn available_pieces(&self) -> Vec<usize> {
-        self.piece_table
+    fn assign_n_blocks(&mut self, take: usize, peer_idx: usize) -> usize {
+        let mut took = 0;
+        let peer = &mut self.peers[peer_idx];
+        for i in self
+            .pending_pieces
             .iter()
-            .enumerate()
-            .filter_map(|(i, piece)| {
-                piece
-                    .pending_blocks
-                    .as_ref()
-                    .and_then(|p| (!p.is_filled()).then_some(i))
-            })
-            .collect()
+            .filter(|p| peer.bitfield.has(**p))
+        {
+            let blocks = self.piece_table[*i].pending_blocks.as_mut().unwrap();
+            while let Some(position) = blocks.pend_block() {
+                let block = Block::from_position(*i as u32, position);
+                match peer.message_tx.try_send(PeerMessage::request(block)) {
+                    Ok(_) => {
+                        took += 1;
+                        let global_position =
+                            BlockGlobalLocation::from_block(&block, self.piece_size);
+                        peer.pending_blocks.insert(global_position);
+                        if took == take {
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Send error: {e}");
+                        blocks.unpend_block(position);
+                        return took;
+                    }
+                }
+            }
+            if took == take {
+                break;
+            }
+        }
+        took
     }
 
     pub fn get_peer_idx(&self, peer_id: &Uuid) -> Option<usize> {
@@ -674,29 +706,14 @@ impl Scheduler {
     }
 
     pub fn is_torrent_finished(&self) -> bool {
-        self.piece_table
-            .iter()
-            .all(|p| p.is_finished || p.priority == Priority::Disabled)
+        self.pending_pieces.is_empty()
     }
 
     /// Get progress percent and the amount of pending_pieces
     pub fn percent_pending_pieces(&self) -> (f64, usize) {
-        let mut total_pieces = 0;
-        let mut downloaded_pieces = 0;
-        let mut pending_pieces = 0;
-        for piece in self
-            .piece_table
-            .iter()
-            .filter(|p| p.priority != Priority::Disabled)
-        {
-            if piece.pending_blocks.is_some() {
-                pending_pieces += 1;
-            }
-            total_pieces += 1;
-            if piece.is_finished {
-                downloaded_pieces += 1;
-            }
-        }
+        let downloaded_pieces = self.downloaded_pieces;
+        let total_pieces = self.piece_queue.len() + self.pending_pieces.len() + downloaded_pieces;
+        let pending_pieces = self.pending_pieces.len();
         (
             downloaded_pieces as f64 / total_pieces as f64 * 100.,
             pending_pieces,
@@ -704,6 +721,6 @@ impl Scheduler {
     }
 
     pub fn total_pieces(&self) -> usize {
-        self.pieces.len()
+        self.piece_table.len()
     }
 }

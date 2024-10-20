@@ -10,10 +10,21 @@ pub fn verify_sha1(hash: [u8; 20], input: &[u8]) -> bool {
     hash == result
 }
 
-pub fn piece_size(piece_i: usize, piece_length: usize, total_length: usize) -> usize {
-    let total_pieces = (total_length + piece_length - 1) / piece_length;
+pub fn verify_iter_sha1(hash: [u8; 20], input: impl Iterator<Item = impl AsRef<[u8]>>) -> bool {
+    use sha1::{Digest, Sha1};
+    let mut hasher = <Sha1 as sha1::Digest>::new();
+    for el in input {
+        hasher.update(el);
+    }
+    let result: [u8; 20] = hasher.finalize().into();
+    hash == result
+}
 
-    if piece_i == total_pieces - 1 {
+pub fn piece_size(piece_i: usize, piece_length: u32, total_length: u64) -> u64 {
+    let piece_length = piece_length as u64;
+    let total_pieces = total_length.div_ceil(piece_length);
+
+    if piece_i == total_pieces as usize - 1 {
         let md = total_length % piece_length;
         if md == 0 {
             piece_length

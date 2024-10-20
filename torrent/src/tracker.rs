@@ -256,10 +256,10 @@ pub enum TrackerType {
 }
 
 impl TrackerType {
-    pub fn from_url(url: &Url, sender: UdpTrackerChannel) -> anyhow::Result<Self> {
+    pub fn from_url(url: &Url, sender: &UdpTrackerChannel) -> anyhow::Result<Self> {
         match url.scheme() {
             "https" | "http" => Ok(Self::Http),
-            "udp" => Ok(Self::Udp(sender)),
+            "udp" => Ok(Self::Udp(sender.clone())),
             rest => Err(anyhow::anyhow!("url scheme {rest} is not supported")),
         }
     }

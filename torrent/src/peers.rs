@@ -5,7 +5,6 @@ use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
-    sync::mpsc,
 };
 use tokio_stream::StreamExt;
 use tokio_util::{
@@ -14,20 +13,14 @@ use tokio_util::{
 };
 use uuid::Uuid;
 
-use crate::{
-    download::{Block, PeerCommand, PeerStatus, PeerStatusMessage},
-    protocol::{
-        peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage, CLIENT_EXTENSIONS},
-        pex::PexMessage,
-        ut_metadata::{UtMessage, UtMetadata},
-        Info,
-    },
+use crate::protocol::{
+    extension::Extension, peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage}, ut_metadata::{UtMessage, UtMetadata}, Info
 };
 
 #[derive(Debug)]
 pub struct PeerIPC {
-    pub status_tx: mpsc::Sender<PeerStatus>,
-    pub commands_rx: mpsc::Receiver<PeerCommand>,
+    pub message_tx: flume::Sender<PeerMessage>,
+    pub message_rx: flume::Receiver<PeerMessage>,
 }
 
 #[derive(Debug, Clone)]
@@ -92,11 +85,29 @@ impl PeerError {
     }
 }
 
-#[derive(Debug)]
-pub struct PeerJoin {
-    pub uuid: Uuid,
-    pub pending_blocks: Vec<Block>,
-    pub ready_blocks: Vec<(Block, bytes::Bytes)>,
+#[derive(Debug, Clone)]
+pub struct PeerLogicError(String);
+
+impl Display for PeerLogicError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "logic error: {}", self.0)
+    }
+}
+impl std::error::Error for PeerLogicError {}
+
+impl From<PeerLogicError> for PeerError {
+    fn from(value: PeerLogicError) -> Self {
+        Self {
+            msg: value.0,
+            error_type: PeerErrorCause::PeerLogic,
+        }
+    }
+}
+
+impl From<anyhow::Error> for PeerLogicError {
+    fn from(err: anyhow::Error) -> Self {
+        Self(err.to_string())
+    }
 }
 
 #[derive(Debug)]
@@ -106,11 +117,7 @@ pub struct Peer {
     pub stream: Framed<TcpStream, MessageFramer>,
     pub bitfield: BitField,
     pub handshake: HandShake,
-    pub choked: bool,
-    pub interested: bool,
     pub extension_handshake: Option<ExtensionHandshake>,
-    pub pending_blocks: Vec<Block>,
-    pub ready_blocks: Vec<(Block, bytes::Bytes)>,
 }
 
 impl Peer {
@@ -163,7 +170,7 @@ impl Peer {
                     let PeerMessage::ExtensionHandshake { payload: extension } = second_message
                     else {
                         return Err(anyhow!(
-                            "Second message must be the extension message if first is bitfield"
+                            "Second message must be the extension message if first is bitfield, got {second_message}"
                         ));
                     };
                     (bitfield, Some(extension))
@@ -171,15 +178,15 @@ impl Peer {
                 PeerMessage::ExtensionHandshake { payload: extension } => {
                     let PeerMessage::Bitfield { payload: bitfield } = second_message else {
                         return Err(anyhow!(
-                            "Second message must be the bitfield message if first is extension"
+                            "Second message must be the bitfield message if first is extension, got {second_message}"
                         ));
                     };
                     (bitfield, Some(extension))
                 }
                 _ => {
                     return Err(anyhow!(
-                        "First 2 messages must be bitfield or extension handshake"
-                    ))
+                    "First 2 messages must be bitfield or extension handshake, got {first_message}"
+                ))
                 }
             }
         } else {
@@ -195,11 +202,7 @@ impl Peer {
             bitfield,
             stream: messages_stream,
             handshake: his_handshake,
-            choked: true,
-            interested: false,
             extension_handshake: his_extension_handshake,
-            pending_blocks: Vec::new(),
-            ready_blocks: Vec::new(),
         })
     }
 
@@ -252,7 +255,7 @@ impl Peer {
                     let PeerMessage::ExtensionHandshake { payload: extension } = second_message
                     else {
                         return Err(anyhow!(
-                            "Second message must be the extension message if first is bitfield"
+                            "Second message must be the extension message if first is bitfield, got {second_message}"
                         ));
                     };
                     (bitfield, Some(extension))
@@ -260,20 +263,22 @@ impl Peer {
                 PeerMessage::ExtensionHandshake { payload: extension } => {
                     let PeerMessage::Bitfield { payload: bitfield } = second_message else {
                         return Err(anyhow!(
-                            "Second message must be the bitfield message if first is extension"
+                            "Second message must be the bitfield message if first is extension, got {second_message}"
                         ));
                     };
                     (bitfield, Some(extension))
                 }
                 _ => {
                     return Err(anyhow!(
-                        "First 2 messages must be bitfield or extension handshake"
-                    ))
+                    "First 2 messages must be bitfield or extension handshake, got {first_message}"
+                ))
                 }
             }
         } else {
             let PeerMessage::Bitfield { payload: bitfield } = first_message else {
-                return Err(anyhow!("First message must be the bitfield"));
+                return Err(anyhow!(
+                    "First message must be the bitfield, got {first_message}"
+                ));
             };
             (bitfield, None)
         };
@@ -284,11 +289,7 @@ impl Peer {
             bitfield,
             stream: messages_stream,
             handshake: his_handshake,
-            choked: true,
-            interested: false,
             extension_handshake: his_extension_handshake,
-            pending_blocks: Vec::new(),
-            ready_blocks: Vec::new(),
         })
     }
 
@@ -311,7 +312,7 @@ impl Peer {
             .as_ref()
             .context("peer does not support extensions")?;
         let mut ut_metadata = UtMetadata::empty_from_handshake(handshake)
-            .ok_or(anyhow!("peer does not support ut_metadata"))?;
+            .context("peer does not support ut_metadata")?;
         while let Some(msg) = ut_metadata.request_next_block() {
             self.send_peer_msg(PeerMessage::Extension {
                 extension_id: ut_metadata.metadata_id,
@@ -327,19 +328,24 @@ impl Peer {
                 else {
                     continue;
                 };
-                if extension_id != 1 {
+                if extension_id != UtMessage::CLIENT_ID {
                     continue;
                 }
                 let message: UtMessage = serde_bencode::from_bytes(&payload)?;
-                let message_length = serde_bencode::to_bytes(&message).unwrap().len();
                 match message {
                     UtMessage::Request { piece } => {
                         tracing::warn!("Ignoring ut metadata request piece: {piece}");
+                        // reject it baby
                     }
                     UtMessage::Data { piece, total_size } => {
                         ensure!(total_size == ut_metadata.size);
+                        // ISSUE: This is really stupid way to figure out the length of the message
+                        // part. Simplicity comes with consequences
+                        let message_length = serde_bencode::to_bytes(&message).unwrap().len();
                         let data_slice = payload.slice(message_length..);
-                        ut_metadata.save_block(piece, data_slice).unwrap();
+                        ut_metadata
+                            .save_block(piece, data_slice)
+                            .context("peer send block that does not exist")?;
                         break;
                     }
                     UtMessage::Reject { piece } => {
@@ -352,52 +358,24 @@ impl Peer {
         Ok(serde_bencode::from_bytes(&ut_metadata.as_bytes())?)
     }
 
-    pub async fn show_interest(&mut self) -> Result<(), PeerError> {
-        self.send_peer_msg(PeerMessage::Interested).await?;
-        self.interested = true;
-        Ok(())
-    }
-
     pub async fn download(
         mut self,
-        mut ipc: PeerIPC,
+        ipc: PeerIPC,
         cancellation_token: CancellationToken,
-    ) -> (PeerJoin, Result<(), PeerError>) {
-        let mut pex_update_interval = tokio::time::interval(Duration::from_secs(90));
-        let mut timeout_interval = tokio::time::interval(Duration::from_secs(5));
-        pex_update_interval.tick().await;
-        timeout_interval.tick().await;
+    ) -> (Uuid, Result<(), PeerError>) {
         let peer_result = loop {
             tokio::select! {
-                Some(command_msg) = ipc.commands_rx.recv() => {
-                    if let PeerCommand::StartMany { .. } = command_msg {
-                        timeout_interval.reset();
-                    }
-                    match self.handle_peer_command(command_msg).await {
+                Ok(command_msg) = ipc.message_rx.recv_async() => {
+                    match self.send_peer_msg(command_msg).await {
                         Ok(_) => {},
                         Err(e) => break Err(e),
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
-                    if let PeerMessage::Piece { .. } = peer_msg {
-                        timeout_interval.reset();
-                    }
-                    if let Err(e) = self.handle_peer_msg(peer_msg, &mut ipc).await {
-                        break Err(e);
-                    }
+                    if let Err(_) = ipc.message_tx.try_send(peer_msg) {
+                        break Err(PeerError::timeout("Channel is closed or overflowed"));
+                    };
                 },
-                _ = pex_update_interval.tick() => {
-                    let _ = self.send_status(PeerStatusMessage::PexRequest, &mut ipc);
-                }
-                _ = timeout_interval.tick() => {
-                    if !self.pending_blocks.is_empty() {
-                        break Err(PeerError::timeout("Timeout"));
-                    }
-                    if !self.ready_blocks.is_empty() {
-                        let ready_blocks = std::mem::take(&mut self.ready_blocks);
-                        self.send_status(PeerStatusMessage::Flush { blocks: ready_blocks }, &mut ipc)
-                    }
-                }
                 _ = cancellation_token.cancelled() => {
                     tracing::debug!(ip = self.ip().to_string(), "Peer quit using cancellation token");
                     break Ok(());
@@ -406,221 +384,7 @@ impl Peer {
         };
         let mut stream = self.stream.into_inner();
         let _ = stream.shutdown().await;
-        let pending_blocks = std::mem::take(&mut self.pending_blocks);
-        let ready_blocks = std::mem::take(&mut self.ready_blocks);
-        let join_data = PeerJoin {
-            pending_blocks,
-            ready_blocks,
-            uuid: self.uuid,
-        };
-        (join_data, peer_result)
-    }
-
-    pub async fn handle_peer_command(
-        &mut self,
-        peer_command: PeerCommand,
-    ) -> Result<(), PeerError> {
-        match peer_command {
-            PeerCommand::Start { block } => {
-                self.pending_blocks.push(block);
-                self.send_peer_msg(PeerMessage::request(block)).await?;
-            }
-            PeerCommand::StartMany { blocks } => {
-                for block in blocks {
-                    self.pending_blocks.push(block);
-                    self.send_peer_msg(PeerMessage::request(block)).await?;
-                }
-            }
-            // Cancel does not provide guarantee that this block will not arrive
-            PeerCommand::Cancel { block } => {
-                self.send_peer_msg(PeerMessage::Cancel {
-                    index: block.piece,
-                    begin: block.offset,
-                    length: block.length,
-                })
-                .await?;
-            }
-            PeerCommand::Have { piece } => {
-                self.send_peer_msg(PeerMessage::Have { index: piece })
-                    .await?;
-            }
-            PeerCommand::Interested => self.show_interest().await?,
-            PeerCommand::Choke => self.send_peer_msg(PeerMessage::Choke).await?,
-            PeerCommand::Unchoke => self.send_peer_msg(PeerMessage::Unchoke).await?,
-            PeerCommand::NotInterested => self.send_peer_msg(PeerMessage::NotInterested).await?,
-            PeerCommand::Block { block, data } => {
-                self.send_peer_msg(PeerMessage::Piece {
-                    index: block.piece,
-                    begin: block.offset,
-                    block: data,
-                })
-                .await?
-            }
-            PeerCommand::Pex { msg } => {
-                if let Some(pex_id) = self.extension_handshake.as_ref().and_then(|h| h.pex_id()) {
-                    self.send_peer_msg(PeerMessage::Extension {
-                        extension_id: pex_id,
-                        payload: msg.as_bytes().into(),
-                    })
-                    .await?;
-                };
-            }
-            PeerCommand::UtMetadata { msg, data } => {
-                if let Some(ut_metadata_id) = self
-                    .extension_handshake
-                    .as_ref()
-                    .and_then(|h| h.ut_metadata_id())
-                {
-                    let msg_bytes = msg.as_bytes();
-                    let mut bytes = bytes::BytesMut::with_capacity(msg_bytes.len() + data.len());
-                    bytes.extend_from_slice(&msg_bytes);
-                    bytes.extend_from_slice(&data);
-
-                    self.send_peer_msg(PeerMessage::Extension {
-                        extension_id: ut_metadata_id,
-                        payload: bytes.freeze(),
-                    })
-                    .await?;
-                };
-            }
-        };
-        Ok(())
-    }
-
-    pub async fn handle_peer_msg(
-        &mut self,
-        peer_msg: PeerMessage,
-        ipc: &mut PeerIPC,
-    ) -> Result<(), PeerError> {
-        match peer_msg {
-            PeerMessage::HeatBeat => {}
-            PeerMessage::Choke => {
-                self.choked = true;
-                let pending_blocks = std::mem::take(&mut self.pending_blocks);
-                let ready_blocks = std::mem::take(&mut self.ready_blocks);
-                self.send_status(
-                    PeerStatusMessage::Choked {
-                        ready_blocks,
-                        pending_blocks,
-                    },
-                    ipc,
-                );
-            }
-            PeerMessage::Unchoke => {
-                self.choked = false;
-                self.send_status(PeerStatusMessage::Unchoked, ipc);
-            }
-            PeerMessage::Interested => {
-                self.interested = true;
-                self.send_status(PeerStatusMessage::Interested, ipc);
-            }
-            PeerMessage::NotInterested => {
-                self.interested = false;
-                self.send_status(PeerStatusMessage::NotInterested, ipc);
-            }
-            PeerMessage::Have { index } => {
-                let _ = self.bitfield.add(index as usize);
-                self.send_status(PeerStatusMessage::Have { piece: index }, ipc);
-            }
-            PeerMessage::Bitfield { .. } => {
-                return Err(PeerError::logic("Peer is sending bitfield"));
-            }
-            PeerMessage::Request {
-                index,
-                begin,
-                length,
-            } => {
-                self.send_status(
-                    PeerStatusMessage::Request {
-                        block: Block {
-                            piece: index,
-                            offset: begin,
-                            length,
-                        },
-                    },
-                    ipc,
-                );
-            }
-            PeerMessage::Piece {
-                index,
-                begin,
-                block: bytes,
-            } => {
-                let block = Block {
-                    piece: index,
-                    offset: begin,
-                    length: bytes.len() as u32,
-                };
-                if let Some(block) = self
-                    .pending_blocks
-                    .iter()
-                    .position(|b| *b == block)
-                    .map(|idx| self.pending_blocks.swap_remove(idx))
-                {
-                    self.ready_blocks.push((block, bytes));
-                    if self.ready_blocks.len() > self.pending_blocks.len() / 2 {
-                        let blocks: Vec<_> = self.ready_blocks.drain(..).collect();
-                        self.send_status(PeerStatusMessage::Data { blocks }, ipc)
-                    }
-                };
-            }
-            PeerMessage::Cancel { .. } => {
-                tracing::warn!(%peer_msg, "Not implemented")
-            }
-            PeerMessage::ExtensionHandshake { .. } => {
-                return Err(PeerError::logic("Peer is sending extension handshake"));
-            }
-            PeerMessage::Extension {
-                extension_id,
-                payload,
-            } => {
-                if let Some(name) = CLIENT_EXTENSIONS
-                    .iter()
-                    .find(|(_, id)| *id == extension_id)
-                    .map(|(name, _)| *name)
-                {
-                    match name {
-                        "ut_metadata" => match UtMessage::from_bytes(&payload) {
-                            Ok(msg) => match msg {
-                                UtMessage::Request { piece } => {
-                                    tracing::debug!("Peer asked for ut_metadata block({})", piece);
-                                    self.send_status(
-                                        PeerStatusMessage::UtMetadataBlockRequest { block: piece },
-                                        ipc,
-                                    )
-                                }
-                                UtMessage::Data { .. } => {
-                                    tracing::warn!("Peer sent ut_metadata data message");
-                                }
-                                UtMessage::Reject { piece } => {
-                                    tracing::warn!(
-                                        "Peer sent ut_metadata reject message for block: {}",
-                                        piece
-                                    );
-                                }
-                            },
-                            Err(e) => {
-                                tracing::error!("Failed to decode ut_metadata message: {e}");
-                                return Err(PeerError::logic(
-                                    "Failed to decode ut_metadata message",
-                                ));
-                            }
-                        },
-                        "ut_pex" => match PexMessage::from_bytes(&payload) {
-                            Ok(msg) => {
-                                self.send_status(PeerStatusMessage::PexMessage { msg }, ipc);
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to decode pex message: {e}");
-                                return Err(PeerError::logic("Failed to decode pex message"));
-                            }
-                        },
-                        _ => return Err(PeerError::logic("Unrecognized extension")),
-                    }
-                };
-            }
-        }
-        Ok(())
+        (self.uuid, peer_result)
     }
 
     pub async fn send_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
@@ -646,15 +410,6 @@ impl Peer {
                 Err(PeerError::connection("peer connection failed"))
             }
         }
-    }
-
-    pub fn send_status(&mut self, status: PeerStatusMessage, ipc: &mut PeerIPC) {
-        ipc.status_tx
-            .try_send(PeerStatus {
-                peer_id: self.uuid,
-                message_type: status,
-            })
-            .unwrap();
     }
 
     pub fn ip(&self) -> SocketAddr {

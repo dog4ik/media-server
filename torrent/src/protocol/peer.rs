@@ -11,6 +11,8 @@ use tokio_util::codec::{Decoder, Encoder};
 
 use crate::{download::Block, peers::BitField};
 
+use super::{extension::Extension, pex, ut_metadata};
+
 #[derive(Debug, Clone)]
 pub struct HandShake {
     pub reserved: [u8; 8],
@@ -86,7 +88,13 @@ pub struct ExtensionHandshake {
     pub fields: HashMap<String, serde_bencode::value::Value>,
 }
 
-pub const CLIENT_EXTENSIONS: [(&str, u8); 2] = [("ut_metadata", 1), ("ut_pex", 2)];
+pub const CLIENT_EXTENSIONS: [(&str, u8); 2] = [
+    (
+        ut_metadata::UtMessage::NAME,
+        ut_metadata::UtMessage::CLIENT_ID,
+    ),
+    (pex::PexMessage::NAME, pex::PexMessage::CLIENT_ID),
+];
 
 impl ExtensionHandshake {
     pub fn from_bytes(bytes: &[u8]) -> serde_bencode::Result<Self> {
@@ -112,8 +120,7 @@ impl ExtensionHandshake {
         self.fields
             .get("metadata_size")
             .and_then(|size| match size {
-                // WARN: negative value
-                serde_bencode::value::Value::Int(size) => Some(*size as usize),
+                serde_bencode::value::Value::Int(size) => Some(usize::try_from(*size).ok()?),
                 _ => None,
             })
     }
@@ -226,8 +233,8 @@ impl Display for PeerMessage {
 }
 
 impl PeerMessage {
-    pub fn from_slice(data_bytes: &[u8]) -> anyhow::Result<Self> {
-        if data_bytes.is_empty() {
+    pub fn from_frame(frame: Bytes) -> anyhow::Result<Self> {
+        if frame.is_empty() {
             return Ok(Self::HeatBeat);
         }
         let request_payload = |b: &[u8]| -> anyhow::Result<_> {
@@ -250,8 +257,8 @@ impl PeerMessage {
                 u32::from_be_bytes(length_buffer),
             ))
         };
-        let tag = data_bytes[0];
-        let payload = &data_bytes[1..];
+        let tag = frame[0];
+        let payload = &frame[1..];
         match tag {
             0 => Ok(PeerMessage::Choke),
             1 => Ok(PeerMessage::Unchoke),
@@ -281,11 +288,11 @@ impl PeerMessage {
                 let begin_buffer: [u8; 4] = payload[4..8].try_into()?;
                 let index = u32::from_be_bytes(index_buffer);
                 let begin = u32::from_be_bytes(begin_buffer);
-                let piece = Bytes::copy_from_slice(&payload[8..]);
+                let block = frame.slice(9..);
                 Ok(PeerMessage::Piece {
                     index,
                     begin,
-                    block: piece,
+                    block,
                 })
             }
             8 => {
@@ -303,9 +310,10 @@ impl PeerMessage {
                         payload: ExtensionHandshake::from_bytes(payload[1..].as_ref())?,
                     })
                 } else {
+                    let payload = frame.slice(2..);
                     Ok(PeerMessage::Extension {
                         extension_id,
-                        payload: Bytes::copy_from_slice(&payload[1..]),
+                        payload,
                     })
                 }
             }
@@ -458,15 +466,15 @@ impl Decoder for MessageFramer {
             return Ok(None);
         }
 
-        // Use advance to modify src such that it no longer contains
-        // this frame.
-        let data = &src[4..4 + length];
-        let message = match PeerMessage::from_slice(data) {
+        let mut frame = src.split_to(4 + length);
+        // skip length bytes
+        frame.advance(4);
+        let frame = frame.freeze();
+        let message = match PeerMessage::from_frame(frame) {
             Ok(msg) => msg,
             Err(e) => return Err(anyhow!("failed to construct peer message: {}", e)),
         };
 
-        src.advance(4 + length);
         Ok(Some(message))
     }
 }

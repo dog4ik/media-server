@@ -184,7 +184,7 @@ impl UdpTrackerMessage {
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
         let mut cursor = Cursor::new(bytes);
 
-        let action = read_u32(&mut cursor).context("Message dont contain action byte")?;
+        let action = read_u32(&mut cursor).context("message doesn't contain action byte")?;
         let transaction_id = read_u32(&mut cursor).context("read transaction id")?;
 
         let message_type = match action {

@@ -1,5 +1,6 @@
 use std::{
     io::SeekFrom,
+    ops::Range,
     path::{Path, PathBuf},
 };
 
@@ -7,7 +8,7 @@ use anyhow::{bail, ensure, Context};
 use bytes::{Bytes, BytesMut};
 use tokio::{
     fs,
-    io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt, BufReader},
+    io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt, BufReader},
     sync::{mpsc, oneshot, watch},
     task::JoinSet,
 };
@@ -16,8 +17,48 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use crate::{
     peers::BitField,
     protocol::{Hashes, Info, OutputFile},
-    utils::verify_sha1,
+    scheduler::BLOCK_LENGTH,
+    utils::{verify_iter_sha1, verify_sha1},
 };
+
+pub struct ReadyPiece(Vec<Bytes>);
+
+impl ReadyPiece {
+    pub async fn write_to<T: AsyncWrite + Unpin>(
+        &self,
+        mut writer: T,
+        range: Range<usize>,
+    ) -> std::io::Result<()> {
+        let block_length = BLOCK_LENGTH as usize;
+        let start = range.start;
+        let end = range.end;
+        let start_idx = start / block_length;
+        let end_idx = end.div_ceil(block_length);
+        for i in start_idx..end_idx {
+            let bytes = &self.0[i];
+            let block_start = i * block_length;
+
+            let relative_start = if i == start_idx {
+                start - block_start
+            } else {
+                0
+            };
+            let relative_end = if i == end_idx - 1 {
+                end - block_start
+            } else {
+                bytes.len() // Full block
+            };
+            writer
+                .write_all(&bytes[relative_start..relative_end])
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub fn len(&self) -> usize {
+        self.0.iter().map(|x| x.len()).sum()
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 /// Methods of storing and retrieving pieces
@@ -52,17 +93,31 @@ impl StorageHandle {
     pub async fn save_piece(
         &self,
         insert_piece: usize,
-        bytes: Bytes,
+        blocks: Vec<Bytes>,
         response: mpsc::Sender<StorageFeedback>,
     ) {
         self.piece_tx
             .send(StorageMessage::Save {
                 piece_i: insert_piece,
-                bytes,
+                blocks,
                 response,
             })
             .await
             .unwrap();
+    }
+
+    pub fn try_save_piece(
+        &self,
+        insert_piece: usize,
+        blocks: Vec<Bytes>,
+        response: mpsc::Sender<StorageFeedback>,
+    ) -> anyhow::Result<()> {
+        self.piece_tx.try_send(StorageMessage::Save {
+            piece_i: insert_piece,
+            blocks,
+            response,
+        })?;
+        Ok(())
     }
     pub async fn retrieve_piece(&self, piece_i: usize, response: mpsc::Sender<StorageFeedback>) {
         self.piece_tx
@@ -99,7 +154,7 @@ impl StorageHandle {
 pub enum StorageMessage {
     Save {
         piece_i: usize,
-        bytes: Bytes,
+        blocks: Vec<Bytes>,
         response: mpsc::Sender<StorageFeedback>,
     },
     EnableFile {
@@ -207,20 +262,22 @@ impl TorrentStorage {
         match message {
             StorageMessage::Save {
                 piece_i,
-                bytes,
+                blocks,
                 response,
             } => {
                 let save_result = match self.storage_method {
                     StorageMethod::Preallocated => self
-                        .save_piece_preallocated(piece_i, bytes)
+                        .save_piece_preallocated(piece_i, ReadyPiece(blocks))
                         .await
                         .map(|_| piece_i)
                         .map_err(|_| piece_i),
-                    StorageMethod::Reallocated => self
-                        .save_piece(piece_i, bytes)
-                        .await
-                        .map(|_| piece_i)
-                        .map_err(|_| piece_i),
+                    StorageMethod::Reallocated => {
+                        todo!()
+                        //self.save_piece(piece_i, blocks)
+                        //    .await
+                        //    .map(|_| piece_i)
+                        //    .map_err(|_| piece_i);
+                    }
                 };
                 match save_result {
                     Ok(piece_i) => {
@@ -270,11 +327,7 @@ impl TorrentStorage {
 
     /// Helper function to get piece length with consideration of the last piece
     fn piece_length(&self, piece_i: usize) -> u32 {
-        crate::utils::piece_size(
-            piece_i,
-            self.piece_size as usize,
-            self.total_length as usize,
-        ) as u32
+        crate::utils::piece_size(piece_i, self.piece_size, self.total_length) as u32
     }
 
     /// Save piece reallocating every time "gap" occurs
@@ -377,16 +430,16 @@ impl TorrentStorage {
     pub async fn save_piece_preallocated(
         &mut self,
         piece_i: usize,
-        bytes: Bytes,
+        blocks: ReadyPiece,
     ) -> anyhow::Result<()> {
-        let piece_length = bytes.len() as u32;
+        let piece_length = blocks.len() as u32;
         ensure!(piece_length == self.piece_length(piece_i));
 
         let piece_start = piece_i as u64 * self.piece_size as u64;
         let piece_end = piece_start + piece_length as u64;
 
         let hash = self.pieces.get_hash(piece_i).unwrap();
-        if !verify_sha1(hash, &bytes) {
+        if !verify_iter_sha1(hash, blocks.0.iter()) {
             let msg = format!("Failed to verify hash of piece {}", piece_i);
             tracing::error!(msg);
             return Err(anyhow::anyhow!(msg));
@@ -429,7 +482,8 @@ impl TorrentStorage {
                 // end is behind file
                 piece_length
             } as usize;
-            file_handle.write_all(&bytes[start..end]).await?;
+            blocks.write_to(&mut file_handle, start..end).await?;
+            //file_handle.write_all(&bytes[start..end]).await?;
             file_offset += file.length();
         }
         Ok(())

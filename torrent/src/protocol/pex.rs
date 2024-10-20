@@ -5,6 +5,8 @@ use std::{
     net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
 
+use super::extension::Extension;
+
 #[derive(Debug, Clone)]
 pub struct PexHistory {
     history: Vec<PexHistoryEntry>,
@@ -351,6 +353,28 @@ impl Default for PexHistory {
     fn default() -> Self {
         Self::new()
     }
+}
+
+impl From<PexMessage> for bytes::Bytes {
+    fn from(value: PexMessage) -> Self {
+        serde_bencode::to_bytes(&value)
+            .expect("serialization infallable")
+            .into()
+    }
+}
+
+impl TryFrom<&[u8]> for PexMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let pex_message = serde_bencode::from_bytes(value)?;
+        Ok(pex_message)
+    }
+}
+
+impl Extension<'_> for PexMessage {
+    const NAME: &'static str = "ut_pex";
+    const CLIENT_ID: u8 = 2;
 }
 
 #[cfg(test)]

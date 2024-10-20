@@ -8,6 +8,7 @@ use sha1::{Digest, Sha1};
 
 #[allow(unused)]
 pub mod dht;
+pub mod extension;
 pub mod peer;
 pub mod pex;
 pub mod tracker;
