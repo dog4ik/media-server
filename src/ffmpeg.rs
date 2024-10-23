@@ -26,8 +26,8 @@ const FFMPEG_IMAGE_CODECS: [&str; 6] = ["png", "jpeg", "mjpeg", "gif", "tiff", "
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct FFprobeStream {
     pub index: i32,
-    pub codec_name: String,
-    pub codec_long_name: String,
+    pub codec_name: Option<String>,
+    pub codec_long_name: Option<String>,
     pub profile: Option<String>,
     pub codec_type: String,
     pub codec_tag_string: String,
@@ -191,7 +191,13 @@ impl FFprobeOutput {
         self.streams
             .iter()
             .filter(|s| {
-                s.codec_type == "video" && !FFMPEG_IMAGE_CODECS.contains(&s.codec_name.as_str())
+                s.codec_type == "video"
+                    && !FFMPEG_IMAGE_CODECS.contains(
+                        &s.codec_name
+                            .as_ref()
+                            .expect("codec name is defined if codec type is video")
+                            .as_str(),
+                    )
             })
             .map(|s| s.video_stream().expect("video stream"))
             .collect()
@@ -264,8 +270,8 @@ impl FFprobeStream {
     pub fn audio_stream(&self) -> Result<FFprobeAudioStream<'_>, anyhow::Error> {
         Ok(FFprobeAudioStream {
             index: self.index,
-            codec_name: &self.codec_name,
-            codec_long_name: &self.codec_long_name,
+            codec_name: &self.codec_name.as_ref().context("audio codec name")?,
+            codec_long_name: &self.codec_long_name.as_ref().context("codec long name")?,
             bit_rate: self.bit_rate.as_deref(),
             channels: self.channels.context("channel is absent")?,
             profile: self.profile.as_deref(),
@@ -277,8 +283,8 @@ impl FFprobeStream {
     pub fn video_stream(&self) -> Result<FFprobeVideoStream<'_>, anyhow::Error> {
         let video = FFprobeVideoStream {
             index: self.index,
-            codec_name: &self.codec_name,
-            codec_long_name: &self.codec_long_name,
+            codec_name: &self.codec_name.as_ref().context("video codec name")?,
+            codec_long_name: &self.codec_long_name.as_ref().context("codec long name")?,
             profile: self.profile.as_ref().context("profile is absent")?,
             level: self.level.context("level is absent")?,
             avg_frame_rate: self
@@ -300,8 +306,8 @@ impl FFprobeStream {
         let tags = &self.tags.as_ref().context("tags are absent")?;
         let video = FFprobeSubtitleStream {
             index: self.index,
-            codec_name: &self.codec_name,
-            codec_long_name: &self.codec_long_name,
+            codec_name: &self.codec_name.as_ref().context("subtitle codec name")?,
+            codec_long_name: &self.codec_long_name.as_ref().context("long codec name")?,
             language: tags.language.as_deref(),
             disposition: &self.disposition,
         };
