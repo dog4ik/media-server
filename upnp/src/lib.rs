@@ -85,12 +85,12 @@ impl XmlReaderExt for quick_xml::Reader<&[u8]> {
 
 pub type XmlWriter = quick_xml::Writer<Vec<u8>>;
 
-/// Allows structs to serialize themselfs into xml fragments
+/// Allows structs to serialize themselves into xml fragments
 pub trait IntoXml {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()>;
 }
 
-/// Allows structs to deserialize themselfs from xml reader
+/// Allows structs to deserialize themselves from xml reader
 pub trait FromXml {
     fn read_xml(r: &mut quick_xml::Reader<&[u8]>) -> anyhow::Result<Self>
     where

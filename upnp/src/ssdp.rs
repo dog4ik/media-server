@@ -85,7 +85,7 @@ pub struct SsdpListener {
 impl SsdpListener {
     pub async fn bind(config: SsdpListenerConfig) -> anyhow::Result<Self> {
         let socket = bind_ssdp_socket(config.ttl).context("failed to bind ssdp socket")?;
-        // NOTE: mabye pass location via config?
+        // NOTE: maybe pass location via config?
         let local_addr = resolve_local_addr().await?;
         tracing::debug!("Resolved local ip address {local_addr}");
         let location = format!(
@@ -217,13 +217,13 @@ impl SsdpListener {
                 },
             },
             BroadcastMessage::NotifyAlive(msg) => {
-                println!("Recieved alive message from: {}", msg.server);
+                println!("Received alive message from: {}", msg.server);
             }
             BroadcastMessage::NotifyByeBye(msg) => {
-                println!("Recieved byebye message from: {}", msg.usn);
+                println!("Received byebye message from: {}", msg.usn);
             }
             BroadcastMessage::NotifyUpdate(msg) => {
-                println!("Recieved update message from: {}", msg.usn);
+                println!("Received update message from: {}", msg.usn);
             }
         }
         Ok(())
