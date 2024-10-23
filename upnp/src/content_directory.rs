@@ -889,7 +889,7 @@ pub mod properties {
     impl ObjectProperty for Date {}
     impl IntoXml for Date {
         fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
-            let formatted = self.date.format(&Self::FORMAT).expect("infallable");
+            let formatted = self.date.format(&Self::FORMAT).expect("infallible");
             w.create_element("dc:date")
                 .write_text_content(BytesText::new(&formatted))?;
             Ok(())
@@ -1074,7 +1074,7 @@ impl Resource {
 
 #[derive(Debug)]
 pub struct ProtocolInfo {
-    protcol: String,
+    protocol: String,
     network: String,
     content_format: String,
     additional_info: String,
@@ -1083,7 +1083,7 @@ pub struct ProtocolInfo {
 impl ProtocolInfo {
     pub fn http_get(mime: String) -> Self {
         Self {
-            protcol: "http-get".into(),
+            protocol: "http-get".into(),
             network: "*".into(),
             content_format: mime,
             additional_info: "*".into(),
@@ -1096,7 +1096,7 @@ impl Display for ProtocolInfo {
         write!(
             f,
             "{protocol}:{network}:{content_format}:{additional_info}",
-            protocol = self.protcol,
+            protocol = self.protocol,
             network = self.network,
             content_format = self.content_format,
             additional_info = self.additional_info,
@@ -1109,13 +1109,13 @@ impl FromStr for ProtocolInfo {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let mut split = s.splitn(4, ':');
-        let protcol = split.next().context("get protocol part")?;
+        let protocol = split.next().context("get protocol part")?;
         let network = split.next().context("get network part")?;
         let content_format = split.next().context("get content format part")?;
         let additional_info = split.next().context("get additional info part")?;
         anyhow::ensure!(split.next().is_none());
         Ok(Self {
-            protcol: protcol.to_owned(),
+            protocol: protocol.to_owned(),
             network: network.to_owned(),
             content_format: content_format.to_owned(),
             additional_info: additional_info.to_owned(),

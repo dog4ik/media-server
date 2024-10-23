@@ -383,7 +383,7 @@ impl FromXml for ActionResponse {
                     ))
                 })
             })
-            .context("attrubute urn")?;
+            .context("attribute urn")?;
 
         let action_name = {
             let local_name = action_name_tag.local_name();
@@ -492,7 +492,7 @@ pub enum ActionErrorCode {
     ArgumentValueOutOfRange,
     /// Optional Action Not
     /// Implemented
-    OptionalActionNotImplmented,
+    OptionalActionNotImplemented,
     /// The device does not have sufficient memory available to complete the
     /// action.  
     OutOfMemory,
@@ -512,7 +512,7 @@ impl ActionErrorCode {
             ActionErrorCode::ActionFailed => 501,
             ActionErrorCode::ArgumentInvalid => 600,
             ActionErrorCode::ArgumentValueOutOfRange => 601,
-            ActionErrorCode::OptionalActionNotImplmented => 602,
+            ActionErrorCode::OptionalActionNotImplemented => 602,
             ActionErrorCode::OutOfMemory => 603,
             ActionErrorCode::HumanInterventionRequired => 604,
             ActionErrorCode::StringArgumentTooLong => 605,
