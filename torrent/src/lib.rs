@@ -42,6 +42,8 @@ pub mod scheduler;
 pub mod storage;
 mod tracker;
 mod utils;
+mod piece_picker;
+mod seeder;
 
 #[derive(Debug)]
 pub struct ClientConfig {

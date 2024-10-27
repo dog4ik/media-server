@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeSet, HashMap, HashSet, VecDeque},
+    collections::{HashMap, HashSet, VecDeque},
     fmt::Display,
     io::Write,
     net::SocketAddr,
@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     peers::{BitField, Peer, PeerError, PeerIPC},
+    piece_picker::{Priority, ScheduleStrategy},
     protocol::{
         extension::Extension,
         peer::{ExtensionHandshake, HandShake, PeerMessage},
@@ -22,7 +23,7 @@ use crate::{
         ut_metadata::UtMessage,
         Info,
     },
-    scheduler::{PendingFiles, Priority, ScheduleStrategy, Scheduler},
+    scheduler::{PendingFiles, Scheduler},
     storage::{StorageFeedback, StorageHandle},
     NewPeer,
 };
@@ -66,9 +67,9 @@ impl DownloadHandle {
     /// Notify scheduler about desired piece
     pub async fn ask_piece(&self, piece: usize) -> anyhow::Result<()> {
         self.download_tx
-            .send(DownloadMessage::SetStrategy(
-                ScheduleStrategy::PieceRequest { piece },
-            ))
+            .send(DownloadMessage::SetStrategy(ScheduleStrategy::Request(
+                piece,
+            )))
             .await?;
         Ok(())
     }
@@ -135,7 +136,7 @@ impl PerformanceHistory {
         self.history.push_front(perf);
     }
 
-    /// Latest measurement
+    /// The latest measurement
     pub fn last(&self) -> Option<&Performance> {
         self.history.front()
     }
@@ -206,13 +207,11 @@ pub struct ActivePeer {
     pub pex_idx: usize,
     pub last_pex_message_time: Instant,
     pub cancellation_token: CancellationToken,
-    pub interested_pieces: usize,
+    interested_pieces: usize,
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
-    // NOTE: this is kinda unfortunate. Optimization with first in last out vec will lose its benefits.
-    // we need to store pending blocks in hashset because during current implementation of endgame we can
-    // receive blocks that are not in this list so constant lookup is important.
-    pub pending_blocks: BTreeSet<BlockGlobalLocation>,
+    /// Amount of blocks that are in flight
+    pub pending_blocks: usize,
 }
 
 impl ActivePeer {
@@ -240,7 +239,7 @@ impl ActivePeer {
             interested_pieces: 0,
             handshake: peer.handshake.clone(),
             extension_handshake: peer.extension_handshake.clone(),
-            pending_blocks: BTreeSet::new(),
+            pending_blocks: 0,
         }
     }
 
@@ -284,7 +283,7 @@ impl ActivePeer {
     }
 
     pub fn send_pex_message(&mut self, latest_idx: usize) {
-        // TODO: send the actuall message
+        // TODO: send the actual message
         self.last_pex_message_time = Instant::now();
         self.pex_idx = latest_idx
     }
@@ -318,6 +317,26 @@ impl ActivePeer {
             payload: writer.into_inner().freeze(),
         })?;
         Ok(())
+    }
+
+    /// Send cancel signal to the peer.
+    /// It will force peer handle to join
+    pub fn cancel_peer(&self) {
+        self.cancellation_token.cancel();
+    }
+
+    pub fn add_interested(&mut self) {
+        if self.interested_pieces == 0 {
+            self.set_out_interset(true).unwrap();
+        }
+        self.interested_pieces += 1;
+    }
+
+    pub fn remove_interested(&mut self) {
+        if self.interested_pieces == 1 {
+            self.set_out_interset(false).unwrap();
+        }
+        self.interested_pieces -= 1;
     }
 }
 
@@ -510,8 +529,9 @@ impl Block {
         }
     }
 
-    pub fn range(&self) -> Range<u32> {
-        self.offset..self.offset + self.length
+    pub fn range(&self) -> Range<usize> {
+        let offset = self.offset as usize;
+        offset..offset + self.length as usize
     }
 
     pub fn position(&self) -> BlockPosition {
@@ -618,7 +638,6 @@ const PEER_CHANNEL_CAPACITY: usize = 500;
 #[derive(Debug)]
 pub struct Download {
     pub info_hash: [u8; 20],
-    pub total_pieces: usize,
     pub peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     pub storage_rx: mpsc::Receiver<StorageFeedback>,
     pub storage_tx: mpsc::Sender<StorageFeedback>,
@@ -647,7 +666,6 @@ impl Download {
         let info_hash = t.hash();
         let active_peers = JoinSet::new();
         let (storage_tx, storage_rx) = mpsc::channel(100);
-        let total_pieces = t.pieces.len();
         let output_files = t.output_files("");
         let pending_files =
             PendingFiles::from_output_files(t.piece_length, &output_files, enabled_files);
@@ -665,7 +683,6 @@ impl Download {
             storage_tx,
             scheduler,
             storage,
-            total_pieces,
             pex_history: PexHistory::new(),
             cancellation_token,
             state: DownloadState::default(),
@@ -683,7 +700,7 @@ impl Download {
         let (download_tx, download_rx) = mpsc::channel(100);
         let download_handle = DownloadHandle {
             download_tx,
-            total_pieces: self.total_pieces,
+            total_pieces: self.scheduler.piece_table.len(),
             cancellation_token: self.cancellation_token.clone(),
             storage: self.storage.clone(),
         };
@@ -730,10 +747,69 @@ impl Download {
                 PeerMessage::Extension {
                     extension_id,
                     payload,
-                } => self
-                    .scheduler
-                    .handle_peer_extension(peer_idx, extension_id, payload)
-                    .expect("sheuastoehustnaoheusthaoetsnuhaoneh unsateohunsth aoesntuh aonsteh unstaoheus theao"),
+                } => {
+                    let peer = &mut self.scheduler.peers[peer_idx];
+                    tracing::debug!("Received extension message with id {extension_id}");
+                    match extension_id {
+                        PexMessage::CLIENT_ID => {
+                            let info_hash = self.info_hash;
+                            let pex_message = PexMessage::from_bytes(&payload)
+                                .context("parse pex message")
+                                .unwrap();
+                            tracing::debug!(
+                                "Received {} new peers from pex message",
+                                pex_message.added.len()
+                            );
+                            for addr in pex_message.added.into_iter().filter_map(|a| {
+                                if self
+                                    .scheduler
+                                    .peers
+                                    .iter()
+                                    .find(|p| p.ip == a.addr)
+                                    .is_none()
+                                {
+                                    Some(a.addr)
+                                } else {
+                                    None
+                                }
+                            }) {
+                                self.pending_new_peers_ips.insert(addr);
+                                self.new_peers_join_set.spawn(async move {
+                                    crate::peers::Peer::new_from_ip(addr, info_hash)
+                                        .await
+                                        .map_err(|_| addr)
+                                });
+                            }
+                        }
+                        UtMessage::CLIENT_ID => {
+                            let ut_message = UtMessage::from_bytes(&payload)
+                                .context("parse ut_metadata message")
+                                .unwrap();
+                            match ut_message {
+                                UtMessage::Request { piece } => {
+                                    if let Some(block) = self.scheduler.ut_metadata.get_piece(piece)
+                                    {
+                                        peer.send_ut_metadata_block(
+                                            UtMessage::Data {
+                                                piece,
+                                                total_size: self.scheduler.ut_metadata.size,
+                                            },
+                                            block,
+                                        )
+                                        .unwrap()
+                                    } else {
+                                        peer.send_extension_message(UtMessage::Reject { piece })
+                                            .unwrap();
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+                        _ => {
+                            // unknown extension
+                        }
+                    }
+                }
                 // It is valid to send the handshake message more than once during the lifetime of a connection,
                 // the sending client should not be disconnected.
                 // An implementation may choose to ignore the subsequent handshake messages (or parts of them).
@@ -742,8 +818,9 @@ impl Download {
                 // It's enough that it contains the actual CHANGES to the extension list. To disable the support for LT_metadata at run-time,
                 // without affecting any other extensions, this message should be sent: d11:LT_metadatai0ee.
                 PeerMessage::ExtensionHandshake { .. } => {}
-                PeerMessage::Bitfield { payload } => {
+                PeerMessage::Bitfield { .. } => {
                     // logic error
+                    self.scheduler.peers[peer_idx].cancel_peer();
                 }
                 PeerMessage::HeatBeat => {}
             }
@@ -775,30 +852,46 @@ impl Download {
             // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
             //    blocks, handle their messages
 
+            let mut min_pex_tip = usize::MAX;
+
+            let prev_pending_amount = self.scheduler.pending_pieces.len();
+
             // 99% of time here
             let handle_peer_messages = Instant::now();
             for i in 0..self.scheduler.peers.len() {
                 self.handle_peer_messages(i);
+                let pex_idx = self.scheduler.peers[i].pex_idx;
+                if pex_idx < min_pex_tip {
+                    min_pex_tip = pex_idx
+                }
             }
             tracing::debug!(
                 "Handled peer's messages in {:?}",
                 handle_peer_messages.elapsed()
             );
 
+            // iterate over newly added pieces
+            for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
+                for peer in &mut self.scheduler.peers {
+                    if peer.bitfield.has(*piece) {
+                        peer.add_interested();
+                    }
+                }
+            }
+
             self.scheduler.pending_pieces.retain(|pending_piece| {
-                let piece = &self.scheduler.piece_table[*pending_piece]
-                    .pending_blocks
-                    .as_ref()
-                    .unwrap();
-                let is_full = piece.is_full();
+                let piece = &mut self.scheduler.piece_table[*pending_piece];
+                let blocks = piece.pending_blocks.as_mut().unwrap();
+                let is_full = blocks.is_full();
                 if is_full {
-                    let piece = self.scheduler.piece_table[*pending_piece]
-                        .pending_blocks
-                        .take()
-                        .unwrap();
-                    let blocks = piece.as_bytes();
+                    let pending_blocks = piece.pending_blocks.take().unwrap();
+                    piece.is_saving = true;
                     self.storage
-                        .try_save_piece(*pending_piece, blocks, self.storage_tx.clone())
+                        .try_save_piece(
+                            *pending_piece,
+                            pending_blocks.as_bytes(),
+                            self.storage_tx.clone(),
+                        )
                         .unwrap();
                 }
                 !is_full
@@ -815,10 +908,8 @@ impl Download {
 
             if loop_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
                 self.last_choke = loop_start;
-                // choke someone :D
+                // choke someone
             }
-
-            // 4. Do some stuff with new peers progress dispatching and other BS.
 
             while let Ok(new_peer) = self.new_peers.try_recv() {
                 match new_peer {
@@ -850,8 +941,7 @@ impl Download {
             self.scheduler.register_performance();
             self.handle_progress_dispatch(&mut progress);
 
-            let elapsed = loop_start.elapsed();
-            tracing::debug!("Download tick took: {:?}", elapsed);
+            tracing::debug!(took = ?loop_start.elapsed(), "Download tick finished");
 
             // 4. We sleep until next tick time
             tokio::select! {
@@ -894,6 +984,11 @@ impl Download {
         if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
             return;
         }
+        let total_pieces = self.scheduler.piece_table.len();
+        if let Err(e) = peer.bitfield.validate(total_pieces) {
+            tracing::warn!("Failed to validate peer's bitfiled: {e}");
+            return;
+        }
         let (message_tx, message_rx) = flume::bounded(PEER_CHANNEL_CAPACITY);
         let (peer_message_tx, peer_message_rx) = flume::bounded(PEER_CHANNEL_CAPACITY);
         let child_token = self.cancellation_token.child_token();
@@ -926,8 +1021,11 @@ impl Download {
                     .collect(),
                 dropped: vec![],
             };
-            let _ = active_peer.send_extension_message(initial_pex_message);
+            if let Err(e) = active_peer.send_extension_message(initial_pex_message) {
+                tracing::warn!("Failed to send pex initial message to peer: {e}")
+            };
         }
+        self.scheduler.add_peer(active_peer);
     }
 
     fn handle_peer_join(
@@ -952,7 +1050,7 @@ impl Download {
                 };
             }
             Err(e) => {
-                panic!("Peer task paniced: {e}");
+                panic!("Peer task panicked: {e}");
             }
         };
     }
@@ -1011,17 +1109,17 @@ impl Download {
     pub async fn handle_command(&mut self, command: DownloadMessage) {
         match command {
             DownloadMessage::SetStrategy(strategy) => {
-                if let ScheduleStrategy::PieceRequest { .. } = strategy {
+                if let ScheduleStrategy::Request(piece) = strategy {
                     self.scheduler.max_pending_pieces = 2;
                 } else {
                     self.scheduler.max_pending_pieces = 40;
                 };
                 tracing::debug!(
                     "Switching schedule strategy from {} to {}",
-                    self.scheduler.schedule_strategy,
+                    self.scheduler.strategy(),
                     strategy,
                 );
-                self.scheduler.schedule_strategy = strategy;
+                self.scheduler.set_strategy(strategy);
             }
             DownloadMessage::SetFilePriority { file_idx, priority } => {
                 self.scheduler.change_file_priority(file_idx, priority);
@@ -1049,19 +1147,4 @@ impl Download {
         // wait for peers to close
         while let Some(_) = self.peers_handles.join_next().await {}
     }
-}
-
-#[derive(Debug, Clone)]
-pub enum PeerCommand {
-    Start { block: Block },
-    StartMany { blocks: Vec<Block> },
-    Block { block: Block, data: Bytes },
-    Cancel { block: Block },
-    Have { piece: u32 },
-    Pex { msg: PexMessage },
-    UtMetadata { msg: UtMessage, data: Bytes },
-    Interested,
-    Choke,
-    Unchoke,
-    NotInterested,
 }

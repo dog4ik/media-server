@@ -14,7 +14,10 @@ use tokio_util::{
 use uuid::Uuid;
 
 use crate::protocol::{
-    extension::Extension, peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage}, ut_metadata::{UtMessage, UtMetadata}, Info
+    extension::Extension,
+    peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage},
+    ut_metadata::{UtMessage, UtMetadata},
+    Info,
 };
 
 #[derive(Debug)]
@@ -373,6 +376,7 @@ impl Peer {
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
                     if let Err(_) = ipc.message_tx.try_send(peer_msg) {
+                        tracing::error!("Peer channel is closed or overflowed");
                         break Err(PeerError::timeout("Channel is closed or overflowed"));
                     };
                 },
@@ -483,8 +487,44 @@ impl BitField {
         })
     }
 
+    pub fn missing_pieces(&self, total_pieces: usize) -> impl Iterator<Item = usize> + '_ {
+        self.0.iter().enumerate().flat_map(move |(i, byte)| {
+            (0..8).filter_map(move |position| {
+                let piece_i = i * 8 + (position as usize);
+                if piece_i >= total_pieces {
+                    return None;
+                }
+                let mask = 1u8.rotate_right(position + 1);
+                (byte & mask == 0).then_some(piece_i)
+            })
+        })
+    }
+
     pub fn empty(pieces_amount: usize) -> Self {
-        Self(vec![0; std::cmp::max((pieces_amount + 8 - 1) / 8, 1)])
+        Self(vec![0; std::cmp::max(pieces_amount.div_ceil(8), 1)])
+    }
+
+    /// Make sure that bitield is appropriate for given pieces amount.
+    /// Fails if there are any 1's after the end or it is small or large to fit given pieces.
+    pub fn validate(&self, total_pieces: usize) -> anyhow::Result<()> {
+        let bitfield_pieces = self.0.len() * 8;
+        let leftover = bitfield_pieces
+            .checked_sub(total_pieces)
+            .context("bitfield has less capacity than needed")?;
+        if leftover >= 8 {
+            anyhow::bail!("bitfield is larger than needed")
+        }
+        for piece in (bitfield_pieces - leftover)..bitfield_pieces {
+            anyhow::ensure!(!self.has(piece));
+        }
+        Ok(())
+    }
+
+    /// Perform bitwise | with other
+    pub fn or(&mut self, other: &Self) {
+        for (self_byte, other_byte) in self.0.iter_mut().zip(other.0.iter()) {
+            *self_byte |= other_byte;
+        }
     }
 }
 
@@ -590,6 +630,41 @@ mod test {
         assert_eq!(Some(11), iterator.next());
         assert_eq!(Some(15), iterator.next());
         assert_eq!(None, iterator.next());
+    }
+
+    #[test]
+    fn bitfiled_validate() {
+        let data = [0b01110101, 0b01110001, 0b00100000];
+        let bitfield = BitField::new(&data);
+        assert!(bitfield.validate(16).is_err());
+        assert!(bitfield.validate(1).is_err());
+        assert!(bitfield.validate(13).is_err());
+        assert!(bitfield.validate(18).is_err());
+        assert!(bitfield.validate(19).is_ok());
+        assert!(bitfield.validate(20).is_ok());
+        assert!(bitfield.validate(24).is_ok());
+        assert!(bitfield.validate(25).is_err());
+        assert!(bitfield.validate(100).is_err());
+        let data = [0b01110100];
+        let bitfield = BitField::new(&data);
+        assert!(bitfield.validate(1).is_err());
+        assert!(bitfield.validate(4).is_err());
+        assert!(bitfield.validate(5).is_err());
+        assert!(bitfield.validate(6).is_ok());
+        assert!(bitfield.validate(7).is_ok());
+        assert!(bitfield.validate(8).is_ok());
+        assert!(bitfield.validate(9).is_err());
+        assert!(bitfield.validate(100).is_err());
+        let data = [0b11111111, 0b00000000];
+        let bitfield = BitField::new(&data);
+        assert!(bitfield.validate(1).is_err());
+        assert!(bitfield.validate(4).is_err());
+        assert!(bitfield.validate(5).is_err());
+        assert!(bitfield.validate(6).is_err());
+        assert!(bitfield.validate(7).is_err());
+        assert!(bitfield.validate(8).is_err());
+        assert!(bitfield.validate(9).is_ok());
+        assert!(bitfield.validate(100).is_err());
     }
 
     #[test]

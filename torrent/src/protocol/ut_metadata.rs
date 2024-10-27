@@ -27,7 +27,7 @@ impl UtMessage {
         serde_bencode::from_bytes(bytes)
     }
     pub fn as_bytes(&self) -> Vec<u8> {
-        serde_bencode::to_bytes(self).expect("serialization is infallable")
+        serde_bencode::to_bytes(self).expect("serialization is infallible")
     }
 }
 
