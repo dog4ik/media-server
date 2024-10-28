@@ -436,6 +436,21 @@ impl IntoArgumentList for Vec<ArgumentPayload> {
     }
 }
 
+impl<T: IntoArgumentList> IntoArgumentList for Option<T> {
+    fn into_action_response(&self) -> Vec<ArgumentPayload> {
+        match self {
+            Some(val) => val.into_action_response(),
+            None => vec![],
+        }
+    }
+}
+
+impl IntoArgumentList for () {
+    fn into_action_response(&self) -> Vec<ArgumentPayload> {
+        vec![]
+    }
+}
+
 macro_rules! impl_for_tuples {
     () => {};
 
@@ -534,6 +549,15 @@ impl From<ActionErrorCode> for ActionError {
 pub struct ActionError {
     pub code: ActionErrorCode,
     pub description: Option<String>,
+}
+
+impl ActionError {
+    pub fn not_implemented() -> Self {
+        Self {
+            code: ActionErrorCode::OptionalActionNotImplemented,
+            description: None,
+        }
+    }
 }
 
 impl From<anyhow::Error> for ActionError {
