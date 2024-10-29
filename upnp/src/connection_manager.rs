@@ -1,8 +1,8 @@
 use axum::handler::HandlerWithoutStateExt;
 
 use crate::{
-    action::{Action, ActionError, IntoArgumentList, OutArgument},
-    service::Service,
+    action::{Action, ActionError, IntoArgumentList, IntoValueList, OutArgument},
+    service::{ArgumentScanner, Service},
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
     templates::{service_description::ServiceDescription, SpecVersion},
     urn,
@@ -139,74 +139,44 @@ impl<T: ConnectionManagerHandler> ConnectionManagerService<T> {
         Self { handler }
     }
 
-    async fn get_protocol_info(
-        &self,
-    ) -> Result<
-        (
-            OutArgument<SourceProtocolInfo>,
-            OutArgument<SinkProtocolInfo>,
-        ),
-        ActionError,
-    > {
+    async fn get_protocol_info(&self) -> Result<(String, String), ActionError> {
         todo!()
     }
 
-    async fn get_current_connection_ids(
-        &self,
-    ) -> Result<OutArgument<CurrentConnectionIDs>, ActionError> {
+    async fn get_current_connection_ids(&self) -> Result<String, ActionError> {
         todo!()
     }
 
     async fn get_current_connection_info(
         &self,
-        connection_id: OutArgument<ConnectionID>,
-    ) -> Result<
-        (
-            OutArgument<RcsID>,
-            OutArgument<AVTransportID>,
-            OutArgument<ProtocolInfo>,
-            OutArgument<ConnectionManager>,
-            OutArgument<Direction>,
-            OutArgument<ConnectionStatus>,
-        ),
-        ActionError,
-    > {
+        connection_id: String,
+    ) -> Result<(i32, i32, String, String, Direction, ConnectionStatus), ActionError> {
         todo!()
     }
 
-    async fn get_feature_list(&self) -> Result<OutArgument<FeatureList>, ActionError> {
+    async fn get_feature_list(&self) -> Result<String, ActionError> {
         todo!()
     }
 
     async fn get_renderer_item_info(
         &self,
-        item_info_filter: OutArgument<ItemInfoFilter>,
-        item_metadata_list: OutArgument<ArgResult>,
-    ) -> Result<OutArgument<RenderingInfoList>, ActionError> {
+        item_info_filter: String,
+        item_metadata_list: String,
+    ) -> Result<String, ActionError> {
         todo!()
     }
 
     async fn prepare_for_connection(
         &self,
-        remote_protocol_info: OutArgument<ProtocolInfo>,
-        peer_connection_manager: OutArgument<ConnectionManager>,
-        connection_id: OutArgument<ConnectionID>,
-        direction: OutArgument<Direction>,
-    ) -> Result<
-        (
-            OutArgument<ConnectionID>,
-            OutArgument<AVTransportID>,
-            OutArgument<RcsID>,
-        ),
-        ActionError,
-    > {
+        remote_protocol_info: String,
+        peer_connection_manager: String,
+        connection_id: i32,
+        direction: Direction,
+    ) -> Result<(String, i32, i32), ActionError> {
         todo!()
     }
 
-    async fn connection_complete(
-        &self,
-        connection_id: OutArgument<ConnectionID>,
-    ) -> Result<(), ActionError> {
+    async fn connection_complete(&self, connection_id: String) -> Result<(), ActionError> {
         todo!()
     }
 }
@@ -288,54 +258,38 @@ impl<T: ConnectionManagerHandler + Send + Sync + 'static> Service for Connection
         ]
     }
 
-    async fn control_handler(
+    async fn control_handler<'a>(
         &self,
-        action: crate::action::ActionPayload,
-    ) -> anyhow::Result<impl crate::action::IntoArgumentList> {
-        match action.name() {
-            "GetProtocolInfo" => Ok(self.get_protocol_info().await?.into_action_response()),
-            "PrepareForConnection" => {
-                let remote_protocol_info = action.find_argument("RemoteProtocolInfo")?;
-                let peer_connection_manager = action.find_argument("PeerConnectionManager")?;
-                let connection_id = action.find_argument("PeerConnectionID")?;
-                let direction = action.find_argument("Direction")?;
-                Ok(self
-                    .prepare_for_connection(
-                        remote_protocol_info,
-                        peer_connection_manager,
-                        connection_id,
-                        direction,
-                    )
-                    .await?
-                    .into_action_response())
-            }
-            "ConnectionComplete" => {
-                let connection_id = action.find_argument("ConnectionID")?;
-                Ok(self
-                    .connection_complete(connection_id)
-                    .await?
-                    .into_action_response())
-            }
-            "GetCurrentConnectionIDs" => Ok(self
-                .get_current_connection_ids()
+        name: &'a str,
+        mut inputs: ArgumentScanner<'a>,
+    ) -> anyhow::Result<impl crate::action::IntoValueList> {
+        match name {
+            "GetProtocolInfo" => Ok(self.get_protocol_info().await?.into_value_list()),
+            "PrepareForConnection" => Ok(self
+                .prepare_for_connection(
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
+                )
                 .await?
-                .into_action_response()),
-            "GetCurrentConnectionInfo" => {
-                let connection_id = action.find_argument("ConnectionID")?;
-                Ok(self
-                    .get_current_connection_info(connection_id)
-                    .await?
-                    .into_action_response())
+                .into_value_list()),
+            "ConnectionComplete" => Ok(self
+                .connection_complete(inputs.next()?)
+                .await?
+                .into_value_list()),
+            "GetCurrentConnectionIDs" => {
+                Ok(self.get_current_connection_ids().await?.into_value_list())
             }
-            "GetRendererItemInfo" => {
-                let item_info_filter = action.find_argument("ItemInfoFilter")?;
-                let item_metadata_list = action.find_argument("ItemMetadataList")?;
-                Ok(self
-                    .get_renderer_item_info(item_info_filter, item_metadata_list)
-                    .await?
-                    .into_action_response())
-            }
-            "GetFeatureList" => Ok(self.get_feature_list().await?.into_action_response()),
+            "GetCurrentConnectionInfo" => Ok(self
+                .get_current_connection_info(inputs.next()?)
+                .await?
+                .into_value_list()),
+            "GetRendererItemInfo" => Ok(self
+                .get_renderer_item_info(inputs.next()?, inputs.next()?)
+                .await?
+                .into_value_list()),
+            "GetFeatureList" => Ok(self.get_feature_list().await?.into_value_list()),
             rest => Err(anyhow::anyhow!("unhandled action: {rest}")),
         }
     }

@@ -7,7 +7,7 @@ use axum_extra::headers::{self, HeaderMapExt};
 use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
 use reqwest::StatusCode;
 
-use crate::XmlReaderExt;
+use crate::{service::ArgumentScanner, XmlReaderExt};
 
 use super::{
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
@@ -69,6 +69,10 @@ impl Argument {
             .write_text_content(BytesText::new(&self.related_variable.name))?;
         w.write_event(Event::End(parent.to_end()))?;
         Ok(())
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
     }
 }
 
@@ -148,6 +152,42 @@ impl Action {
 
     pub fn add_output<T: SVariable>(&mut self, name: &'static str) {
         self.out_variables.push(Argument::into_sv::<T>(name));
+    }
+
+    pub fn name(&self) -> &str {
+        &self.action_name
+    }
+
+    pub fn in_variables(&self) -> &Vec<Argument> {
+        &self.in_variables
+    }
+
+    pub fn out_variables(&self) -> &Vec<Argument> {
+        &self.out_variables
+    }
+
+    pub fn input_scanner<'a>(&'a self, input: Vec<ArgumentPayload>) -> ArgumentScanner<'a> {
+        ArgumentScanner::new(input, self.in_variables())
+    }
+
+    pub fn map_out_varibales(&self, list: Vec<String>) -> Vec<ArgumentPayload> {
+        let out_variables = self.out_variables();
+        let mut arguments = Vec::with_capacity(out_variables.len());
+        for (arg, val) in self.out_variables.iter().zip(list.into_iter()) {
+            arguments.push(ArgumentPayload {
+                name: arg.name().to_owned(),
+                value: val,
+            });
+        }
+        if arguments.len() != out_variables.len() {
+            tracing::warn!(
+                "Mismatched output arguments length from {} action ({}/{})",
+                self.name(),
+                arguments.len(),
+                out_variables.len(),
+            );
+        }
+        arguments
     }
 }
 
@@ -424,6 +464,64 @@ impl IntoResponse for ActionResponse {
     fn into_response(self) -> axum::response::Response {
         SoapMessage::new(self).into_response()
     }
+}
+
+pub trait IntoValueList {
+    fn into_value_list(self) -> Vec<String>;
+}
+
+impl<T: IntoUpnpValue> IntoValueList for T {
+    fn into_value_list(self) -> Vec<String> {
+        vec![self.into_value().to_string()]
+    }
+}
+
+impl IntoValueList for () {
+    fn into_value_list(self) -> Vec<String> {
+        vec![]
+    }
+}
+
+impl IntoValueList for Vec<String> {
+    fn into_value_list(self) -> Vec<String> {
+        self
+    }
+}
+
+macro_rules! impl_tuples_into_value_list {
+    () => {};
+
+    ($(($($types:ident),*)),*) => {
+        $(
+            #[allow(non_snake_case, unused_variables)]
+            impl<$($types: IntoUpnpValue),*> IntoValueList for ($($types,)*) {
+                fn into_value_list(self) -> Vec<String> {
+                    let ($($types,)*) = self;
+                    let mut args = Vec::new();
+                    $(
+                        let value = $types.into_value().to_string();
+                        args.push(value);
+                    )*
+                    args
+                }
+            }
+        )*
+    };
+}
+
+impl_tuples_into_value_list! {
+    (A),
+    (A, B),
+    (A, B, C),
+    (A, B, C, D),
+    (A, B, C, D, E),
+    (A, B, C, D, E, F),
+    (A, B, C, D, E, F, G),
+    (A, B, C, D, E, F, G, H),
+    (A, B, C, D, E, F, G, H, I),
+    (A, B, C, D, E, F, G, H, I, J),
+    (A, B, C, D, E, F, G, H, I, J, K),
+    (A, B, C, D, E, F, G, H, I, J, K, L)
 }
 
 pub trait IntoArgumentList {

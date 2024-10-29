@@ -10,7 +10,10 @@ use std::{
 use anyhow::Context;
 use quick_xml::events::BytesText;
 
-use crate::action::{ActionError, IntoArgumentList};
+use crate::{
+    action::{ActionError, IntoArgumentList, IntoValueList},
+    service::ArgumentScanner,
+};
 
 use super::{
     action::{Action, OutArgument},
@@ -51,22 +54,17 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
 impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
     async fn browse(
         &self,
-        object_id: OutArgument<ObjectID>,
-        browse_flag: OutArgument<BrowseFlag>,
-        filter: OutArgument<Filter>,
-        start_index: OutArgument<Index>,
-        requested_count: OutArgument<Count>,
-        sort_criteria: OutArgument<SortCriteria>,
-    ) -> anyhow::Result<(
-        OutArgument<ArgResult>,
-        OutArgument<Count>,
-        OutArgument<Count>,
-        OutArgument<UpdateID>,
-    )> {
-        let result = match browse_flag.as_ref() {
+        object_id: String,
+        browse_flag: BrowseFlag,
+        filter: String,
+        start_index: u32,
+        requested_count: u32,
+        sort_criteria: String,
+    ) -> anyhow::Result<(String, u32, u32, u32)> {
+        let result = match browse_flag {
             BrowseFlag::BrowseDirectChildren => {
                 self.handler
-                    .browse_direct_children(object_id.as_ref(), requested_count.var)
+                    .browse_direct_children(object_id.as_ref(), requested_count)
                     .await?
             }
             BrowseFlag::BrowseMetadata => self.handler.browse_metadata(object_id.as_ref()).await?,
@@ -76,10 +74,10 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         let result = result.into_xml().unwrap();
         let update_id = self.update_id.load(Ordering::Acquire);
         Ok((
-            OutArgument::new("Result", result),
-            OutArgument::new("NumberReturned", number_returned as u32),
-            OutArgument::new("TotalMatches", total_matches as u32),
-            OutArgument::new("UpdateID", update_id),
+            result,
+            number_returned as u32,
+            total_matches as u32,
+            update_id,
         ))
     }
 }
@@ -275,36 +273,21 @@ impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDire
         ]
     }
 
-    async fn control_handler(
+    async fn control_handler<'a>(
         &self,
-        action: super::action::ActionPayload,
-    ) -> anyhow::Result<impl IntoArgumentList> {
-        tracing::debug!("Got action: {name}", name = action.name());
-        match action.name() {
+        name: &'a str,
+        mut inputs: ArgumentScanner<'a>,
+    ) -> anyhow::Result<impl IntoValueList> {
+        tracing::debug!("Got action: {name}", name = name);
+        match name {
             "Browse" => {
-                let arg_object_id = action.find_argument("ObjectID")?;
-                let browse_flag = action.find_argument("BrowseFlag")?;
-                let arg_filter = action.find_argument("Filter")?;
-                let arg_index = action.find_argument("StartingIndex")?;
-                let arg_count = action.find_argument("RequestedCount")?;
-                let arg_sort_criteria = action.find_argument("SortCriteria")?;
-
-                tracing::debug!(
-                    "Invoked browse action with arguments {}, {}, {}, {}, {}, {}",
-                    arg_object_id,
-                    browse_flag,
-                    arg_filter,
-                    arg_index,
-                    arg_count,
-                    arg_sort_criteria,
-                );
                 self.browse(
-                    arg_object_id,
-                    browse_flag,
-                    arg_filter,
-                    arg_index,
-                    arg_count,
-                    arg_sort_criteria,
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
+                    inputs.next()?,
                 )
                 .await
             }

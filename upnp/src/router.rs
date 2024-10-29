@@ -21,7 +21,10 @@ where
     }
 }
 
-use crate::action::{ActionError, ActionPayload};
+use crate::{
+    action::{ActionError, ActionPayload, IntoValueList},
+    service::UpnpService,
+};
 
 use super::{
     action::{ActionResponse, IntoArgumentList, SoapMessage},
@@ -52,6 +55,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
         let base_path = format!("/{}", S::NAME);
         let control_path = format!("{base_path}/control.xml");
         let scpd_path = format!("{base_path}/scpd.xml");
+        let service = UpnpService::new(service);
 
         let action_handler = |headers: HeaderMap, body: String| async move {
             let mut header = headers
@@ -74,15 +78,21 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
                     action.name(),
                 );
             }
+            let expected_action = service.find_action(action_name)?;
+            let scanner = expected_action.input_scanner(action.arguments);
 
             let out_arguments = service
-                .control_handler(action)
+                .s
+                .control_handler(action_name, scanner)
                 .await?
-                .into_action_response();
+                .into_value_list();
+
+            let args = expected_action.map_out_varibales(out_arguments);
+
             let action_response = ActionResponse {
                 service_urn: S::URN,
                 action_name: action_name.to_string(),
-                args: out_arguments,
+                args,
             };
             Ok::<_, ActionError>(action_response)
         };
