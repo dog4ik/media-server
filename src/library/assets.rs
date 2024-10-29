@@ -27,13 +27,13 @@ pub(crate) trait FileAsset {
 
     fn temp_path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
-        let base_path = &APP_RESOURCES.get().unwrap().temp_path;
+        let base_path = &APP_RESOURCES.temp_path;
         base_path.join(self.relative_path())
     }
 
     fn path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
-        let base_path = &APP_RESOURCES.get().unwrap().resources_path;
+        let base_path = &APP_RESOURCES.resources_path;
         base_path.join(self.relative_path())
     }
 
@@ -167,13 +167,13 @@ pub(crate) trait AssetDir {
 
     fn temp_path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
-        let base_path = &APP_RESOURCES.get().unwrap().temp_path;
+        let base_path = &APP_RESOURCES.temp_path;
         base_path.join(self.relative_path())
     }
 
     fn path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
-        let base_path = &APP_RESOURCES.get().unwrap().resources_path;
+        let base_path = &APP_RESOURCES.resources_path;
         base_path.join(self.relative_path())
     }
 

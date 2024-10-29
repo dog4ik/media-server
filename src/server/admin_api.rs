@@ -669,7 +669,7 @@ pub async fn progress(
 pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String), AppError> {
     use tokio::fs;
     use tokio::io;
-    let log_path = &APP_RESOURCES.get().unwrap().log_path;
+    let log_path = &APP_RESOURCES.log_path;
     let file = fs::File::open(log_path).await?;
     let take = 40_000;
     let length = file.metadata().await?.len();
@@ -746,7 +746,7 @@ pub async fn update_server_configuration(
     let result = config::CONFIG.apply_json(new_config)?;
     let table = config::CONFIG.construct_table();
 
-    let config_path = APP_RESOURCES.get().unwrap().config_path.to_owned();
+    let config_path = APP_RESOURCES.config_path.to_owned();
     let mut config_file = config::ConfigFile::open(config_path).await?;
 
     config_file.write_toml(table).await?;
@@ -767,7 +767,7 @@ pub async fn reset_server_configuration() -> Result<(), AppError> {
 
     let table = config::CONFIG.construct_table();
 
-    let config_path = APP_RESOURCES.get().unwrap().config_path.to_owned();
+    let config_path = APP_RESOURCES.config_path.to_owned();
     let mut config_file = config::ConfigFile::open(config_path).await?;
 
     config_file.write_toml(table).await?;

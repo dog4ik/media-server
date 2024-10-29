@@ -30,7 +30,7 @@ async fn main() {
         panic!("Could not initiate app resources");
     };
     let log_channel = init_tracer();
-    tracing::info!("Selected log location: {}", AppResources::log().display());
+    tracing::info!("Using log file location: {}", AppResources::log().display());
 
     if let Ok(path) = dotenv() {
         tracing::info!("Loaded env variables from: {}", path.display());
@@ -38,26 +38,12 @@ async fn main() {
         tracing::warn!("Could not load env variables from dotfile");
     }
 
-    let args = Args::parse();
-    let config_path = args
-        .config_path
-        .clone()
-        .unwrap_or_else(AppResources::default_config_path);
-    tracing::debug!("Selected config path: {}", config_path.display());
+    Args::parse().apply_configuration();
 
-    let mut config_file = ConfigFile::open(&config_path).await.unwrap();
-
-    let app_resources = AppResources::new(config_path);
-    APP_RESOURCES
-        .set(app_resources.clone())
-        .expect("resources are not initiated yet");
-    // Apply configuration after set APP_RESOURCES because global CONFIG depends on global
-    // APP_RESOURCES to get some defaults
-    match config_file.read().await {
+    match ConfigFile::open_and_read().await {
         Ok(toml) => config::CONFIG.apply_toml_settings(toml),
         Err(err) => tracing::error!("Error reading config file: {err}"),
     };
-    args.apply_configuration();
 
     let cancellation_token = CancellationToken::new();
 
@@ -72,7 +58,7 @@ async fn main() {
     };
     let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
-    let db = Db::connect(&app_resources.database_path)
+    let db = Db::connect(&APP_RESOURCES.database_path)
         .await
         .expect("database to be found");
 
@@ -91,8 +77,6 @@ async fn main() {
         .into_iter()
         .filter(|d| d.try_exists().unwrap_or(false))
         .collect();
-
-    let program_files = app_resources.base_path;
 
     let library = Library::init_from_folders(&shows_dirs, &movies_dirs, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));

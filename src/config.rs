@@ -724,10 +724,7 @@ impl ConfigValue for WebUiPath {
 }
 impl Default for WebUiPath {
     fn default() -> Self {
-        let base_path = &APP_RESOURCES
-            .get()
-            .expect("APP_RESOURCES initiated before first CONFIG access")
-            .base_path;
+        let base_path = &APP_RESOURCES.base_path;
         Self(base_path.join("dist"))
     }
 }
@@ -788,6 +785,12 @@ impl ConfigFile {
         Ok(Self(file))
     }
 
+    /// Open and read config file dropping file handle.
+    pub async fn open_and_read() -> anyhow::Result<toml::Table> {
+        let mut config = Self::open(&APP_RESOURCES.config_path).await?;
+        config.read().await
+    }
+
     /// Read config file
     pub async fn read(&mut self) -> Result<toml::Table, anyhow::Error> {
         let mut raw = String::new();
@@ -811,9 +814,6 @@ pub struct Args {
     /// Override port
     #[arg(short, long)]
     pub port: Option<u16>,
-    /// Provide custom config location
-    #[arg(short, long)]
-    pub config_path: Option<PathBuf>,
     /// Override tmdb api token
     #[arg(long)]
     pub tmdb_token: Option<String>,
@@ -971,7 +971,7 @@ pub struct AppResources {
     pub log_path: PathBuf,
 }
 
-pub static APP_RESOURCES: OnceLock<AppResources> = OnceLock::new();
+pub static APP_RESOURCES: LazyLock<AppResources> = LazyLock::new(AppResources::new);
 
 impl AppResources {
     pub const APP_NAME: &'static str = "media-server";
@@ -1045,7 +1045,8 @@ impl AppResources {
         Ok(())
     }
 
-    pub fn new(config_path: PathBuf) -> Self {
+    pub fn new() -> Self {
+        let config_path = Self::default_config_path();
         let resources_path = Self::resources();
         let database_path = Self::database();
         let temp_path = Self::temp_storage();
@@ -1075,7 +1076,6 @@ impl AppResources {
 
 impl Default for AppResources {
     fn default() -> Self {
-        let config_path = Self::default_config_path();
-        Self::new(config_path)
+        Self::new()
     }
 }
