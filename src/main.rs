@@ -39,22 +39,25 @@ async fn main() {
     }
 
     let args = Args::parse();
-    args.apply_configuration();
     let config_path = args
         .config_path
         .clone()
         .unwrap_or_else(AppResources::default_config_path);
     tracing::debug!("Selected config path: {}", config_path.display());
+
     let mut config_file = ConfigFile::open(&config_path).await.unwrap();
+
     let app_resources = AppResources::new(config_path);
     APP_RESOURCES
         .set(app_resources.clone())
         .expect("resources are not initiated yet");
-
+    // Apply configuration after set APP_RESOURCES because global CONFIG depends on global
+    // APP_RESOURCES to get some defaults
     match config_file.read().await {
         Ok(toml) => config::CONFIG.apply_toml_settings(toml),
         Err(err) => tracing::error!("Error reading config file: {err}"),
     };
+    args.apply_configuration();
 
     let cancellation_token = CancellationToken::new();
 
@@ -297,8 +300,10 @@ async fn main() {
         )
         .route("/clear_db", delete(admin_api::clear_db));
 
-    let assets_service = ServeDir::new(program_files.join("dist"))
-        .fallback(ServeFile::new(program_files.join("dist/index.html")));
+    let web_ui_path: config::WebUiPath = config::CONFIG.get_value();
+
+    let assets_service =
+        ServeDir::new(&web_ui_path.0).fallback(ServeFile::new(web_ui_path.0.join("index.html")));
     let app = Router::new()
         .route("/api/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))

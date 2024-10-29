@@ -239,6 +239,7 @@ impl ConfigStore {
         store.register_value::<TvdbKey>();
         store.register_value::<IntroMinDuration>();
         store.register_value::<IntroDetectionFfmpegBuild>();
+        store.register_value::<WebUiPath>();
 
         store
     }
@@ -495,7 +496,8 @@ impl utoipa::ToSchema<'static> for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<FFprobePath>::schema().1)
             .item(UtoipaConfigValue::<HwAccel>::schema().1)
             .item(UtoipaConfigValue::<IntroMinDuration>::schema().1)
-            .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema().1);
+            .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema().1)
+            .item(UtoipaConfigValue::<WebUiPath>::schema().1);
         let array = schema::ArrayBuilder::new().items(schema).build();
         ("UtoipaConfigSchema", array.into())
     }
@@ -710,6 +712,23 @@ impl ConfigValue for IntroDetectionFfmpegBuild {}
 impl Default for IntroDetectionFfmpegBuild {
     fn default() -> Self {
         Self(PathBuf::from("ffmpeg"))
+    }
+}
+
+/// Path to Web UI dist directory
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+#[schema(value_type = String)]
+pub struct WebUiPath(pub PathBuf);
+impl ConfigValue for WebUiPath {
+    const REQUIRE_RESTART: bool = true;
+}
+impl Default for WebUiPath {
+    fn default() -> Self {
+        let base_path = &APP_RESOURCES
+            .get()
+            .expect("APP_RESOURCES initiated before first CONFIG access")
+            .base_path;
+        Self(base_path.join("dist"))
     }
 }
 
