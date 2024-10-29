@@ -1,6 +1,7 @@
 use std::{
     fs::{self, File},
     io::{self, Read},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
 };
 
@@ -85,4 +86,14 @@ where
     }
 
     format!("{:x}", hasher.finalize())
+}
+
+pub async fn local_addr() -> std::io::Result<SocketAddr> {
+    use tokio::net::UdpSocket;
+    const SSDP_IP_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+    const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 1900));
+    let socket =
+        UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))).await?;
+    socket.connect(SSDP_ADDR).await?;
+    socket.local_addr()
 }

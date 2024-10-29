@@ -13,7 +13,7 @@ use media_server::server::{admin_api, public_api, torrent_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
-use media_server::upnp::router::UpnpRouter;
+use media_server::upnp::Upnp;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -111,9 +111,6 @@ async fn main() {
         torrent_client,
         cancelation_token: cancellation_token.clone(),
     };
-
-    // let _ = DeviceDiscoverer::service_discover().await;
-    tokio::spawn(media_server::upnp::ssdp::ssdp_listener());
 
     #[cfg(feature = "windows-tray")]
     tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
@@ -290,13 +287,16 @@ async fn main() {
 
     let assets_service =
         ServeDir::new(&web_ui_path.0).fallback(ServeFile::new(web_ui_path.0.join("index.html")));
+
+    let upnp = Upnp::init(app_state.clone()).await;
+
     let app = Router::new()
         .route("/api/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
         .nest("/api", public_api)
         .nest_service("/", assets_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
-        .merge(UpnpRouter::new().0)
+        .merge(upnp)
         .layer(cors)
         .with_state(app_state);
 
