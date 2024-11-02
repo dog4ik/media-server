@@ -5,10 +5,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::{
-    sync::{mpsc, watch},
-    task::JoinSet,
-};
+use tokio::{sync::watch, task::JoinSet};
 use torrent::{
     download::{DownloadHandle, DownloadState},
     file::MagnetLink,

@@ -23,6 +23,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 
 pub mod tmdb_api;
 #[allow(dead_code)]
+#[allow(unused)]
 pub mod tvdb_api;
 
 pub struct MetadataProvidersStack {

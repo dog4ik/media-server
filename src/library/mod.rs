@@ -452,33 +452,6 @@ impl LazyFFprobeOutput {
             .get_or_try_init(|| async { get_metadata(path).await })
             .await
     }
-
-    fn get(&self) -> Option<&FFprobeOutput> {
-        self.metadata.get()
-    }
-}
-
-/// Ignores failed Video::new results
-async fn get_variants(folder: impl AsRef<Path>) -> anyhow::Result<Vec<Video>> {
-    let dir = std::fs::read_dir(&folder).context("failed to read dir")?;
-    let mut out = Vec::new();
-    for entry in dir {
-        let Ok(file) = entry else {
-            tracing::error!("Could not read file in dir {}", folder.as_ref().display());
-            continue;
-        };
-        let Ok(file_type) = file.file_type() else {
-            tracing::error!("Could not get filetype for file {}", file.path().display());
-            continue;
-        };
-        // expect all files to be videos
-        if file_type.is_file() {
-            if let Ok(video) = Video::from_path(file.path()).await {
-                out.push(video);
-            }
-        }
-    }
-    Ok(out)
 }
 
 impl Video {

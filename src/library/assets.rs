@@ -12,18 +12,13 @@ use std::{
 use axum::{body::Body, response::IntoResponse};
 use axum_extra::{headers::ContentLength, TypedHeader};
 use reqwest::StatusCode;
-use tokio::{
-    fs,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-};
+use tokio::{fs, io::AsyncRead};
 use tokio_util::io::ReaderStream;
-
-use crate::app_state::AppError;
 
 use super::Video;
 
 pub(crate) trait FileAsset {
-    fn relative_path(&self) -> PathBuf;
+    fn relative_path(&self) -> &Path;
 
     fn temp_path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
@@ -37,10 +32,7 @@ pub(crate) trait FileAsset {
         base_path.join(self.relative_path())
     }
 
-    async fn save_from_reader(
-        &self,
-        reader: &mut (impl AsyncRead + std::marker::Unpin),
-    ) -> anyhow::Result<()> {
+    async fn save_from_reader(&self, reader: &mut (impl AsyncRead + Unpin)) -> anyhow::Result<()> {
         let path = self.path();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(&parent).await?;
@@ -52,53 +44,6 @@ pub(crate) trait FileAsset {
             .open(&path)
             .await?;
         tokio::io::copy(reader, &mut file).await?;
-        Ok(())
-    }
-
-    async fn save_bytes(&self, bytes: &[u8]) -> anyhow::Result<()> {
-        let path = self.path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(&parent).await?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&path)
-            .await?;
-        file.write_all(bytes).await?;
-        Ok(())
-    }
-
-    async fn read_to_bytes(&self) -> Result<bytes::Bytes, AppError> {
-        let path = self.path();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(&parent).await?;
-        }
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .truncate(true)
-            .open(&path)
-            .await?;
-        let length = file.metadata().await?.len();
-        let mut bytes = Vec::with_capacity(length as usize);
-        file.read_to_end(&mut bytes).await?;
-        Ok(bytes.into())
-    }
-
-    async fn read_to_writer(
-        &self,
-        writer: &mut (impl AsyncWrite + std::marker::Unpin),
-    ) -> anyhow::Result<()> {
-        let path = self.path();
-        let mut file = fs::OpenOptions::new()
-            .create(true)
-            .read(true)
-            .truncate(true)
-            .open(&path)
-            .await?;
-        tokio::io::copy(&mut file, writer).await?;
         Ok(())
     }
 
@@ -163,7 +108,7 @@ pub(crate) trait FileAsset {
 }
 
 pub(crate) trait AssetDir {
-    fn relative_path(&self) -> PathBuf;
+    fn relative_path(&self) -> &Path;
 
     fn temp_path(&self) -> PathBuf {
         use crate::config::APP_RESOURCES;
@@ -187,8 +132,8 @@ pub struct PosterAsset {
     path: PathBuf,
 }
 impl FileAsset for PosterAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.path
     }
 }
 pub enum PosterContentType {
@@ -217,12 +162,10 @@ impl PosterAsset {
 }
 
 #[derive(Debug, Clone)]
-pub struct BackdropAsset {
-    path: PathBuf,
-}
+pub struct BackdropAsset(PathBuf);
 impl FileAsset for BackdropAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 pub enum BackdropContentType {
@@ -239,54 +182,41 @@ impl From<BackdropContentType> for AssetContentType {
 }
 impl BackdropAsset {
     pub fn new(id: i64, content_type: BackdropContentType) -> Self {
-        let sharded_path = sharded_path(id, content_type.into());
-        BackdropAsset {
-            path: sharded_path.join("backdrop.jpg"),
-        }
+        Self(sharded_path(id, content_type.into()).join("backdrop.jpg"))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SubtitleAsset {
-    id: String,
-    path: PathBuf,
-}
+pub struct SubtitleAsset(PathBuf);
 impl FileAsset for SubtitleAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl SubtitleAsset {
     pub fn new(video_id: i64, subtitle_id: String) -> Self {
-        let path = video_sharded_path(video_id)
-            .join("subs")
-            .join(format!("{}.srt", subtitle_id));
-        Self {
-            path,
-            id: subtitle_id,
-        }
+        Self(
+            video_sharded_path(video_id)
+                .join("subs")
+                .join(format!("{}.srt", subtitle_id)),
+        )
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct VariantAsset {
-    id: String,
-    path: PathBuf,
-}
+pub struct VariantAsset(PathBuf);
 impl FileAsset for VariantAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl VariantAsset {
     pub fn new(video_id: i64, variant_id: String) -> Self {
-        let path = video_sharded_path(video_id)
-            .join("variants")
-            .join(format!("{}.mkv", variant_id));
-        Self {
-            path,
-            id: variant_id,
-        }
+        Self(
+            video_sharded_path(video_id)
+                .join("variants")
+                .join(format!("{}.mkv", variant_id)),
+        )
     }
 
     pub async fn video(&self) -> anyhow::Result<Video> {
@@ -295,40 +225,36 @@ impl VariantAsset {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewAsset {
-    path: PathBuf,
-    index: usize,
-}
+pub struct PreviewAsset(PathBuf);
 impl FileAsset for PreviewAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl PreviewAsset {
     pub fn new(video_id: i64, index: usize) -> Self {
-        let path = video_sharded_path(video_id)
-            .join("previews")
-            .join(format!("{}.jpg", index));
-        Self { path, index }
+        Self(
+            video_sharded_path(video_id)
+                .join("previews")
+                .join(format!("{}.jpg", index)),
+        )
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ChapterThumbnailAsset {
-    path: PathBuf,
-    number: usize,
-}
+pub struct ChapterThumbnailAsset(PathBuf);
 impl FileAsset for ChapterThumbnailAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl ChapterThumbnailAsset {
     pub fn new(video_id: i64, number: usize) -> Self {
-        let path = video_sharded_path(video_id)
-            .join("chapters")
-            .join(format!("{}.jpg", number));
-        Self { path, number }
+        Self(
+            video_sharded_path(video_id)
+                .join("chapters")
+                .join(format!("{}.jpg", number)),
+        )
     }
 }
 
@@ -336,87 +262,71 @@ impl ChapterThumbnailAsset {
 
 /// Directory of all video assets
 #[derive(Debug, Clone)]
-pub struct VideoAssetsDir {
-    path: PathBuf,
-    id: i64,
-}
+pub struct VideoAssetsDir(PathBuf);
 impl AssetDir for VideoAssetsDir {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl VideoAssetsDir {
     pub fn new(video_id: i64) -> Self {
-        let path = video_sharded_path(video_id);
-        Self { path, id: video_id }
+        Self(video_sharded_path(video_id))
     }
 }
 
 /// Directory of all episode assets
 #[derive(Debug, Clone)]
-pub struct EpisodeAssetsDir {
-    path: PathBuf,
-}
+pub struct EpisodeAssetsDir(PathBuf);
 impl AssetDir for EpisodeAssetsDir {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl EpisodeAssetsDir {
     pub fn new(episode_id: i64) -> Self {
-        let path = sharded_path(episode_id, AssetContentType::Episode);
-        Self { path }
+        Self(sharded_path(episode_id, AssetContentType::Episode))
     }
 }
 
 /// Directory of all season assets
 #[derive(Debug, Clone)]
-pub struct SeasonAssetsDir {
-    path: PathBuf,
-}
+pub struct SeasonAssetsDir(PathBuf);
 impl AssetDir for SeasonAssetsDir {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl SeasonAssetsDir {
     pub fn new(season_id: i64) -> Self {
-        let path = sharded_path(season_id, AssetContentType::Season);
-        Self { path }
+        Self(sharded_path(season_id, AssetContentType::Season))
     }
 }
 
 /// Directory of all show assets
 #[derive(Debug, Clone)]
-pub struct ShowAssetsDir {
-    path: PathBuf,
-}
+pub struct ShowAssetsDir(PathBuf);
 impl AssetDir for ShowAssetsDir {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl ShowAssetsDir {
     pub fn new(show_id: i64) -> Self {
-        let path = sharded_path(show_id, AssetContentType::Show);
-        Self { path }
+        Self(sharded_path(show_id, AssetContentType::Show))
     }
 }
 
 /// Directory of all movie assets
 #[derive(Debug, Clone)]
-pub struct MovieAssetsDir {
-    path: PathBuf,
-}
+pub struct MovieAssetsDir(PathBuf);
 impl AssetDir for MovieAssetsDir {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl MovieAssetsDir {
     pub fn new(movie_id: i64) -> Self {
-        let path = sharded_path(movie_id, AssetContentType::Movie);
-        Self { path }
+        Self(sharded_path(movie_id, AssetContentType::Movie))
     }
 }
 
@@ -426,8 +336,8 @@ pub struct VariantsDirAsset {
     id: i64,
 }
 impl AssetDir for VariantsDirAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.path
     }
 }
 impl VariantsDirAsset {
@@ -453,18 +363,15 @@ impl VariantsDirAsset {
 }
 
 #[derive(Debug, Clone)]
-pub struct PreviewsDirAsset {
-    path: PathBuf,
-}
+pub struct PreviewsDirAsset(PathBuf);
 impl AssetDir for PreviewsDirAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl PreviewsDirAsset {
     pub fn new(video_id: i64) -> Self {
-        let path = video_sharded_path(video_id).join("previews");
-        Self { path }
+        Self(video_sharded_path(video_id).join("previews"))
     }
     pub fn previews_count(&self) -> usize {
         std::fs::read_dir(self.path()).map_or(0, |d| d.count())
@@ -472,34 +379,28 @@ impl PreviewsDirAsset {
 }
 
 #[derive(Debug, Clone)]
-pub struct SubtitlesDirAsset {
-    path: PathBuf,
-}
+pub struct SubtitlesDirAsset(PathBuf);
 impl AssetDir for SubtitlesDirAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl SubtitlesDirAsset {
     pub fn new(video_id: i64) -> Self {
-        let path = video_sharded_path(video_id).join("subtitles");
-        Self { path }
+        Self(video_sharded_path(video_id).join("subtitles"))
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ChapterThumbnailsDirAsset {
-    path: PathBuf,
-}
+pub struct ChapterThumbnailsDirAsset(PathBuf);
 impl AssetDir for ChapterThumbnailsDirAsset {
-    fn relative_path(&self) -> PathBuf {
-        self.path.clone()
+    fn relative_path(&self) -> &Path {
+        &self.0
     }
 }
 impl ChapterThumbnailsDirAsset {
     pub fn new(video_id: i64) -> Self {
-        let path = video_sharded_path(video_id).join("chapters");
-        Self { path }
+        Self(video_sharded_path(video_id).join("chapters"))
     }
 }
 
@@ -545,7 +446,7 @@ impl AsRef<Path> for ShardedPath {
     }
 }
 
-pub fn video_sharded_path(video_id: i64) -> PathBuf {
+fn video_sharded_path(video_id: i64) -> PathBuf {
     sharded_path(video_id, AssetContentType::Video)
 }
 

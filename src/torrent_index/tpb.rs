@@ -64,6 +64,7 @@ impl TorrentIndex for TpbApi {
     }
 }
 
+#[allow(unused)]
 #[derive(Deserialize, Debug, Clone)]
 pub struct TpbTorrent {
     id: String,

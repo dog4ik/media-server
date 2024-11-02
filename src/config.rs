@@ -5,7 +5,7 @@ use std::{
     fmt::Display,
     io::BufRead,
     path::{Path, PathBuf},
-    sync::{LazyLock, OnceLock},
+    sync::LazyLock,
 };
 
 use anyhow::Context;
@@ -810,6 +810,7 @@ impl ConfigFile {
 }
 
 #[derive(Debug, Parser, Deserialize, Serialize)]
+#[command(version)]
 pub struct Args {
     /// Override port
     #[arg(short, long)]
@@ -820,11 +821,11 @@ pub struct Args {
 }
 
 impl Args {
-    pub fn apply_configuration(&self) {
+    pub fn apply_configuration(self) {
         if let Some(port) = self.port {
             CONFIG.apply_cli_value(Port(port));
         }
-        if let Some(token) = self.tmdb_token.clone() {
+        if let Some(token) = self.tmdb_token {
             CONFIG.apply_cli_value(TmdbKey(Some(token)));
         }
     }

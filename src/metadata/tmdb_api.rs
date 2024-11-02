@@ -7,7 +7,7 @@ use reqwest::{
     Client, Method, Request, Url,
 };
 use serde::Deserialize;
-use time::{Date, OffsetDateTime};
+use time::Date;
 
 use crate::app_state::AppError;
 
@@ -532,11 +532,11 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
     }
 }
 
-fn parse_tmdb_date(input: &str) -> anyhow::Result<OffsetDateTime> {
+fn parse_tmdb_date(input: &str) -> anyhow::Result<Date> {
     use time::format_description::parse_borrowed;
     let parsed = parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
     let date = Date::parse(input, &parsed)?;
-    Ok(OffsetDateTime::new_utc(date, time::Time::MIDNIGHT))
+    Ok(date)
 }
 
 // Types

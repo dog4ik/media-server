@@ -25,9 +25,9 @@ use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() {
+    Args::parse().apply_configuration();
     if let Err(err) = AppResources::initiate() {
-        tracing::error!("Failed to initiate resources {}", err);
-        panic!("Could not initiate app resources");
+        panic!("Could not initiate app resources: {err}");
     };
     let log_channel = init_tracer();
     tracing::info!("Using log file location: {}", AppResources::log().display());
@@ -37,8 +37,6 @@ async fn main() {
     } else {
         tracing::warn!("Could not load env variables from dotfile");
     }
-
-    Args::parse().apply_configuration();
 
     match ConfigFile::open_and_read().await {
         Ok(toml) => config::CONFIG.apply_toml_settings(toml),
