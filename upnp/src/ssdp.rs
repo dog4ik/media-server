@@ -2,7 +2,7 @@ use core::str;
 use std::{
     borrow::Cow,
     fmt::Display,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     str::FromStr,
     sync::LazyLock,
@@ -47,6 +47,7 @@ fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     socket.set_reuse_address(true)?;
     socket.set_reuse_port(true)?;
     socket.set_nonblocking(true)?;
+    socket.set_multicast_loop_v4(false)?;
     socket.join_multicast_v4(&SSDP_IP_ADDR, &Ipv4Addr::UNSPECIFIED)?;
     socket.bind(&SocketAddr::V4(local_ip).into())?;
     let socket = UdpSocket::from_std(socket.into())?;
@@ -80,6 +81,7 @@ pub struct SsdpListener {
     boot_id: usize,
     location: String,
     unicast_port: u16,
+    config_id: usize,
 }
 
 impl SsdpListener {
@@ -100,26 +102,42 @@ impl SsdpListener {
             boot_id: 0,
             location,
             unicast_port: 18398,
+            config_id: 0,
         })
     }
 
     pub async fn announce(&mut self, receiver: SocketAddr) -> anyhow::Result<()> {
         let sleep_range = 0..100;
-        let first = NotifyAliveMessage::first_server_message(&self.location);
+        let udn = UDN::new(SERVER_UUID);
+        let mut message = NotifyAliveMessage {
+            host: SSDP_ADDR,
+            location: Cow::Borrowed(&self.location),
+            usn: USN::root_device(udn.clone()),
+            nt: NotificationType::RootDevice,
+            nts: NotificationSubType::Alive,
+            cache_control: CACHE_CONTROL,
+            server: SERVER,
+            boot_id: self.boot_id,
+            search_port: None,
+            config_id: self.config_id,
+        };
         self.socket
-            .send_to(first.to_string().as_bytes(), &receiver)
+            .send_to(message.to_string().as_bytes(), &receiver)
             .await?;
         sleep_rand_millis_duration(&sleep_range).await;
 
-        let second = NotifyAliveMessage::second_server_message(&self.location);
+        message.nt = NotificationType::Uuid(SERVER_UUID);
+        message.usn = USN::device_uuid(udn.clone());
         self.socket
-            .send_to(second.to_string().as_bytes(), &receiver)
+            .send_to(message.to_string().as_bytes(), &receiver)
             .await?;
         sleep_rand_millis_duration(&sleep_range).await;
 
-        let third = NotifyAliveMessage::third_server_message(&self.location);
+        let urn = urn::URN::media_server();
+        message.nt = NotificationType::Urn(urn.clone());
+        message.usn = USN::urn(udn.clone(), urn);
         self.socket
-            .send_to(third.to_string().as_bytes(), &receiver)
+            .send_to(message.to_string().as_bytes(), &receiver)
             .await?;
         sleep_rand_millis_duration(&sleep_range).await;
 
@@ -127,11 +145,11 @@ impl SsdpListener {
             version: 1,
             urn_type: urn::UrnType::Service(urn::ServiceType::ContentDirectory),
         };
-        let content_directory = NotifyAliveMessage::service_message(&self.location, urn);
+        message.nt = NotificationType::Urn(urn.clone());
+        message.usn = USN::urn(udn, urn);
         self.socket
-            .send_to(content_directory.to_string().as_bytes(), &receiver)
+            .send_to(message.to_string().as_bytes(), &receiver)
             .await?;
-        self.boot_id += 1;
         tracing::debug!("Finished announcing media server to: {receiver}");
         Ok(())
     }
@@ -141,7 +159,7 @@ impl SsdpListener {
         sender: SocketAddr,
         msg: SearchMessage<'_>,
     ) -> anyhow::Result<()> {
-        let sleep_range = 0..(msg.mx as u64).min(5) * 1000;
+        let sleep_range = 0..(msg.mx.saturating_sub(1) as u64).min(5) * 1000;
         sleep_rand_millis_duration(&sleep_range).await;
         let search_response = SearchResponse {
             cache_control: 1800,
@@ -150,8 +168,8 @@ impl SsdpListener {
             st: msg.st,
             usn: USN::device_uuid(UDN::new(SERVER_UUID)),
             boot_id: self.boot_id,
-            config_id: 1,
-            search_port: self.unicast_port,
+            config_id: self.config_id.into(),
+            search_port: None,
         }
         .to_string();
         self.socket
@@ -175,7 +193,7 @@ impl SsdpListener {
                     // TODO: this will block everything because it sleeps. We must be able to
                     // respond to others meanwhile.
                     if let Err(e) = self.handle_message(data, sender).await {
-                        tracing::warn!("failed to handle ssdp message: {e}");
+                        tracing::warn!("Failed to handle ssdp message: {e}");
                     };
                 }
                 _ = cancellation_token.cancelled() => {
@@ -191,31 +209,43 @@ impl SsdpListener {
 
     async fn handle_message(&mut self, data: &[u8], sender: SocketAddr) -> anyhow::Result<()> {
         let payload = str::from_utf8(data).context("construct string from bytes")?;
-        let message =
-            BroadcastMessage::parse_ssdp_payload(payload).context("parse ssdp message")?;
+        let message = BroadcastMessage::parse_ssdp_payload(payload)?;
+        let is_multicast = sender.ip() == IpAddr::V4(SSDP_IP_ADDR);
+        if is_multicast {
+            tracing::info!("Received multicast message from {sender}");
+        } else {
+            tracing::info!("Received unicast message from {sender}");
+        };
         match message {
-            BroadcastMessage::Search(msg) => match msg.st {
-                NotificationType::All => {
-                    self.musticast_search_response(sender, msg).await?;
-                }
-                NotificationType::RootDevice => {
-                    self.musticast_search_response(sender, msg).await?;
-                }
-                NotificationType::Uuid(uuid) => {
-                    if uuid == SERVER_UUID {
+            BroadcastMessage::Search(msg) => {
+                tracing::info!(
+                    friendly_name = msg.cp_fn,
+                    user_agent = msg.user_agent,
+                    "Received search message"
+                );
+                match msg.st {
+                    NotificationType::All => {
                         self.musticast_search_response(sender, msg).await?;
                     }
+                    NotificationType::RootDevice => {
+                        self.musticast_search_response(sender, msg).await?;
+                    }
+                    NotificationType::Uuid(uuid) => {
+                        if uuid == SERVER_UUID {
+                            self.musticast_search_response(sender, msg).await?;
+                        }
+                    }
+                    NotificationType::Urn(ref urn) => match urn.urn_type {
+                        urn::UrnType::Device(urn::DeviceType::MediaServer) => {
+                            self.musticast_search_response(sender, msg).await?;
+                        }
+                        urn::UrnType::Service(urn::ServiceType::ContentDirectory) => {
+                            self.musticast_search_response(sender, msg).await?;
+                        }
+                        _ => {}
+                    },
                 }
-                NotificationType::Urn(ref urn) => match urn.urn_type {
-                    urn::UrnType::Device(urn::DeviceType::MediaServer) => {
-                        self.musticast_search_response(sender, msg).await?;
-                    }
-                    urn::UrnType::Service(urn::ServiceType::ContentDirectory) => {
-                        self.musticast_search_response(sender, msg).await?;
-                    }
-                    _ => {}
-                },
-            },
+            }
             BroadcastMessage::NotifyAlive(msg) => {
                 println!("Received alive message from: {}", msg.server);
             }
@@ -230,7 +260,7 @@ impl SsdpListener {
     }
 
     async fn handle_shutdown(&self) -> anyhow::Result<()> {
-        let self_byebye_message = NotifyByeByeMessage::media_server();
+        let self_byebye_message = NotifyByeByeMessage::media_server(self.boot_id);
         tracing::info!("Sending bye bye message");
         self.socket
             .send_to(self_byebye_message.to_string().as_bytes(), SSDP_ADDR)
@@ -307,6 +337,31 @@ impl FromStr for USN {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct UnicastSearchMessage<'a> {
+    pub host: SocketAddr,
+    pub st: NotificationType,
+    pub user_agent: Option<&'a str>,
+}
+
+impl Display for UnicastSearchMessage<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(
+            f,
+            "M-SEARCH * HTTP/1.1
+HOST: {host}
+MAN: \"ssdp:discover\"
+ST: {search_target}",
+            host = self.host,
+            search_target = self.st,
+        )?;
+        if let Some(user_agent) = self.user_agent {
+            writeln!(f, "USER-AGENT: {user_agent}")?;
+        }
+        writeln!(f)
+    }
+}
+
 #[derive(Debug)]
 pub enum BroadcastMessage<'a> {
     Search(SearchMessage<'a>),
@@ -329,24 +384,36 @@ pub struct SearchMessage<'a> {
     pub mx: usize,
     /// Same as server in search messages
     pub user_agent: Option<&'a str>,
+    /// A control point can request that a device replies to a TCP port on the control point
+    pub tcp_port: Option<u16>,
+    /// Specifies the friendly name of the control point. The friendly name is vendor specific.
+    pub cp_fn: &'a str,
+    /// Uuid of the control point.
+    pub cp_uuid: Option<&'a str>,
 }
 
 impl Display for SearchMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "M-SEARCH * HTTP/1.1
-HOST: 239.255.255.250:1900
+HOST: {host}
 MAN: \"ssdp:discover\"
 ST: {search_target}
-MX: {mx}",
-            search_target = self.st.to_string(),
-            mx = self.mx
+MX: {mx}
+CPFN.UPNP.ORG: {cp_fn}",
+            host = self.host,
+            search_target = self.st,
+            mx = self.mx,
+            cp_fn = self.cp_fn,
         )?;
         if let Some(user_agent) = self.user_agent {
-            write!(f, "USER-AGENT: {user_agent}")?;
+            writeln!(f, "USER-AGENT: {user_agent}")?;
         }
-        write!(f, "\r\n\r\n")
+        if let Some(tcp_port) = self.tcp_port {
+            writeln!(f, "TCPPORT.UPNP.ORG: {tcp_port}")?;
+        }
+        writeln!(f)
     }
 }
 
@@ -358,13 +425,13 @@ pub struct SearchResponse<'a> {
     st: NotificationType,
     usn: USN,
     boot_id: usize,
-    config_id: usize,
-    search_port: u16,
+    config_id: Option<usize>,
+    search_port: Option<u16>,
 }
 
 impl Display for SearchResponse<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "HTTP/1.1 200 OK
 CACHE-CONTROL: max-age={cache_control}
@@ -372,18 +439,21 @@ LOCATION: {location}
 SERVER: {server}
 ST: {st}
 USN: {usn}
-BOOTID.UPNP.ORG: {boot_id}
-CONFIGID.UPNP.ORG: {config_id}
-SEARCHPORT.UPNP.ORG: {search_port}\r\n\r\n",
+BOOTID.UPNP.ORG: {boot_id}",
             cache_control = self.cache_control,
             location = self.location,
             server = self.server,
             st = self.st,
             usn = self.usn,
             boot_id = self.boot_id,
-            config_id = self.config_id,
-            search_port = self.search_port,
-        )
+        )?;
+        if let Some(config_id) = self.config_id {
+            writeln!(f, "CONFIGID.UPNP.ORG: {config_id}")?;
+        }
+        if let Some(search_port) = self.search_port {
+            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
+        }
+        writeln!(f)
     }
 }
 
@@ -480,15 +550,19 @@ pub struct NotifyByeByeMessage {
     pub nt: NotificationType,
     /// Notification subtype. Specifies type of notification.
     pub nts: NotificationSubType,
+    pub boot_id: usize,
+    pub config_id: usize,
 }
 
 impl NotifyByeByeMessage {
-    fn media_server() -> Self {
+    fn media_server(boot_id: usize) -> Self {
         NotifyByeByeMessage {
             host: SSDP_ADDR,
             usn: USN::device_uuid(UDN::new(SERVER_UUID)),
             nt: NotificationType::RootDevice,
             nts: NotificationSubType::ByeBye,
+            boot_id,
+            config_id: 0,
         }
     }
 }
@@ -501,10 +575,14 @@ impl Display for NotifyByeByeMessage {
 HOST: 239.255.255.250:1900
 NT: {nt}
 NTS: {nts}
-USN: {usn}\r\n\r\n",
+USN: {usn}
+BOOTID.UPNP.ORG: {boot_id}
+CONFIGID.UPNP.ORG: {config_id}\r\n\r\n",
             nt = self.nt,
             nts = self.nts,
             usn = self.usn,
+            boot_id = self.boot_id,
+            config_id = self.config_id,
         )
     }
 }
@@ -521,25 +599,37 @@ pub struct NotifyUpdateMessage<'a> {
     pub nt: NotificationType,
     /// Notification subtype. Specifies type of notification.
     pub nts: NotificationSubType,
+    pub boot_id: usize,
+    pub config_id: usize,
+    pub next_boot_id: usize,
+    pub search_port: Option<u16>,
 }
-
-impl NotifyAliveMessage<'_> {}
 
 impl Display for NotifyUpdateMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "NOTIFY * HTTP/1.1
 HOST: 239.255.255.250:1900
 LOCATION: {location}
 NT: {nt}
 NTS: {nts}
-USN: {usn}\r\n\r\n",
+USN: {usn}
+BOOTID.UPNP.ORG: {boot_id}
+CONFIGID.UPNP.ORG: {config_id}
+NEXTBOOTID.UPNP.ORG: {next_boot_id}",
             location = self.location,
             nt = self.nt,
             nts = self.nts,
             usn = self.usn,
-        )
+            boot_id = self.boot_id,
+            config_id = self.config_id,
+            next_boot_id = self.next_boot_id,
+        )?;
+        if let Some(search_port) = self.search_port {
+            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
+        }
+        writeln!(f)
     }
 }
 
@@ -559,59 +649,14 @@ pub struct NotifyAliveMessage<'a> {
     pub cache_control: usize,
     /// Information about the software used by the origin server to handle the request
     pub server: &'a str,
-}
-
-impl<'a> NotifyAliveMessage<'a> {
-    pub fn new(location: &'a str, nt: NotificationType, usn: USN) -> Self {
-        Self {
-            host: SSDP_ADDR,
-            location: Cow::Borrowed(location),
-            usn,
-            nt,
-            nts: NotificationSubType::Alive,
-            cache_control: CACHE_CONTROL,
-            server: SERVER,
-        }
-    }
-
-    pub fn first_server_message(location: &'a str) -> Self {
-        let udn = UDN::new(SERVER_UUID);
-        Self::new(
-            location,
-            NotificationType::RootDevice,
-            USN::root_device(udn),
-        )
-    }
-
-    pub fn second_server_message(location: &'a str) -> Self {
-        let udn = UDN::new(SERVER_UUID);
-        Self::new(
-            location,
-            NotificationType::Uuid(SERVER_UUID),
-            USN::device_uuid(udn),
-        )
-    }
-
-    pub fn third_server_message(location: &'a str) -> Self {
-        let udn = UDN::new(SERVER_UUID);
-        let urn = urn::URN::media_server();
-        Self::new(
-            location,
-            NotificationType::Urn(urn.clone()),
-            USN::urn(udn, urn),
-        )
-    }
-
-    pub fn service_message(location: &'a str, service_urn: urn::URN) -> Self {
-        let udn = UDN::new(SERVER_UUID);
-        let usn = USN::urn(udn, service_urn.clone());
-        Self::new(location, NotificationType::Urn(service_urn), usn)
-    }
+    pub boot_id: usize,
+    pub config_id: usize,
+    pub search_port: Option<u16>,
 }
 
 impl Display for NotifyAliveMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
+        writeln!(
             f,
             "NOTIFY * HTTP/1.1
 HOST: 239.255.255.250:1900
@@ -620,14 +665,22 @@ LOCATION: {location}
 NT: {nt}
 NTS: {nts}
 SERVER: {server}
-USN: {usn}\r\n\r\n",
+USN: {usn}
+BOOTID.UPNP.ORG: {boot_id}
+CONFIGID.UPNP.ORG: {config_id}",
             cache_control = self.cache_control,
             location = self.location,
             nt = self.nt,
             nts = self.nts,
             server = self.server,
             usn = self.usn,
-        )
+            boot_id = self.boot_id,
+            config_id = self.config_id,
+        )?;
+        if let Some(search_port) = self.search_port {
+            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
+        }
+        writeln!(f)
     }
 }
 
@@ -644,6 +697,9 @@ impl BroadcastMessage<'_> {
                 let mut st = None;
                 let mut mx = None;
                 let mut user_agent = None;
+                let mut cp_fn = None;
+                let mut cp_uuid = None;
+                let mut tcp_port = None;
                 for (name, value) in headers {
                     let value = value.trim();
                     match name.to_ascii_lowercase().as_str() {
@@ -656,6 +712,11 @@ impl BroadcastMessage<'_> {
                         "st" => st = Some(NotificationType::from_str(value)?),
                         "mx" => mx = Some(value.parse()?),
                         "user-agent" => user_agent = Some(value),
+                        "cpfn.upnp.org" => cp_fn = Some(value),
+                        "cpuuid.upnp.org" => cp_uuid = Some(value),
+                        "tcpport.upnp.org" => {
+                            tcp_port = Some(value.parse().context("parse tcp port")?)
+                        }
                         _ => (),
                     }
                 }
@@ -663,12 +724,17 @@ impl BroadcastMessage<'_> {
                 let man = man.context("missing man")?;
                 let st = st.context("missing st")?;
                 let mx = mx.context("missing mx")?;
+                // Compatibility with upnp 1.0
+                let cp_fn = cp_fn.unwrap_or_default();
                 let search_message = SearchMessage {
                     host,
                     man,
                     st,
                     mx,
                     user_agent,
+                    cp_fn,
+                    cp_uuid,
+                    tcp_port,
                 };
                 Ok(BroadcastMessage::Search(search_message))
             }
@@ -680,6 +746,10 @@ impl BroadcastMessage<'_> {
                 let mut usn = None;
                 let mut cache_control = None;
                 let mut server = None;
+                let mut boot_id = None;
+                let mut config_id = None;
+                let mut search_port = None;
+                let mut next_boot_id = None;
                 for (name, value) in headers {
                     let value = value.trim();
                     match name.to_ascii_lowercase().as_str() {
@@ -700,6 +770,18 @@ impl BroadcastMessage<'_> {
                             cache_control =
                                 Some(cache_duration.parse().context("parse duration seconds")?)
                         }
+                        "bootid.upnp.org" => {
+                            boot_id = Some(value.parse().context("parse boot id")?)
+                        }
+                        "configid.upnp.org" => {
+                            config_id = Some(value.parse().context("parse config id")?)
+                        }
+                        "searchport.upnp.org" => {
+                            search_port = Some(value.parse().context("parse search port")?)
+                        }
+                        "nextbootid.upnp.org" => {
+                            next_boot_id = Some(value.parse().context("parse next boot id")?)
+                        }
                         _ => (),
                     }
                 }
@@ -707,6 +789,8 @@ impl BroadcastMessage<'_> {
                 let nts = nts.context("missing nts")?;
                 let host = host.context("missing host")?;
                 let usn = usn.context("missing usn")?;
+                let boot_id = boot_id.context("missing boot id")?;
+                let config_id = config_id.context("missing config id")?;
                 match nts {
                     NotificationSubType::Alive => {
                         let location = location.context("missing location")?;
@@ -720,6 +804,9 @@ impl BroadcastMessage<'_> {
                             nts,
                             cache_control,
                             server,
+                            boot_id,
+                            config_id,
+                            search_port,
                         };
                         Ok(BroadcastMessage::NotifyAlive(notify_message))
                     }
@@ -729,23 +816,30 @@ impl BroadcastMessage<'_> {
                             usn: USN::from_str(usn)?,
                             nt,
                             nts,
+                            boot_id,
+                            config_id,
                         };
                         Ok(BroadcastMessage::NotifyByeBye(byebye_message))
                     }
                     NotificationSubType::Update => {
                         let location = location.context("missing location")?;
+                        let next_boot_id = next_boot_id.context("missing next boot id")?;
                         let update_message = NotifyUpdateMessage {
                             location,
                             host,
                             usn,
                             nt,
                             nts,
+                            boot_id,
+                            config_id,
+                            next_boot_id,
+                            search_port,
                         };
                         Ok(BroadcastMessage::NotifyUpdate(update_message))
                     }
                 }
             }
-            rest => Err(anyhow::anyhow!("Unknown method encountered: {rest}")),
+            _ => Err(anyhow::anyhow!("Unknown method encountered: {method}")),
         }
     }
 }
