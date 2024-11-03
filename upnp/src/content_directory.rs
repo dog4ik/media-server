@@ -11,12 +11,12 @@ use anyhow::Context;
 use quick_xml::events::BytesText;
 
 use crate::{
-    action::{ActionError, IntoArgumentList, IntoValueList},
+    action::{ActionError, IntoValueList},
     service::ArgumentScanner,
 };
 
 use super::{
-    action::{Action, OutArgument},
+    action::Action,
     service::Service,
     service_variables::{self, IntoUpnpValue, SVariable, StateVariableDescriptor},
     templates::{service_description::ServiceDescription, SpecVersion},
@@ -61,6 +61,15 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         requested_count: u32,
         sort_criteria: String,
     ) -> anyhow::Result<(String, u32, u32, u32)> {
+        tracing::debug!(
+            object_id,
+            %browse_flag,
+            filter,
+            start_index,
+            requested_count,
+            sort_criteria,
+            "Invoking browse action"
+        );
         let result = match browse_flag {
             BrowseFlag::BrowseDirectChildren => {
                 self.handler
@@ -79,6 +88,10 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
             total_matches as u32,
             update_id,
         ))
+    }
+
+    fn get_system_update_id(&self) -> u32 {
+        self.update_id.load(Ordering::Acquire)
     }
 }
 
@@ -217,6 +230,68 @@ impl SVariable for Filter {
     const VAR_NAME: &str = "A_ARG_TYPE_Filter";
 }
 
+mod feature_list {
+    use quick_xml::events::{BytesStart, Event};
+
+    use crate::{
+        service_variables::{IntoUpnpValue, SVariable},
+        IntoXml,
+    };
+
+    #[derive(Debug, Clone)]
+    pub struct Feature {
+        name: String,
+        version: usize,
+    }
+
+    impl IntoXml for Feature {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+            let version = self.version.to_string();
+            let start = BytesStart::new("Feature")
+                .with_attributes([("name", self.name.as_str()), ("version", version.as_str())]);
+            let end = start.to_end().into_owned();
+            w.write_event(Event::Start(start))?;
+            w.write_event(Event::End(end))
+        }
+    }
+
+    #[derive(Default, Debug)]
+    pub struct FeatureList(Vec<Feature>);
+
+    impl IntoXml for FeatureList {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+            let start = BytesStart::new("FeatureList");
+            let end = start.to_end().into_owned();
+            w.write_event(Event::Start(start))?;
+            for feature in &self.0 {
+                feature.write_xml(w)?;
+            }
+            w.write_event(Event::End(end))
+        }
+    }
+
+    impl IntoUpnpValue for FeatureList {
+        const TYPE_NAME: crate::service_variables::DataType =
+            crate::service_variables::DataType::String;
+
+        fn into_value(&self) -> crate::service_variables::Value {
+            todo!()
+        }
+
+        fn from_xml_value(value: &str) -> anyhow::Result<Self>
+        where
+            Self: Sized,
+        {
+            todo!()
+        }
+    }
+
+    impl SVariable for FeatureList {
+        type VarType = Self;
+        const VAR_NAME: &str = "FeatureList";
+    }
+}
+
 impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDirectoryService<T> {
     const NAME: &str = "content_directory";
     const URN: URN = URN {
@@ -258,12 +333,14 @@ impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDire
         browse.add_output::<Count>("NumberReturned");
         browse.add_output::<Count>("TotalMatches");
         browse.add_output::<UpdateID>("UpdateID");
-        let mut sort_capabilities = Action::empty("SortCapabilities");
+        let mut sort_capabilities = Action::empty("GetSortCapabilities");
         sort_capabilities.add_output::<SortCapabilities>("SortCaps");
         let mut system_update_id = Action::empty("GetSystemUpdateID");
         system_update_id.add_output::<SystemUpdateId>("Id");
         let mut search_capabilities = Action::empty("GetSearchCapabilities");
         search_capabilities.add_output::<SearchCapabilities>("SearchCaps");
+        let mut feature_list = Action::empty("GetFeatureList");
+        feature_list.add_output::<feature_list::FeatureList>("SearchCaps");
 
         vec![
             browse,
@@ -279,20 +356,30 @@ impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDire
         mut inputs: ArgumentScanner<'a>,
     ) -> anyhow::Result<impl IntoValueList> {
         tracing::debug!("Got action: {name}", name = name);
-        match name {
+        let values = match name {
             "Browse" => {
-                self.browse(
-                    inputs.next()?,
-                    inputs.next()?,
-                    inputs.next()?,
-                    inputs.next()?,
-                    inputs.next()?,
-                    inputs.next()?,
-                )
-                .await
+                let browse_result = self
+                    .browse(
+                        inputs.next()?,
+                        inputs.next()?,
+                        inputs.next()?,
+                        inputs.next()?,
+                        inputs.next()?,
+                        inputs.next()?,
+                    )
+                    .await?;
+                browse_result.into_value_list()
             }
-            rest => Err(anyhow::anyhow!("unhandled action: {rest}")),
-        }
+            "GetSortCapabilities" => {
+                todo!()
+            }
+            "GetSearchCapabilities" => {
+                todo!()
+            }
+            "GetSystemUpdateID" => self.get_system_update_id().into_value_list(),
+            rest => Err(anyhow::anyhow!("unhandled action: {rest}"))?,
+        };
+        Ok(values)
     }
 }
 
@@ -908,6 +995,7 @@ pub mod properties {
         const MULTIVALUE: bool = true;
     }
 
+    #[derive(Default)]
     pub struct DidlResponse {
         pub containers: Vec<Container>,
         pub items: Vec<Item>,

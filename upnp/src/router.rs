@@ -27,7 +27,7 @@ use crate::{
 };
 
 use super::{
-    action::{ActionResponse, IntoArgumentList, SoapMessage},
+    action::{ActionResponse, SoapMessage},
     device_description,
     service::Service,
 };
@@ -54,6 +54,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
     pub fn register_service<S: Service + Send + Clone + 'static>(mut self, service: S) -> Self {
         let base_path = format!("/{}", S::NAME);
         let control_path = format!("{base_path}/control.xml");
+        let event_path = format!("{base_path}/event.xml");
         let scpd_path = format!("{base_path}/scpd.xml");
         let service = UpnpService::new(service);
 
@@ -87,7 +88,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
                 .await?
                 .into_value_list();
 
-            let args = expected_action.map_out_varibales(out_arguments);
+            let args = expected_action.map_out_variables(out_arguments);
 
             let action_response = ActionResponse {
                 service_urn: S::URN,
@@ -105,8 +106,19 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
             let response = String::from_utf8(scpd).unwrap();
             Ok::<_, ActionError>((headers, response))
         };
+        let event_handler = || async move {
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+            println!("Eventing is not yet implemented!");
+        };
         self.router = self.router.route(&scpd_path, get(scpd_handler));
         self.router = self.router.route(&control_path, post(action_handler));
+        self.router = self.router.route(&event_path, post(event_handler));
         self
     }
 }

@@ -13,4 +13,10 @@ impl SpecVersion {
     pub const fn upnp_v2() -> Self {
         Self { major: 2, minor: 0 }
     }
+    pub const fn upnp_v1_1() -> Self {
+        Self { major: 1, minor: 1 }
+    }
+    pub const fn upnp_v1() -> Self {
+        Self { major: 1, minor: 0 }
+    }
 }

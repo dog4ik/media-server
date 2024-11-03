@@ -264,7 +264,7 @@ impl IntoXml for Range {
 
 /// Convert types into upnpn values
 pub trait IntoUpnpValue {
-    const TYPE_NAME: DataType;
+    const TYPE_NAME: DataType = DataType::String;
     fn into_value(&self) -> Value;
     fn from_xml_value(value: &str) -> anyhow::Result<Self>
     where
@@ -279,6 +279,13 @@ impl IntoUpnpValue for u8 {
 
     fn from_xml_value(value: &str) -> anyhow::Result<Self> {
         value.parse().context("parse u8")
+    }
+}
+
+impl IntoXml for u8 {
+    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+        let str = self.to_string();
+        w.write_event(Event::Text(BytesText::new(&str)))
     }
 }
 

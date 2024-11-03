@@ -2,7 +2,8 @@ use core::str;
 use std::{
     borrow::Cow,
     fmt::Display,
-    net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
+    io::{Cursor, Write},
+    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     str::FromStr,
     sync::LazyLock,
@@ -24,13 +25,10 @@ const SSDP_IP_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 1900));
 const NOTIFY_INTERVAL_DURATION: Duration = Duration::from_secs(90);
 
-const DATE_FORMAT: time::format_description::well_known::Rfc2822 =
-    time::format_description::well_known::Rfc2822;
-
 const CACHE_CONTROL: usize = 1800;
 
 // TODO: Real values please
-const SERVER: &str = "Linux/6.10.10-arch1-1 UPnP/2.0 MediaServer/1.0";
+const SERVER: &str = "Linux/6.10.10 UPnP/2.0 MediaServer/1.0";
 
 async fn sleep_rand_millis_duration(range: &Range<u64>) {
     let range = {
@@ -45,9 +43,9 @@ fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_ttl(ttl.unwrap_or(2))?;
     socket.set_reuse_address(true)?;
-    socket.set_reuse_port(true)?;
+    socket.set_reuse_port(false)?;
     socket.set_nonblocking(true)?;
-    socket.set_multicast_loop_v4(false)?;
+    socket.set_multicast_loop_v4(true)?;
     socket.join_multicast_v4(&SSDP_IP_ADDR, &Ipv4Addr::UNSPECIFIED)?;
     socket.bind(&SocketAddr::V4(local_ip).into())?;
     let socket = UdpSocket::from_std(socket.into())?;
@@ -80,7 +78,6 @@ pub struct SsdpListener {
     socket: UdpSocket,
     boot_id: usize,
     location: String,
-    unicast_port: u16,
     config_id: usize,
 }
 
@@ -99,88 +96,130 @@ impl SsdpListener {
 
         Ok(Self {
             socket,
-            boot_id: 0,
+            boot_id: 8399389,
             location,
-            unicast_port: 18398,
-            config_id: 0,
+            config_id: 9999,
         })
     }
 
-    pub async fn announce(&mut self, receiver: SocketAddr) -> anyhow::Result<()> {
-        let sleep_range = 0..100;
+    async fn announce_all<T: AnnounceHandler>(
+        &mut self,
+        receiver: SocketAddr,
+    ) -> anyhow::Result<()> {
         let udn = UDN::new(SERVER_UUID);
-        let mut message = NotifyAliveMessage {
-            host: SSDP_ADDR,
-            location: Cow::Borrowed(&self.location),
+        let mut buf = Cursor::new(Vec::new());
+        let mut message = Announce {
+            location: &self.location,
             usn: USN::root_device(udn.clone()),
-            nt: NotificationType::RootDevice,
-            nts: NotificationSubType::Alive,
+            notification_type: NotificationType::RootDevice,
             cache_control: CACHE_CONTROL,
             server: SERVER,
             boot_id: self.boot_id,
             search_port: None,
             config_id: self.config_id,
         };
-        self.socket
-            .send_to(message.to_string().as_bytes(), &receiver)
-            .await?;
-        sleep_rand_millis_duration(&sleep_range).await;
+        T::handle_announce(&message, &mut buf)?;
+        let pos = buf.position() as usize;
 
-        message.nt = NotificationType::Uuid(SERVER_UUID);
-        message.usn = USN::device_uuid(udn.clone());
         self.socket
-            .send_to(message.to_string().as_bytes(), &receiver)
+            .send_to(&buf.get_ref()[..pos], &receiver)
             .await?;
-        sleep_rand_millis_duration(&sleep_range).await;
+        buf.set_position(0);
+
+        message.notification_type = NotificationType::Uuid(SERVER_UUID);
+        message.usn = USN::device_uuid(udn.clone());
+        T::handle_announce(&message, &mut buf)?;
+        let pos = buf.position() as usize;
+        self.socket
+            .send_to(&buf.get_ref()[..pos], &receiver)
+            .await?;
+        buf.set_position(0);
 
         let urn = urn::URN::media_server();
-        message.nt = NotificationType::Urn(urn.clone());
+        message.notification_type = NotificationType::Urn(urn.clone());
         message.usn = USN::urn(udn.clone(), urn);
+        T::handle_announce(&message, &mut buf)?;
+        let pos = buf.position() as usize;
         self.socket
-            .send_to(message.to_string().as_bytes(), &receiver)
+            .send_to(&buf.get_ref()[..pos], &receiver)
             .await?;
-        sleep_rand_millis_duration(&sleep_range).await;
+        buf.set_position(0);
 
         let urn = urn::URN {
             version: 1,
             urn_type: urn::UrnType::Service(urn::ServiceType::ContentDirectory),
         };
-        message.nt = NotificationType::Urn(urn.clone());
-        message.usn = USN::urn(udn, urn);
+        message.notification_type = NotificationType::Urn(urn.clone());
+        message.usn = USN::urn(udn.clone(), urn);
+        T::handle_announce(&message, &mut buf)?;
+        let pos = buf.position() as usize;
         self.socket
-            .send_to(message.to_string().as_bytes(), &receiver)
+            .send_to(&buf.get_ref()[..pos], &receiver)
             .await?;
-        tracing::debug!("Finished announcing media server to: {receiver}");
+        buf.set_position(0);
+
+        let urn = urn::URN {
+            version: 1,
+            urn_type: urn::UrnType::Service(urn::ServiceType::ConnectionManager),
+        };
+        message.notification_type = NotificationType::Urn(urn.clone());
+        message.usn = USN::urn(udn, urn);
+        T::handle_announce(&message, &mut buf)?;
+        let pos = buf.position() as usize;
+        self.socket
+            .send_to(&buf.get_ref()[..pos], &receiver)
+            .await?;
+        tracing::debug!("Finished announcing everything to: {receiver}");
         Ok(())
     }
 
-    pub async fn musticast_search_response(
+    async fn root_announce<T: AnnounceHandler>(
         &mut self,
         sender: SocketAddr,
-        msg: SearchMessage<'_>,
     ) -> anyhow::Result<()> {
-        let sleep_range = 0..(msg.mx.saturating_sub(1) as u64).min(5) * 1000;
-        sleep_rand_millis_duration(&sleep_range).await;
-        let search_response = SearchResponse {
-            cache_control: 1800,
+        let search_response = Announce {
+            cache_control: CACHE_CONTROL,
             location: &self.location,
             server: SERVER,
-            st: msg.st,
-            usn: USN::device_uuid(UDN::new(SERVER_UUID)),
+            notification_type: NotificationType::RootDevice,
+            usn: USN::root_device(UDN::new(SERVER_UUID)),
             boot_id: self.boot_id,
             config_id: self.config_id.into(),
             search_port: None,
-        }
-        .to_string();
-        self.socket
-            .send_to(search_response.as_bytes(), sender)
-            .await?;
-        tracing::debug!("Responded to multicast search from {sender}");
+        };
+        let mut buf = Vec::new();
+        T::handle_announce(&search_response, &mut buf)?;
+        self.socket.send_to(&buf, sender).await?;
+        let text = String::from_utf8(buf).unwrap();
+        println!("Root response: {text}");
+        Ok(())
+    }
+
+    async fn urn_announce<T: AnnounceHandler>(
+        &self,
+        sender: SocketAddr,
+        urn: urn::URN,
+    ) -> anyhow::Result<()> {
+        let udn = UDN::new(SERVER_UUID);
+        let search_response = Announce {
+            cache_control: CACHE_CONTROL,
+            location: &self.location,
+            server: SERVER,
+            notification_type: NotificationType::Urn(urn.clone()),
+            usn: USN::urn(udn, urn),
+            boot_id: self.boot_id,
+            config_id: self.config_id.into(),
+            search_port: None,
+        };
+        let mut buf = Vec::new();
+        T::handle_announce(&search_response, &mut buf)?;
+        self.socket.send_to(&buf, sender).await?;
+        tracing::debug!("Finished announcing urn to {sender}");
         Ok(())
     }
 
     pub async fn listen(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        self.announce(SSDP_ADDR).await?;
+        self.announce_all::<MulticastAnnounce>(SSDP_ADDR).await?;
 
         let mut notify_interval = tokio::time::interval(NOTIFY_INTERVAL_DURATION);
         notify_interval.tick().await;
@@ -201,7 +240,7 @@ impl SsdpListener {
                     return Ok(())
                 }
                 _ = notify_interval.tick() => {
-                    self.announce(SSDP_ADDR).await?;
+                    self.announce_all::<MulticastAnnounce>(SSDP_ADDR).await?;
                 }
             }
         }
@@ -210,37 +249,37 @@ impl SsdpListener {
     async fn handle_message(&mut self, data: &[u8], sender: SocketAddr) -> anyhow::Result<()> {
         let payload = str::from_utf8(data).context("construct string from bytes")?;
         let message = BroadcastMessage::parse_ssdp_payload(payload)?;
-        let is_multicast = sender.ip() == IpAddr::V4(SSDP_IP_ADDR);
-        if is_multicast {
-            tracing::info!("Received multicast message from {sender}");
-        } else {
-            tracing::info!("Received unicast message from {sender}");
-        };
         match message {
             BroadcastMessage::Search(msg) => {
-                tracing::info!(
-                    friendly_name = msg.cp_fn,
-                    user_agent = msg.user_agent,
-                    "Received search message"
-                );
+                tracing::debug!(user_agent = ?msg.user_agent, mx = ?msg.mx, st = %msg.st, "search message",);
+                if let Some(mx) = msg.mx {
+                    let sleep_range = 1..(mx.saturating_sub(1) as u64).clamp(1, 5) * 1000;
+                    sleep_rand_millis_duration(&sleep_range).await;
+                }
                 match msg.st {
                     NotificationType::All => {
-                        self.musticast_search_response(sender, msg).await?;
+                        self.announce_all::<UnicastAnnounce>(sender).await?;
                     }
                     NotificationType::RootDevice => {
-                        self.musticast_search_response(sender, msg).await?;
+                        self.root_announce::<UnicastAnnounce>(sender).await?;
                     }
                     NotificationType::Uuid(uuid) => {
                         if uuid == SERVER_UUID {
-                            self.musticast_search_response(sender, msg).await?;
+                            self.root_announce::<UnicastAnnounce>(sender).await?;
                         }
                     }
                     NotificationType::Urn(ref urn) => match urn.urn_type {
                         urn::UrnType::Device(urn::DeviceType::MediaServer) => {
-                            self.musticast_search_response(sender, msg).await?;
+                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
+                                .await?;
                         }
                         urn::UrnType::Service(urn::ServiceType::ContentDirectory) => {
-                            self.musticast_search_response(sender, msg).await?;
+                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
+                                .await?;
+                        }
+                        urn::UrnType::Service(urn::ServiceType::ConnectionManager) => {
+                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
+                                .await?;
                         }
                         _ => {}
                     },
@@ -337,31 +376,6 @@ impl FromStr for USN {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct UnicastSearchMessage<'a> {
-    pub host: SocketAddr,
-    pub st: NotificationType,
-    pub user_agent: Option<&'a str>,
-}
-
-impl Display for UnicastSearchMessage<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "M-SEARCH * HTTP/1.1
-HOST: {host}
-MAN: \"ssdp:discover\"
-ST: {search_target}",
-            host = self.host,
-            search_target = self.st,
-        )?;
-        if let Some(user_agent) = self.user_agent {
-            writeln!(f, "USER-AGENT: {user_agent}")?;
-        }
-        writeln!(f)
-    }
-}
-
 #[derive(Debug)]
 pub enum BroadcastMessage<'a> {
     Search(SearchMessage<'a>),
@@ -381,88 +395,136 @@ pub struct SearchMessage<'a> {
     /// be less than 5 inclusive. Device responses should be delayed a random duration between 0 and this many
     /// seconds to balance load for the control point when it processes responses. This value is allowed to be
     /// increased if a large number of devices are expected to respond
-    pub mx: usize,
+    /// Missing in unicast search message
+    pub mx: Option<usize>,
     /// Same as server in search messages
     pub user_agent: Option<&'a str>,
     /// A control point can request that a device replies to a TCP port on the control point
+    /// Missing in unicast search message
     pub tcp_port: Option<u16>,
     /// Specifies the friendly name of the control point. The friendly name is vendor specific.
-    pub cp_fn: &'a str,
+    /// Missing in unicast search message
+    pub cp_fn: Option<&'a str>,
     /// Uuid of the control point.
+    /// Missing in unicast search message
+    /// Optional in multicast search message
     pub cp_uuid: Option<&'a str>,
+}
+
+impl SearchMessage<'_> {
+    pub fn is_unicast(&self) -> bool {
+        self.mx.is_none()
+    }
 }
 
 impl Display for SearchMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
+        write!(
             f,
-            "M-SEARCH * HTTP/1.1
-HOST: {host}
-MAN: \"ssdp:discover\"
-ST: {search_target}
-MX: {mx}
-CPFN.UPNP.ORG: {cp_fn}",
+            "M-SEARCH * HTTP/1.1\r\n\
+HOST: {host}\r\n\
+MAN: \"ssdp:discover\"\r\n\
+ST: {search_target}\r\n",
             host = self.host,
             search_target = self.st,
-            mx = self.mx,
-            cp_fn = self.cp_fn,
         )?;
         if let Some(user_agent) = self.user_agent {
-            writeln!(f, "USER-AGENT: {user_agent}")?;
+            write!(f, "USER-AGENT: {user_agent}\r\n")?;
+        }
+        if let Some(mx) = self.mx {
+            write!(f, "MX: {mx}\r\n")?;
         }
         if let Some(tcp_port) = self.tcp_port {
-            writeln!(f, "TCPPORT.UPNP.ORG: {tcp_port}")?;
+            write!(f, "TCPPORT.UPNP.ORG: {tcp_port}\r\n")?;
         }
-        writeln!(f)
+        if let Some(cp_fn) = self.cp_fn {
+            write!(f, "CPFN.UPNP.ORG: {cp_fn}\r\n")?;
+        }
+        write!(f, "\r\n")
+    }
+}
+
+trait AnnounceHandler {
+    fn handle_announce(announce: &Announce<'_>, f: impl Write) -> anyhow::Result<()>;
+}
+
+pub struct MulticastAnnounce;
+
+impl AnnounceHandler for MulticastAnnounce {
+    fn handle_announce(a: &Announce<'_>, mut f: impl Write) -> anyhow::Result<()> {
+        write!(
+            f,
+            "NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age={cache_control}\r\n\
+LOCATION: {location}\r\n\
+NT: {nt}\r\n\
+NTS: ssdp:alive\r\n\
+SERVER: {server}\r\n\
+USN: {usn}\r\n\
+BOOTID.UPNP.ORG: {boot_id}\r\n\
+CONFIGID.UPNP.ORG: {config_id}\r\n",
+            cache_control = a.cache_control,
+            location = a.location,
+            nt = a.notification_type,
+            server = a.server,
+            usn = a.usn,
+            boot_id = a.boot_id,
+            config_id = a.config_id,
+        )?;
+        if let Some(search_port) = a.search_port {
+            write!(f, "SEARCHPORT.UPNP.ORG: {search_port}\r\n")?;
+        }
+        write!(f, "\r\n")?;
+        Ok(())
+    }
+}
+pub struct UnicastAnnounce;
+
+impl AnnounceHandler for UnicastAnnounce {
+    fn handle_announce(a: &Announce<'_>, mut f: impl Write) -> anyhow::Result<()> {
+        let now = time::OffsetDateTime::now_utc();
+        let format = time::format_description::parse_borrowed::<2>("[weekday repr:short], [day padding:zero] [month repr:short] [year] [hour]:[minute]:[second] GMT").expect("infallible");
+        let formatted_date = now.format(&format).expect("infallible");
+        write!(
+            f,
+            "HTTP/1.1 200 OK\r\n\
+CACHE-CONTROL: max-age={cache_control}\r\n\
+LOCATION: {location}\r\n\
+SERVER: {server}\r\n\
+EXT:\r\n\
+ST: {st}\r\n\
+DATE: {date}\r\n\
+USN: {usn}\r\n\
+BOOTID.UPNP.ORG: {boot_id}\r\n\
+CONFIGID.UPNP.ORG: {config_id}\r\n",
+            cache_control = a.cache_control,
+            location = a.location,
+            server = a.server,
+            st = a.notification_type,
+            date = formatted_date,
+            usn = a.usn,
+            boot_id = a.boot_id,
+            config_id = a.config_id,
+        )?;
+        if let Some(search_port) = a.search_port {
+            write!(f, "SEARCHPORT.UPNP.ORG: {search_port}\r\n")?;
+        }
+        write!(f, "\r\n")?;
+        Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct SearchResponse<'a> {
+pub struct Announce<'a> {
     cache_control: usize,
     location: &'a str,
     server: &'a str,
-    st: NotificationType,
+    notification_type: NotificationType,
     usn: USN,
     boot_id: usize,
-    config_id: Option<usize>,
-    search_port: Option<u16>,
-}
-
-impl Display for SearchResponse<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
-            f,
-            "HTTP/1.1 200 OK
-CACHE-CONTROL: max-age={cache_control}
-LOCATION: {location}
-SERVER: {server}
-ST: {st}
-USN: {usn}
-BOOTID.UPNP.ORG: {boot_id}",
-            cache_control = self.cache_control,
-            location = self.location,
-            server = self.server,
-            st = self.st,
-            usn = self.usn,
-            boot_id = self.boot_id,
-        )?;
-        if let Some(config_id) = self.config_id {
-            writeln!(f, "CONFIGID.UPNP.ORG: {config_id}")?;
-        }
-        if let Some(search_port) = self.search_port {
-            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
-        }
-        writeln!(f)
-    }
-}
-
-impl<'a> TryFrom<&'a str> for SearchResponse<'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        todo!()
-    }
+    config_id: usize,
+    search_port: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -571,12 +633,12 @@ impl Display for NotifyByeByeMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "NOTIFY * HTTP/1.1
-HOST: 239.255.255.250:1900
-NT: {nt}
-NTS: {nts}
-USN: {usn}
-BOOTID.UPNP.ORG: {boot_id}
+            "NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+NT: {nt}\r\n\
+NTS: {nts}\r\n\
+USN: {usn}\r\n\
+BOOTID.UPNP.ORG: {boot_id}\r\n\
 CONFIGID.UPNP.ORG: {config_id}\r\n\r\n",
             nt = self.nt,
             nts = self.nts,
@@ -607,17 +669,17 @@ pub struct NotifyUpdateMessage<'a> {
 
 impl Display for NotifyUpdateMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
+        write!(
             f,
-            "NOTIFY * HTTP/1.1
-HOST: 239.255.255.250:1900
-LOCATION: {location}
-NT: {nt}
-NTS: {nts}
-USN: {usn}
-BOOTID.UPNP.ORG: {boot_id}
-CONFIGID.UPNP.ORG: {config_id}
-NEXTBOOTID.UPNP.ORG: {next_boot_id}",
+            "NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+LOCATION: {location}\r\n\
+NT: {nt}\r\n\
+NTS: {nts}\r\n\
+USN: {usn}\r\n\
+BOOTID.UPNP.ORG: {boot_id}\r\n\
+CONFIGID.UPNP.ORG: {config_id}\r\n\
+NEXTBOOTID.UPNP.ORG: {next_boot_id}\r\n",
             location = self.location,
             nt = self.nt,
             nts = self.nts,
@@ -627,9 +689,9 @@ NEXTBOOTID.UPNP.ORG: {next_boot_id}",
             next_boot_id = self.next_boot_id,
         )?;
         if let Some(search_port) = self.search_port {
-            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
+            write!(f, "SEARCHPORT.UPNP.ORG: {search_port}\r\n")?;
         }
-        writeln!(f)
+        write!(f, "\r\n")
     }
 }
 
@@ -656,18 +718,18 @@ pub struct NotifyAliveMessage<'a> {
 
 impl Display for NotifyAliveMessage<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(
+        write!(
             f,
-            "NOTIFY * HTTP/1.1
-HOST: 239.255.255.250:1900
-CACHE-CONTROL: max-age={cache_control}
-LOCATION: {location}
-NT: {nt}
-NTS: {nts}
-SERVER: {server}
-USN: {usn}
-BOOTID.UPNP.ORG: {boot_id}
-CONFIGID.UPNP.ORG: {config_id}",
+            "NOTIFY * HTTP/1.1\r\n\
+HOST: 239.255.255.250:1900\r\n\
+CACHE-CONTROL: max-age={cache_control}\r\n\
+LOCATION: {location}\r\n\
+NT: {nt}\r\n\
+NTS: {nts}\r\n\
+SERVER: {server}\r\n\
+USN: {usn}\r\n\
+BOOTID.UPNP.ORG: {boot_id}\r\n\
+CONFIGID.UPNP.ORG: {config_id}\r\n",
             cache_control = self.cache_control,
             location = self.location,
             nt = self.nt,
@@ -678,9 +740,9 @@ CONFIGID.UPNP.ORG: {config_id}",
             config_id = self.config_id,
         )?;
         if let Some(search_port) = self.search_port {
-            writeln!(f, "SEARCHPORT.UPNP.ORG: {search_port}")?;
+            write!(f, "SEARCHPORT.UPNP.ORG: {search_port}\r\n")?;
         }
-        writeln!(f)
+        write!(f, "\r\n")
     }
 }
 
@@ -723,9 +785,7 @@ impl BroadcastMessage<'_> {
                 let host = host.context("missing host")?;
                 let man = man.context("missing man")?;
                 let st = st.context("missing st")?;
-                let mx = mx.context("missing mx")?;
                 // Compatibility with upnp 1.0
-                let cp_fn = cp_fn.unwrap_or_default();
                 let search_message = SearchMessage {
                     host,
                     man,
@@ -789,8 +849,8 @@ impl BroadcastMessage<'_> {
                 let nts = nts.context("missing nts")?;
                 let host = host.context("missing host")?;
                 let usn = usn.context("missing usn")?;
-                let boot_id = boot_id.context("missing boot id")?;
-                let config_id = config_id.context("missing config id")?;
+                let boot_id = boot_id.unwrap_or_default();
+                let config_id = config_id.unwrap_or_default();
                 match nts {
                     NotificationSubType::Alive => {
                         let location = location.context("missing location")?;

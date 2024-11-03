@@ -1,5 +1,3 @@
-use axum::handler::HandlerWithoutStateExt;
-
 use crate::{
     action::{Action, ActionError, IntoArgumentList, IntoValueList, OutArgument},
     service::{ArgumentScanner, Service},
@@ -9,7 +7,7 @@ use crate::{
 };
 
 #[allow(unused)]
-trait ConnectionManagerHandler {
+pub trait ConnectionManagerHandler {
     /// This REQUIRED action returns the protocol-related info that this ConnectionManager supports in its
     /// current state, as a Comma-Separated Value list of strings according to Table 2-20, “Defined Protocols and
     /// their associated ProtocolInfo ”. Protocol-related information for ‘sourcing’ data is returned in the Source
@@ -19,8 +17,7 @@ trait ConnectionManagerHandler {
     /// ‘sinking’ of data, the Source argument MUST return the empty string.
     fn get_protocol_info(
         &self,
-    ) -> impl std::future::Future<Output = Result<(SourceProtocolInfo, SinkProtocolInfo), ActionError>>
-           + Send;
+    ) -> impl std::future::Future<Output = Result<(String, String), ActionError>> + Send;
 
     fn get_current_connection_ids(
         &self,
@@ -36,12 +33,12 @@ trait ConnectionManagerHandler {
 
     fn get_feature_list(
         &self,
-    ) -> impl std::future::Future<Output = Result<FeatureList, ActionError>> + Send + Sync;
+    ) -> impl std::future::Future<Output = Result<String, ActionError>> + Send + Sync;
 
     fn get_renderer_item_info(
         &self,
         item_info_filter: String,
-        item_metadata_list: ArgResult,
+        item_metadata_list: String,
     ) -> impl std::future::Future<Output = Result<String, ActionError>> + Send + Sync {
         async { Err(ActionError::not_implemented()) }
     }
@@ -130,7 +127,7 @@ trait ConnectionManagerHandler {
 }
 
 #[derive(Debug, Clone)]
-pub struct ConnectionManagerService<T> {
+pub struct ConnectionManagerService<T: ConnectionManagerHandler> {
     handler: T,
 }
 
@@ -182,7 +179,7 @@ impl<T: ConnectionManagerHandler> ConnectionManagerService<T> {
 }
 
 impl<T: ConnectionManagerHandler + Send + Sync + 'static> Service for ConnectionManagerService<T> {
-    const NAME: &str = "ConnectionManager";
+    const NAME: &str = "connection_manager";
 
     const URN: urn::URN = urn::URN {
         version: 3,

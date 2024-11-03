@@ -1,6 +1,7 @@
 use std::fmt::Display;
 
 pub mod action;
+pub mod connection_manager;
 pub mod content_directory;
 mod device_description;
 pub mod router;
@@ -9,7 +10,6 @@ mod service_variables;
 pub mod ssdp;
 pub mod templates;
 mod urn;
-mod connection_manager;
 
 pub const SERVER_UUID: uuid::Uuid = uuid::uuid!("8bbd544b-5a70-4491-89ac-e89476ebb3e9");
 

@@ -1,9 +1,11 @@
+use connection_manager::MediaServerConnectionManager;
 use content_directory::MediaServerContentDirectory;
-use upnp::{content_directory::ContentDirectoryService, router::UpnpRouter};
+use upnp::{connection_manager::ConnectionManagerService, content_directory::ContentDirectoryService, router::UpnpRouter};
 
 use crate::{app_state::AppState, config, utils};
 
 pub mod content_directory;
+pub mod connection_manager;
 
 #[derive(Debug)]
 pub struct Upnp {
@@ -40,7 +42,10 @@ impl Upnp {
                 let content_directory =
                     MediaServerContentDirectory::new(app_state.db.clone(), server_location);
                 let content_directory = ContentDirectoryService::new(content_directory);
+                let connection_manager = MediaServerConnectionManager;
+                let connection_manager = ConnectionManagerService::new(connection_manager);
                 router = router.register_service(content_directory);
+                router = router.register_service(connection_manager);
             }
             Err(e) => {
                 tracing::error!("Failed to resolve server local address: {e}");

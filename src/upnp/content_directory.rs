@@ -165,8 +165,17 @@ enum ContentId {
     Root,
     AllMovies,
     AllShows,
+    Movie(i64),
     Show(i64),
-    Season { show_id: i64, season: i64 },
+    Season {
+        show_id: i64,
+        season: i64,
+    },
+    Episode {
+        show_id: i64,
+        season: i64,
+        episode: i64,
+    },
 }
 
 impl Display for ContentId {
@@ -176,7 +185,13 @@ impl Display for ContentId {
             ContentId::AllMovies => write!(f, "movies"),
             ContentId::AllShows => write!(f, "shows"),
             ContentId::Show(id) => write!(f, "show.{id}"),
+            ContentId::Movie(id) => write!(f, "movie.{id}"),
             ContentId::Season { show_id, season } => write!(f, "show.{show_id}.{season}"),
+            ContentId::Episode {
+                show_id,
+                season,
+                episode,
+            } => write!(f, "show.{show_id}.{season}.{episode}"),
         }
     }
 }
@@ -220,13 +235,28 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
             ContentId::AllMovies => return Ok(self.all_movies().await?),
             ContentId::AllShows => return Ok(self.all_shows().await?),
             ContentId::Show(id) => return Ok(self.show(id).await?),
+            ContentId::Movie(_) => return Ok(DidlResponse::default()),
             ContentId::Season { show_id, season } => {
                 return Ok(self.show_season(show_id, season).await?)
             }
+            ContentId::Episode { .. } => return Ok(DidlResponse::default()),
         }
     }
 
     async fn browse_metadata(&self, object_id: &str) -> Result<DidlResponse, ActionError> {
-        todo!()
+        let content_id = object_id.parse()?;
+        match content_id {
+            ContentId::Root => todo!(),
+            ContentId::AllMovies => todo!(),
+            ContentId::AllShows => todo!(),
+            ContentId::Movie(movie_id) => todo!(),
+            ContentId::Show(show_id) => todo!(),
+            ContentId::Season { show_id, season } => todo!(),
+            ContentId::Episode {
+                show_id,
+                season,
+                episode,
+            } => todo!(),
+        }
     }
 }

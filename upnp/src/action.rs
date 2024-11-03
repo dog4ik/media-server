@@ -170,7 +170,7 @@ impl Action {
         ArgumentScanner::new(input, self.in_variables())
     }
 
-    pub fn map_out_varibales(&self, list: Vec<String>) -> Vec<ArgumentPayload> {
+    pub fn map_out_variables(&self, list: Vec<String>) -> Vec<ArgumentPayload> {
         let out_variables = self.out_variables();
         let mut arguments = Vec::with_capacity(out_variables.len());
         for (arg, val) in self.out_variables.iter().zip(list.into_iter()) {
@@ -348,25 +348,6 @@ impl ActionPayload {
             .iter()
             .map(|a| (a.name.clone(), a.value.as_str()))
             .collect()
-    }
-
-    /// Finds and parses argument from action argument list
-    pub fn find_argument<T: SVariable>(&self, name: &str) -> anyhow::Result<OutArgument<T>> {
-        // TODO: Return ActionError with errors when argument is not found/out of order and
-        // errors when parsing failed
-        let arg = self
-            .arguments
-            .iter()
-            .find(|a| a.name() == name)
-            .with_context(|| format!("find argument {name}"))?;
-        let value = match T::VarType::from_xml_value(&arg.value) {
-            Ok(v) => v,
-            Err(err) => return Err(anyhow::anyhow!("parse error of argument {name}: {err}")),
-        };
-        Ok(OutArgument {
-            name: name.to_owned(),
-            var: value,
-        })
     }
 }
 

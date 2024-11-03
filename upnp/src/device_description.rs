@@ -1,14 +1,15 @@
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Context;
-use quick_xml::events::{BytesDecl, BytesStart, Event};
+use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
 use serde::{Deserialize, Serialize};
+
+use crate::IntoXml;
 
 use super::{templates::SpecVersion, SERVER_UUID};
 
 #[derive(Debug)]
 pub struct DeviceDescription<'a> {
-    pub xmlns_dlna: &'a str,
     pub config_id: &'a str,
     pub spec_version: SpecVersion,
     pub device: Device<'a>,
@@ -21,13 +22,14 @@ impl DeviceDescription<'_> {
         w.write_event(Event::Decl(BytesDecl::new("1.0", None, None)))?;
         let root = BytesStart::new("root").with_attributes([
             ("xmlns", "urn:schemas-upnp-org:device-1-0"),
+            ("xmlns:dlna", "urn:schemas-dlna-org:device-1-0"),
             ("configId", self.config_id),
         ]);
         let root_end = root.to_end().into_owned();
         w.write_event(Event::Start(root))?;
 
         w.write_serializable("specVersion", &self.spec_version)?;
-        w.write_serializable("device", &self.device)?;
+        self.device.write_xml(&mut w)?;
 
         w.write_event(Event::End(root_end))?;
         Ok(String::from_utf8(w.into_inner())?)
@@ -37,33 +39,43 @@ impl DeviceDescription<'_> {
 impl DeviceDescription<'_> {
     pub fn new(friendly_name: String) -> Self {
         Self {
-            xmlns_dlna: "urn:schemas-dlna-org:device-1-0",
-            config_id: "1",
-            spec_version: SpecVersion::upnp_v2(),
+            config_id: "9999",
+            spec_version: SpecVersion::upnp_v1_1(),
             device: Device {
                 device_type: "urn:schemas-upnp-org:device:MediaServer:1",
                 friendly_name,
                 manufacturer: "media-server",
+                serial_number: None,
                 manufacturer_url: Some("https://github.com/dog4ik"),
                 model_description: Some("The media server"),
                 model_name: "Media server",
                 model_number: Some("1.0"),
                 model_url: Some("https://github.com/dog4ik/media-server"),
-                serial_number: None,
                 udn: UDN::new(SERVER_UUID),
-                dlna_x_dlnadoc: "urn:schemas-dlna-org:device-1-0",
-                icon_list: IconList {
-                    icon: vec![Icon {
+                icon_list: vec![
+                    Icon {
                         mimetype: "image/webp",
-                        width: 25,
-                        height: 25,
+                        width: 32,
+                        height: 32,
                         depth: 25,
                         url: "/logo.webp",
-                    }],
-                },
-                service_list: ServiceList {
-                    service: vec![Service::content_directory()],
-                },
+                    },
+                    Icon {
+                        mimetype: "image/png",
+                        width: 32,
+                        height: 32,
+                        depth: 25,
+                        url: "/logo.png",
+                    },
+                    Icon {
+                        mimetype: "image/jpeg",
+                        width: 32,
+                        height: 32,
+                        depth: 25,
+                        url: "/logo.jpeg",
+                    },
+                ],
+                service_list: vec![Service::content_directory(), Service::connection_manager()],
             },
         }
     }
@@ -75,36 +87,77 @@ impl Default for DeviceDescription<'_> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 //TODO: use types that can be serialized here
 pub struct Device<'a> {
-    #[serde(rename = "deviceType")]
     pub device_type: &'a str,
-    #[serde(rename = "friendlyName")]
     pub friendly_name: String,
     /// Manufacturer name. Should be < 64 characters.
     pub manufacturer: &'a str,
-    #[serde(rename = "manufacturerURL")]
     pub manufacturer_url: Option<&'a str>,
-    #[serde(rename = "modelDescription")]
     /// Should be < 128 characters
     pub model_description: Option<&'a str>,
-    #[serde(rename = "modelName")]
     pub model_name: &'a str,
-    #[serde(rename = "modelNumber")]
     pub model_number: Option<&'a str>,
-    #[serde(rename = "modelURL")]
     pub model_url: Option<&'a str>,
-    #[serde(rename = "serialNumber")]
     pub serial_number: Option<&'a str>,
-    #[serde(rename = "UDN")]
     pub udn: UDN,
-    #[serde(rename = "X_DLNADOC")]
-    pub dlna_x_dlnadoc: &'a str,
-    #[serde(rename = "iconList")]
-    pub icon_list: IconList<'a>,
-    #[serde(rename = "serviceList")]
-    pub service_list: ServiceList<'a>,
+    pub icon_list: Vec<Icon<'a>>,
+    pub service_list: Vec<Service<'a>>,
+}
+
+impl IntoXml for Device<'_> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        let device = BytesStart::new("device");
+        let device_end = device.to_end().into_owned();
+        w.write_event(Event::Start(device))?;
+        w.create_element("deviceType")
+            .write_text_content(BytesText::new(&self.device_type))?;
+        w.create_element("friendlyName")
+            .write_text_content(BytesText::new(&self.friendly_name))?;
+        w.create_element("manufacturer")
+            .write_text_content(BytesText::new(&self.manufacturer))?;
+        if let Some(manufacturer_url) = &self.manufacturer_url {
+            w.create_element("manufacturerURL")
+                .write_text_content(BytesText::new(manufacturer_url))?;
+        }
+        if let Some(model_description) = self.model_description {
+            w.create_element("modelDescription")
+                .write_text_content(BytesText::new(model_description))?;
+        }
+        w.create_element("modelName")
+            .write_text_content(BytesText::new(self.model_name))?;
+        if let Some(model_number) = &self.model_number {
+            w.create_element("modelNumber")
+                .write_text_content(BytesText::new(model_number))?;
+        }
+        if let Some(model_url) = self.model_url {
+            w.create_element("modelURL")
+                .write_text_content(BytesText::new(model_url))?;
+        }
+        let udn = self.udn.to_string();
+        w.create_element("UDN")
+            .write_text_content(BytesText::new(&udn))?;
+        w.create_element("dlna:X_DLNADOC")
+            .write_text_content(BytesText::new("DMS-1.50"))?;
+        w.create_element("iconList")
+            .write_inner_content::<_, quick_xml::Error>(|w| {
+                for icon in &self.icon_list {
+                    w.write_serializable("icon", icon)
+                        .expect("serialization not fail");
+                }
+                Ok(())
+            })?;
+        w.create_element("serviceList")
+            .write_inner_content::<_, quick_xml::Error>(|w| {
+                for service in &self.service_list {
+                    w.write_serializable("service", service)
+                        .expect("serialization not fail");
+                }
+                Ok(())
+            })?;
+        w.write_event(Event::End(device_end))
+    }
 }
 
 /// Unique Device Name. Universally-unique identifier for the device, whether root or
@@ -147,16 +200,6 @@ pub struct DlnaXDlnadoc {
     pub xmlns_dlna: String,
 }
 
-#[derive(Debug, Serialize)]
-pub struct IconList<'a> {
-    icon: Vec<Icon<'a>>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ServiceList<'a> {
-    service: Vec<Service<'a>>,
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Icon<'a> {
     pub mimetype: &'a str,
@@ -189,6 +232,15 @@ impl Service<'_> {
             scpdurl: "/upnp/content_directory/scpd.xml",
             control_url: "/upnp/content_directory/control.xml",
             event_sub_url: "/upnp/content_directory/event.xml",
+        }
+    }
+    const fn connection_manager() -> Self {
+        Service {
+            service_type: "urn:schemas-upnp-org:service:ConnectionManager:1",
+            service_id: "urn:upnp-org:serviceId:ConnectionManager",
+            scpdurl: "/upnp/connection_manager/scpd.xml",
+            control_url: "/upnp/connection_manager/control.xml",
+            event_sub_url: "/upnp/connection_manager/event.xml",
         }
     }
 }
