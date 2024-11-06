@@ -6,7 +6,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     str::FromStr,
-    sync::LazyLock,
+    sync::{Arc, LazyLock},
     time::Duration,
 };
 
@@ -75,7 +75,7 @@ pub struct SsdpListenerConfig {
 
 #[derive(Debug)]
 pub struct SsdpListener {
-    socket: UdpSocket,
+    socket: Arc<UdpSocket>,
     boot_id: usize,
     location: String,
     config_id: usize,
@@ -95,131 +95,26 @@ impl SsdpListener {
         );
 
         Ok(Self {
-            socket,
+            socket: Arc::new(socket),
             boot_id: 8399389,
             location,
             config_id: 9999,
         })
     }
 
-    async fn announce_all<T: AnnounceHandler>(
-        &mut self,
-        receiver: SocketAddr,
-    ) -> anyhow::Result<()> {
-        let udn = UDN::new(SERVER_UUID);
-        let mut buf = Cursor::new(Vec::new());
-        let mut message = Announce {
-            location: &self.location,
-            usn: USN::root_device(udn.clone()),
-            notification_type: NotificationType::RootDevice,
+    pub async fn listen(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        let default_announce = Announce {
             cache_control: CACHE_CONTROL,
-            server: SERVER,
-            boot_id: self.boot_id,
-            search_port: None,
-            config_id: self.config_id,
-        };
-        T::handle_announce(&message, &mut buf)?;
-        let pos = buf.position() as usize;
-
-        self.socket
-            .send_to(&buf.get_ref()[..pos], &receiver)
-            .await?;
-        buf.set_position(0);
-
-        message.notification_type = NotificationType::Uuid(SERVER_UUID);
-        message.usn = USN::device_uuid(udn.clone());
-        T::handle_announce(&message, &mut buf)?;
-        let pos = buf.position() as usize;
-        self.socket
-            .send_to(&buf.get_ref()[..pos], &receiver)
-            .await?;
-        buf.set_position(0);
-
-        let urn = urn::URN::media_server();
-        message.notification_type = NotificationType::Urn(urn.clone());
-        message.usn = USN::urn(udn.clone(), urn);
-        T::handle_announce(&message, &mut buf)?;
-        let pos = buf.position() as usize;
-        self.socket
-            .send_to(&buf.get_ref()[..pos], &receiver)
-            .await?;
-        buf.set_position(0);
-
-        let urn = urn::URN {
-            version: 1,
-            urn_type: urn::UrnType::Service(urn::ServiceType::ContentDirectory),
-        };
-        message.notification_type = NotificationType::Urn(urn.clone());
-        message.usn = USN::urn(udn.clone(), urn);
-        T::handle_announce(&message, &mut buf)?;
-        let pos = buf.position() as usize;
-        self.socket
-            .send_to(&buf.get_ref()[..pos], &receiver)
-            .await?;
-        buf.set_position(0);
-
-        let urn = urn::URN {
-            version: 1,
-            urn_type: urn::UrnType::Service(urn::ServiceType::ConnectionManager),
-        };
-        message.notification_type = NotificationType::Urn(urn.clone());
-        message.usn = USN::urn(udn, urn);
-        T::handle_announce(&message, &mut buf)?;
-        let pos = buf.position() as usize;
-        self.socket
-            .send_to(&buf.get_ref()[..pos], &receiver)
-            .await?;
-        tracing::debug!("Finished announcing everything to: {receiver}");
-        Ok(())
-    }
-
-    async fn root_announce<T: AnnounceHandler>(
-        &mut self,
-        sender: SocketAddr,
-    ) -> anyhow::Result<()> {
-        let search_response = Announce {
-            cache_control: CACHE_CONTROL,
-            location: &self.location,
-            server: SERVER,
+            location: self.location.clone(),
+            server: SERVER.to_string(),
             notification_type: NotificationType::RootDevice,
             usn: USN::root_device(UDN::new(SERVER_UUID)),
             boot_id: self.boot_id,
             config_id: self.config_id.into(),
             search_port: None,
         };
-        let mut buf = Vec::new();
-        T::handle_announce(&search_response, &mut buf)?;
-        self.socket.send_to(&buf, sender).await?;
-        let text = String::from_utf8(buf).unwrap();
-        println!("Root response: {text}");
-        Ok(())
-    }
-
-    async fn urn_announce<T: AnnounceHandler>(
-        &self,
-        sender: SocketAddr,
-        urn: urn::URN,
-    ) -> anyhow::Result<()> {
-        let udn = UDN::new(SERVER_UUID);
-        let search_response = Announce {
-            cache_control: CACHE_CONTROL,
-            location: &self.location,
-            server: SERVER,
-            notification_type: NotificationType::Urn(urn.clone()),
-            usn: USN::urn(udn, urn),
-            boot_id: self.boot_id,
-            config_id: self.config_id.into(),
-            search_port: None,
-        };
-        let mut buf = Vec::new();
-        T::handle_announce(&search_response, &mut buf)?;
-        self.socket.send_to(&buf, sender).await?;
-        tracing::debug!("Finished announcing urn to {sender}");
-        Ok(())
-    }
-
-    pub async fn listen(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        self.announce_all::<MulticastAnnounce>(SSDP_ADDR).await?;
+        announce_all::<MulticastAnnounce>(self.socket.clone(), default_announce.clone(), SSDP_ADDR)
+            .await?;
 
         let mut notify_interval = tokio::time::interval(NOTIFY_INTERVAL_DURATION);
         notify_interval.tick().await;
@@ -240,7 +135,7 @@ impl SsdpListener {
                     return Ok(())
                 }
                 _ = notify_interval.tick() => {
-                    self.announce_all::<MulticastAnnounce>(SSDP_ADDR).await?;
+                    announce_all::<MulticastAnnounce>(self.socket.clone(), default_announce.clone(), SSDP_ADDR).await?;
                 }
             }
         }
@@ -249,51 +144,78 @@ impl SsdpListener {
     async fn handle_message(&mut self, data: &[u8], sender: SocketAddr) -> anyhow::Result<()> {
         let payload = str::from_utf8(data).context("construct string from bytes")?;
         let message = BroadcastMessage::parse_ssdp_payload(payload)?;
+        let default_announce = Announce {
+            cache_control: CACHE_CONTROL,
+            location: self.location.clone(),
+            server: SERVER.to_string(),
+            notification_type: NotificationType::RootDevice,
+            usn: USN::root_device(UDN::new(SERVER_UUID)),
+            boot_id: self.boot_id,
+            config_id: self.config_id.into(),
+            search_port: None,
+        };
         match message {
             BroadcastMessage::Search(msg) => {
+                let socket = self.socket.clone();
+                let search_target = msg.st.clone();
                 tracing::debug!(user_agent = ?msg.user_agent, mx = ?msg.mx, st = %msg.st, "search message",);
-                if let Some(mx) = msg.mx {
-                    let sleep_range = 1..(mx.saturating_sub(1) as u64).clamp(1, 5) * 1000;
-                    sleep_rand_millis_duration(&sleep_range).await;
-                }
-                match msg.st {
-                    NotificationType::All => {
-                        self.announce_all::<UnicastAnnounce>(sender).await?;
+                tokio::spawn(async move {
+                    if let Some(mx) = msg.mx {
+                        let sleep_range = 1..(mx.saturating_sub(1) as u64).clamp(1, 5) * 1000;
+                        sleep_rand_millis_duration(&sleep_range).await;
                     }
-                    NotificationType::RootDevice => {
-                        self.root_announce::<UnicastAnnounce>(sender).await?;
-                    }
-                    NotificationType::Uuid(uuid) => {
-                        if uuid == SERVER_UUID {
-                            self.root_announce::<UnicastAnnounce>(sender).await?;
-                        }
-                    }
-                    NotificationType::Urn(ref urn) => match urn.urn_type {
-                        urn::UrnType::Device(urn::DeviceType::MediaServer) => {
-                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
+                    match search_target {
+                        NotificationType::All => {
+                            announce_all::<UnicastAnnounce>(socket, default_announce, sender)
                                 .await?;
                         }
-                        urn::UrnType::Service(urn::ServiceType::ContentDirectory) => {
-                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
+                        NotificationType::RootDevice => {
+                            root_announce::<UnicastAnnounce>(socket, default_announce, sender)
                                 .await?;
                         }
-                        urn::UrnType::Service(urn::ServiceType::ConnectionManager) => {
-                            self.urn_announce::<UnicastAnnounce>(sender, urn.clone())
-                                .await?;
+                        NotificationType::Uuid(uuid) => {
+                            if uuid == SERVER_UUID {
+                                root_announce::<UnicastAnnounce>(socket, default_announce, sender)
+                                    .await?;
+                            }
                         }
-                        _ => {}
-                    },
-                }
+                        NotificationType::Urn(ref urn) => match urn.urn_type {
+                            urn::UrnType::Device(urn::DeviceType::MediaServer) => {
+                                urn_announce::<UnicastAnnounce>(
+                                    socket,
+                                    default_announce,
+                                    sender,
+                                    urn.clone(),
+                                )
+                                .await?;
+                            }
+                            urn::UrnType::Service(urn::ServiceType::ContentDirectory) => {
+                                urn_announce::<UnicastAnnounce>(
+                                    socket,
+                                    default_announce,
+                                    sender,
+                                    urn.clone(),
+                                )
+                                .await?;
+                            }
+                            urn::UrnType::Service(urn::ServiceType::ConnectionManager) => {
+                                urn_announce::<UnicastAnnounce>(
+                                    socket,
+                                    default_announce,
+                                    sender,
+                                    urn.clone(),
+                                )
+                                .await?;
+                            }
+                            _ => {}
+                        },
+                    };
+                    Ok::<_, anyhow::Error>(())
+                });
             }
-            BroadcastMessage::NotifyAlive(msg) => {
-                println!("Received alive message from: {}", msg.server);
-            }
-            BroadcastMessage::NotifyByeBye(msg) => {
-                println!("Received byebye message from: {}", msg.usn);
-            }
-            BroadcastMessage::NotifyUpdate(msg) => {
-                println!("Received update message from: {}", msg.usn);
-            }
+            BroadcastMessage::NotifyAlive(_) => {}
+            BroadcastMessage::NotifyByeBye(_) => {}
+            BroadcastMessage::NotifyUpdate(_) => {}
         }
         Ok(())
     }
@@ -306,6 +228,89 @@ impl SsdpListener {
             .await?;
         Ok(())
     }
+}
+
+async fn urn_announce<T: AnnounceHandler>(
+    socket: Arc<UdpSocket>,
+    mut default_announce: Announce,
+    sender: SocketAddr,
+    urn: urn::URN,
+) -> anyhow::Result<()> {
+    let udn = UDN::new(SERVER_UUID);
+    default_announce.notification_type = NotificationType::Urn(urn.clone());
+    default_announce.usn = USN::urn(udn, urn);
+    let mut buf = Vec::new();
+    T::handle_announce(&default_announce, &mut buf)?;
+    socket.send_to(&buf, sender).await?;
+    tracing::debug!("Finished announcing urn to {sender}");
+    Ok(())
+}
+
+async fn root_announce<T: AnnounceHandler>(
+    socket: Arc<UdpSocket>,
+    mut default_announce: Announce,
+    sender: SocketAddr,
+) -> anyhow::Result<()> {
+    default_announce.notification_type = NotificationType::RootDevice;
+    default_announce.usn = USN::root_device(UDN::new(SERVER_UUID));
+
+    let mut buf = Vec::new();
+    T::handle_announce(&default_announce, &mut buf)?;
+    socket.send_to(&buf, sender).await?;
+    Ok(())
+}
+
+async fn announce_all<T: AnnounceHandler>(
+    socket: Arc<UdpSocket>,
+    mut default_announce: Announce,
+    receiver: SocketAddr,
+) -> anyhow::Result<()> {
+    let udn = UDN::new(SERVER_UUID);
+    let mut buf = Cursor::new(Vec::new());
+    default_announce.notification_type = NotificationType::RootDevice;
+    default_announce.usn = USN::root_device(udn.clone());
+    T::handle_announce(&default_announce, &mut buf)?;
+    let pos = buf.position() as usize;
+    socket.send_to(&buf.get_ref()[..pos], &receiver).await?;
+    buf.set_position(0);
+
+    default_announce.notification_type = NotificationType::Uuid(SERVER_UUID);
+    default_announce.usn = USN::device_uuid(udn.clone());
+    T::handle_announce(&default_announce, &mut buf)?;
+    let pos = buf.position() as usize;
+    socket.send_to(&buf.get_ref()[..pos], &receiver).await?;
+    buf.set_position(0);
+
+    let urn = urn::URN::media_server();
+    default_announce.notification_type = NotificationType::Urn(urn.clone());
+    default_announce.usn = USN::urn(udn.clone(), urn);
+    T::handle_announce(&default_announce, &mut buf)?;
+    let pos = buf.position() as usize;
+    socket.send_to(&buf.get_ref()[..pos], &receiver).await?;
+    buf.set_position(0);
+
+    let urn = urn::URN {
+        version: 1,
+        urn_type: urn::UrnType::Service(urn::ServiceType::ContentDirectory),
+    };
+    default_announce.notification_type = NotificationType::Urn(urn.clone());
+    default_announce.usn = USN::urn(udn.clone(), urn);
+    T::handle_announce(&default_announce, &mut buf)?;
+    let pos = buf.position() as usize;
+    socket.send_to(&buf.get_ref()[..pos], &receiver).await?;
+    buf.set_position(0);
+
+    let urn = urn::URN {
+        version: 1,
+        urn_type: urn::UrnType::Service(urn::ServiceType::ConnectionManager),
+    };
+    default_announce.notification_type = NotificationType::Urn(urn.clone());
+    default_announce.usn = USN::urn(udn, urn);
+    T::handle_announce(&default_announce, &mut buf)?;
+    let pos = buf.position() as usize;
+    socket.send_to(&buf.get_ref()[..pos], &receiver).await?;
+    tracing::debug!("Finished announcing everything to: {receiver}");
+    Ok(())
 }
 
 ///  Unique Service Name. Identifies a unique instance of a device or service.
@@ -445,13 +450,13 @@ ST: {search_target}\r\n",
 }
 
 trait AnnounceHandler {
-    fn handle_announce(announce: &Announce<'_>, f: impl Write) -> anyhow::Result<()>;
+    fn handle_announce(announce: &Announce, f: impl Write) -> anyhow::Result<()>;
 }
 
 pub struct MulticastAnnounce;
 
 impl AnnounceHandler for MulticastAnnounce {
-    fn handle_announce(a: &Announce<'_>, mut f: impl Write) -> anyhow::Result<()> {
+    fn handle_announce(a: &Announce, mut f: impl Write) -> anyhow::Result<()> {
         write!(
             f,
             "NOTIFY * HTTP/1.1\r\n\
@@ -482,7 +487,7 @@ CONFIGID.UPNP.ORG: {config_id}\r\n",
 pub struct UnicastAnnounce;
 
 impl AnnounceHandler for UnicastAnnounce {
-    fn handle_announce(a: &Announce<'_>, mut f: impl Write) -> anyhow::Result<()> {
+    fn handle_announce(a: &Announce, mut f: impl Write) -> anyhow::Result<()> {
         let now = time::OffsetDateTime::now_utc();
         let format = time::format_description::parse_borrowed::<2>("[weekday repr:short], [day padding:zero] [month repr:short] [year] [hour]:[minute]:[second] GMT").expect("infallible");
         let formatted_date = now.format(&format).expect("infallible");
@@ -516,10 +521,10 @@ CONFIGID.UPNP.ORG: {config_id}\r\n",
 }
 
 #[derive(Debug, Clone)]
-pub struct Announce<'a> {
+pub struct Announce {
     cache_control: usize,
-    location: &'a str,
-    server: &'a str,
+    location: String,
+    server: String,
     notification_type: NotificationType,
     usn: USN,
     boot_id: usize,

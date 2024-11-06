@@ -61,7 +61,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
         let action_handler = |headers: HeaderMap, body: String| async move {
             let mut header = headers
                 .get("soapaction")
-                .context("soap_action header")?
+                .context("get soapaction header")?
                 .to_str()
                 .context("convert header to string")?;
             if let Some(stripped) = header.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {

@@ -89,11 +89,23 @@ pub type XmlWriter = quick_xml::Writer<Vec<u8>>;
 /// Allows structs to serialize themselves into xml fragments
 pub trait IntoXml {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()>;
+
+    fn into_string(&self) -> quick_xml::Result<String> {
+        let mut w = quick_xml::Writer::new(Vec::new());
+        self.write_xml(&mut w)?;
+        Ok(String::from_utf8(w.into_inner()).expect("produced value to be utf-8"))
+    }
+}
+
+impl std::fmt::Debug for Box<dyn IntoXml> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.into_string().unwrap())
+    }
 }
 
 /// Allows structs to deserialize themselves from xml reader
-pub trait FromXml {
-    fn read_xml(r: &mut quick_xml::Reader<&[u8]>) -> anyhow::Result<Self>
+pub trait FromXml<'a> {
+    fn read_xml(r: &mut quick_xml::Reader<&'a [u8]>) -> anyhow::Result<Self>
     where
         Self: Sized;
 }

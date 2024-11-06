@@ -1,7 +1,6 @@
 use core::str;
-use std::{collections::HashMap, fmt::Display, str::FromStr};
+use std::{borrow::Cow, collections::HashMap, fmt::Display};
 
-use anyhow::Context;
 use axum::{http::HeaderMap, response::IntoResponse};
 use axum_extra::headers::{self, HeaderMapExt};
 use quick_xml::events::{BytesDecl, BytesStart, BytesText, Event};
@@ -43,7 +42,7 @@ impl Argument {
             kind: S::VarType::TYPE_NAME,
             send_events: S::SEND_EVENTS,
             range: S::RANGE,
-            default: S::default().map(|d| d.into_value().to_string()),
+            default: S::default(),
             allowed_list: S::ALLOWED_VALUE_LIST,
         };
         Self {
@@ -100,27 +99,9 @@ impl<T: SVariable> AsMut<T::VarType> for OutArgument<T> {
     }
 }
 
-impl<T: SVariable> IntoArgumentList for OutArgument<T> {
-    fn into_action_response(&self) -> Vec<ArgumentPayload> {
-        vec![ArgumentPayload {
-            name: self.name.to_string(),
-            value: self.var.into_value().to_string(),
-        }]
-    }
-}
-
-impl<A: SVariable> OutArgument<A> {
-    pub fn new(name: &str, var: A::VarType) -> Self {
-        Self {
-            name: name.to_string(),
-            var,
-        }
-    }
-}
-
 impl<A: SVariable> Display for OutArgument<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.var.into_value().to_string();
+        let value = self.var.into_string().unwrap();
         write!(
             f,
             "{}: {value} @ State variable: {}",
@@ -166,15 +147,15 @@ impl Action {
         &self.out_variables
     }
 
-    pub fn input_scanner<'a>(&'a self, input: Vec<ArgumentPayload>) -> ArgumentScanner<'a> {
+    pub fn input_scanner<'a>(&'a self, input: Vec<InArgumentPayload<'a>>) -> ArgumentScanner<'a> {
         ArgumentScanner::new(input, self.in_variables())
     }
 
-    pub fn map_out_variables(&self, list: Vec<String>) -> Vec<ArgumentPayload> {
+    pub fn map_out_variables(&self, list: Vec<Box<dyn IntoXml>>) -> Vec<OutArgumentsPayload> {
         let out_variables = self.out_variables();
         let mut arguments = Vec::with_capacity(out_variables.len());
         for (arg, val) in self.out_variables.iter().zip(list.into_iter()) {
-            arguments.push(ArgumentPayload {
+            arguments.push(OutArgumentsPayload {
                 name: arg.name().to_owned(),
                 value: val,
             });
@@ -229,8 +210,8 @@ impl<T> SoapMessage<T> {
     }
 }
 
-impl<T: FromXml> SoapMessage<T> {
-    pub fn from_xml(raw_xml: &[u8]) -> anyhow::Result<Self> {
+impl<'a, T: FromXml<'a>> SoapMessage<T> {
+    pub fn from_xml(raw_xml: &'a [u8]) -> anyhow::Result<Self> {
         use quick_xml::Reader;
         let mut r = Reader::from_reader(raw_xml);
 
@@ -251,8 +232,8 @@ impl<T: IntoXml> SoapMessage<T> {
     pub fn into_xml(self) -> anyhow::Result<String> {
         use quick_xml::Writer;
         let mut w = Writer::new(Vec::new());
-        w.write_event(Event::Decl(BytesDecl::new("1.0", None, None)))?;
-        let envelope = BytesStart::new("Envelope").with_attributes([
+        w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
+        let envelope = BytesStart::new("s:Envelope").with_attributes([
             ("xmlns:s", "http://schemas.xmlsoap.org/soap/envelope/"),
             (
                 "s:encodingStyle",
@@ -286,13 +267,13 @@ impl<T: IntoXml> IntoResponse for SoapMessage<T> {
 /// An SCPD action inside Soap message.
 /// The action consists of its name used in the services
 #[derive(Debug, Clone)]
-pub struct ActionPayload {
+pub struct ActionPayload<'a> {
     pub name: String,
-    pub arguments: Vec<ArgumentPayload>,
+    pub arguments: Vec<InArgumentPayload<'a>>,
 }
 
-impl FromXml for ActionPayload {
-    fn read_xml(r: &mut quick_xml::Reader<&[u8]>) -> anyhow::Result<Self>
+impl<'a> FromXml<'a> for ActionPayload<'a> {
+    fn read_xml(r: &mut quick_xml::Reader<&'a [u8]>) -> anyhow::Result<Self>
     where
         Self: Sized,
     {
@@ -306,8 +287,8 @@ impl FromXml for ActionPayload {
             match next {
                 Event::Start(var) => {
                     let name = String::from_utf8(var.local_name().into_inner().to_vec())?;
-                    let value = r.read_text(var.name())?.to_string();
-                    arguments.push(ArgumentPayload { name, value });
+                    let value = r.read_text(var.name())?;
+                    arguments.push(InArgumentPayload { name, value });
                 }
                 Event::End(end) if end == action_name_tag_end => {
                     break;
@@ -323,7 +304,7 @@ impl FromXml for ActionPayload {
     }
 }
 
-impl IntoXml for ActionPayload {
+impl IntoXml for ActionPayload<'_> {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
         let action = BytesStart::new(self.name());
         let action_end = action.to_end().into_owned();
@@ -338,7 +319,7 @@ impl IntoXml for ActionPayload {
     }
 }
 
-impl ActionPayload {
+impl ActionPayload<'_> {
     pub fn name(&self) -> &str {
         &self.name
     }
@@ -346,28 +327,40 @@ impl ActionPayload {
     pub fn arguments_map(&self) -> HashMap<String, &str> {
         self.arguments
             .iter()
-            .map(|a| (a.name.clone(), a.value.as_str()))
+            .map(|a| (a.name.clone(), a.value.as_ref()))
             .collect()
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ArgumentPayload {
+pub struct InArgumentPayload<'a> {
     pub name: String,
-    pub value: String,
+    pub value: Cow<'a, str>,
 }
 
-impl ArgumentPayload {
+impl InArgumentPayload<'_> {
     pub fn name(&self) -> &str {
         &self.name
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct OutArgumentsPayload {
+    pub name: String,
+    pub value: Box<dyn IntoXml>,
+}
+
+impl OutArgumentsPayload {
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+#[derive(Debug)]
 pub struct ActionResponse {
     pub action_name: String,
     pub service_urn: URN,
-    pub args: Vec<ArgumentPayload>,
+    pub args: Vec<OutArgumentsPayload>,
 }
 
 impl IntoXml for ActionResponse {
@@ -379,65 +372,10 @@ impl IntoXml for ActionResponse {
 
         for argument in &self.args {
             w.create_element(argument.name())
-                .write_text_content(BytesText::new(&argument.value))?;
+                .write_inner_content(|w| argument.value.write_xml(w))?;
         }
 
         w.write_event(Event::End(action_end))
-    }
-}
-
-impl FromXml for ActionResponse {
-    fn read_xml(r: &mut quick_xml::Reader<&[u8]>) -> anyhow::Result<Self>
-    where
-        Self: Sized,
-    {
-        let mut args = Vec::new();
-        let action_name_tag = r.read_to_start()?;
-        let action_name_tag_end = action_name_tag.to_end().into_owned();
-        let (_prefix, urn) = action_name_tag
-            .attributes()
-            .find_map(|a| {
-                a.ok().and_then(|a| {
-                    Some((
-                        a.key.as_namespace_binding()?,
-                        URN::from_str(&str::from_utf8(&a.value).ok()?).ok()?,
-                    ))
-                })
-            })
-            .context("attribute urn")?;
-
-        let action_name = {
-            let local_name = action_name_tag.local_name();
-            let action_name = str::from_utf8(local_name.as_ref())?;
-            action_name
-                .strip_suffix("Response")
-                .context("name must end with Response")?
-                .to_string()
-        };
-        loop {
-            let argument = r.read_event_err_eof()?.into_owned();
-            match argument {
-                Event::Start(start) => {
-                    let name = String::from_utf8(start.local_name().as_ref().to_vec())?;
-                    let value = r.read_text(start.name())?;
-                    args.push(ArgumentPayload {
-                        name,
-                        value: value.to_string(),
-                    })
-                }
-                Event::End(end) => {
-                    if end == action_name_tag_end {
-                        break;
-                    }
-                }
-                _ => (),
-            }
-        }
-        Ok(Self {
-            service_urn: urn,
-            action_name: action_name.to_string(),
-            args,
-        })
     }
 }
 
@@ -448,23 +386,23 @@ impl IntoResponse for ActionResponse {
 }
 
 pub trait IntoValueList {
-    fn into_value_list(self) -> Vec<String>;
+    fn into_value_list(self) -> Vec<Box<dyn IntoXml>>;
 }
 
-impl<T: IntoUpnpValue> IntoValueList for T {
-    fn into_value_list(self) -> Vec<String> {
-        vec![self.into_value().to_string()]
+impl<T: IntoUpnpValue + 'static> IntoValueList for T {
+    fn into_value_list(self) -> Vec<Box<dyn IntoXml>> {
+        vec![Box::new(self)]
     }
 }
 
 impl IntoValueList for () {
-    fn into_value_list(self) -> Vec<String> {
+    fn into_value_list(self) -> Vec<Box<dyn IntoXml>> {
         vec![]
     }
 }
 
-impl IntoValueList for Vec<String> {
-    fn into_value_list(self) -> Vec<String> {
+impl IntoValueList for Vec<Box<dyn IntoXml>> {
+    fn into_value_list(self) -> Vec<Box<dyn IntoXml>> {
         self
     }
 }
@@ -475,13 +413,12 @@ macro_rules! impl_tuples_into_value_list {
     ($(($($types:ident),*)),*) => {
         $(
             #[allow(non_snake_case, unused_variables)]
-            impl<$($types: IntoUpnpValue),*> IntoValueList for ($($types,)*) {
-                fn into_value_list(self) -> Vec<String> {
+            impl<$($types: IntoUpnpValue + 'static),*> IntoValueList for ($($types,)*) {
+                fn into_value_list(self) -> Vec<Box<dyn IntoXml>> {
                     let ($($types,)*) = self;
-                    let mut args = Vec::new();
+                    let mut args: Vec<Box<dyn IntoXml>> = Vec::new();
                     $(
-                        let value = $types.into_value().to_string();
-                        args.push(value);
+                        args.push(Box::new($types));
                     )*
                     args
                 }
@@ -491,69 +428,6 @@ macro_rules! impl_tuples_into_value_list {
 }
 
 impl_tuples_into_value_list! {
-    (A),
-    (A, B),
-    (A, B, C),
-    (A, B, C, D),
-    (A, B, C, D, E),
-    (A, B, C, D, E, F),
-    (A, B, C, D, E, F, G),
-    (A, B, C, D, E, F, G, H),
-    (A, B, C, D, E, F, G, H, I),
-    (A, B, C, D, E, F, G, H, I, J),
-    (A, B, C, D, E, F, G, H, I, J, K),
-    (A, B, C, D, E, F, G, H, I, J, K, L)
-}
-
-pub trait IntoArgumentList {
-    fn into_action_response(&self) -> Vec<ArgumentPayload>;
-}
-
-impl IntoArgumentList for Vec<ArgumentPayload> {
-    fn into_action_response(&self) -> Vec<ArgumentPayload> {
-        self.clone()
-    }
-}
-
-impl<T: IntoArgumentList> IntoArgumentList for Option<T> {
-    fn into_action_response(&self) -> Vec<ArgumentPayload> {
-        match self {
-            Some(val) => val.into_action_response(),
-            None => vec![],
-        }
-    }
-}
-
-impl IntoArgumentList for () {
-    fn into_action_response(&self) -> Vec<ArgumentPayload> {
-        vec![]
-    }
-}
-
-macro_rules! impl_for_tuples {
-    () => {};
-
-    ($(($($types:ident),*)),*) => {
-        $(
-            #[allow(non_snake_case, unused_variables)]
-            impl<$($types: SVariable),*> IntoArgumentList for ($(OutArgument<$types>,)*) {
-                fn into_action_response(&self) -> Vec<ArgumentPayload> {
-                    let ($($types,)*) = self;
-                    let mut args = Vec::new();
-                    $(
-                        let name = $types.name.to_string();
-                        let value = $types.var.into_value().to_string();
-                        let arg = ArgumentPayload { name, value };
-                        args.push(arg);
-                    )*
-                    args
-                }
-            }
-        )*
-    };
-}
-
-impl_for_tuples! {
     (A),
     (A, B),
     (A, B, C),
@@ -588,7 +462,7 @@ pub enum ActionErrorCode {
     /// Implemented
     OptionalActionNotImplemented,
     /// The device does not have sufficient memory available to complete the
-    /// action.  
+    /// action.
     OutOfMemory,
     /// The device has encountered an error condition which it cannot resolve
     /// itself and required human intervention such as a reset or power cycle.

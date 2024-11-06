@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::{
-    action::{ActionError, ActionErrorCode, Argument, ArgumentPayload, IntoValueList},
+    action::{ActionError, ActionErrorCode, Argument, InArgumentPayload, IntoValueList},
     service_variables::IntoUpnpValue,
 };
 
@@ -22,12 +22,12 @@ pub trait Service {
 
 #[derive(Debug, Clone)]
 pub struct ArgumentScanner<'a> {
-    payload: std::vec::IntoIter<ArgumentPayload>,
+    payload: std::vec::IntoIter<InArgumentPayload<'a>>,
     expected: std::slice::Iter<'a, Argument>,
 }
 
 impl<'a> ArgumentScanner<'a> {
-    pub fn new(payload: Vec<ArgumentPayload>, expected: &'a Vec<Argument>) -> Self {
+    pub fn new(payload: Vec<InArgumentPayload<'a>>, expected: &'a Vec<Argument>) -> Self {
         Self {
             payload: payload.into_iter(),
             expected: expected.iter(),
@@ -77,7 +77,7 @@ impl<S: Service> UpnpService<S> {
     pub fn input_scanner<'a>(
         &'a self,
         name: &str,
-        input: Vec<ArgumentPayload>,
+        input: Vec<InArgumentPayload<'a>>,
     ) -> Result<ArgumentScanner<'a>, ActionError> {
         let action = self.find_action(name)?;
         Ok(ArgumentScanner::new(input, action.in_variables()))

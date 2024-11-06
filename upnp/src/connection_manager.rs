@@ -1,9 +1,11 @@
+use quick_xml::events::{BytesText, Event};
+
 use crate::{
-    action::{Action, ActionError, IntoArgumentList, IntoValueList, OutArgument},
+    action::{Action, ActionError, IntoValueList, OutArgument},
     service::{ArgumentScanner, Service},
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
     templates::{service_description::ServiceDescription, SpecVersion},
-    urn,
+    urn, IntoXml,
 };
 
 #[allow(unused)]
@@ -260,6 +262,7 @@ impl<T: ConnectionManagerHandler + Send + Sync + 'static> Service for Connection
         name: &'a str,
         mut inputs: ArgumentScanner<'a>,
     ) -> anyhow::Result<impl crate::action::IntoValueList> {
+        tracing::debug!("Got connection manager action {}", name);
         match name {
             "GetProtocolInfo" => Ok(self.get_protocol_info().await?.into_value_list()),
             "PrepareForConnection" => Ok(self
@@ -392,17 +395,6 @@ impl IntoUpnpValue for ConnectionStatus {
     const TYPE_NAME: crate::service_variables::DataType =
         crate::service_variables::DataType::String;
 
-    fn into_value(&self) -> crate::service_variables::Value {
-        let val = match self {
-            ConnectionStatus::Ok => "OK",
-            ConnectionStatus::ContentFormatMismatch => "ContentFormatMismatch",
-            ConnectionStatus::InsufficienBandwidth => "InsufficienBandwidth",
-            ConnectionStatus::UnreliableChannel => "UnreliableChannel",
-            ConnectionStatus::Unknown => "Unknown",
-        };
-        crate::service_variables::Value::String(val.into())
-    }
-
     fn from_xml_value(value: &str) -> anyhow::Result<Self>
     where
         Self: Sized,
@@ -417,6 +409,20 @@ impl IntoUpnpValue for ConnectionStatus {
         }
     }
 }
+
+impl IntoXml for ConnectionStatus {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        let val = match self {
+            ConnectionStatus::Ok => "OK",
+            ConnectionStatus::ContentFormatMismatch => "ContentFormatMismatch",
+            ConnectionStatus::InsufficienBandwidth => "InsufficienBandwidth",
+            ConnectionStatus::UnreliableChannel => "UnreliableChannel",
+            ConnectionStatus::Unknown => "Unknown",
+        };
+        w.write_event(Event::Text(BytesText::new(val)))
+    }
+}
+
 impl SVariable for ConnectionStatus {
     type VarType = Self;
     const ALLOWED_VALUE_LIST: Option<&[&str]> = Some(&[
@@ -446,14 +452,6 @@ impl IntoUpnpValue for Direction {
     const TYPE_NAME: crate::service_variables::DataType =
         crate::service_variables::DataType::String;
 
-    fn into_value(&self) -> crate::service_variables::Value {
-        let msg = match self {
-            Direction::Output => "Output",
-            Direction::Input => "Input",
-        };
-        crate::service_variables::Value::String(msg.into())
-    }
-
     fn from_xml_value(value: &str) -> anyhow::Result<Self>
     where
         Self: Sized,
@@ -465,6 +463,17 @@ impl IntoUpnpValue for Direction {
         }
     }
 }
+
+impl IntoXml for Direction {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        let msg = match self {
+            Direction::Output => "Output",
+            Direction::Input => "Input",
+        };
+        w.write_event(Event::Text(BytesText::new(msg)))
+    }
+}
+
 impl SVariable for Direction {
     type VarType = Self;
     const VAR_NAME: &str = "Direction";
