@@ -525,9 +525,9 @@ impl From<anyhow::Error> for ActionError {
 impl std::fmt::Display for ActionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         if let Some(description) = &self.description {
-            write!(f, "Error({}): {}", self.code.code(), description)
+            write!(f, "{}: {}", self.code.code(), description)
         } else {
-            write!(f, "Error({})", self.code.code())
+            write!(f, "{}", self.code.code())
         }
     }
 }

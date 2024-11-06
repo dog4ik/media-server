@@ -10,7 +10,6 @@ use std::{
 };
 
 use anyhow::Context;
-use properties::DidlResponse;
 use property_name::PropertyValue;
 use quick_xml::events::{BytesStart, BytesText, Event};
 
@@ -29,6 +28,7 @@ use super::{
 };
 
 pub mod class;
+pub mod error;
 pub mod properties;
 
 pub trait ContentDirectoryHandler {

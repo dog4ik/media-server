@@ -593,7 +593,6 @@ impl DidlResponse {
     pub fn apply_filter(&mut self, filter: Filter) {
         match filter {
             Filter::Wildcard => {
-                println!("Applying wildcard filter");
                 for container in &mut self.containers {
                     for property in container.properties.values_mut() {
                         property.allow_all();

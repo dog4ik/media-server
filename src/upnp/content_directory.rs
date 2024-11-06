@@ -4,7 +4,8 @@ use anyhow::Context;
 use upnp::{
     action::ActionError,
     content_directory::{
-        class::{self, ItemType},
+        class::ItemType,
+        error,
         properties::{
             self,
             res::{ProtocolInfo, Resource},
@@ -14,10 +15,7 @@ use upnp::{
     },
 };
 
-use crate::{
-    db::{Db, DbActions},
-    metadata::MovieMetadata,
-};
+use crate::db::{Db, DbActions};
 
 #[derive(Clone)]
 pub struct MediaServerContentDirectory {
@@ -66,6 +64,9 @@ impl MediaServerContentDirectory {
                 show.title,
             );
             container.set_property(properties::AlbumArtUri(poster_url));
+            if let Some(plot) = show.plot {
+                container.set_property(properties::Description(plot));
+            }
             containers.push(container);
         }
         Ok(DidlResponse {
@@ -171,6 +172,9 @@ impl MediaServerContentDirectory {
             episode_metadata.title,
         );
         item.base.set_upnp_class(Some(ItemType::VideoItem(None)));
+        if let Some(plot) = episode_metadata.plot {
+            item.set_property(properties::Description(plot));
+        }
         item.set_property(properties::EpisodeNumber(episode_metadata.number as u32));
         item.set_property(properties::EpisodeSeason(
             episode_metadata.season_number as u32,
@@ -208,6 +212,9 @@ impl MediaServerContentDirectory {
             );
             item.base.set_upnp_class(Some(ItemType::VideoItem(None)));
             item.set_property(properties::AlbumArtUri(poster_url));
+            if let Some(plot) = movie.plot {
+                item.set_property(properties::Description(plot));
+            }
             let watch_resource =
                 Resource::new(watch_url, ProtocolInfo::http_get("video/matroska".into()));
             item.set_property(watch_resource);
@@ -239,6 +246,9 @@ impl MediaServerContentDirectory {
         );
         item.base.set_upnp_class(Some(ItemType::VideoItem(None)));
         item.set_property(properties::AlbumArtUri(poster_url));
+        if let Some(plot) = movie.plot {
+            item.set_property(properties::Description(plot));
+        }
         let watch_resource =
             Resource::new(watch_url, ProtocolInfo::http_get("video/matroska".into()));
         item.set_property(watch_resource);
@@ -286,7 +296,7 @@ impl Display for ContentId {
 }
 
 impl FromStr for ContentId {
-    type Err = anyhow::Error;
+    type Err = error::NoSuchObjectError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s == "0" {
@@ -320,7 +330,7 @@ impl FromStr for ContentId {
             let movie_id = movie.parse().context("parse movie id")?;
             return Ok(Self::Movie(movie_id));
         }
-        Err(anyhow::anyhow!("failed to parse content id: {s}"))
+        Err(anyhow::anyhow!("failed to parse content id: {s}"))?
     }
 }
 
@@ -349,8 +359,8 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
             ContentId::AllMovies => todo!(),
             ContentId::AllShows => todo!(),
             ContentId::Movie(movie_id) => Ok(self.movie_metadata(movie_id).await?),
-            ContentId::Show(show_id) => todo!(),
-            ContentId::Season { show_id, season } => todo!(),
+            ContentId::Show(_) => todo!(),
+            ContentId::Season { .. } => todo!(),
             ContentId::Episode {
                 show_id,
                 season,
