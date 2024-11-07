@@ -789,7 +789,7 @@ impl IntoXml for Item {
 
 #[derive(Debug)]
 pub struct Container {
-    base: ContainerBase,
+    pub base: ContainerBase,
     properties: HashMap<TypeId, PropertyValue>,
     multivalue_properties: HashMap<TypeId, Vec<PropertyValue>>,
 }

@@ -48,6 +48,18 @@ impl MediaServerContentDirectory {
         }
     }
 
+    pub fn root_metadata() -> DidlResponse {
+        let root = Container::new(
+            ContentId::Root.to_string(),
+            "-1".into(),
+            "Media server".into(),
+        );
+        DidlResponse {
+            containers: vec![root],
+            items: vec![],
+        }
+    }
+
     pub async fn all_shows(&self) -> anyhow::Result<DidlResponse> {
         let shows = self.db.all_shows().await?;
         let mut containers = Vec::with_capacity(shows.len());
@@ -226,6 +238,30 @@ impl MediaServerContentDirectory {
         })
     }
 
+    pub fn all_movies_metadata() -> DidlResponse {
+        let all_movies = Container::new(
+            ContentId::AllMovies.to_string(),
+            ContentId::Root.to_string(),
+            "Movies".to_string(),
+        );
+        DidlResponse {
+            containers: vec![all_movies],
+            items: vec![],
+        }
+    }
+
+    pub fn all_shows_metadata() -> DidlResponse {
+        let all_movies = Container::new(
+            ContentId::AllShows.to_string(),
+            ContentId::Root.to_string(),
+            "Shows".to_string(),
+        );
+        DidlResponse {
+            containers: vec![all_movies],
+            items: vec![],
+        }
+    }
+
     pub async fn movie_metadata(&self, movie_id: i64) -> anyhow::Result<DidlResponse> {
         let movie = self.db.get_movie(movie_id).await?;
         let poster_url = format!(
@@ -255,6 +291,46 @@ impl MediaServerContentDirectory {
         Ok(DidlResponse {
             containers: vec![],
             items: vec![item],
+        })
+    }
+
+    pub async fn show_metadata(&self, show_id: i64) -> anyhow::Result<DidlResponse> {
+        let show = self.db.get_show(show_id).await?;
+        let poster_url = format!(
+            "{server_url}/api/show/{show_id}/poster",
+            server_url = self.server_location,
+            show_id = show.metadata_id
+        );
+        let show_id = ContentId::Show(show_id);
+        let mut container = Container::new(
+            show_id.to_string(),
+            ContentId::AllShows.to_string(),
+            show.title,
+        );
+        container.set_property(properties::AlbumArtUri(poster_url));
+        if let Some(plot) = show.plot {
+            container.set_property(properties::Description(plot));
+        }
+        Ok(DidlResponse {
+            containers: vec![container],
+            items: vec![],
+        })
+    }
+
+    pub async fn season_metadata(&self, show_id: i64, season: i64) -> anyhow::Result<DidlResponse> {
+        let season_metadata = self.db.get_season(show_id, season as usize).await?;
+        let season_id = ContentId::Season { show_id, season };
+        let mut container = Container::new(
+            season_id.to_string(),
+            ContentId::Show(show_id).to_string(),
+            format!("Season {}", season),
+        );
+        if let Some(plot) = season_metadata.plot {
+            container.set_property(properties::Description(plot));
+        }
+        Ok(DidlResponse {
+            containers: vec![container],
+            items: vec![],
         })
     }
 }
@@ -355,12 +431,14 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
     async fn browse_metadata(&self, object_id: &str) -> Result<DidlResponse, ActionError> {
         let content_id = object_id.parse()?;
         match content_id {
-            ContentId::Root => todo!(),
-            ContentId::AllMovies => todo!(),
-            ContentId::AllShows => todo!(),
+            ContentId::Root => Ok(Self::root_metadata()),
+            ContentId::AllMovies => Ok(Self::all_movies_metadata()),
+            ContentId::AllShows => Ok(Self::all_shows_metadata()),
             ContentId::Movie(movie_id) => Ok(self.movie_metadata(movie_id).await?),
-            ContentId::Show(_) => todo!(),
-            ContentId::Season { .. } => todo!(),
+            ContentId::Show(show_id) => Ok(self.show_metadata(show_id).await?),
+            ContentId::Season { show_id, season } => {
+                Ok(self.season_metadata(show_id, season).await?)
+            }
             ContentId::Episode {
                 show_id,
                 season,

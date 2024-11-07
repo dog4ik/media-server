@@ -6,7 +6,7 @@ use std::{
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     ops::Range,
     str::FromStr,
-    sync::{Arc, LazyLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -59,13 +59,6 @@ async fn resolve_local_addr() -> anyhow::Result<SocketAddr> {
     socket.connect(SSDP_ADDR).await?;
     socket.local_addr().context("get local addr")
 }
-
-pub static LOCAL_ADDR: LazyLock<std::io::Result<SocketAddr>> = LazyLock::new(|| {
-    use std::net::UdpSocket;
-    let socket = UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)))?;
-    socket.connect(SSDP_ADDR)?;
-    socket.local_addr()
-});
 
 #[derive(Debug, Clone)]
 pub struct SsdpListenerConfig {
