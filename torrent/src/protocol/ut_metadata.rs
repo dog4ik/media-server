@@ -2,6 +2,7 @@ use bytes::Bytes;
 use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
 
 use super::{
+    extension::Extension,
     peer::{ExtensionHandshake, CLIENT_EXTENSIONS},
     Info,
 };
@@ -11,9 +12,10 @@ pub struct UtMetadata {
     pub size: usize,
     pub metadata_id: u8,
     pub blocks: Vec<Option<Bytes>>,
+    pub downloaded: usize,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum UtMessage {
     Request { piece: usize },
     Data { piece: usize, total_size: usize },
@@ -25,7 +27,7 @@ impl UtMessage {
         serde_bencode::from_bytes(bytes)
     }
     pub fn as_bytes(&self) -> Vec<u8> {
-        serde_bencode::to_bytes(self).unwrap()
+        serde_bencode::to_bytes(self).expect("serialization is infallible")
     }
 }
 
@@ -118,13 +120,14 @@ impl UtMetadata {
     const BLOCK_SIZE: usize = 1024 * 16;
 
     pub fn empty_from_handshake(handshake: &ExtensionHandshake) -> Option<Self> {
-        let metadata_id = *handshake.dict.get("ut_metadata")?;
+        let metadata_id = handshake.ut_metadata_id()?;
         let size = handshake.ut_metadata_size()?;
         let total_pieces = (size + Self::BLOCK_SIZE - 1) / Self::BLOCK_SIZE;
         Some(Self {
             size,
             metadata_id,
             blocks: vec![None; total_pieces],
+            downloaded: 0,
         })
     }
 
@@ -141,13 +144,15 @@ impl UtMetadata {
             blocks.push(Some(bytes.slice(start..end)));
         }
         let last_start = (total_pieces - 1) * Self::BLOCK_SIZE;
-        let last_length = crate::utils::piece_size(total_pieces - 1, Self::BLOCK_SIZE, size);
-        let last_end = last_start + last_length;
+        let last_length =
+            crate::utils::piece_size(total_pieces - 1, Self::BLOCK_SIZE as u32, size as u64);
+        let last_end = last_start + last_length as usize;
         blocks.push(Some(bytes.slice(last_start..last_end)));
 
         Self {
             size,
             metadata_id,
+            downloaded: blocks.len(),
             blocks,
         }
     }
@@ -158,7 +163,7 @@ impl UtMetadata {
     }
 
     pub fn is_full(&self) -> bool {
-        self.blocks.iter().all(Option::is_some)
+        self.downloaded == self.blocks.len()
     }
 
     pub fn request_next_block(&mut self) -> Option<UtMessage> {
@@ -168,7 +173,34 @@ impl UtMetadata {
 
     pub fn save_block(&mut self, piece: usize, data: Bytes) -> Option<()> {
         let block = self.blocks.get_mut(piece)?;
-        *block = Some(data);
+        if block.is_none() {
+            *block = Some(data);
+            self.downloaded += 1;
+        }
         Some(())
     }
+
+    pub fn get_piece(&self, piece: usize) -> Option<Bytes> {
+        self.blocks.get(piece).cloned()?
+    }
+}
+
+impl From<UtMessage> for bytes::Bytes {
+    fn from(value: UtMessage) -> Self {
+        value.as_bytes().into()
+    }
+}
+
+impl TryFrom<&[u8]> for UtMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let ut_message = Self::from_bytes(value)?;
+        Ok(ut_message)
+    }
+}
+
+impl Extension<'_> for UtMessage {
+    const CLIENT_ID: u8 = 1;
+    const NAME: &'static str = "ut_metadata";
 }

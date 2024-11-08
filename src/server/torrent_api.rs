@@ -5,7 +5,7 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Deserializer, Serialize};
-use torrent::scheduler::Priority;
+use torrent::Priority;
 
 use crate::{
     app_state::AppError,

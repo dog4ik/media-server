@@ -6,12 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, task::JoinSet};
-use torrent::{
-    download::{DownloadHandle, DownloadState},
-    file::MagnetLink,
-    protocol::{Info, OutputFile},
-    DownloadProgress,
-};
+use torrent::{DownloadHandle, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile};
 
 use crate::{
     library::{

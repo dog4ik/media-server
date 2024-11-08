@@ -5,6 +5,9 @@ edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[dev-dependencies]
+clap = { version = "4.5.20", features = ["derive"] }
+
 [dependencies]
 serde_bencode = "0.2.4"
 serde_urlencoded = "0.7.1"
@@ -24,3 +27,4 @@ tracing-test = "0.2.4"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 uuid = { version = "1.8.0", features = ["v4", "serde"] }
 sysinfo = "0.30.12"
+flume = { version = "0.11.0", features = ["async"] }

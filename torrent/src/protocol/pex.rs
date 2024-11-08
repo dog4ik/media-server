@@ -1,9 +1,11 @@
 use bytes::{Bytes, BytesMut};
 use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
 use std::{
-    collections::HashSet,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
+    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashSet},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
+
+use super::extension::Extension;
 
 #[derive(Debug, Clone)]
 pub struct PexHistory {
@@ -350,6 +352,71 @@ impl PexHistory {
 impl Default for PexHistory {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl From<PexMessage> for bytes::Bytes {
+    fn from(value: PexMessage) -> Self {
+        serde_bencode::to_bytes(&value)
+            .expect("serialization infallible")
+            .into()
+    }
+}
+
+impl TryFrom<&[u8]> for PexMessage {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8]) -> Result<Self, Self::Error> {
+        let pex_message = serde_bencode::from_bytes(value)?;
+        Ok(pex_message)
+    }
+}
+
+impl Extension<'_> for PexMessage {
+    const NAME: &'static str = "ut_pex";
+    const CLIENT_ID: u8 = 2;
+}
+
+#[derive(Debug)]
+pub struct PexPeers {
+    /// Map from suggested ip to peers that suggested it.
+    pub peer_map: BTreeMap<SocketAddr, BTreeSet<IpAddr>>,
+}
+
+impl PexPeers {
+    pub fn add_peer(&mut self, from: SocketAddr, peer: SocketAddr) {
+        let entry = self.peer_map.entry(peer);
+        match entry {
+            Entry::Vacant(vacant) => {
+                let mut set = BTreeSet::new();
+                set.insert(from.ip());
+                vacant.insert(set);
+            }
+            Entry::Occupied(mut occupied) => {
+                occupied.get_mut().insert(from.ip());
+            }
+        };
+    }
+
+    pub fn remove_peer(&mut self, from: SocketAddr, peer: SocketAddr) {
+        if let Some(set) = self.peer_map.get_mut(&peer) {
+            set.remove(&from.ip());
+        }
+    }
+
+    pub fn pop_best(&mut self) -> Option<SocketAddr> {
+        let mut max_val = 0;
+        let mut best_peer = None;
+        for (key, val) in &self.peer_map {
+            if val.len() > max_val {
+                max_val = val.len();
+                best_peer = Some(*key)
+            }
+        }
+        if let Some(best_peer) = best_peer {
+            self.peer_map.remove(&best_peer);
+        }
+        best_peer
     }
 }
 

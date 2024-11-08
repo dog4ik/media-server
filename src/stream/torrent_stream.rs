@@ -7,7 +7,7 @@ use axum_extra::{headers, TypedHeader};
 use bytes::Bytes;
 use reqwest::{header, StatusCode};
 use tokio::sync::mpsc;
-use torrent::scheduler::ScheduleStrategy;
+use torrent::ScheduleStrategy;
 
 use crate::torrent::TorrentDownload;
 
@@ -43,9 +43,7 @@ impl TorrentDownload {
         let piece_size = self.torrent_info.piece_length as usize;
         let mut current_piece = range.start / piece_size as u64;
         self.download_handle
-            .set_strategy(ScheduleStrategy::PieceRequest {
-                piece: current_piece as usize,
-            })
+            .set_strategy(ScheduleStrategy::Request(current_piece as usize))
             .await
             .unwrap();
         tokio::spawn(async move {

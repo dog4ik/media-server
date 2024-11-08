@@ -1,4 +1,5 @@
 use std::{
+    fmt::Display,
     ops::Deref,
     path::{Path, PathBuf},
 };
@@ -8,6 +9,7 @@ use sha1::{Digest, Sha1};
 
 #[allow(unused)]
 pub mod dht;
+pub mod extension;
 pub mod peer;
 pub mod pex;
 pub mod tracker;
@@ -65,6 +67,25 @@ pub struct Info {
     pub piece_length: u32,
     #[serde(flatten)]
     pub file_descriptor: SizeDescriptor,
+}
+
+impl Display for Info {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Name: {}", self.name)?;
+        writeln!(
+            f,
+            "Pieces amount: {}x{} = {} bytes",
+            self.pieces.len(),
+            self.piece_length,
+            self.pieces.len() * self.piece_length as usize
+        )?;
+        let output_files = self.output_files("");
+        writeln!(f, "Files ({}):", output_files.len())?;
+        for file in output_files {
+            writeln!(f, "   {}: {} bytes", file.path.display(), file.length())?;
+        }
+        Ok(())
+    }
 }
 
 impl Info {
