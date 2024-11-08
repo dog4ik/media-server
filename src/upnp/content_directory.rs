@@ -4,7 +4,7 @@ use anyhow::Context;
 use upnp::{
     action::ActionError,
     content_directory::{
-        class::ItemType,
+        class::{ItemType, VideoItemType},
         error,
         properties::{
             self,
@@ -110,6 +110,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn show_season(&self, show_id: i64, season: i64) -> anyhow::Result<DidlResponse> {
+        let show_metadata = self.db.get_show(show_id).await?;
         let season_metadata = self.db.get_season(show_id, season as usize).await?;
         let episodes = season_metadata.episodes;
         let mut items = Vec::with_capacity(episodes.len());
@@ -139,8 +140,12 @@ impl MediaServerContentDirectory {
             item.set_property(properties::ProgramTitle(episode.title));
             item.set_property(properties::EpisodeNumber(episode.number as u32));
             item.set_property(properties::EpisodeSeason(season as u32));
+            item.set_property(properties::SeriesTitle(show_metadata.title.clone()));
+            if let Some(amount) = show_metadata.episodes_amount {
+                item.set_property(properties::EpisodeCount(amount as u32));
+            }
             if let Some(description) = episode.plot {
-                item.set_property(properties::LongDescription(description));
+                item.set_property(properties::Description(description));
             }
             let watch_resource =
                 Resource::new(watch_url, ProtocolInfo::http_get("video/matroska".into()));
@@ -222,7 +227,8 @@ impl MediaServerContentDirectory {
                 ContentId::AllMovies.to_string(),
                 movie.title,
             );
-            item.base.set_upnp_class(Some(ItemType::VideoItem(None)));
+            item.base
+                .set_upnp_class(Some(ItemType::VideoItem(Some(VideoItemType::Movie))));
             item.set_property(properties::AlbumArtUri(poster_url));
             if let Some(plot) = movie.plot {
                 item.set_property(properties::Description(plot));
