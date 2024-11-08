@@ -44,6 +44,7 @@ use self::{
 pub mod assets;
 pub mod movie;
 pub mod show;
+pub mod identification;
 
 const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
 

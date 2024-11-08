@@ -2166,6 +2166,7 @@ dependencies = [
  "dirs",
  "dotenvy",
  "image",
+ "nom",
  "notify",
  "open",
  "rand",
