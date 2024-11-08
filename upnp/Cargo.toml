@@ -1,0 +1,20 @@
+[package]
+name = "upnp"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+tokio = { workspace = true, features = ["full"] }
+tokio-util = { workspace = true, features = ["full"] }
+anyhow = { workspace = true }
+axum = { workspace = true, features = ["macros", "tracing"] }
+axum-extra = { workspace = true, features = ["typed-header"] }
+time = { workspace = true, features = ["parsing", "formatting"] }
+tracing = { workspace = true }
+uuid = { workspace = true }
+reqwest = { workspace = true }
+serde = { workspace = true, features = ["serde_derive"] }
+rand = { workspace = true }
+socket2 = "0.5.7"
+quick-xml = { version = "0.36.1", features = ["serde", "serialize"] }
+csv = "1.3.0"

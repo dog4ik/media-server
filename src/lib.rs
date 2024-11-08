@@ -20,6 +20,7 @@ pub mod torrent_index;
 pub mod tracing;
 #[cfg(feature = "windows-tray")]
 pub mod tray;
+pub mod upnp;
 pub mod utils;
 #[allow(unused)]
 pub mod watch;
