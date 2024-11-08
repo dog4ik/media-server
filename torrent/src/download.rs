@@ -25,6 +25,7 @@ use crate::{
     },
     scheduler::{PendingFiles, Scheduler},
     storage::{StorageFeedback, StorageHandle},
+    tracker::{DownloadStat, DownloadTracker},
     NewPeer,
 };
 
@@ -566,6 +567,14 @@ pub struct DownloadProgress {
     pub state: DownloadState,
 }
 
+#[derive(Debug, serde::Serialize, Default)]
+pub struct TrackerStats {
+    pub url: String,
+    pub announce_interval: Duration,
+    pub peers: Option<usize>,
+    pub leechers: Option<usize>,
+}
+
 impl Display for DownloadProgress {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", serde_json::to_string(&self).unwrap())
@@ -627,7 +636,7 @@ impl Display for DownloadState {
     }
 }
 
-const MAX_PEER_CONNECTIONS: usize = 150;
+const MAX_PEER_CONNECTIONS: usize = 75;
 /// Keep it not super low to prevent event loop congestion
 const DEFAULT_TICK_DURATION: Duration = Duration::from_millis(500);
 const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
@@ -637,30 +646,33 @@ const PEER_CHANNEL_CAPACITY: usize = 500;
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
 pub struct Download {
-    pub info_hash: [u8; 20],
-    pub peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
-    pub storage_rx: mpsc::Receiver<StorageFeedback>,
-    pub storage_tx: mpsc::Sender<StorageFeedback>,
-    pub new_peers: mpsc::Receiver<NewPeer>,
-    pub new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
-    pub pending_new_peers_ips: HashSet<SocketAddr>,
-    pub pending_retrieves: HashMap<usize, Vec<(Uuid, Block)>>,
-    pub scheduler: Scheduler,
-    pub storage: StorageHandle,
-    pub pex_history: PexHistory,
-    pub cancellation_token: CancellationToken,
-    pub state: DownloadState,
-    pub tick_duration: Duration,
-    pub last_optimistic_unchoke: Instant,
-    pub last_choke: Instant,
+    info_hash: [u8; 20],
+    peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
+    storage_rx: mpsc::Receiver<StorageFeedback>,
+    storage_tx: mpsc::Sender<StorageFeedback>,
+    new_peers: mpsc::Receiver<NewPeer>,
+    new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
+    pending_new_peers_ips: HashSet<SocketAddr>,
+    pending_retrieves: HashMap<usize, Vec<(Uuid, Block)>>,
+    trackers: Vec<DownloadTracker>,
+    scheduler: Scheduler,
+    storage: StorageHandle,
+    pex_history: PexHistory,
+    cancellation_token: CancellationToken,
+    state: DownloadState,
+    tick_duration: Duration,
+    last_optimistic_unchoke: Instant,
+    last_choke: Instant,
+    stat: DownloadStat,
 }
 
 impl Download {
-    pub async fn new(
+    pub fn new(
         storage: StorageHandle,
         t: Info,
         enabled_files: Vec<usize>,
         new_peers: mpsc::Receiver<NewPeer>,
+        trackers: Vec<DownloadTracker>,
         cancellation_token: CancellationToken,
     ) -> Self {
         let info_hash = t.hash();
@@ -670,6 +682,9 @@ impl Download {
         let pending_files =
             PendingFiles::from_output_files(t.piece_length, &output_files, enabled_files);
 
+        // TODO: consider disabled and downloaded pieces
+        let stat = DownloadStat::empty(t.total_size());
+
         let scheduler = Scheduler::new(t, pending_files);
 
         Self {
@@ -677,6 +692,7 @@ impl Download {
             new_peers_join_set: JoinSet::new(),
             pending_new_peers_ips: HashSet::new(),
             pending_retrieves: HashMap::new(),
+            trackers,
             info_hash,
             peers_handles: active_peers,
             storage_rx,
@@ -689,6 +705,7 @@ impl Download {
             tick_duration: DEFAULT_TICK_DURATION,
             last_optimistic_unchoke: Instant::now(),
             last_choke: Instant::now(),
+            stat,
         }
     }
 
@@ -708,7 +725,7 @@ impl Download {
         download_handle
     }
 
-    pub fn handle_peer_messages(&mut self, peer_idx: usize) {
+    fn handle_peer_messages(&mut self, peer_idx: usize) {
         let peer_rx = self.scheduler.peers[peer_idx].message_rx.clone();
 
         while let Ok(peer_msg) = peer_rx.try_recv() {
@@ -730,6 +747,8 @@ impl Download {
                         offset: begin,
                         length,
                     };
+                    // NOTE: this is wrong. We should add it when we are sending requested block.
+                    self.stat.uploaded += block.length as u64;
                 }
                 PeerMessage::Piece {
                     index,
@@ -839,6 +858,11 @@ impl Download {
     ) -> anyhow::Result<()> {
         self.scheduler.start().await;
 
+        // initial tracker announce
+        for tracker in &mut self.trackers {
+            tracker.announce(self.stat);
+        }
+
         let mut tick_interval = tokio::time::interval(self.tick_duration);
 
         loop {
@@ -856,7 +880,7 @@ impl Download {
 
             let prev_pending_amount = self.scheduler.pending_pieces.len();
 
-            // 99% of time here
+            // 99% of time spent here
             let handle_peer_messages = Instant::now();
             for i in 0..self.scheduler.peers.len() {
                 self.handle_peer_messages(i);
@@ -914,7 +938,6 @@ impl Download {
             while let Ok(new_peer) = self.new_peers.try_recv() {
                 match new_peer {
                     NewPeer::ListenerOrigin(peer) => self.handle_new_peer(peer),
-                    NewPeer::TrackerOrigin(ip) => self.handle_tracker_peer(ip),
                 };
             }
 
@@ -941,9 +964,11 @@ impl Download {
             self.scheduler.register_performance();
             self.handle_progress_dispatch(&mut progress);
 
+            self.handle_tracker_updates(loop_start);
+
             tracing::debug!(took = ?loop_start.elapsed(), "Download tick finished");
 
-            // 4. We sleep until next tick time
+            // 4. We sleep until the next tick
             tokio::select! {
                 _ = tick_interval.tick() => {}
                 _ = self.cancellation_token.cancelled() => {
@@ -954,29 +979,39 @@ impl Download {
         }
     }
 
-    fn handle_tracker_peer(&mut self, ip: SocketAddr) {
-        if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
-            return;
-        }
-        if !self.scheduler.peers.iter().any(|p| p.ip == ip) && self.pending_new_peers_ips.insert(ip)
-        {
-            let info_hash = self.info_hash;
-            self.new_peers_join_set.spawn(async move {
-                let timeout_duration = Duration::from_secs(3);
-                match timeout(timeout_duration, Peer::new_from_ip(ip, info_hash)).await {
-                    Ok(Ok(peer)) => Ok(peer),
-                    Ok(Err(e)) => {
-                        tracing::trace!("Failed to connect peer with ip {}: {}", ip, e);
-                        Err(ip)
-                    }
-                    Err(_) => {
-                        tracing::trace!("Failed to connect peer with ip {} timed out", ip);
-                        Err(ip)
-                    }
+    fn handle_tracker_updates(&mut self, loop_start: Instant) {
+        for tracker in &mut self.trackers {
+            if loop_start.duration_since(tracker.last_announced_at) > tracker.announce_interval {
+                tracker.announce(self.stat);
+            }
+
+            for ip in tracker.handle_messages() {
+                if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
+                    // TODO: store new peers somewhere for later use
+                    continue;
                 }
-            });
-        } else {
-            tracing::warn!("Received duplicate peer with ip {}", ip);
+                if !self.scheduler.peers.iter().any(|p| p.ip == ip)
+                    && self.pending_new_peers_ips.insert(ip)
+                {
+                    let info_hash = self.info_hash;
+                    self.new_peers_join_set.spawn(async move {
+                        let timeout_duration = Duration::from_secs(3);
+                        match timeout(timeout_duration, Peer::new_from_ip(ip, info_hash)).await {
+                            Ok(Ok(peer)) => Ok(peer),
+                            Ok(Err(e)) => {
+                                tracing::trace!("Failed to connect peer {ip}: {e}");
+                                Err(ip)
+                            }
+                            Err(_) => {
+                                tracing::trace!("Failed to connect peer {ip}: time out");
+                                Err(ip)
+                            }
+                        }
+                    });
+                } else {
+                    tracing::warn!("Received duplicate peer {ip}");
+                }
+            }
         }
     }
 
@@ -1086,6 +1121,8 @@ impl Download {
     fn handle_storage_feedback(&mut self, storage_update: StorageFeedback) {
         match storage_update {
             StorageFeedback::Saved { piece_i } => {
+                // NOTE: this is wrong. last piece will be less than piece size
+                self.stat.downloaded += self.scheduler.piece_size as u64;
                 self.scheduler.add_piece(piece_i);
                 if self.scheduler.is_torrent_finished() {
                     tracing::info!("Finished downloading torrent");

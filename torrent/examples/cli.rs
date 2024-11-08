@@ -4,11 +4,7 @@ use std::{
 };
 
 use clap::{ArgGroup, Parser, Subcommand};
-use torrent::{
-    file::{MagnetLink, TorrentFile},
-    protocol::Info,
-    Client, ClientConfig, DownloadProgress,
-};
+use torrent::{Client, ClientConfig, DownloadProgress, Info, MagnetLink, TorrentFile};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 

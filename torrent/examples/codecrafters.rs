@@ -1,4 +1,4 @@
-use torrent::{file::TorrentFile, Client, ClientConfig, DownloadProgress};
+use torrent::{Client, ClientConfig, DownloadProgress, TorrentFile};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 

@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
-use torrent::file::{MagnetLink, TorrentFile};
+use torrent::{MagnetLink, TorrentFile};
 use tracing::{debug, info};
 use uuid::Uuid;
 

@@ -450,6 +450,20 @@ impl BitField {
         Ok(())
     }
 
+    pub fn all_pieces(&self, total_pieces: usize) -> impl IntoIterator<Item = bool> + '_ {
+        self.0.iter().enumerate().flat_map(move |(i, byte)| {
+            (0..8).filter_map(move |position| {
+                let piece_i = i * 8 + (position as usize);
+                if piece_i > total_pieces {
+                    None
+                } else {
+                    let mask = 1u8.rotate_right(position + 1);
+                    Some(byte & mask != 0)
+                }
+            })
+        })
+    }
+
     pub fn is_full(&self, max_pieces: usize) -> bool {
         if self.0.is_empty() {
             return true;

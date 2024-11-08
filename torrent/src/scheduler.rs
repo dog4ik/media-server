@@ -281,7 +281,7 @@ impl Display for ScheduleStat {
 
 #[derive(Debug)]
 pub struct Scheduler {
-    piece_size: u32,
+    pub piece_size: u32,
     /// Full ut_metadata used to share it
     pub ut_metadata: UtMetadata,
     pub max_pending_pieces: usize,

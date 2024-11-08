@@ -1,8 +1,8 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
     str::FromStr,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Context};
@@ -11,7 +11,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, oneshot},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -20,7 +20,7 @@ use crate::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
-    utils, NewPeer,
+    utils,
 };
 
 pub const ID: [u8; 20] = *b"00112233445566778899";
@@ -200,9 +200,9 @@ impl HttpAnnounceResponse {
 
 #[derive(Clone, Copy, Debug)]
 pub struct DownloadStat {
-    downloaded: u64,
-    uploaded: u64,
-    left: u64,
+    pub downloaded: u64,
+    pub uploaded: u64,
+    pub left: u64,
 }
 
 impl DownloadStat {
@@ -265,79 +265,119 @@ impl TrackerType {
     }
 }
 
-const MIN_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+#[derive(Debug, Clone)]
+pub struct TrackerHandle {
+    command_tx: mpsc::Sender<TrackerCommand>,
+    cancellation_token: CancellationToken,
+    url: Url,
+}
+
+impl TrackerHandle {
+    pub fn announce(&self, stat: DownloadStat) {
+        self.command_tx
+            .try_send(TrackerCommand::Reannounce(stat))
+            .unwrap();
+    }
+    pub fn close(&self) {
+        self.cancellation_token.cancel();
+    }
+
+    pub fn url(&self) -> &str {
+        self.url.as_ref()
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub enum TrackerCommand {
+    Reannounce(DownloadStat),
+}
+
+#[derive(Debug, Clone)]
+pub enum TrackerResponse {
+    Failure {
+        reason: String,
+    },
+    AnnounceResponse {
+        peers: Vec<SocketAddr>,
+        interval: Duration,
+    },
+}
+
+const MAX_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 #[derive(Debug)]
 pub struct Tracker {
     pub tracker_type: TrackerType,
     pub url: Url,
-    pub peers: HashSet<SocketAddr>,
-    pub progress: watch::Receiver<DownloadStat>,
-    pub peer_tx: mpsc::Sender<NewPeer>,
+    pub commands: mpsc::Receiver<TrackerCommand>,
+    pub rensponse_tx: mpsc::Sender<TrackerResponse>,
     pub announce_payload: AnnouncePayload,
     pub udp_connection_id: Option<u64>,
+    pub cancellation_token: CancellationToken,
 }
 
 impl Tracker {
-    pub async fn new(
+    pub fn new(
         info_hash: [u8; 20],
         tracker_type: TrackerType,
         url: Url,
-        mut progress: watch::Receiver<DownloadStat>,
-        peer_tx: mpsc::Sender<NewPeer>,
-    ) -> anyhow::Result<Self> {
-        let stats = { *progress.borrow_and_update() };
+        initial_stats: DownloadStat,
+        rensponse_tx: mpsc::Sender<TrackerResponse>,
+        cancellation_token: CancellationToken,
+    ) -> (TrackerHandle, Self) {
+        let (command_tx, command_rx) = mpsc::channel(10);
         let announce_payload = AnnouncePayload {
             announce: url.clone(),
             info_hash,
             peer_id: ID,
             port: PORT,
-            uploaded: stats.uploaded,
-            downloaded: stats.downloaded,
-            left: stats.left,
+            uploaded: initial_stats.uploaded,
+            downloaded: initial_stats.downloaded,
+            left: initial_stats.left,
             event: TrackerEvent::Started,
         };
 
-        let udp_connection_id = match &tracker_type {
-            TrackerType::Http => None,
-            TrackerType::Udp(c) => {
-                let addrs = url.socket_addrs(|| None)?;
-                let addr = addrs.first().context("could not resove url hostname")?;
-                let res = c.connect(*addr).await?;
-                Some(res)
-            }
+        let tracker = Self {
+            tracker_type,
+            url: url.clone(),
+            commands: command_rx,
+            rensponse_tx,
+            announce_payload,
+            udp_connection_id: None,
+            cancellation_token: cancellation_token.clone(),
         };
 
-        Ok(Self {
-            tracker_type,
+        let handle = TrackerHandle {
+            cancellation_token,
+            command_tx,
             url,
-            peers: HashSet::new(),
-            progress,
-            peer_tx,
-            announce_payload,
-            udp_connection_id,
-        })
+        };
+
+        (handle, tracker)
     }
 
-    pub async fn work(mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
-        let initial_announce = self.announce().await?;
-        let interval_duration =
-            Duration::from_secs(initial_announce.interval as u64).min(MIN_ANNOUNCE_INTERVAL);
-        self.handle_announce(initial_announce).await?;
-        self.announce_payload.event = TrackerEvent::Empty;
-
-        let mut reannounce_interval = tokio::time::interval(interval_duration);
-        // immediate tick
-        reannounce_interval.tick().await;
-
+    pub async fn work(&mut self) -> anyhow::Result<()> {
         loop {
             tokio::select! {
-                _ = reannounce_interval.tick() => {
-                    let announce_result = self.announce().await?;
-                    self.handle_announce(announce_result).await?;
-                }
-                Ok(_) = self.progress.changed() => self.handle_progress_update(),
-                _ = cancellation_token.cancelled() => {
+                Some(command) = self.commands.recv() => {
+                    match command {
+                        TrackerCommand::Reannounce(stat) => {
+                            self.announce_payload.downloaded = stat.downloaded;
+                            self.announce_payload.uploaded = stat.uploaded;
+                            self.announce_payload.left = stat.left;
+                            if stat.left == 0 {
+                                self.announce_payload.event = TrackerEvent::Completed;
+                            }
+                            match self.announce().await {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    self.send_response(TrackerResponse::Failure{ reason: e.to_string() }).await?;
+                                }
+                            };
+                        },
+                    }
+                },
+                _ = self.cancellation_token.cancelled() => {
                     break;
                 },
             }
@@ -345,43 +385,114 @@ impl Tracker {
         Ok(())
     }
 
-    pub async fn announce(&mut self) -> anyhow::Result<AnnounceResult> {
+    pub async fn announce(&mut self) -> anyhow::Result<()> {
         tracing::debug!("Announcing tracker {}", self.url);
-        match &self.tracker_type {
+        let announce_result = match &self.tracker_type {
             TrackerType::Http => self.announce_payload.announce_http().await,
             TrackerType::Udp(chan) => {
-                self.announce_payload
-                    .announce_udp(chan, self.udp_connection_id.unwrap())
-                    .await
+                let conn_id = match self.udp_connection_id {
+                    Some(id) => id,
+                    None => {
+                        tracing::debug!(
+                            "Trying to get connection id from udp tracker {}",
+                            self.url
+                        );
+                        let addrs = self.url.socket_addrs(|| None)?;
+                        let addr = addrs.first().context("could not resove url hostname")?;
+                        let id = chan.connect(*addr).await?;
+                        self.udp_connection_id = Some(id);
+                        id
+                    }
+                };
+                self.announce_payload.announce_udp(chan, conn_id).await
             }
-        }
+        };
+        self.handle_announce(announce_result?).await
     }
 
-    pub async fn handle_announce(&mut self, announce_result: AnnounceResult) -> anyhow::Result<()> {
-        let mut count = 0;
-        for ip in announce_result.peers {
-            if self.peers.insert(ip) {
-                self.peer_tx.send(NewPeer::TrackerOrigin(ip)).await?;
-                count += 1;
-            };
-        }
-        tracing::debug!(
-            seeds = announce_result.seeds,
-            leeachs = announce_result.leeachs,
-            "Tracker {} announced {count} new peers",
-            self.url
-        );
+    async fn handle_announce(&self, announce_result: AnnounceResult) -> anyhow::Result<()> {
+        self.send_response(TrackerResponse::AnnounceResponse {
+            interval: Duration::from_secs(announce_result.interval as u64)
+                .max(MAX_ANNOUNCE_INTERVAL),
+            peers: announce_result.peers,
+        })
+        .await?;
         Ok(())
     }
 
-    fn handle_progress_update(&mut self) {
-        let new = self.progress.borrow_and_update();
-        self.announce_payload.downloaded = new.downloaded;
-        self.announce_payload.uploaded = new.uploaded;
-        self.announce_payload.left = new.left;
-        if new.left == 0 {
-            self.announce_payload.event = TrackerEvent::Completed;
+    async fn send_response(&self, response: TrackerResponse) -> anyhow::Result<()> {
+        self.rensponse_tx.send(response).await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub enum TrackerStatus {
+    Working,
+    #[default]
+    NotContacted,
+    Error(String),
+}
+
+#[derive(Debug)]
+pub struct DownloadTracker {
+    pub response_rx: mpsc::Receiver<TrackerResponse>,
+    pub status: TrackerStatus,
+    pub announce_interval: Duration,
+    pub last_announced_at: Instant,
+    handle: TrackerHandle,
+}
+
+impl DownloadTracker {
+    pub fn new(
+        info_hash: [u8; 20],
+        tracker_type: TrackerType,
+        url: Url,
+        initial_stats: DownloadStat,
+        cancellation_token: CancellationToken,
+    ) -> (Self, Tracker) {
+        let (response_tx, response_rx) = mpsc::channel(10);
+        let (handle, tracker) = Tracker::new(
+            info_hash,
+            tracker_type,
+            url,
+            initial_stats,
+            response_tx,
+            cancellation_token,
+        );
+        let download_tracker = Self {
+            response_rx,
+            status: TrackerStatus::default(),
+            announce_interval: MAX_ANNOUNCE_INTERVAL,
+            last_announced_at: Instant::now(),
+            handle,
+        };
+        (download_tracker, tracker)
+    }
+
+    pub fn announce(&mut self, stat: DownloadStat) {
+        self.last_announced_at = Instant::now();
+        self.handle.announce(stat);
+    }
+
+    pub fn handle_messages(&mut self) -> Vec<SocketAddr> {
+        let mut announce_peers = Vec::new();
+        while let Ok(message) = self.response_rx.try_recv() {
+            match message {
+                TrackerResponse::Failure { reason } => {
+                    self.status = TrackerStatus::Error(reason);
+                }
+                TrackerResponse::AnnounceResponse { peers, interval } => {
+                    self.announce_interval = interval;
+                    announce_peers.extend(peers.into_iter());
+                    self.status = TrackerStatus::Working;
+                }
+            }
         }
+        announce_peers
+    }
+    pub fn url(&self) -> &str {
+        self.handle.url()
     }
 }
 

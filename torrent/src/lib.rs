@@ -5,45 +5,53 @@
 #![feature(iter_collect_into)]
 
 use std::{
-    collections::HashMap,
-    net::{Ipv4Addr, SocketAddr, SocketAddrV4},
+    collections::HashSet,
+    net::{Ipv4Addr, SocketAddrV4},
     path::Path,
     sync::Arc,
     time::Duration,
 };
 
 use anyhow::bail;
-use download::DownloadHandle;
 pub use download::{DownloadProgress, ProgressConsumer};
-use file::MagnetLink;
+use peer_listener::{NewPeer, PeerListener};
 use peers::Peer;
-use protocol::Info;
 use reqwest::Url;
 use storage::{StorageMethod, TorrentStorage};
 use tokio::{
     net::TcpStream,
-    sync::{mpsc, watch, Semaphore},
+    sync::{mpsc, Semaphore},
     task::JoinSet,
     time::timeout,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracker::{TrackerType, UdpTrackerChannel, UdpTrackerWorker};
+use tracker::{DownloadTracker, TrackerResponse, TrackerType, UdpTrackerChannel, UdpTrackerWorker};
 
 use crate::{
     download::Download,
     tracker::{DownloadStat, Tracker},
 };
 
-pub mod download;
-pub mod file;
+mod download;
+mod file;
+mod peer_listener;
 mod peers;
-pub mod protocol;
-pub mod scheduler;
-pub mod storage;
+mod piece_picker;
+mod protocol;
+mod scheduler;
+mod seeder;
+mod storage;
 mod tracker;
 mod utils;
-mod piece_picker;
-mod seeder;
+
+pub use download::DownloadHandle;
+pub use download::DownloadState;
+pub use file::MagnetLink;
+pub use file::TorrentFile;
+pub use piece_picker::Priority;
+pub use piece_picker::ScheduleStrategy;
+pub use protocol::Info;
+pub use protocol::OutputFile;
 
 #[derive(Debug)]
 pub struct ClientConfig {
@@ -59,77 +67,6 @@ impl Default for ClientConfig {
             udp_listener_port: 7897,
             cancellation_token: Some(CancellationToken::new()),
         }
-    }
-}
-
-#[derive(Debug)]
-pub enum NewPeer {
-    ListenerOrigin(Peer),
-    TrackerOrigin(SocketAddr),
-}
-
-#[derive(Debug)]
-struct PeerListener {
-    new_torrent_channel: mpsc::Sender<([u8; 20], mpsc::Sender<NewPeer>)>,
-}
-
-impl PeerListener {
-    pub async fn spawn(
-        port: u16,
-        tracker: &TaskTracker,
-        cancellation_token: CancellationToken,
-    ) -> anyhow::Result<Self> {
-        let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
-        let listener = utils::bind_tcp_listener(addr).await?;
-        let (tx, mut rx) = mpsc::channel(100);
-        tracker.spawn(async move {
-            let mut map: HashMap<[u8; 20], mpsc::Sender<NewPeer>> = HashMap::new();
-            loop {
-                tokio::select! {
-                    Ok((socket,ip)) = listener.accept() => {
-                        let timeout_duration = Duration::from_secs(3);
-                        match timeout(timeout_duration, Peer::new_without_info_hash(socket)).await {
-                            Ok(Ok(peer)) => {
-                                let info_hash = peer.handshake.info_hash();
-                                if let Some(channel) = map.get_mut(&info_hash) {
-                                    tracing::trace!("Peer connected via listener {}", ip);
-                                    if channel.send(NewPeer::ListenerOrigin(peer)).await.is_err() {
-                                        tracing::warn!(?info_hash, "Peer connected to outdated torrent");
-                                        map.remove(&info_hash);
-                                    };
-                                } else {
-                                    tracing::warn!(?info_hash, "Peer {ip} connected but torrent does not exist", );
-                                }
-                            }
-                            Ok(Err(e)) => {
-                                tracing::warn!("Failed to construct handshake with peer: {}", e);
-                            }
-                            Err(_) => {
-                                tracing::trace!("Peer with ip {} timed out", ip);
-                            }
-                        }
-
-                    },
-                    Some((info_hash, sender)) = rx.recv() => {
-                        map.insert(info_hash, sender);
-                    }
-                    _ = cancellation_token.cancelled() => {
-                            break;
-                    }
-                };
-            }
-            tracing::debug!("Closed peer listener");
-        });
-        Ok(Self {
-            new_torrent_channel: tx,
-        })
-    }
-
-    pub async fn subscribe(&self, info_hash: [u8; 20], sender: mpsc::Sender<NewPeer>) {
-        self.new_torrent_channel
-            .send((info_hash, sender))
-            .await
-            .unwrap();
     }
 }
 
@@ -178,15 +115,15 @@ impl Client {
         let child_token = self.cancellation_token.child_token();
         let hash = info.hash();
         // TODO: Trackers should know download/upload stats
-        let (_, rx) = watch::channel(DownloadStat::empty(info.total_size()));
+        // TODO: Torrent resumability
+        let initial_stat = DownloadStat::empty(info.total_size());
         let (peers_tx, peers_rx) = mpsc::channel(1000);
         tracing::info!("Connecting trackers");
-        spawn_trackers(
+        let trackers = spawn_trackers(
             trackers,
             hash,
             self.udp_tracker_tx.clone(),
-            rx,
-            peers_tx.clone(),
+            initial_stat,
             self.task_tracker.clone(),
             child_token.clone(),
         )
@@ -203,8 +140,14 @@ impl Client {
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
 
-        let download =
-            Download::new(storage_handle, info, enabled_files, peers_rx, child_token).await;
+        let download = Download::new(
+            storage_handle,
+            info,
+            enabled_files,
+            peers_rx,
+            trackers,
+            child_token,
+        );
         let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)
     }
@@ -214,44 +157,49 @@ impl Client {
         let Some(ref tracker_list) = link.announce_list else {
             bail!("magnet links without announce list are not supported yet");
         };
-        let (new_peers_tx, mut new_peers_rx) = mpsc::channel(100);
+        let (response_tx, mut response_rx) = mpsc::channel(100);
         // don't care about download stats
-        let (_, download_rx) = watch::channel(DownloadStat::empty(0));
+        let downloaded = DownloadStat::empty(0);
         let mut tracker_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
         let mut ut_metadata_set: JoinSet<anyhow::Result<Info>> = JoinSet::new();
         for tracker_url in tracker_list.clone() {
             let tracker_type = TrackerType::from_url(&tracker_url, &self.udp_tracker_tx)?;
             {
-                let new_peers_tx = new_peers_tx.clone();
-                let download_rx = download_rx.clone();
+                let response_tx = response_tx.clone();
+                let cancellation_token = self.cancellation_token.clone();
                 tracker_set.spawn(async move {
-                    let mut tracker = Tracker::new(
+                    let (_, mut tracker) = Tracker::new(
                         info_hash,
                         tracker_type,
                         tracker_url,
-                        download_rx,
-                        new_peers_tx,
-                    )
-                    .await?;
-                    let announce = tracker.announce().await?;
-                    tracker.handle_announce(announce).await?;
+                        downloaded,
+                        response_tx,
+                        cancellation_token,
+                    );
+                    tracker.announce().await?;
                     Ok(())
                 });
             }
         }
         let peer_semaphore = Arc::new(Semaphore::new(100));
         let duration = Duration::from_secs(2);
+        let mut pending_peers = HashSet::new();
         loop {
             let peer_semaphore = peer_semaphore.clone();
             tokio::select! {
-                Some(NewPeer::TrackerOrigin(addr)) = new_peers_rx.recv() => {
-                    ut_metadata_set.spawn(async move {
-                        let _lock = peer_semaphore.acquire().await;
-                        let socket = timeout(duration, TcpStream::connect(addr)).await??;
-                        let mut peer = timeout(duration, Peer::new(socket, info_hash)).await??;
-                        let metadata = timeout(Duration::from_secs(5), peer.fetch_ut_metadata()).await??;
-                        Ok(metadata)
-                    });
+                Some(TrackerResponse::AnnounceResponse { peers, .. }) = response_rx.recv() => {
+                    for peer in peers {
+                        if pending_peers.insert(peer) {
+                            let peer_semaphore = peer_semaphore.clone();
+                            ut_metadata_set.spawn(async move {
+                                let _lock = peer_semaphore.acquire().await;
+                                let socket = timeout(duration, TcpStream::connect(peer)).await??;
+                                let mut peer = timeout(duration, Peer::new(socket, info_hash)).await??;
+                                let metadata = timeout(Duration::from_secs(5), peer.fetch_ut_metadata()).await??;
+                                Ok(metadata)
+                            });
+                        }
+                    }
                 }
                 Some(join) = ut_metadata_set.join_next() => {
                     match join {
@@ -266,7 +214,7 @@ impl Client {
                             if ut_metadata_set.is_empty() {
                                 bail!("No one managed to send metadata");
                             }
-                            tracing::error!("ut_metadata retrieval task panicked: {e}");
+                            panic!("ut_metadata retrieval task panicked: {e}");
                         },
                     }
                 }
@@ -279,41 +227,33 @@ async fn spawn_trackers(
     urls: Vec<Url>,
     info_hash: [u8; 20],
     tracker_tx: UdpTrackerChannel,
-    progress: watch::Receiver<DownloadStat>,
-    peer_tx: mpsc::Sender<NewPeer>,
+    initial_progress: DownloadStat,
     task_tracker: TaskTracker,
     cancellation_token: CancellationToken,
-) {
-    for tracker in urls {
-        let Ok(tracker_type) = TrackerType::from_url(&tracker, &tracker_tx) else {
+) -> Vec<DownloadTracker> {
+    let mut handles = Vec::new();
+    for url in urls {
+        let Ok(tracker_type) = TrackerType::from_url(&url, &tracker_tx) else {
             continue;
         };
-        let cancellation_token = cancellation_token.clone();
-        let progress = progress.clone();
-        let peer_tx = peer_tx.clone();
-        let tracker_url = tracker.to_string();
-        task_tracker.spawn(async move {
-            let tracker = timeout(
-                Duration::from_secs(2),
-                Tracker::new(info_hash, tracker_type, tracker, progress, peer_tx),
-            )
-            .await;
-            match tracker {
-                Ok(Ok(tracker)) => {
-                    let url = tracker.url.to_string();
-                    tracing::info!("Connected to the tracker: {url}");
-                    match tracker.work(cancellation_token).await {
-                        Ok(_) => tracing::info!(tracker_url, "Gracefully stopped tracker"),
-                        Err(e) => tracing::warn!(tracker_url, "Tracker errored: {e}"),
-                    };
-                }
-                Ok(Err(e)) => {
-                    tracing::error!(tracker_url, "Failed to construct tracker: {e}");
-                }
-                Err(_) => {
-                    tracing::error!(tracker_url, "Failed to connect tracker: Timeout");
-                }
-            };
-        });
+        {
+            let cancellation_token = cancellation_token.clone();
+            let (handle, mut tracker) = DownloadTracker::new(
+                info_hash,
+                tracker_type,
+                url,
+                initial_progress,
+                cancellation_token,
+            );
+            tracing::info!("Started tracker: {}", tracker.url);
+            task_tracker.spawn(async move {
+                match tracker.work().await {
+                    Ok(_) => tracing::info!(url = %tracker.url, "Gracefully stopped tracker"),
+                    Err(e) => tracing::warn!(url = %tracker.url, "Tracker errored: {e}"),
+                };
+            });
+            handles.push(handle);
+        }
     }
+    handles
 }
