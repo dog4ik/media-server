@@ -43,6 +43,7 @@ fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
     socket.set_ttl(ttl.unwrap_or(2))?;
     socket.set_reuse_address(true)?;
+    #[cfg(target_os = "linux")]
     socket.set_reuse_port(false)?;
     socket.set_nonblocking(true)?;
     socket.set_multicast_loop_v4(true)?;
