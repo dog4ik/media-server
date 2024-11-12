@@ -11,7 +11,7 @@ use serde_json::{Map, Number, Value};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::{Stream, StreamExt};
 use tracing::field::{Field, Visit};
-use tracing::{Level, Subscriber};
+use tracing::Subscriber;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
@@ -198,16 +198,9 @@ pub fn init_tracer() -> LogChannel {
     let pub_tracer = PublicTracerLayer::new();
     let file_logger = FileLoggingLayer::from_path(log_path).unwrap();
     let log_channel = LogChannel(pub_tracer.channel.clone());
-    if AppResources::is_prod() {
-        let sub = tracing_subscriber::fmt()
-            .with_max_level(Level::INFO)
-            .finish();
-        sub.with(pub_tracer).with(file_logger).init();
-    } else {
-        let sub = tracing_subscriber::fmt()
-            .with_env_filter(EnvFilter::from_default_env())
-            .finish();
-        sub.with(pub_tracer).with(file_logger).init();
-    };
+    let sub = tracing_subscriber::fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .finish();
+    sub.with(pub_tracer).with(file_logger).init();
     log_channel
 }
