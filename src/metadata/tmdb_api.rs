@@ -26,13 +26,14 @@ pub struct TmdbApi {
     episodes_cache: Mutex<HashMap<usize, HashMap<usize, Vec<TmdbSeasonEpisode>>>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub enum PosterSizes {
     W92,
     W154,
     W185,
     W342,
     W500,
+    #[default]
     W780,
     Original,
 }
@@ -271,7 +272,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
     fn from(val: TmdbSearchMovieResult) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -292,7 +293,7 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
     fn from(val: TmdbSearchShowResult) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -314,7 +315,7 @@ impl From<TmdbShowSeason> for SeasonMetadata {
     fn from(val: TmdbShowSeason) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         SeasonMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -331,7 +332,7 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
     fn from(val: TmdbSeasonEpisode) -> Self {
         let poster = val
             .still_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         EpisodeMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -451,7 +452,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
     fn from(val: TmdbMovieDetails) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -472,7 +473,7 @@ impl From<TmdbShowDetails> for ShowMetadata {
     fn from(val: TmdbShowDetails) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::W342).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
@@ -503,7 +504,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 title = movie.title;
                 poster = movie
                     .poster_path
-                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::W342).url));
+                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::default()).url));
                 tmdb_id = movie.id;
                 plot = movie.overview;
                 content_type = ContentType::Movie;
@@ -512,7 +513,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 title = show.name;
                 poster = show
                     .poster_path
-                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::W342).url));
+                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::default()).url));
                 tmdb_id = show.id;
                 plot = show.overview;
                 content_type = ContentType::Show;
