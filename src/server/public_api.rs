@@ -1194,3 +1194,17 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
 
     Ok(Json(show_suggestions))
 }
+
+/// Debug library files
+pub async fn library_state(
+    State(app_state): State<AppState>,
+) -> Result<Json<serde_json::Value>, AppError> {
+    let library = app_state.library.lock().unwrap();
+    let map: serde_json::Map<String, serde_json::Value> = library
+        .videos
+        .iter()
+        .map(|(id, v)| (id.to_string(), serde_json::to_value(&v.identifier).unwrap()))
+        .collect();
+
+    Ok(Json(map.into()))
+}

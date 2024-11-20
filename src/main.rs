@@ -272,6 +272,8 @@ async fn main() {
         )
         .route("/clear_db", delete(admin_api::clear_db));
 
+    let debug_api = Router::new().route("/library", get(public_api::library_state));
+
     let web_ui_path: config::WebUiPath = config::CONFIG.get_value();
 
     let assets_service =
@@ -283,6 +285,7 @@ async fn main() {
         .route("/api/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
         .nest("/api", public_api)
+        .nest("/debug", debug_api)
         .nest_service("/", assets_service)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .merge(upnp)
