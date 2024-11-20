@@ -266,11 +266,10 @@ impl TorrentStorage {
                 response,
             } => {
                 let save_result = match self.storage_method {
-                    StorageMethod::Preallocated => self
-                        .save_piece_preallocated(piece_i, ReadyPiece(blocks))
-                        .await
-                        .map(|_| piece_i)
-                        .map_err(|_| piece_i),
+                    StorageMethod::Preallocated => {
+                        self.save_piece_preallocated(piece_i, ReadyPiece(blocks))
+                            .await
+                    }
                     StorageMethod::Reallocated => {
                         todo!()
                         //self.save_piece(piece_i, blocks)
@@ -280,19 +279,13 @@ impl TorrentStorage {
                     }
                 };
                 match save_result {
-                    Ok(piece_i) => {
-                        response
-                            .send(StorageFeedback::Saved { piece_i })
-                            .await
-                            .unwrap();
+                    Ok(_) => {
+                        let _ = response.send(StorageFeedback::Saved { piece_i }).await;
                         self.bitfield.add(piece_i).unwrap();
                         state.send_modify(|old| old.add(piece_i).unwrap())
                     }
-                    Err(piece_i) => {
-                        response
-                            .send(StorageFeedback::Failed { piece_i })
-                            .await
-                            .unwrap();
+                    Err(_) => {
+                        let _ = response.send(StorageFeedback::Failed { piece_i }).await;
                     }
                 }
             }
