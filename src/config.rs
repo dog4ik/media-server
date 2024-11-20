@@ -956,6 +956,8 @@ impl Capabilities {
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct AppResources {
     #[schema(value_type = String)]
+    pub start_time: SystemTime,
+    #[schema(value_type = String)]
     pub database_path: PathBuf,
     #[schema(value_type = String)]
     #[serde(skip)]
@@ -1049,6 +1051,7 @@ impl AppResources {
     }
 
     pub fn new() -> Self {
+        let start_time = SystemTime::now();
         let config_path = Self::default_config_path();
         let resources_path = Self::resources();
         let database_path = Self::database();
@@ -1065,6 +1068,7 @@ impl AppResources {
             binary_path.clone().unwrap()
         };
         Self {
+            start_time,
             config_path,
             database_path,
             resources_path,

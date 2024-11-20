@@ -69,14 +69,15 @@ where
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO movies 
             (title, release_date, poster,
-            backdrop, plot, video_id)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            backdrop, plot, video_id, duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
                 movie.title,
                 movie.release_date,
                 movie.poster,
                 movie.backdrop,
                 movie.plot,
-                movie.video_id
+                movie.video_id,
+                movie.duration,
             );
             query.fetch_one(&mut *conn).await.map(|x| x.id)
         }

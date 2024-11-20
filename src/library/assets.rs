@@ -60,11 +60,12 @@ pub(crate) trait FileAsset {
         let file = self.open().await?;
         let metadata = file.metadata().await?;
         let length_header = TypedHeader(ContentLength(metadata.len()));
+        let start_time = &config::APP_RESOURCES.start_time;
 
         if let (Some(if_modified_since), Ok(metadata_modified)) =
             (if_modified_since, metadata.modified())
         {
-            if !if_modified_since.is_modified(metadata_modified) {
+            if !if_modified_since.is_modified(*start_time.max(&metadata_modified)) {
                 return Ok(StatusCode::NOT_MODIFIED.into_response());
             }
         }
@@ -75,13 +76,13 @@ pub(crate) trait FileAsset {
             .ok();
         let modified_header = metadata
             .modified()
-            .map(|d| TypedHeader(axum_extra::headers::LastModified::from(d)))
+            .map(|d| TypedHeader(axum_extra::headers::LastModified::from(d.max(*start_time))))
             .ok();
 
         let cache_control = TypedHeader(
             axum_extra::headers::CacheControl::new()
-                .with_public()
-                .with_max_age(Duration::from_secs(60 * 60 * 12)),
+                .with_no_cache()
+                .with_max_age(Duration::ZERO),
         );
 
         let stream = ReaderStream::new(file);
