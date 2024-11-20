@@ -56,11 +56,24 @@ use crate::{
     path = "/api/scan",
     responses(
         (status = 200),
+        (status = 400, body = AppError),
     ),
     tag = "Videos",
 )]
 pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
-    app_state.reconciliate_library().await
+    let task_id = app_state.tasks.start_task(TaskKind::Scan, None)?;
+    tokio::spawn(async move {
+        match app_state.reconciliate_library().await {
+            Ok(_) => {
+                app_state.tasks.finish_task(task_id);
+            }
+            Err(err) => {
+                tracing::error!("Library reconcilliation task failed: {err}");
+                app_state.tasks.error_task(task_id);
+            }
+        };
+    });
+    Ok(())
 }
 
 /// Clear the database. For debug purposes only.
