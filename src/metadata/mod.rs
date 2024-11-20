@@ -455,13 +455,13 @@ pub trait DiscoverMetadataProvider {
 
 #[derive(Debug, Clone)]
 pub struct LimitedRequestClient {
-    request_tx: mpsc::Sender<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>,
+    request_tx: mpsc::Sender<(Request, oneshot::Sender<reqwest::Result<Response>>)>,
 }
 
 impl LimitedRequestClient {
     pub fn new(client: Client, limit_number: usize, limit_duration: Duration) -> Self {
         let (tx, mut rx) =
-            mpsc::channel::<(Request, oneshot::Sender<Result<Response, reqwest::Error>>)>(100);
+            mpsc::channel::<(Request, oneshot::Sender<reqwest::Result<Response>>)>(100);
         tokio::spawn(async move {
             let semaphore = Arc::new(Semaphore::new(limit_number));
             while let Some((req, resp_tx)) = rx.recv().await {
@@ -494,7 +494,7 @@ impl LimitedRequestClient {
             .context("Failed to send request")?;
         let response = rx
             .await
-            .map_err(|_| anyhow::anyhow!("failed to receive response: channel closed"))?
+            .map_err(|e| anyhow::anyhow!("failed to receive response: {e}"))?
             .map_err(|e| {
                 tracing::error!("Request in {} failed: {}", url, e);
                 anyhow::anyhow!("Request failed: {}", e)
@@ -529,8 +529,8 @@ impl FromStr for MetadataProvider {
             "tmdb" => Ok(Self::Tmdb),
             "tvdb" => Ok(Self::Tvdb),
             "imdb" => Ok(Self::Imdb),
-            rest => Err(anyhow::anyhow!(
-                "{rest} is not recognized as metadata provider"
+            _ => Err(anyhow::anyhow!(
+                "{s} is not recognized as metadata provider"
             )),
         }
     }
@@ -572,7 +572,7 @@ pub struct MovieMetadata {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
-    #[schema(value_type = Option<SerdeDuration>)]
+    #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
 }
@@ -611,7 +611,7 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
-    #[schema(value_type = Option<SerdeDuration>)]
+    #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
 }
@@ -656,7 +656,7 @@ impl From<ShowMetadata> for MetadataSearchResult {
 }
 
 impl EpisodeMetadata {
-    pub fn into_db_episode(self, season_id: i64, video_id: i64) -> DbEpisode {
+    pub fn into_db_episode(self, season_id: i64, video_id: i64, duration: Duration) -> DbEpisode {
         DbEpisode {
             id: None,
             video_id,
@@ -665,6 +665,7 @@ impl EpisodeMetadata {
             number: self.number as i64,
             plot: self.plot,
             release_date: self.release_date,
+            duration: duration.as_secs() as i64,
             poster: self.poster.map(|x| x.as_str().to_owned()),
         }
     }
@@ -711,7 +712,7 @@ impl ShowMetadata {
 }
 
 impl MovieMetadata {
-    pub async fn into_db_movie(self, video_id: i64) -> DbMovie {
+    pub async fn into_db_movie(self, video_id: i64, duration: Duration) -> DbMovie {
         let poster;
         if let Some(metadata_image) = self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -727,6 +728,7 @@ impl MovieMetadata {
             release_date: self.release_date,
             poster,
             backdrop,
+            duration: duration.as_secs() as i64,
             plot: self.plot,
         }
     }

@@ -33,7 +33,7 @@ impl Default for TpbApi {
 impl TpbApi {
     pub fn new() -> Self {
         let client = Client::new();
-        let limited_client = LimitedRequestClient::new(client, 3, std::time::Duration::SECOND);
+        let limited_client = LimitedRequestClient::new(client, 3, std::time::Duration::from_secs(1));
         let base_url = Url::parse("https://apibay.org/q.php").unwrap();
         Self {
             client: limited_client,

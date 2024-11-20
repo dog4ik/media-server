@@ -15,6 +15,8 @@ use reqwest::StatusCode;
 use tokio::{fs, io::AsyncRead};
 use tokio_util::io::ReaderStream;
 
+use crate::config;
+
 use super::Video;
 
 pub(crate) trait FileAsset {

@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREME
                                     plot TEXT,
                                     poster TEXT,
                                     release_date TEXT,
+                                    duration INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
@@ -41,6 +42,7 @@ CREATE TABLE IF NOT EXISTS movies (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
                                     plot TEXT,
                                     poster TEXT,
                                     release_date TEXT,
+                                    duration INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS movies_fts_idx USING fts5(title, plot, content='movies', content_rowid='id');
@@ -58,7 +60,6 @@ END;
 CREATE TABLE IF NOT EXISTS videos (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
-                                    duration INTEGER NOT NULL,
                                     scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,

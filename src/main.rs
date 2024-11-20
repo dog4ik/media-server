@@ -15,7 +15,6 @@ use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::upnp::Upnp;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::path::PathBuf;
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use torrent::ClientConfig;
@@ -66,18 +65,7 @@ async fn main() {
     let show_dirs: config::ShowFolders = config::CONFIG.get_value();
     let movie_dirs: config::MovieFolders = config::CONFIG.get_value();
 
-    let shows_dirs: Vec<PathBuf> = show_dirs
-        .0
-        .into_iter()
-        .filter(|d| d.try_exists().unwrap_or(false))
-        .collect();
-    let movies_dirs: Vec<PathBuf> = movie_dirs
-        .0
-        .into_iter()
-        .filter(|d| d.try_exists().unwrap_or(false))
-        .collect();
-
-    let library = Library::init_from_folders(&shows_dirs, &movies_dirs, db).await;
+    let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
     let Some(tmdb_key) = config::CONFIG.get_value::<config::TmdbKey>().0 else {
         panic!("Missing tmdb api token, consider passing it in cli, configuration file or {} environment variable", config::TmdbKey::ENV_KEY.unwrap());

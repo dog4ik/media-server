@@ -1,11 +1,95 @@
+use std::path::Path;
+
 use serde::Serialize;
 
-use super::{ContentIdentifier, Media};
+use super::{
+    identification::{Parseable as Parsable, Parser, Token, SPECIAL_CHARS},
+    ContentIdentifier, Media,
+};
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MovieIdent {
+    pub title: String,
+    pub year: Option<u16>,
+}
+
+impl Parsable for MovieIdent {
+    fn parse_parent<'a>(&mut self, folder_tokens: Vec<Token<'a>>) {
+        self.parse_tokens(folder_tokens);
+    }
+
+    fn parse_name<'a>(&mut self, name_tokens: Vec<Token<'a>>) {
+        self.parse_tokens(name_tokens);
+    }
+}
+
+impl MovieIdent {
+    pub fn parse_tokens<'a>(&mut self, tokens: Vec<Token<'a>>) {
+        let mut past_name = false;
+        let mut title = String::new();
+        let mut in_group = false;
+        let mut year = None;
+        for (_, token) in tokens.into_iter().enumerate() {
+            match token {
+                Token::Unknown(t) => {
+                    if !past_name && !in_group {
+                        if title.is_empty() {
+                            title += t;
+                        } else {
+                            title += " ";
+                            title += t;
+                        }
+                    }
+                }
+                Token::Noise(_) => {
+                    past_name = true;
+                }
+                Token::Year(y) => {
+                    year = Some(y);
+                    past_name = true;
+                }
+                Token::GroupStart => {
+                    in_group = true;
+                    if !title.is_empty() {
+                        past_name = true;
+                    }
+                }
+                Token::ExplicitSeparator => {
+                    past_name = true;
+                }
+                Token::GroupEnd => {
+                    in_group = false;
+                }
+            }
+        }
+
+        let title = title.trim_matches(SPECIAL_CHARS).to_string();
+
+        if !title.is_empty() {
+            self.title = title;
+        }
+        self.year = year.or(self.year);
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 pub struct MovieIdentifier {
     pub title: String,
-    pub year: Option<u32>,
+    pub year: Option<u16>,
+}
+
+impl MovieIdentifier {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, MovieIdent> {
+        let ident = Parser::parse_filename(path.as_ref(), MovieIdent::default());
+        if ident.title.is_empty() {
+            Err(ident)
+        } else {
+            Ok(Self {
+                title: ident.title,
+                year: ident.year,
+            })
+        }
+    }
 }
 
 impl From<MovieIdentifier> for ContentIdentifier {
@@ -15,46 +99,12 @@ impl From<MovieIdentifier> for ContentIdentifier {
 }
 
 impl Media for MovieIdentifier {
-    fn identify(tokens: &[String]) -> Option<Self> {
-        let mut name: Option<String> = None;
-        let mut year: Option<u32> = None;
-        for token in tokens {
-            let chars: Vec<char> = token.chars().collect();
-            let is_year = token.len() == 6
-                && chars[0] == '('
-                && chars[1].is_ascii_digit()
-                && chars[2].is_ascii_digit()
-                && chars[3].is_ascii_digit()
-                && chars[4].is_ascii_digit()
-                && chars[5] == ')'
-                && (chars[1] == '1' || chars[1] == '2');
-            if is_year {
-                if let Ok(parsed_year) = token[1..6].parse() {
-                    year = Some(parsed_year);
-                }
-                continue;
-            }
-
-            // break when quality encountered, no more useful information
-            if (token.len() == 4 || token.len() == 5)
-                && chars[0].is_ascii_digit()
-                && chars[1].is_ascii_digit()
-                && chars[2].is_ascii_digit()
-                && chars[3].is_ascii_digit()
-            {
-                break;
-            }
-            match name {
-                Some(ref mut n) => n.push_str(&format!(" {}", token)),
-                None => name = Some(token.to_string()),
-            }
-        }
-        if let Some(name) = name {
-            let show_file = Self { title: name, year };
-            Some(show_file)
-        } else {
-            None
-        }
+    type Ident = MovieIdent;
+    fn identify(path: impl AsRef<Path>) -> Result<Self, Self::Ident>
+    where
+        Self: Sized,
+    {
+        Self::from_path(path)
     }
     fn title(&self) -> &str {
         &self.title
@@ -63,31 +113,31 @@ impl Media for MovieIdentifier {
 
 #[cfg(test)]
 mod tests {
-    use crate::{library::Media, utils};
+    use std::path::Path;
 
-    use super::MovieIdentifier;
+    use crate::library::{identification::Parser, movie::MovieIdent};
 
     #[test]
     fn identify_movies() {
         let tests = [
             (
                 "Inception.2010.1080p.BluRay.x264.YIFY",
-                MovieIdentifier {
-                    title: "inception".into(),
-                    year: None,
+                MovieIdent {
+                    title: "Inception".into(),
+                    year: Some(2010),
                 },
             ),
             (
                 "The.Matrix.1999.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ",
-                MovieIdentifier {
-                    title: "the matrix".into(),
-                    year: None,
+                MovieIdent {
+                    title: "The Matrix".into(),
+                    year: Some(1999),
                 },
             ),
         ];
         for (input, expected) in tests {
-            let tokens = utils::tokenize_filename(input);
-            assert_eq!(MovieIdentifier::identify(&tokens).unwrap(), expected);
+            let identifier = Parser::parse_filename(Path::new(input), MovieIdent::default());
+            assert_eq!(identifier, expected);
         }
     }
 }

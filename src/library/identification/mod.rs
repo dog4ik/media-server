@@ -1,4 +1,14 @@
-const EXTRAS_FOLDERS: [&str; 11] = [
+use std::{
+    ffi::OsStr,
+    path::{Component, Path, PathBuf},
+    time::Instant,
+};
+
+use crate::library::{movie::MovieIdent, show::ShowIdent, Video, SUPPORTED_FILES};
+
+use super::{movie::MovieIdentifier, show::ShowIdentifier};
+
+pub const EXTRAS_FOLDERS: [&str; 11] = [
     "behind the scenes",
     "deleted scenes",
     "interviews",
@@ -12,7 +22,7 @@ const EXTRAS_FOLDERS: [&str; 11] = [
     "trailers",
 ];
 
-const NAME_NOISE: &[&str] = &[
+const NAME_NOISE: [&str; 68] = [
     "3d",
     "sbs",
     "tab",
@@ -44,21 +54,13 @@ const NAME_NOISE: &[&str] = &[
     "ntsc",
     "ogg",
     "ogm",
-    "pal",
     "pdtv",
-    "proper",
     "repack",
     "rerip",
     "r5",
-    "bd5",
-    "bd",
-    "se",
     "svcd",
     "nfo",
     "nfofix",
-    "ws",
-    "ts",
-    "tc",
     "brrip",
     "bdrip",
     "480p",
@@ -86,416 +88,479 @@ const NAME_NOISE: &[&str] = &[
     "kp",
     "web-dl",
     "webdl",
+    "webrip",
     "aac",
     "dts",
 ];
 
-pub const OPEN_BRACKETS: &[char] = &['(', '[', '{'];
-pub const CLOSE_BRACKETS: &[char] = &[')', ']', '}'];
-pub const SEPARATORS: &[char] = &['_', '.', ' '];
+pub(super) const SPECIAL_CHARS: [char; 3] = [',', '_', ' '];
+
+#[derive(Debug, Clone)]
+pub struct Parser<T> {
+    inner: T,
+}
+
+pub trait Parseable {
+    fn parse_parent(&mut self, folder_tokens: Vec<Token<'_>>);
+    fn parse_name(&mut self, name_tokens: Vec<Token<'_>>);
+}
+
+impl<T: Parseable> Parser<T> {
+    /// Creates new parser returning result in Err if given path is a file
+    pub fn new(parsable: T) -> Parser<T> {
+        Self { inner: parsable }
+    }
+
+    pub fn apply_dir_path(&mut self, dir_path: &Path) {
+        let mut path = dir_path.components();
+        loop {
+            match path.next() {
+                Some(Component::Normal(comp)) => {
+                    self.feed_directory(comp);
+                }
+                None => {
+                    break;
+                }
+                Some(_) => continue,
+            }
+        }
+    }
+
+    pub fn apply_file_path(mut self, file_path: &Path) -> T {
+        let mut path = file_path.components().peekable();
+        loop {
+            match path.next() {
+                Some(Component::Normal(comp)) => {
+                    let last_part = path
+                        .peek()
+                        .is_none()
+                        .then(|| Path::new(comp).file_stem())
+                        .flatten();
+
+                    match last_part {
+                        Some(last_part) => {
+                            return self.feed_filename(last_part);
+                        }
+                        None => {
+                            self.feed_directory(comp);
+                        }
+                    }
+                }
+                None => {
+                    return self.into_inner();
+                }
+                Some(_) => continue,
+            }
+        }
+    }
+
+    pub fn parse_filename(file_path: &Path, mut parsable: T) -> T {
+        let mut path = file_path.components().peekable();
+        loop {
+            match path.next() {
+                Some(Component::Normal(comp)) => {
+                    let last_part = path
+                        .peek()
+                        .is_none()
+                        .then(|| Path::new(comp).file_stem())
+                        .flatten();
+
+                    match last_part {
+                        Some(last_part) => {
+                            if let Some(comp) = last_part.to_str() {
+                                let tokens = tokenize_path(comp);
+                                parsable.parse_name(tokens);
+                                return parsable;
+                            }
+                        }
+                        None => {
+                            if let Some(comp) = comp.to_str() {
+                                let tokens = tokenize_path(comp);
+                                parsable.parse_parent(tokens);
+                            }
+                        }
+                    }
+                }
+                None => {
+                    return parsable;
+                }
+                Some(_) => continue,
+            }
+        }
+    }
+
+    pub fn feed_filename(mut self, file_name: &OsStr) -> T {
+        let file_name = file_name.to_string_lossy();
+        self.inner.parse_name(tokenize_path(&file_name));
+        self.inner
+    }
+
+    pub fn feed_directory(&mut self, dir_name: &OsStr) {
+        let dir_name = dir_name.to_string_lossy();
+        self.inner.parse_parent(tokenize_path(&dir_name));
+    }
+
+    pub fn into_inner(self) -> T {
+        self.inner
+    }
+}
+
+pub const OPEN_BRACKETS: [char; 3] = ['(', '[', '{'];
+pub const CLOSE_BRACKETS: [char; 3] = [')', ']', '}'];
+pub const SEPARATORS: [char; 4] = ['-', '_', ' ', '.'];
 
 #[derive(Debug, PartialEq, Eq)]
-enum Token<'a> {
-    Name(&'a str),
+pub enum Token<'a> {
+    Unknown(&'a str),
     Noise(&'a str),
     Year(u16),
-    Episode(u16),
-    Season(u16),
-    SeasonEpisode((u16, u16)),
+    GroupStart,
+    /// Separator that have separators as neighbors
+    ExplicitSeparator,
+    GroupEnd,
 }
 
-fn visit_season(value: &str) -> Option<u16> {
-    if value.len() != 3 && value.chars().nth(0).unwrap() != 's' {
-        return None;
-    }
-    value[1..3].parse().ok()
-}
-
-fn visit_episode(value: &str) -> Option<u16> {
-    if value.len() != 3 && value.chars().nth(0).unwrap() != 'e' {
-        return None;
-    }
-    value[1..3].parse().ok()
-}
-
-fn visit_season_episode(value: &str) -> Option<(u16, u16)> {
-    if value.len() == 6 {
-        let season = visit_season(&value[..3])?;
-        let episode = visit_episode(&value[3..6])?;
-        return Some((season, episode));
+fn visit_year(value: &str, current_year: i32) -> Option<u16> {
+    if value.len() == 4 {
+        let year = value.parse().ok()?;
+        if year >= current_year as u16 + 1 {
+            return None;
+        }
+        return Some(year);
     }
     None
 }
 
-fn visit_year(value: &str) -> Option<u16> {
-    if value.len() != 4 {
-        return None;
-    }
-    value.parse().ok()
-}
-
-pub fn tokenize_show<'a>(file_name: &'a str) -> Vec<Token<'a>> {
-    let is_spaced = file_name.contains(' ');
-    let raw_tokens = match is_spaced {
-        true => file_name.split(' '),
-        false => file_name.split('.'),
-    };
-    let mut past_name = false;
-    let mut need_name = true;
+fn tokenize_path<'a>(file_name: &'a str) -> Vec<Token<'a>> {
     let mut group_tag = None;
     let mut tokens = Vec::new();
-    for mut token in raw_tokens {
-        if let Some(stripped_token) = token.strip_prefix(OPEN_BRACKETS) {
-            token = stripped_token;
-            group_tag = Some(token.chars().next().unwrap());
-            if !need_name {
-                past_name = true;
+    let mut current_token_start = 0;
+    let total_tokens = file_name.len();
+    let current_year = time::OffsetDateTime::now_utc().year();
+
+    for (char_idx, (i, char)) in file_name.char_indices().enumerate() {
+        if current_token_start > i {
+            continue;
+        }
+        if let Some(close_token) = OPEN_BRACKETS
+            .iter()
+            .enumerate()
+            .find_map(|(i, c)| (*c == char).then_some(CLOSE_BRACKETS[i]))
+        {
+            if i - current_token_start != 0 {
+                let token = &file_name[current_token_start..i];
+                if let Some(year) = visit_year(token, current_year) {
+                    tokens.push(Token::Year(year));
+                } else {
+                    tokens.push(Token::Unknown(token));
+                }
+            }
+            group_tag = Some(close_token);
+            tokens.push(Token::GroupStart);
+            current_token_start = i + 1;
+            continue;
+        }
+        if group_tag.is_some_and(|t| char == t) {
+            if i - current_token_start != 0 {
+                let token = &file_name[current_token_start..i];
+                if let Some(year) = visit_year(token, current_year) {
+                    tokens.push(Token::Year(year));
+                } else {
+                    tokens.push(Token::Unknown(token));
+                }
+            }
+            group_tag = None;
+            tokens.push(Token::GroupEnd);
+            current_token_start = i + 1;
+            continue;
+        }
+        if SEPARATORS.contains(&char) {
+            if i - current_token_start != 0 {
+                let token = &file_name[current_token_start..i];
+                if let Some(year) = visit_year(token, current_year) {
+                    tokens.push(Token::Year(year));
+                } else {
+                    tokens.push(Token::Unknown(token));
+                }
+            }
+
+            if let Some((prev, next)) = char_idx
+                .checked_sub(1)
+                .and_then(|idx| file_name.chars().nth(idx))
+                .zip(file_name.chars().nth(char_idx + 1))
+            {
+                if SEPARATORS.contains(&prev) && next == prev {
+                    tokens.push(Token::ExplicitSeparator);
+                    current_token_start = i + 2;
+                    continue;
+                }
+            };
+
+            current_token_start = i + 1;
+            continue;
+        }
+        // We should check noise only if it separate token
+        if i - current_token_start == 0 {
+            for noise in NAME_NOISE {
+                let remaining_tokens = total_tokens - current_token_start;
+                if noise.len() <= remaining_tokens {
+                    let file_noise =
+                        &file_name.get(current_token_start..current_token_start + noise.len());
+                    if let Some(file_noise) = file_noise.filter(|n| n.eq_ignore_ascii_case(noise)) {
+                        current_token_start = i + noise.len();
+                        tokens.push(Token::Noise(file_noise));
+                        break;
+                    }
+                }
             }
         }
-        if let Some(stripped_token) = group_tag.and_then(|t| token.strip_suffix(t)) {
-            token = stripped_token;
-            group_tag = None;
-        }
-        if NAME_NOISE.contains(&token) {
-            past_name = true;
-            tokens.push(Token::Noise(token));
-            continue;
-        }
-        if let Some(season_episode) = visit_season_episode(token) {
-            tokens.push(Token::SeasonEpisode(season_episode));
-            past_name = true;
-            continue;
-        }
-        if let Some(season) = visit_season(token) {
-            tokens.push(Token::Season(season));
-            past_name = true;
-            continue;
-        }
-        if let Some(episode) = visit_episode(token) {
-            tokens.push(Token::Episode(episode));
-            past_name = true;
-            continue;
-        }
-        if let Some(year) = visit_year(token) {
-            tokens.push(Token::Year(year));
-            past_name = true;
-            continue;
-        }
-        if group_tag.is_none() && !past_name {
-            tokens.push(Token::Name(token));
-            need_name = false;
-            continue;
-        }
-        tokens.push(Token::Noise(token));
+    }
+
+    if current_token_start != total_tokens {
+        let remainder = &file_name[current_token_start..file_name.len()];
+        tokens.push(Token::Unknown(remainder));
     }
 
     tokens
 }
 
+pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
+    use std::fs;
+    let mut files = Vec::new();
+    let start = Instant::now();
+
+    let mut directories: Vec<(PathBuf, Parser<ShowIdent>)> = dirs
+        .into_iter()
+        .map(|p| {
+            let mut parser = Parser::new(ShowIdent::default());
+            parser.apply_dir_path(&p);
+            (p, parser)
+        })
+        .collect();
+
+    while let Some((current_dir, parser)) = directories.pop() {
+        let Ok(mut read_dir) = fs::read_dir(&current_dir) else {
+            tracing::warn!("Failed to read show directory {}", current_dir.display());
+            continue;
+        };
+        let mut supported_paths = Vec::new();
+        let mut dir_season = None;
+        let mut dir_year = None;
+        let mut dir_show_title = None;
+
+        let mut need_sort = false;
+
+        while let Some(Ok(entry)) = read_dir.next() {
+            let Ok(metadata) = entry.metadata() else {
+                continue;
+            };
+            let path = entry.path();
+            if metadata.is_dir() {
+                let Some(dir_name) = path.file_name() else {
+                    continue;
+                };
+                if dir_name
+                    .to_str()
+                    .is_some_and(|f| EXTRAS_FOLDERS.iter().any(|e| f.eq_ignore_ascii_case(e)))
+                {
+                    tracing::warn!("Skipping extras directory: {}", path.display());
+                    continue;
+                }
+                let mut new_dir_parser = parser.clone();
+                new_dir_parser.feed_directory(dir_name);
+                directories.push((path, new_dir_parser));
+                continue;
+            }
+            let Some(extension) = path.extension().and_then(|x| x.to_str()) else {
+                tracing::trace!("Ignoring file without extension: {}", path.display());
+                continue;
+            };
+            if metadata.is_file() && SUPPORTED_FILES.contains(&extension) {
+                let Some(file_name) = path.file_name() else {
+                    continue;
+                };
+                let metadata_parser = parser.clone();
+                let show_ident: Result<ShowIdentifier, ShowIdent> =
+                    metadata_parser.feed_filename(file_name).try_into();
+                match &show_ident {
+                    Ok(identifier) => {
+                        dir_show_title = Some(identifier.title.clone());
+                        dir_season = Some(identifier.season);
+                        if let Some(year) = identifier.year {
+                            dir_year = Some(year);
+                        }
+                    }
+                    Err(ident) => {
+                        if !ident.title.is_empty() {
+                            dir_show_title = Some(ident.title.clone());
+                        }
+                        if let Some(season) = ident.season {
+                            dir_season = Some(season);
+                        }
+                        if ident.episode.is_none() {
+                            need_sort = true;
+                        }
+                        if let Some(year) = ident.year {
+                            dir_year = Some(year);
+                        }
+                    }
+                };
+                supported_paths.push((path, show_ident));
+            }
+        }
+        if need_sort {
+            supported_paths.sort_by_key(|(p, _)| p.to_string_lossy().to_string());
+        }
+        for (i, (path, ident_result)) in supported_paths.into_iter().enumerate() {
+            let video = Video::from_path_unchecked(&path);
+            match ident_result {
+                Ok(identifier) => {
+                    files.push((video, identifier));
+                }
+                Err(mut ident) => {
+                    if let Some(dir_title) = &dir_show_title {
+                        if ident.title.is_empty() {
+                            ident.title = dir_title.clone();
+                        }
+                    }
+                    // Here is the right time to use video container metadata.
+                    // The problem is that running ffprobe is expensive and will affect the startup time
+                    let identifier = ShowIdentifier {
+                        episode: ident.episode.unwrap_or(i as u16 + 1),
+                        season: ident.season.or(dir_season).unwrap_or(1),
+                        title: ident.title,
+                        year: ident.year.or(dir_year),
+                    };
+                    files.push((video, identifier));
+                }
+            }
+        }
+    }
+
+    tracing::debug!("Walking show dirs took {:?}", start.elapsed());
+    files
+}
+
+pub async fn walk_movie_dirs(mut dirs: Vec<PathBuf>) -> Vec<(Video, MovieIdentifier)> {
+    use tokio::fs;
+    let mut files = Vec::new();
+
+    while let Some(current_dir) = dirs.pop() {
+        let Ok(mut read_dir) = fs::read_dir(&current_dir).await else {
+            tracing::warn!("Failed to read movie directory {}", current_dir.display());
+            continue;
+        };
+
+        while let Ok(Some(entry)) = read_dir.next_entry().await {
+            let path = entry.path();
+            if path.is_dir() {
+                dirs.push(path);
+                continue;
+            }
+            let Some(extension) = path.extension().and_then(|x| x.to_str()) else {
+                tracing::trace!("Ignoring file without extension: {}", path.display());
+                continue;
+            };
+            if path.is_file() && SUPPORTED_FILES.contains(&extension) {
+                let ident = Parser::parse_filename(&path, MovieIdent::default());
+                let identifier = MovieIdentifier {
+                    title: ident.title,
+                    year: ident.year,
+                };
+                let video = Video::from_path_unchecked(path);
+                files.push((video, identifier));
+            }
+        }
+    }
+    files
+}
+
 #[cfg(test)]
 mod tests {
-    use crate::library::identification::tokenize_show;
+    use crate::library::identification::tokenize_path;
 
     use super::Token;
 
-    fn test<'a>(tests: impl IntoIterator<Item = (&'a str, Vec<Token<'a>>)>) {
+    fn tokenize_test<'a>(tests: impl IntoIterator<Item = (&'a str, Vec<Token<'a>>)>) {
         for (test, expected) in tests {
-            let test = test.to_lowercase();
-            assert_eq!(expected, tokenize_show(&test));
+            assert_eq!(expected, tokenize_path(&test));
         }
     }
 
     #[test]
-    pub fn show_names() {
+    pub fn tokenize_shows() {
         let tests = [
             (
                 "Cyberpunk.Edgerunners.S01E02.DUBBED.1080p.WEBRip.x265-RARBG[eztv.re]",
                 vec![
-                    Token::Name("cyberpunk"),
-                    Token::Name("edgerunners"),
-                    Token::SeasonEpisode((1, 2)),
-                    Token::Noise("dubbed"),
+                    Token::Unknown("Cyberpunk"),
+                    Token::Unknown("Edgerunners"),
+                    Token::Unknown("S01E02"),
+                    Token::Noise("DUBBED"),
                     Token::Noise("1080p"),
-                    Token::Noise("webrip"),
-                    Token::Noise("x265-rarbg[eztv"),
-                    Token::Noise("re]"),
+                    Token::Noise("WEBRip"),
+                    Token::Noise("x265"),
+                    Token::Unknown("RARBG"),
+                    Token::GroupStart,
+                    Token::Unknown("eztv"),
+                    Token::Unknown("re"),
+                    Token::GroupEnd,
                 ],
             ),
             (
                 "shogun.2024.s01e05.2160p.web.h265-successfulcrab",
                 vec![
-                    Token::Name("shogun"),
+                    Token::Unknown("shogun"),
                     Token::Year(2024),
-                    Token::SeasonEpisode((1, 5)),
+                    Token::Unknown("s01e05"),
                     Token::Noise("2160p"),
-                    Token::Noise("web"),
-                    Token::Noise("h265-successfulcrab"),
+                    Token::Unknown("web"),
+                    Token::Noise("h265"),
+                    Token::Unknown("successfulcrab"),
+                ],
+            ),
+            (
+                "Foo (2019).S04E03",
+                vec![
+                    Token::Unknown("Foo"),
+                    Token::GroupStart,
+                    Token::Year(2019),
+                    Token::GroupEnd,
+                    Token::Unknown("S04E03"),
+                ],
+            ),
+            (
+                "Inception - 2010 - 1080p - BluRay - x264 - YIFY",
+                vec![
+                    Token::Unknown("Inception"),
+                    Token::ExplicitSeparator,
+                    Token::Year(2010),
+                    Token::ExplicitSeparator,
+                    Token::Noise("1080p"),
+                    Token::ExplicitSeparator,
+                    Token::Noise("BluRay"),
+                    Token::ExplicitSeparator,
+                    Token::Noise("x264"),
+                    Token::ExplicitSeparator,
+                    Token::Unknown("YIFY"),
                 ],
             ),
         ];
-        test(tests);
+        tokenize_test(tests);
     }
 
     #[test]
-    fn movie_names() {
+    fn tokenize_movies() {
         let tests = [(
             "Aladdin.WEB-DL.KP.1080p-SOFCJ",
             vec![
-                Token::Name("aladdin"),
-                Token::Noise("web-dl"),
-                Token::Noise("kp"),
-                Token::Noise("1080p-sofcj"),
+                Token::Unknown("Aladdin"),
+                Token::Noise("WEB-DL"),
+                Token::Noise("KP"),
+                Token::Noise("1080p"),
+                Token::Unknown("SOFCJ"),
             ],
         )];
-        test(tests);
-    }
-
-
-    fn simple_episodes_tests() {
-        let tests = [
-                ("/server/anything_s01e02.mp4", "anything", 1, 2),
-                ("/server/anything_s1e2.mp4", "anything", 1, 2),
-                ("/server/anything_s01.e02.mp4", "anything", 1, 2),
-                ("/server/anything_102.mp4", "anything", 1, 2),
-                ("/server/anything_1x02.mp4", "anything", 1, 2),
-                ("/server/The Walking Dead 4x01.mp4", "The Walking Dead", 4, 1),
-                ("/server/the_simpsons-s02e01_18536.mp4", "the_simpsons", 2, 1),
-                ("/server/Temp/S01E02 foo.mp4", "", 1, 2),
-                ("Series/4x12 - The Woman.mp4", "", 4, 12),
-                ("Series/LA X, Pt. 1_s06e32.mp4", "LA X, Pt. 1", 6, 32),
-                ("[Baz-BarF,oo - [1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", 1, 5),
-                ("/Foo/The.Series.Name.S01E04.WEBRip.x264-Baz[Bar/,the.series.name.s01e04.webrip.x264-Baz[Bar].mkv", "The.Series.Name", 1, 4),
-                ("Love.Death.and.Robots.S01.1080p.NF.WEB-DL.DDP5.1.x264-NTG/Love.Death.and.Robots.S01E01.Sonnies.Edge.1080p.NF.WEB-DL.DDP5.1.x264-NTG.mkv", "Love.Death.and.Robots", 1, 1),
-                ("[YuiSubs ,Tensura Nikki - Tensei Shitara Slime Datta Ken/[YuiSubs] Tensura Nikki - Tensei Shitara Slime Datta Ken - 12 (NVENC H.265 1080p).mkv", "Tensura Nikki - Tensei Shitara Slime Datta Ken", 1, 12),
-                ("[Baz-BarF,oo - 01 - 12[1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", 1, 5),
-                ("Series/4-12 - The Woman.mp4", "", 4, 12),
-    ];
-    }
-    fn show_resolver_test() {
-        let tests = [
-            ("The.Show.S01", "The Show"),
-            ("The.Show.S01.COMPLETE", "The Show"),
-            ("S.H.O.W.S01", "S.H.O.W"),
-            ("The.Show.P.I.S01", "The Show P.I"),
-            ("The_Show_Season_1", "The Show"),
-            ("/something/The_Show/Season 10", "The Show"),
-            ("The Show", "The Show"),
-            ("/some/path/The Show", "The Show"),
-            ("/some/path/The Show s02e10 720p hdtv", "The Show"),
-            (
-                "/some/path/The Show s02e10 the episode 720p hdtv",
-                "The Show",
-            ),
-        ];
-    }
-    fn season_path_test() {
-        let tests = [
-            ("/Drive/Season 1", 1, true),
-            ("/Drive/s1", 1, true),
-            ("/Drive/S1", 1, true),
-            ("/Drive/Season 2", 2, true),
-            ("/Drive/Season 02", 2, true),
-            ("/Drive/Seinfeld/S02", 2, true),
-            ("/Drive/Seinfeld/2", 2, true),
-            ("/Drive/Seinfeld - S02", 2, true),
-            ("/Drive/Season 2009", 2009, true),
-            ("/Drive/Season1", 1, true),
-            (
-                "The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH",
-                4,
-                true,
-            ),
-            ("/Drive/Season 7 (2016)", 7, false),
-            ("/Drive/Staffel 7 (2016)", 7, false),
-            ("/Drive/Stagione 7 (2016)", 7, false),
-            ("/Drive/Season (8)", -1, false),
-            ("/Drive/3.Staffel", 3, false),
-            ("/Drive/s06e05", -1, false),
-            (
-                "/Drive/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv",
-                -1,
-                false,
-            ),
-            ("/Drive/extras", 0, true),
-            ("/Drive/specials", 0, true),
-        ];
-    }
-
-    fn seasons_number_tests() {
-        let tests = [
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", 25),
-            ("/Show/Season 02/S02E03 blah.avi", 2),
-            ("Season 1/seriesname S01x02 blah.avi", 1),
-            ("Season 1/S01x02 blah.avi", 1),
-            ("Season 1/seriesname S01xE02 blah.avi", 1),
-            ("Season 1/01x02 blah.avi", 1),
-            ("Season 1/S01E02 blah.avi", 1),
-            ("Season 1/S01xE02 blah.avi", 1),
-            ("Season 1/seriesname 01x02 blah.avi", 1),
-            ("Season 1/seriesname S01E02 blah.avi", 1),
-            ("Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", 2),
-            ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", 2),
-            ("Season 2/02x03-04-15 - Ep Name.mp4", 2),
-            ("Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", 2),
-            ("Season 02/02x03-E15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03-E15 - Ep Name.mp4", 2),
-            ("Season 02/02x03 - x04 - x15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", 2),
-            ("Season 02/02x03x04x15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", 2),
-            ("Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", 1),
-            ("Season 1/S01E23-E24-E26 - The Woman.mp4", 1),
-            ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", 25),
-            ("The Simpsons/The Simpsons.S25E09.Steal this episode.mp4", 25),
-            ("2016/Season s2016e1.mp4", 2016),
-            ("2016/Season 2016x1.mp4", 2016),
-            ("Season 2009/2009x02 blah.avi", 2009),
-            ("Season 2009/S2009x02 blah.avi", 2009),
-            ("Season 2009/S2009E02 blah.avi", 2009),
-            ("Season 2009/S2009xE02 blah.avi", 2009),
-            ("Season 2009/seriesname 2009x02 blah.avi", 2009),
-            ("Season 2009/seriesname S2009x02 blah.avi", 2009),
-            ("Season 2009/seriesname S2009E02 blah.avi", 2009),
-            ("Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 2009),
-            ("Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 2009),
-            ("Season 2009/2009x03-04-15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4", 2009),
-            ("Season 2009/2009x03x04x15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - 2009x03x04x15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4", 2009),
-            ("Season 2009/S2009E23-E24-E26 - The Woman.mp4", 2009),
-            ("Series/1-12 - The Woman.mp4", 1),
-            ("Running Man/Running Man S2017E368.mkv", 2017),
-            ("Case Closed (1996-2007)/Case Closed - 317.mkv", 3),
-            ("Seinfeld/Seinfeld 0807 The Checks.avi", 8),
-        ];
-    }
-
-    fn episodes_path_test() {
-        let tests = [
-            ("/media/Foo/Foo-S01E01", "Foo", 1, 1),
-            ("/media/Foo - S04E011", "Foo", 4, 11),
-            ("/media/Foo/Foo s01x01", "Foo", 1, 1),
-            ("/media/Foo (2019)/Season 4/Foo (2019).S04E03", "Foo (2019)", 4, 3),
-            (r#"D:\media\Foo\Foo-S01E01"#, "Foo", 1, 1),
-            (r#"D:\media\Foo - S04E011"#, "Foo", 4, 11),
-            (r#"D:\media\Foo\Foo s01x01"#, "Foo", 1, 1),
-            (r#"D:\media\Foo (2019)\Season 4\Foo (2019).S04E03"#, "Foo (2019)", 4, 3),
-            ("/Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", "Elementary", 2, 3),
-            ("/Season 1/seriesname S01E02 blah.avi", "seriesname", 1, 2),
-            ("/Running Man/Running Man S2017E368.mkv", "Running Man", 2017, 368),
-            ("/Season 1/seriesname 01x02 blah.avi", "seriesname", 1, 2),
-            ("/Season 25/The Simpsons.S25E09.Steal this episode.mp4", "The Simpsons", 25, 9),
-            ("/Season 1/seriesname S01x02 blah.avi", "seriesname", 1, 2),
-            ("/Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", "Elementary", 2, 3),
-            ("/Season 1/seriesname S01xE02 blah.avi", "seriesname", 1, 2),
-            ("/Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", "Elementary", 2, 3),
-            ("/Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", "Elementary", 2, 3),
-            ("/Season 02/Elementary - 02x03-E15 - Ep Name.mp4", "Elementary", 2, 3),
-            ("/Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", "Elementary", 1, 23),
-            ("/The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi", "The Wonder Years", 4, 7),
-            ("/The.Sopranos/Season 3/The Sopranos Season 3 Episode 09 - The Telltale Moozadell.avi", "The Sopranos", 3, 9),
-            ("/Castle Rock 2x01 Que el rio siga su curso [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv", "Castle Rock", 2, 1),
-            ("/After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv", "After Life", 1, 6),
-            ("/Season 4/Uchuu.Senkan.Yamato.2199.E03.avi", "Uchuu Senkan Yamoto 2199", 4, 3),
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", "The Daily Show", 25, 22),
-            ("Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv", "Watchmen (2019)", 1, 3),
-            ("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", "The Legend of Condor Heroes 2017", 1, 7),
-        ];
-    }
-
-    fn episodes_without_season_test() {
-        let tests = [
-            ("The Simpsons/The Simpsons.S25E08.Steal this episode.mp4", 8),
-            ("The Simpsons/The Simpsons - 02 - Ep Name.avi", 2),
-            ("The Simpsons/02.avi", 2),
-            ("The Simpsons/02 - Ep Name.avi", 2),
-            ("The Simpsons/02-Ep Name.avi", 2),
-            ("The Simpsons/02.EpName.avi", 2),
-            ("The Simpsons/The Simpsons - 02.avi", 2),
-            ("The Simpsons/The Simpsons - 02 Ep Name.avi", 2),
-            ("GJ Club (2013)/GJ Club - 07.mkv", 7),
-            ("Case Closed (1996-2007)/Case Closed - 317.mkv", 17),
-            (r#"The Simpsons/The Simpsons 5 - 02 - Ep Name.avi"#, 2),
-            (r#"The Simpsons/The Simpsons 5 - 02 Ep Name.avi"#, 2),
-            (r#"Seinfeld/Seinfeld 0807 The Checks.avi"#, 7),
-            // This is not supported anymore after removing the episode number 365+ hack from EpisodePathParser
-            (r#"Case Closed (1996-2007)/Case Closed - 13.mkv"#, 13),
-        ];
-    }
-
-    fn episode_number_test() {
-        let tests = [
-            ("Season 21/One Piece 1001", 1001),
-            ("Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv", 3),
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", 22),
-            ("Castle Rock 2x01 Que el rio siga su curso [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv", 1),
-            ("After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv", 6),
-            ("Season 02/S02E03 blah.avi", 3),
-            ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", 3),
-            ("Season 02/02x03 - x04 - x15 - Ep Name.mp4", 3),
-            ("Season 1/01x02 blah.avi", 2),
-            ("Season 1/S01x02 blah.avi", 2),
-            ("Season 1/S01E02 blah.avi", 2),
-            ("Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", 3),
-            ("Season 1/S01xE02 blah.avi", 2),
-            ("Season 1/seriesname S01E02 blah.avi", 2),
-            ("Season 2/Episode - 16.avi", 16),
-            ("Season 2/Episode 16.avi", 16),
-            ("Season 2/Episode 16 - Some Title.avi", 16),
-            ("Season 2/16 Some Title.avi", 16),
-            ("Season 2/16 - 12 Some Title.avi", 16),
-            ("Season 2/7 - 12 Angry Men.avi", 7),
-            ("Season 1/seriesname 01x02 blah.avi", 2),
-            ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", 9),
-            ("Season 1/seriesname S01x02 blah.avi", 2),
-            ("Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", 3),
-            ("Season 1/seriesname S01xE02 blah.avi", 2),
-            ("Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", 3),
-            ("Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", 3),
-            ("Season 2/02x03-04-15 - Ep Name.mp4", 3),
-            ("Season 02/02x03-E15 - Ep Name.mp4", 3),
-            ("Season 02/Elementary - 02x03-E15 - Ep Name.mp4", 3),
-            ("Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", 23),
-            ("Season 2009/S2009E23-E24-E26 - The Woman.mp4", 23),
-            ("Season 2009/2009x02 blah.avi", 2),
-            ("Season 2009/S2009x02 blah.avi", 2),
-            ("Season 2009/S2009E02 blah.avi", 2),
-            ("Season 2009/seriesname 2009x02 blah.avi", 2),
-            ("Season 2009/Elementary - 2009x03x04x15 - Ep Name.mp4", 3),
-            ("Season 2009/2009x03x04x15 - Ep Name.mp4", 3),
-            ("Season 2009/Elementary - 2009x03-E15 - Ep Name.mp4", 3),
-            ("Season 2009/S2009xE02 blah.avi", 2),
-            ("Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4", 23),
-            ("Season 2009/seriesname S2009xE02 blah.avi", 2),
-            ("Season 2009/2009x03-E15 - Ep Name.mp4", 3),
-            ("Season 2009/seriesname S2009E02 blah.avi", 2),
-            ("Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 3),
-            ("Season 2009/2009x03 - x04 - x15 - Ep Name.mp4", 3),
-            ("Season 2009/seriesname S2009x02 blah.avi", 2),
-            ("Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 3),
-            ("Season 2009/Elementary - 2009x03-04-15 - Ep Name.mp4", 3),
-            ("Season 2009/2009x03-04-15 - Ep Name.mp4", 3),
-            ("Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4", 3),
-            ("Season 1/02 - blah-02 a.avi", 2),
-            ("Season 1/02 - blah.avi", 2),
-            ("Season 2/02 - blah 14 blah.avi", 2),
-            ("Season 2/02.avi", 2),
-            ("Season 2/2. Infestation.avi", 2),
-            ("The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi", 7),
-            ("Running Man/Running Man S2017E368.mkv", 368),
-            ("Season 2/[HorribleSubs] Hunter X Hunter - 136 [720p].mkv", 136), // triple digit episode number
-            ("Log Horizon 2/[HorribleSubs] Log Horizon 2 - 03 [720p].mkv", 3), // digit in series name
-            ("Season 1/seriesname 05.mkv", 5), // no hyphen between series name and episode number
-            ("[BBT-RMX] Ranma ½ - 154 [50AC421A].mkv", 154), // hyphens in the pre-name info, triple digit episode number
-            ("Season 2/Episode 21 - 94 Meetings.mp4", 21), // Title starts with a number
-            ("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", 7),
-            ("Season 3/The Series Season 3 Episode 9 - The title.avi", 9),
-            ("Season 3/The Series S3 E9 - The title.avi", 9),
-            ("Season 3/S003 E009.avi", 9),
-            ("Season 3/Season 3 Episode 9.avi", 9),
-            ("[VCB-Studio] Re Zero kara Hajimeru Isekai Seikatsu [21][Ma10p_1080p][x265_flac].mkv", 21),
-            ("[CASO&Sumisora][Oda_Nobuna_no_Yabou][04][BDRIP][1920x1080][x264_AAC][7620E503].mp4", 4),
-        ];
+        tokenize_test(tests);
     }
 }

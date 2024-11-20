@@ -1,6 +1,3 @@
-#![feature(map_try_insert)]
-#![feature(duration_constructors)]
-#![feature(duration_constants)]
 #![feature(iter_intersperse)]
 #![feature(os_str_display)]
 #![feature(array_chunks)]

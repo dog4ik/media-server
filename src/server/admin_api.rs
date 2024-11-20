@@ -30,7 +30,7 @@ use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
-use crate::db::{DbActions, DbEpisodeIntro, DbHistory};
+use crate::db::{DbActions, DbEpisodeIntro};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -84,7 +84,6 @@ pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, Statu
 }
 
 #[derive(Debug, utoipa::ToSchema)]
-#[aliases(CursoredHistory = CursoredResponse<DbHistory>)]
 pub struct CursoredResponse<T> {
     data: Vec<T>,
     cursor: Option<String>,
@@ -662,7 +661,7 @@ pub async fn progress(
     get,
     path = "/api/log/latest",
     responses(
-        (status = 200, body = Vec<JsonTracingEvent>, content_type = "application/json"),
+        (status = 200, body = Vec<crate::tracing::JsonTracingEvent>, content_type = "application/json"),
     ),
     tag = "Logs",
 )]
@@ -706,7 +705,7 @@ pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String),
     get,
     path = "/api/configuration",
     responses(
-        (status = 200, body = UtoipaConfigSchema),
+        (status = 200, body = config::UtoipaConfigSchema),
     ),
     tag = "Configuration",
 )]
@@ -809,7 +808,7 @@ pub async fn parse_torrent_file(
     params(
         ResolveMagnetLinkPayload,
         ("content_type" = Option<ContentType>, Query, description = "Content type"),
-        ("metadata_provider" = Option<MetadataProvider>, Query, description = "Metadata provider"),
+        ("metadata_provider" = Option<crate::metadata::MetadataProvider>, Query, description = "Metadata provider"),
         ("metadata_id" = Option<String>, Query, description = "Metadata id"),
     ),
     responses(

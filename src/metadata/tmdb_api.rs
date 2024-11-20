@@ -1,3 +1,4 @@
+use std::collections::hash_map::Entry;
 use std::sync::Mutex;
 use std::{collections::HashMap, time::Duration};
 
@@ -241,17 +242,16 @@ impl TmdbApi {
 
     fn update_cache(&self, tmdb_show_id: usize, season: usize, episodes: Vec<TmdbSeasonEpisode>) {
         let mut episodes_cache = self.episodes_cache.lock().unwrap();
-        match episodes_cache.try_insert(tmdb_show_id, HashMap::new()) {
-            Ok(entry) => {
-                entry.insert(season, episodes);
+        match episodes_cache.entry(tmdb_show_id) {
+            Entry::Occupied(mut entry) => {
+                entry.get_mut().insert(season, episodes);
             }
-            Err(_) => {
-                let show = episodes_cache
-                    .get_mut(&tmdb_show_id)
-                    .expect("to exist due previous try_insert");
-                show.insert(season, episodes);
+            Entry::Vacant(entry) => {
+                let mut hash_map = HashMap::new();
+                hash_map.insert(season, episodes);
+                entry.insert(hash_map);
             }
-        }
+        };
     }
 
     fn get_from_cache(
@@ -338,7 +338,7 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
             release_date: Some(val.air_date),
             number: val.episode_number,
             title: val.name,
-            runtime: val.runtime.map(|t| Duration::from_mins(t as u64)),
+            runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             plot: Some(val.overview),
             season_number: val.season_number,
             poster,
@@ -462,7 +462,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             backdrop,
             plot: Some(val.overview),
             release_date: Some(val.release_date),
-            runtime: val.runtime.map(|t| Duration::from_mins(t as u64)),
+            runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: val.title,
         }
     }

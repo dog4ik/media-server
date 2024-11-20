@@ -356,7 +356,7 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
     let path = path.as_ref();
     tracing::trace!(
         "Getting metadata for a file: {}",
-        path.file_name().unwrap().display()
+        Path::new(path.file_name().unwrap()).display()
     );
     let ffprobe: config::FFprobePath = config::CONFIG.get_value();
     let output = Command::new(ffprobe.as_ref())

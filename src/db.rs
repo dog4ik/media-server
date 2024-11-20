@@ -132,8 +132,8 @@ where
             let mut conn = self.acquire().await?;
             let episode_query = sqlx::query!(
                 "INSERT OR IGNORE INTO episodes
-            (video_id, season_id, title, number, plot, release_date, poster)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            (video_id, season_id, title, number, plot, release_date, poster, duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
                 episode.video_id,
                 episode.season_id,
                 episode.title,
@@ -141,6 +141,7 @@ where
                 episode.plot,
                 episode.release_date,
                 episode.poster,
+                episode.duration,
             );
 
             episode_query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -156,11 +157,10 @@ where
             tracing::debug!("Inserting new video: {}", db_video.path);
             let video_query = sqlx::query!(
                 "INSERT INTO videos
-            (path, size, duration)
-            VALUES (?, ?, ?) RETURNING id;",
+            (path, size)
+            VALUES (?, ?) RETURNING id;",
                 db_video.path,
                 db_video.size,
-                db_video.duration
             );
             video_query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
@@ -327,11 +327,6 @@ where
             .fetch_one(&mut *conn)
             .await?;
 
-            let episode_assets = assets::EpisodeAssetsDir::new(id);
-            if let Err(e) = episode_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up episode directory: {e}")
-            };
-
             let season_id = delete_episode_result.season_id;
 
             let siblings_count = sqlx::query!(
@@ -345,6 +340,11 @@ where
             if siblings_count == 0 {
                 conn.remove_season(season_id).await?;
             }
+
+            let episode_assets = assets::EpisodeAssetsDir::new(id);
+            if let Err(e) = episode_assets.delete_dir().await {
+                tracing::warn!("Failed to clean up episode directory: {e}")
+            };
             Ok(())
         }
     }
@@ -358,11 +358,6 @@ where
                     .fetch_one(&mut *conn)
                     .await?;
 
-            let season_assets = assets::SeasonAssetsDir::new(id);
-            if let Err(e) = season_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up season directory: {e}")
-            };
-
             let show_id = delete_result.show_id;
             let siblings_count = sqlx::query!(
                 "SELECT COUNT(*) AS count FROM seasons WHERE show_id = ?",
@@ -374,6 +369,11 @@ where
             if siblings_count == 0 {
                 conn.remove_show(delete_result.show_id).await?;
             }
+
+            let season_assets = assets::SeasonAssetsDir::new(id);
+            if let Err(e) = season_assets.delete_dir().await {
+                tracing::warn!("Failed to clean up season directory: {e}")
+            };
             Ok(())
         }
     }
@@ -624,7 +624,7 @@ where
             .await?;
 
             let episodes: Vec<_> = sqlx::query!(
-                "SELECT episodes.*, videos.duration FROM episodes 
+                "SELECT episodes.* FROM episodes 
 JOIN videos ON videos.id = episodes.video_id
 WHERE season_id = ? ORDER BY number ASC",
                 season.id
@@ -674,7 +674,7 @@ WHERE season_id = ? ORDER BY number ASC",
             let season = season as i64;
             let episode = episode as i64;
             let episode = sqlx::query!(
-                "SELECT episodes.*, seasons.number as season_number, videos.duration FROM episodes
+                "SELECT episodes.*, seasons.number as season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN shows ON shows.id = seasons.show_id
             JOIN videos ON videos.id = episodes.video_id
@@ -808,7 +808,7 @@ WHERE season_id = ? ORDER BY number ASC",
             let mut conn = self.acquire().await?;
             let query = query.trim().to_lowercase();
             let episodes = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number, videos.duration FROM episodes
+                r#"SELECT episodes.*, seasons.number AS season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN videos ON videos.id = episodes.video_id
             WHERE title = ? COLLATE NOCASE"#,
@@ -842,6 +842,8 @@ WHERE season_id = ? ORDER BY number ASC",
 impl<'a> DbActions<'a> for &'a mut Transaction<'static, Sqlite> {}
 impl<'a> DbActions<'a> for &'a Pool<Sqlite> {}
 impl<'a> DbActions<'a> for &'a mut SqliteConnection {}
+
+pub type DbTransaction = Transaction<'static, Sqlite>;
 
 #[derive(Debug, Clone)]
 pub struct Db {
@@ -1031,6 +1033,7 @@ pub struct DbMovie {
     pub plot: Option<String>,
     pub poster: Option<String>,
     pub release_date: Option<String>,
+    pub duration: i64,
     pub backdrop: Option<String>,
 }
 
@@ -1043,6 +1046,7 @@ pub struct DbEpisode {
     pub number: i64,
     pub plot: Option<String>,
     pub release_date: Option<String>,
+    pub duration: i64,
     pub poster: Option<String>,
 }
 
@@ -1051,7 +1055,6 @@ pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
     pub size: i64,
-    pub duration: i64,
     pub scan_date: String,
 }
 

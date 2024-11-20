@@ -38,7 +38,7 @@ pub struct DetailedVideo {
     pub path: PathBuf,
     pub previews_count: usize,
     pub size: u64,
-    #[schema(value_type = SerdeDuration)]
+    #[schema(value_type = super::SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
@@ -55,7 +55,7 @@ pub struct DetailedVariant {
     #[schema(value_type = String)]
     pub path: PathBuf,
     pub size: u64,
-    #[schema(value_type = SerdeDuration)]
+    #[schema(value_type = super::SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
@@ -1025,7 +1025,7 @@ pub async fn video_history(
     get,
     path = "/api/history",
     responses(
-        (status = 200, description = "All history", body = CursoredHistory),
+        (status = 200, description = "All history", body = CursoredResponse<DbHistory>),
     ),
     params(
         TakeParam,

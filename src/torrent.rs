@@ -17,7 +17,6 @@ use crate::{
         ShowMetadata,
     },
     progress::{Progress, ProgressSpeed, ResourceTask, TaskError},
-    utils,
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -242,7 +241,7 @@ pub struct TorrentEpisode {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct TorrentShow {
     pub show_metadata: ShowMetadata,
-    pub seasons: HashMap<u8, Vec<TorrentEpisode>>,
+    pub seasons: HashMap<u16, Vec<TorrentEpisode>>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -305,13 +304,17 @@ async fn parse_torrent_files(
             continue;
         };
         if is_format_supported(&path) {
-            let name_tokens = utils::tokenize_filename(&file_name.to_string_lossy());
             let content_identifier = match content_hint.as_ref().map(|h| h.content_type) {
-                None => ShowIdentifier::identify(&name_tokens)
+                None => ShowIdentifier::from_path(file_name)
                     .map(Into::into)
-                    .or_else(|| MovieIdentifier::identify(&name_tokens).map(Into::into)),
-                Some(ContentType::Movie) => MovieIdentifier::identify(&name_tokens).map(Into::into),
-                Some(ContentType::Show) => ShowIdentifier::identify(&name_tokens).map(Into::into),
+                    .or_else(|_| MovieIdentifier::from_path(file_name).map(Into::into))
+                    .ok(),
+                Some(ContentType::Movie) => {
+                    MovieIdentifier::from_path(file_name).map(Into::into).ok()
+                }
+                Some(ContentType::Show) => {
+                    ShowIdentifier::from_path(file_name).map(Into::into).ok()
+                }
             };
             match content_identifier {
                 Some(ContentIdentifier::Show(s)) => show_identifiers.push((i, s)),
@@ -336,7 +339,7 @@ async fn parse_torrent_files(
     match content_type {
         ContentType::Show => {
             let show_title = show_identifiers.first().unwrap().1.title();
-            let mut seasons_map: HashMap<u8, Vec<TorrentEpisode>> = HashMap::new();
+            let mut seasons_map: HashMap<u16, Vec<TorrentEpisode>> = HashMap::new();
             let show = match &content_hint {
                 Some(hint) => {
                     match providers_stack

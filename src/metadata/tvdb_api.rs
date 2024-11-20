@@ -295,7 +295,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             backdrop,
             plot: Some(plot),
             release_date: self.first_release.map(|r| r.date),
-            runtime: self.runtime.map(|t| Duration::from_mins(t as u64)),
+            runtime: self.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: self.name,
         }
     }

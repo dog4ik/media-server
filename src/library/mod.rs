@@ -6,6 +6,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::{Duration, Instant},
 };
 
 use anyhow::Context;
@@ -15,10 +16,11 @@ use axum::{
     response::IntoResponse,
 };
 use axum_extra::{headers::Range, TypedHeader};
+use identification::{walk_movie_dirs, walk_show_dirs};
 use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
-    sync::{OnceCell, Semaphore},
+    sync::OnceCell,
 };
 use tokio_util::codec::{BytesCodec, FramedRead};
 
@@ -26,7 +28,6 @@ use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
     ffmpeg::{get_metadata, FFprobeOutput},
-    metadata::ContentType,
     utils,
 };
 
@@ -42,18 +43,22 @@ use self::{
 };
 
 pub mod assets;
+pub mod extras;
+pub mod identification;
 pub mod movie;
 pub mod show;
-pub mod identification;
 
 const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
+const SUBS_EXTENSIONS: [&str; 1] = ["srt"];
 
-const EXTRAS_FOLDERS: [&str; 11] = [
+const EXTRAS_FOLDERS: [&str; 13] = [
     "behind the scenes",
     "deleted scenes",
     "interviews",
     "scenes",
+    "screens",
     "samples",
+    "sample",
     "shorts",
     "featurettes",
     "clips",
@@ -78,52 +83,61 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     !is_extra && supports_extension
 }
 
-pub async fn explore_folder(
-    folder: impl AsRef<Path>,
-    folder_type: ContentType,
+pub async fn explore_show_dirs(
+    folders: Vec<PathBuf>,
     db: &crate::db::Db,
+    library: &mut HashMap<i64, LibraryFile>,
     exclude: &[PathBuf],
-) -> Result<HashMap<i64, LibraryFile>, anyhow::Error> {
-    let paths = utils::walk_recursive(folder, Some(is_format_supported))?;
-    let mut handles = Vec::with_capacity(paths.len());
-    let semaphore = Arc::new(Semaphore::new(200));
-    for path in paths {
-        if exclude.contains(&path) {
+) {
+    let videos = walk_show_dirs(folders);
+    let mut tx = db.begin().await.expect("transaction begin");
+    let start = Instant::now();
+    for (video, identifier) in videos {
+        let path = video.path();
+        if exclude.iter().any(|p| p == path) {
             continue;
         }
-        let semaphore = semaphore.clone();
-        let db = db.clone();
-        handles.push((
-            path.clone(),
-            tokio::spawn(async move {
-                let _permit = semaphore.acquire().await;
-                let file: Result<LibraryFile, anyhow::Error> = match folder_type {
-                    ContentType::Movie => LibraryItem::<MovieIdentifier>::from_path(path, &db)
-                        .await
-                        .map(Into::into),
-                    ContentType::Show => LibraryItem::<ShowIdentifier>::from_path(path, &db)
-                        .await
-                        .map(Into::into),
-                };
-                file
-            }),
-        ));
-    }
-
-    let mut result = HashMap::with_capacity(handles.len());
-
-    for (path, handle) in handles {
-        let path = format!("{}", path.display());
-        match handle.await {
-            Ok(Ok(item)) => {
-                result.insert(item.source.id, item);
+        let source = match Source::from_video(video, &mut tx).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to construct source: {e}");
+                continue;
             }
-            Ok(Err(e)) => tracing::warn!(path, "One of the metadata collectors errored: {}", e),
-            Err(e) => tracing::error!(path, "One of the metadata collectors panicked: {}", e),
-        }
+        };
+        let id = source.id;
+        let library_file = LibraryItem { identifier, source };
+        library.insert(id, library_file.into());
     }
 
-    Ok(result)
+    tx.commit().await.expect("if this fails we are cooked");
+    tracing::debug!("Video reconcilliation took: {:?}", start.elapsed());
+}
+
+pub async fn explore_movie_dirs(
+    folders: Vec<PathBuf>,
+    db: &crate::db::Db,
+    library: &mut HashMap<i64, LibraryFile>,
+    exclude: &[PathBuf],
+) {
+    let videos = walk_movie_dirs(folders).await;
+    let mut tx = db.begin().await.expect("transaction begin");
+    for (video, identifier) in videos {
+        let path = video.path();
+        if exclude.iter().any(|p| p == path) {
+            continue;
+        }
+        let source = match Source::from_video(video, &mut tx).await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!("Failed to construct source: {e}");
+                continue;
+            }
+        };
+        let id = source.id;
+        let library_file = LibraryItem { identifier, source };
+        library.insert(id, library_file.into());
+    }
+    tx.commit().await.expect("if this fails we are cooked");
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -164,12 +178,6 @@ impl From<LibraryItem<MovieIdentifier>> for LibraryFile {
 }
 
 impl ContentIdentifier {
-    pub fn identify(content_type: ContentType, tokens: &[String]) -> Option<Self> {
-        match content_type {
-            ContentType::Movie => MovieIdentifier::identify(tokens).map(Into::into),
-            ContentType::Show => ShowIdentifier::identify(tokens).map(Into::into),
-        }
-    }
     pub fn title(&self) -> &str {
         match self {
             ContentIdentifier::Show(i) => &i.title,
@@ -222,7 +230,10 @@ pub struct Source {
 }
 
 impl Source {
-    pub async fn from_video(video: Video, db: &crate::db::Db) -> anyhow::Result<Self> {
+    pub async fn from_video(
+        video: Video,
+        db: &mut crate::db::DbTransaction,
+    ) -> anyhow::Result<Self> {
         let id = video.get_or_insert_id(db).await?;
         let variants_dir = VariantsDirAsset::new(id);
         let variants = variants_dir.variants().await.unwrap_or_default();
@@ -238,7 +249,10 @@ impl Source {
             variants: variants_videos,
         })
     }
-    pub async fn from_path(path: impl AsRef<Path>, db: &crate::db::Db) -> anyhow::Result<Self> {
+    pub async fn from_path(
+        path: impl AsRef<Path>,
+        db: &mut crate::db::DbTransaction,
+    ) -> anyhow::Result<Self> {
         let video = Video::from_path(path).await?;
         let id = video.get_or_insert_id(db).await?;
         let variants = VariantsDirAsset::new(id).variants().await?;
@@ -285,30 +299,26 @@ impl Source {
 }
 
 impl<T: Media> LibraryItem<T> {
+    // Identification in this
     pub async fn from_path(path: PathBuf, db: &crate::db::Db) -> Result<Self, anyhow::Error> {
         let video = Video::from_path(&path).await?;
-        let file_name = path.file_name().context("get filename")?.to_string_lossy();
-        let path_tokens = utils::tokenize_filename(&file_name);
-        let identifier = match T::identify(&path_tokens) {
-            Some(val) => val,
-            None => {
+        let file_name = path.file_name().context("get filename")?;
+        let identifier = match T::identify(file_name) {
+            Ok(val) => val,
+            Err(_) => {
                 let metadata = video.metadata().await?;
                 metadata
                     .format
                     .tags
                     .title
                     .as_ref()
-                    .and_then(|metadata_title| {
-                        let tokens: Vec<_> = metadata_title
-                            .split_whitespace()
-                            .map(|t| t.to_owned())
-                            .collect();
-                        T::identify(&tokens)
-                    })
+                    .and_then(|metadata_title| T::identify(&metadata_title).ok())
                     .context("Try to identify content from container metadata")?
             }
         };
-        let source = Source::from_video(video, db).await?;
+        let mut tx = db.begin().await?;
+        let source = Source::from_video(video, &mut tx).await?;
+        tx.commit().await?;
         Ok(Self { identifier, source })
     }
 }
@@ -319,26 +329,14 @@ impl Library {
     }
 
     pub async fn init_from_folders(
-        show_dirs: &Vec<PathBuf>,
-        movie_dirs: &Vec<PathBuf>,
+        show_dirs: Vec<PathBuf>,
+        movie_dirs: Vec<PathBuf>,
         db: &Db,
     ) -> Self {
         let mut videos = HashMap::new();
-        for dir in show_dirs {
-            videos.extend(
-                explore_folder(dir, ContentType::Show, db, &Vec::new())
-                    .await
-                    .unwrap(),
-            );
-        }
+        explore_show_dirs(show_dirs, db, &mut videos, &[]).await;
 
-        for dir in movie_dirs {
-            videos.extend(
-                explore_folder(dir, ContentType::Movie, db, &Vec::new())
-                    .await
-                    .unwrap(),
-            );
-        }
+        explore_movie_dirs(movie_dirs, db, &mut videos, &[]).await;
         Self { videos }
     }
 
@@ -423,7 +421,8 @@ pub struct Chapter {
 }
 
 pub trait Media {
-    fn identify(tokens: &[String]) -> Option<Self>
+    type Ident;
+    fn identify(path: impl AsRef<Path>) -> Result<Self, Self::Ident>
     where
         Self: Sized;
     fn title(&self) -> &str;
@@ -453,38 +452,84 @@ impl LazyFFprobeOutput {
             .get_or_try_init(|| async { get_metadata(path).await })
             .await
     }
+
+    fn try_get(&self) -> Option<&FFprobeOutput> {
+        self.metadata.get()
+    }
+}
+
+pub async fn symphony_duration(path: impl AsRef<Path>) -> anyhow::Result<Duration> {
+    use symphonia::core::{io::MediaSourceStream, probe::Hint};
+    use tokio::fs::File;
+
+    let src = File::open(&path).await.context("open video file")?;
+    // Create the media source stream.
+    let mss = MediaSourceStream::new(Box::new(src.into_std().await), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.as_ref().extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    // Probe the media source.
+    let probed = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &Default::default(),
+        &Default::default(),
+    )?;
+
+    let default_video = probed.format.default_track().unwrap();
+    let time_base = default_video.codec_params.time_base.unwrap();
+    let n_frames = default_video.codec_params.n_frames.unwrap();
+    let time = time_base.calc_time(n_frames);
+    Ok(time.into())
 }
 
 impl Video {
     /// Returns struct compatible with database Video table
     pub async fn into_db_video(&self) -> DbVideo {
         let now = time::OffsetDateTime::now_utc();
-        let duration = self
-            .metadata()
-            .await
-            .map(FFprobeOutput::duration)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        // let duration = self.fetch_duration().await.unwrap_or_default().as_secs() as i64;
 
         DbVideo {
             id: None,
             path: self.path.to_string_lossy().to_string(),
             size: self.file_size() as i64,
-            duration,
             scan_date: now.to_string(),
         }
     }
 
-    pub async fn get_or_insert_id(&self, db: &crate::db::Db) -> anyhow::Result<i64> {
-        let path = self.path().to_string_lossy().to_string();
+    pub async fn fetch_duration(&self) -> anyhow::Result<std::time::Duration> {
+        use tokio::fs::File;
+        if let Some(metadata) = self.metadata.try_get() {
+            return Ok(metadata.duration());
+        }
+        let ext = self.path.extension().and_then(|e| e.to_str());
+        match ext {
+            Some("mkv") => Ok(symphony_duration(&self.path).await?),
+            Some("mp4") => {
+                let file = File::open(&self.path).await?;
+                let mp4 = mp4::read_mp4(file.into_std().await)?;
+                Ok(mp4.duration())
+            }
+            _ => {
+                let metadata = self.metadata().await?;
+                Ok(metadata.duration())
+            }
+        }
+    }
+
+    pub async fn get_or_insert_id(&self, tx: &mut crate::db::DbTransaction) -> anyhow::Result<i64> {
+        let path = self.path().to_string_lossy();
         let res = sqlx::query!("SELECT id FROM videos WHERE path = ?", path)
-            .fetch_one(&db.pool)
+            .fetch_one(&mut **tx)
             .await;
         let video_id: Result<i64, anyhow::Error> = match res {
             Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
                 let db_video = self.into_db_video().await;
-                let id = db.pool.insert_video(db_video).await?;
+                let id = tx.insert_video(db_video).await?;
                 Ok(id)
             }
             Err(e) => Err(e.into()),
@@ -496,7 +541,7 @@ impl Video {
         &self.path
     }
 
-    /// Create self from path
+    /// Create self from path, checks only file existence
     pub async fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         if tokio::fs::try_exists(&path).await? {
             Ok(Self {
@@ -508,6 +553,25 @@ impl Video {
                 "Video {} does not exist",
                 path.as_ref().display()
             ))
+        }
+    }
+
+    /// Creates video from path and evaluates ffprobe metadata
+    /// Errors if video file is corrupted or missing
+    pub async fn from_path_with_metadata(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let metadata = LazyFFprobeOutput::new();
+        metadata.get_or_init(&path).await?;
+        Ok(Self {
+            path: path.as_ref().to_path_buf(),
+            metadata,
+        })
+    }
+
+    /// Do not check file existence
+    pub fn from_path_unchecked(path: impl AsRef<Path>) -> Self {
+        Self {
+            path: path.as_ref().to_path_buf(),
+            metadata: LazyFFprobeOutput::new(),
         }
     }
 
@@ -767,28 +831,27 @@ impl<'de> Deserialize<'de> for VideoCodec {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Resolution(pub (usize, usize));
 
-impl<'__s> utoipa::ToSchema<'__s> for Resolution {
-    fn schema() -> (
-        &'__s str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
-        (
-            "Resolution",
-            utoipa::openapi::ObjectBuilder::new()
-                .property(
-                    "width",
-                    utoipa::openapi::ObjectBuilder::new()
-                        .schema_type(utoipa::openapi::SchemaType::Integer),
-                )
-                .required("width")
-                .property(
-                    "height",
-                    utoipa::openapi::ObjectBuilder::new()
-                        .schema_type(utoipa::openapi::SchemaType::Integer),
-                )
-                .required("height")
-                .into(),
-        )
+impl utoipa::ToSchema for Resolution {
+    fn name() -> std::borrow::Cow<'static, str> {
+        "Resolution".into()
+    }
+}
+impl utoipa::PartialSchema for Resolution {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        use utoipa::openapi::schema::SchemaType;
+        use utoipa::openapi::Type;
+        utoipa::openapi::ObjectBuilder::new()
+            .property(
+                "width",
+                utoipa::openapi::ObjectBuilder::new().schema_type(SchemaType::Type(Type::Integer)),
+            )
+            .required("width")
+            .property(
+                "height",
+                utoipa::openapi::ObjectBuilder::new().schema_type(SchemaType::Type(Type::Integer)),
+            )
+            .required("height")
+            .into()
     }
 }
 

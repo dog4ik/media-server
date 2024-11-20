@@ -5,7 +5,7 @@ use std::{
     fmt::Display,
     io::BufRead,
     path::{Path, PathBuf},
-    sync::LazyLock,
+    sync::LazyLock, time::SystemTime,
 };
 
 use anyhow::Context;
@@ -48,7 +48,7 @@ impl std::error::Error for ValidationError {}
 
 // TODO: derive macro
 pub trait ConfigValue:
-    'static + Send + Sync + Default + Clone + Serialize + DeserializeOwned + utoipa::ToSchema<'static>
+    'static + Send + Sync + Default + Clone + Serialize + DeserializeOwned + utoipa::ToSchema
 {
     const KEY: Option<&str> = None;
     const ENV_KEY: Option<&str> = None;
@@ -95,8 +95,8 @@ impl<T: ConfigValue> SettingValue<T> {
         let env = match T::ENV_KEY {
             Some(key) => Some(key.to_string()),
             None => Some(T::KEY.map(str::to_uppercase).unwrap_or_else(|| {
-                let (name, _) = T::schema();
-                camel_to_snake_case(name).to_uppercase()
+                let name = T::name();
+                camel_to_snake_case(&name).to_uppercase()
             })),
         }
         .and_then(|env_key| {
@@ -134,7 +134,7 @@ impl<T: ConfigValue> SettingValue<T> {
 trait AnySettingValue: 'static + Send + Sync {
     fn key(&self) -> String;
     fn require_restart(&self) -> bool;
-    fn type_name(&self) -> &'static str;
+    fn type_name(&self) -> std::borrow::Cow<'static, str>;
 
     fn customized_value(&self) -> &dyn Any;
     fn config_mut(&mut self) -> &mut dyn Any;
@@ -152,15 +152,15 @@ impl<T: ConfigValue> AnySettingValue for SettingValue<T> {
     fn key(&self) -> String {
         T::KEY
             .map(|k| k.to_string())
-            .unwrap_or_else(|| camel_to_snake_case(self.type_name()))
+            .unwrap_or_else(|| camel_to_snake_case(&self.type_name()))
     }
 
     fn require_restart(&self) -> bool {
         T::REQUIRE_RESTART
     }
 
-    fn type_name(&self) -> &'static str {
-        T::schema().0
+    fn type_name(&self) -> std::borrow::Cow<'static, str> {
+        T::name()
     }
 
     fn deserialize_toml(&mut self, from: toml::Value) -> Result<(), toml::de::Error> {
@@ -424,24 +424,25 @@ impl<T: ConfigValue + PartialEq> ConfigValueWatcher<T> {
 
 // Shady utoipa manual implementation
 
-impl<T: ConfigValue> utoipa::ToSchema<'static> for UtoipaConfigValue<T> {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
+impl<T: ConfigValue> utoipa::ToSchema for UtoipaConfigValue<T> {
+    fn name() -> std::borrow::Cow<'static, str> {
+        T::name()
+    }
+}
+
+impl<T: ConfigValue> utoipa::PartialSchema for UtoipaConfigValue<T> {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         use utoipa::openapi::schema;
-        use utoipa::PartialSchema;
-        let (name, inner_schema) = T::schema();
-        let snake_name = camel_to_snake_case(name);
+        let name = T::name();
+        let inner_schema = T::schema();
+        let snake_name = camel_to_snake_case(&name);
         let optional: RefOr<utoipa::openapi::Schema> = match &inner_schema {
             RefOr::T(schema::Schema::Object(obj)) => {
-                let mut obj = obj.clone();
-                obj.nullable = true;
+                let obj = obj.clone();
                 obj.into()
             }
             RefOr::T(schema::Schema::Array(obj)) => {
-                let mut obj = obj.clone();
-                obj.nullable = true;
+                let obj = obj.clone();
                 obj.into()
             }
             RefOr::T(schema) => match schema {
@@ -456,13 +457,11 @@ impl<T: ConfigValue> utoipa::ToSchema<'static> for UtoipaConfigValue<T> {
         };
         let key = T::KEY.unwrap_or(&snake_name);
         let key_schema = schema::ObjectBuilder::new()
-            .nullable(false)
-            .schema_type(schema::SchemaType::String)
+            .schema_type(schema::SchemaType::Type(schema::Type::String))
             .enum_values(Some([key]));
 
         let out = schema::ObjectBuilder::new()
-            .schema_type(schema::SchemaType::Object)
-            .nullable(false)
+            .schema_type(schema::SchemaType::Type(schema::Type::Object))
             .property("require_restart", bool::schema())
             .required("require_restart")
             .property("key", key_schema)
@@ -476,30 +475,33 @@ impl<T: ConfigValue> utoipa::ToSchema<'static> for UtoipaConfigValue<T> {
             .property("env_value", optional)
             .required("env_value")
             .into();
-        (name, out)
+        out
     }
 }
 
-impl utoipa::ToSchema<'static> for UtoipaConfigSchema {
-    fn schema() -> (
-        &'static str,
-        utoipa::openapi::RefOr<utoipa::openapi::schema::Schema>,
-    ) {
+impl utoipa::ToSchema for UtoipaConfigSchema {
+    fn name() -> std::borrow::Cow<'static, str> {
+        "UtoipaConfigSchema".into()
+    }
+}
+
+impl utoipa::PartialSchema for UtoipaConfigSchema {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
         use utoipa::openapi::schema;
         let schema = schema::OneOfBuilder::new()
-            .item(UtoipaConfigValue::<Port>::schema().1)
-            .item(UtoipaConfigValue::<ShowFolders>::schema().1)
-            .item(UtoipaConfigValue::<MovieFolders>::schema().1)
-            .item(UtoipaConfigValue::<TmdbKey>::schema().1)
-            .item(UtoipaConfigValue::<TvdbKey>::schema().1)
-            .item(UtoipaConfigValue::<FFmpegPath>::schema().1)
-            .item(UtoipaConfigValue::<FFprobePath>::schema().1)
-            .item(UtoipaConfigValue::<HwAccel>::schema().1)
-            .item(UtoipaConfigValue::<IntroMinDuration>::schema().1)
-            .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema().1)
-            .item(UtoipaConfigValue::<WebUiPath>::schema().1);
+            .item(UtoipaConfigValue::<Port>::schema())
+            .item(UtoipaConfigValue::<ShowFolders>::schema())
+            .item(UtoipaConfigValue::<MovieFolders>::schema())
+            .item(UtoipaConfigValue::<TmdbKey>::schema())
+            .item(UtoipaConfigValue::<TvdbKey>::schema())
+            .item(UtoipaConfigValue::<FFmpegPath>::schema())
+            .item(UtoipaConfigValue::<FFprobePath>::schema())
+            .item(UtoipaConfigValue::<HwAccel>::schema())
+            .item(UtoipaConfigValue::<IntroMinDuration>::schema())
+            .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema())
+            .item(UtoipaConfigValue::<WebUiPath>::schema());
         let array = schema::ArrayBuilder::new().items(schema).build();
-        ("UtoipaConfigSchema", array.into())
+        array.into()
     }
 }
 
