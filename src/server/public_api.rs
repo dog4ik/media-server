@@ -467,7 +467,7 @@ pub async fn watch_movie(
 )]
 /// All local shows
 pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetadata>>, AppError> {
-    Ok(Json(db.pool.all_shows().await?))
+    Ok(Json(db.pool.all_shows(None).await?))
 }
 
 #[utoipa::path(
@@ -543,7 +543,7 @@ pub async fn local_movie_by_video_id(
 )]
 /// All local movies
 pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMetadata>>, AppError> {
-    Ok(Json(db.all_movies().await?))
+    Ok(Json(db.all_movies(None).await?))
 }
 
 /// Map external to local id

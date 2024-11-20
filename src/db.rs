@@ -31,6 +31,8 @@ fn path_to_url(path: &Path) -> String {
     format!("sqlite://{}", path)
 }
 
+pub const DEFAULT_LIMIT: i64 = 50;
+
 /// All database queries and mutations
 // NOTE: This might not be the best way to share queries between `Pool`, `Transaction`, and `Connection`,
 // but it's the best I could come up with.
@@ -506,10 +508,14 @@ where
         }
     }
 
-    fn all_movies(self) -> impl std::future::Future<Output = anyhow::Result<Vec<MovieMetadata>>> {
+    fn all_movies(
+        self,
+        limit: impl Into<Option<i64>>,
+    ) -> impl std::future::Future<Output = anyhow::Result<Vec<MovieMetadata>>> {
         async move {
+            let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
             let mut conn = self.acquire().await?;
-            let movies = sqlx::query_as!(DbMovie, "SELECT movies.* FROM movies")
+            let movies = sqlx::query_as!(DbMovie, "SELECT movies.* FROM movies LIMIT ?", limit)
                 .fetch_all(&mut *conn)
                 .await?;
             Ok(movies.into_iter().map(|movie| movie.into()).collect())
@@ -518,14 +524,15 @@ where
 
     fn all_shows(
         self,
+        limit: impl Into<Option<i64>>,
     ) -> impl std::future::Future<Output = anyhow::Result<Vec<ShowMetadata>>> + Send {
+        let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
         async move {
             let mut conn = self.acquire().await?;
             let shows = sqlx::query!(r#"SELECT shows.*,
             (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
             (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
-            FROM shows
-            "#)
+            FROM shows LIMIT ?;"#, limit)
             .fetch_all(&mut *conn)
             .await?;
             Ok(shows

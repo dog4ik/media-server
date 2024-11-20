@@ -15,7 +15,7 @@ use upnp::{
     },
 };
 
-use crate::db::{Db, DbActions};
+use crate::db::{self, Db, DbActions};
 
 #[derive(Clone)]
 pub struct MediaServerContentDirectory {
@@ -60,8 +60,8 @@ impl MediaServerContentDirectory {
         }
     }
 
-    pub async fn all_shows(&self) -> anyhow::Result<DidlResponse> {
-        let shows = self.db.all_shows().await?;
+    pub async fn all_shows(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
+        let shows = self.db.all_shows(requested_count).await?;
         let mut containers = Vec::with_capacity(shows.len());
         for show in shows {
             let poster_url = format!(
@@ -206,8 +206,8 @@ impl MediaServerContentDirectory {
         })
     }
 
-    pub async fn all_movies(&self) -> anyhow::Result<DidlResponse> {
-        let movies = self.db.all_movies().await?;
+    pub async fn all_movies(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
+        let movies = self.db.all_movies(requested_count).await?;
         let mut items = Vec::with_capacity(movies.len());
         for movie in movies {
             let poster_url = format!(
@@ -423,10 +423,15 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
         requested_count: u32,
     ) -> Result<DidlResponse, ActionError> {
         let content_id = object_id.parse()?;
+        let requested_count = if requested_count == 0 {
+            db::DEFAULT_LIMIT
+        } else {
+            requested_count as i64
+        };
         match content_id {
             ContentId::Root => Ok(Self::root()),
-            ContentId::AllMovies => Ok(self.all_movies().await?),
-            ContentId::AllShows => Ok(self.all_shows().await?),
+            ContentId::AllMovies => Ok(self.all_movies(requested_count).await?),
+            ContentId::AllShows => Ok(self.all_shows(requested_count).await?),
             ContentId::Show(id) => Ok(self.show(id).await?),
             ContentId::Season { show_id, season } => Ok(self.show_season(show_id, season).await?),
             ContentId::Movie(_) => Ok(DidlResponse::default()),
