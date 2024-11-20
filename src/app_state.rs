@@ -589,7 +589,10 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             .into_iter()
             .filter(|l| !db_episodes_videos.iter().any(|d| d.video_id == l.source.id))
             .collect();
-        new_episodes.sort_unstable_by_key(|x| x.identifier.title.clone());
+
+        new_episodes.sort_unstable_by(|a, b| {
+            a.identifier.title.to_lowercase().cmp(&b.identifier.title.to_lowercase())
+        });
 
         let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
 
