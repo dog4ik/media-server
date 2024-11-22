@@ -240,6 +240,8 @@ impl ConfigStore {
         store.register_value::<IntroMinDuration>();
         store.register_value::<IntroDetectionFfmpegBuild>();
         store.register_value::<WebUiPath>();
+        store.register_value::<UpnpEnabled>();
+        store.register_value::<UpnpTtl>();
 
         store
     }
@@ -420,6 +422,16 @@ impl<T: ConfigValue + PartialEq> ConfigValueWatcher<T> {
         self.current_value = new_value.clone();
         new_value
     }
+
+    pub fn current_value(&self) -> &T {
+        &self.current_value
+    }
+
+    pub fn has_changed(&self) -> bool {
+        self.rx
+            .has_changed()
+            .expect("config is static so channel is never dropped")
+    }
 }
 
 // Shady utoipa manual implementation
@@ -499,7 +511,9 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<HwAccel>::schema())
             .item(UtoipaConfigValue::<IntroMinDuration>::schema())
             .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema())
-            .item(UtoipaConfigValue::<WebUiPath>::schema());
+            .item(UtoipaConfigValue::<WebUiPath>::schema())
+            .item(UtoipaConfigValue::<UpnpEnabled>::schema())
+            .item(UtoipaConfigValue::<UpnpTtl>::schema());
         let array = schema::ArrayBuilder::new().items(schema).build();
         array.into()
     }
@@ -731,6 +745,25 @@ impl Default for WebUiPath {
     }
 }
 
+/// Enabled upnp
+#[derive(Deserialize, Serialize, Clone, Eq, PartialEq, Debug, utoipa::ToSchema)]
+pub struct UpnpEnabled(pub bool);
+impl ConfigValue for UpnpEnabled {}
+impl Default for UpnpEnabled {
+    fn default() -> Self {
+        Self(false)
+    }
+}
+
+/// Ssdp packet ttl
+#[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq, utoipa::ToSchema)]
+pub struct UpnpTtl(pub u32);
+impl ConfigValue for UpnpTtl {}
+impl Default for UpnpTtl {
+    fn default() -> Self {
+        Self(2)
+    }
+}
 #[cfg(test)]
 mod tests {
 
