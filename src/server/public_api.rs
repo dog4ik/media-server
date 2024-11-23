@@ -970,6 +970,48 @@ pub async fn search_torrent(
     Ok(Json(out))
 }
 
+/// Get trending shows
+#[utoipa::path(
+    get,
+    path = "/api/search/trending_shows",
+    responses(
+        (status = 200, description = "List of trending movies", body = Vec<ShowMetadata>),
+    ),
+    tag = "Search",
+)]
+pub async fn get_trending_shows(
+    State(tmdb_api): State<&'static TmdbApi>,
+) -> Result<Json<Vec<ShowMetadata>>, AppError> {
+    let res = tmdb_api.trending_shows().await?;
+    let shows = res
+        .results
+        .into_iter()
+        .map(|search_result| search_result.into())
+        .collect();
+    Ok(Json(shows))
+}
+
+/// Get trending movies
+#[utoipa::path(
+    get,
+    path = "/api/search/trending_movies",
+    responses(
+        (status = 200, description = "List of trending shows", body = Vec<MovieMetadata>),
+    ),
+    tag = "Search",
+)]
+pub async fn get_trending_movies(
+    State(tmdb_api): State<&'static TmdbApi>,
+) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+    let res = tmdb_api.trending_movies().await?;
+    let shows = res
+        .results
+        .into_iter()
+        .map(|search_result| search_result.into())
+        .collect();
+    Ok(Json(shows))
+}
+
 /// Search for content. Allows to search for all types of content at once
 #[utoipa::path(
     get,

@@ -80,6 +80,8 @@ pub struct SerdeDuration {
         admin_api::parse_torrent_file,
         admin_api::download_torrent,
         public_api::search_content,
+        public_api::get_trending_shows,
+        public_api::get_trending_movies,
         admin_api::server_configuration,
         admin_api::update_server_configuration,
         admin_api::reset_server_configuration,

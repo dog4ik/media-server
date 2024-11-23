@@ -227,6 +227,8 @@ async fn main() {
         .route("/torrent/download", post(admin_api::download_torrent))
         .route("/torrent/all", get(torrent_api::all_torrents))
         .route("/search/content", get(public_api::search_content))
+        .route("/search/trending_shows", get(public_api::get_trending_shows))
+        .route("/search/trending_movies", get(public_api::get_trending_movies))
         .route("/configuration", get(admin_api::server_configuration))
         .route(
             "/configuration/capabilities",
