@@ -60,16 +60,6 @@ impl ReadyPiece {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-/// Methods of storing and retrieving pieces
-pub enum StorageMethod {
-    /// Crate all files before download start and fill them with null byte
-    Preallocated,
-    /// "Insert" saved pieces inside file. Note that it has same implication as insert into vector
-    /// meaning it shift to the right to fit saved piece
-    Reallocated,
-}
-
 #[derive(Debug)]
 pub struct TorrentStorage {
     pub output_dir: PathBuf,
@@ -78,7 +68,6 @@ pub struct TorrentStorage {
     pub total_length: u64,
     pub pieces: Hashes,
     pub bitfield: BitField,
-    pub storage_method: StorageMethod,
     pub enabled_files: BitField,
 }
 
@@ -188,12 +177,7 @@ pub enum StorageFeedback {
 }
 
 impl TorrentStorage {
-    pub fn new(
-        info: &Info,
-        output_dir: impl AsRef<Path>,
-        storage_method: StorageMethod,
-        enabled_files: &[usize],
-    ) -> Self {
+    pub fn new(info: &Info, output_dir: impl AsRef<Path>, enabled_files: &[usize]) -> Self {
         let output_files = info.output_files(&output_dir);
         let mut files_bitfield = BitField::empty(output_files.len());
         for enabled_idx in enabled_files {
@@ -207,7 +191,6 @@ impl TorrentStorage {
             total_length: info.total_size(),
             pieces: info.pieces.clone(),
             bitfield: BitField::empty(info.pieces.len()),
-            storage_method,
             enabled_files: files_bitfield,
         }
     }
@@ -265,19 +248,9 @@ impl TorrentStorage {
                 blocks,
                 response,
             } => {
-                let save_result = match self.storage_method {
-                    StorageMethod::Preallocated => {
-                        self.save_piece_preallocated(piece_i, ReadyPiece(blocks))
-                            .await
-                    }
-                    StorageMethod::Reallocated => {
-                        todo!()
-                        //self.save_piece(piece_i, blocks)
-                        //    .await
-                        //    .map(|_| piece_i)
-                        //    .map_err(|_| piece_i);
-                    }
-                };
+                let save_result = self
+                    .save_piece_preallocated(piece_i, ReadyPiece(blocks))
+                    .await;
                 match save_result {
                     Ok(_) => {
                         let _ = response.send(StorageFeedback::Saved { piece_i }).await;
@@ -290,21 +263,11 @@ impl TorrentStorage {
                 }
             }
             StorageMessage::RetrieveBlocking { piece_i, response } => {
-                let bytes = match self.storage_method {
-                    StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
-                    StorageMethod::Preallocated => {
-                        self.retrieve_piece_preallocated(piece_i).await.ok()
-                    }
-                };
+                let bytes = self.retrieve_piece(piece_i).await.ok();
                 let _ = response.send(bytes);
             }
             StorageMessage::RetrievePiece { piece_i, response } => {
-                let bytes = match self.storage_method {
-                    StorageMethod::Reallocated => self.retrieve_piece(piece_i).await,
-                    StorageMethod::Preallocated => {
-                        self.retrieve_piece_preallocated(piece_i).await.ok()
-                    }
-                };
+                let bytes = self.retrieve_piece(piece_i).await.ok();
                 let _ = response
                     .send(StorageFeedback::Data { piece_i, bytes })
                     .await;
@@ -482,97 +445,8 @@ impl TorrentStorage {
         Ok(())
     }
 
-    /// retrieve piece form dynamically allocated file
-    pub async fn retrieve_piece(&self, piece_i: usize) -> Option<Bytes> {
-        let piece_length = self.piece_length(piece_i);
-        println!("Piece {} was requested by peer", piece_i);
-
-        let piece_start = piece_i as u32 * self.piece_size;
-        let piece_end = piece_start + piece_length;
-
-        let hash = self.pieces.get_hash(piece_i).unwrap();
-
-        let mut file_offset = 0;
-        let mut out = BytesMut::with_capacity(piece_length as usize);
-        for file in &self.output_files {
-            let file_start = file_offset as u32;
-            let file_end = (file_offset + file.length()) as u32;
-            let file_range = file_start..file_end;
-            if file_start > piece_end || file_end < piece_start {
-                file_offset += file.length();
-                continue;
-            }
-
-            let read_offset = self.bitfield.pieces().fold(0, |acc, p| {
-                if p > piece_i {
-                    return acc;
-                }
-                let p_len = self.piece_length(p);
-                let p_start = self.piece_size * p as u32;
-                let p_end = p_start + p_len;
-                let contains_start = file_range.contains(&p_start);
-                let contains_end = file_range.contains(&p_end);
-                if contains_start && contains_end {
-                    acc + p_len
-                } else if contains_start {
-                    acc + file_start - p_end
-                } else if contains_end {
-                    acc + p_end - file_start
-                } else {
-                    acc
-                }
-            });
-            tracing::debug!(
-                "Reading piece {} in file {} with offset {}",
-                piece_i,
-                &file.path().display(),
-                read_offset
-            );
-
-            let relative_start = file_start as isize - piece_start as isize;
-            let relative_end = file_end as isize - piece_end as isize;
-
-            let start = if relative_start > 0 {
-                // start is behind file
-                relative_start.abs()
-            } else {
-                // start is beyond file
-                0
-            } as usize;
-
-            let end = if relative_end < 0 {
-                // end is beyond file
-                piece_length - relative_end.abs() as u32
-            } else {
-                // end is behind file
-                piece_length
-            } as usize;
-
-            let mut file_handle = fs::OpenOptions::new()
-                .create(true)
-                .read(true)
-                .open(&file.path())
-                .await
-                .ok()?;
-
-            file_handle
-                .seek(SeekFrom::Start(read_offset.into()))
-                .await
-                .ok()?;
-
-            file_handle.read_exact(&mut out[start..end]).await.unwrap();
-
-            file_offset += file.length();
-        }
-        let out: Bytes = out.into();
-        if verify_sha1(hash, &out) {
-            return Some(out);
-        }
-        panic!("Failed to verify hash of downloaded piece {}", piece_i);
-    }
-
     /// retrieve piece from preallocated file
-    pub async fn retrieve_piece_preallocated(&mut self, piece_i: usize) -> anyhow::Result<Bytes> {
+    pub async fn retrieve_piece(&mut self, piece_i: usize) -> anyhow::Result<Bytes> {
         if !self.bitfield.has(piece_i) {
             bail!("Piece {piece_i} is not available");
         };

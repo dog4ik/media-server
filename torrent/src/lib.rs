@@ -17,7 +17,7 @@ pub use download::{DownloadProgress, ProgressConsumer};
 use peer_listener::{NewPeer, PeerListener};
 use peers::Peer;
 use reqwest::Url;
-use storage::{StorageMethod, TorrentStorage};
+use storage::TorrentStorage;
 use tokio::{
     net::TcpStream,
     sync::{mpsc, Semaphore},
@@ -130,12 +130,7 @@ impl Client {
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let storage = TorrentStorage::new(
-            &info,
-            save_location,
-            StorageMethod::Preallocated,
-            &enabled_files,
-        );
+        let storage = TorrentStorage::new(&info, save_location, &enabled_files);
         let storage_handle = storage
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
