@@ -307,7 +307,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
             poster,
             backdrop,
             plot: Some(val.overview),
-            release_date: Some(val.release_date),
+            release_date: val.release_date,
             runtime: None,
             title: val.title,
         }
@@ -487,7 +487,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             poster,
             backdrop,
             plot: Some(val.overview),
-            release_date: Some(val.release_date),
+            release_date: val.release_date,
             runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: val.title,
         }
@@ -616,10 +616,10 @@ pub struct TmdbShowDetails {
     pub original_language: Option<String>,
     pub original_name: String,
     pub overview: String,
-    pub popularity: f64,
+    pub popularity: Option<f64>,
     pub poster_path: Option<String>,
     pub tagline: Option<String>,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub vote_count: usize,
 }
 
@@ -635,15 +635,15 @@ pub struct TmdbMovieDetails {
     pub original_language: Option<String>,
     pub original_title: Option<String>,
     pub overview: String,
-    pub popularity: f64,
+    pub popularity: Option<f64>,
     pub poster_path: Option<String>,
-    pub release_date: String,
+    pub release_date: Option<String>,
     pub revenue: Option<isize>,
     pub runtime: Option<usize>,
     pub status: Option<String>,
     pub tagline: Option<String>,
     pub title: String,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub vote_count: usize,
 }
 
@@ -658,7 +658,7 @@ pub struct TmdbEpisodeToAir {
     pub id: usize,
     pub name: String,
     pub overview: String,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub vote_count: usize,
     pub air_date: String,
     pub episode_number: usize,
@@ -711,7 +711,7 @@ pub struct TmdbSeasonEpisode {
     pub runtime: Option<usize>,
     pub season_number: usize,
     pub still_path: Option<String>,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub vote_count: usize,
 }
 #[derive(Deserialize, Debug, Clone)]
@@ -724,16 +724,16 @@ pub struct TmdbShowSeason {
     pub id: usize,
     pub poster_path: Option<String>,
     pub season_number: usize,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearchShowResult {
     pub poster_path: Option<String>,
-    pub popularity: f64,
+    pub popularity: Option<f64>,
     pub id: usize,
     pub backdrop_path: Option<String>,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub overview: String,
     pub first_air_date: String,
     pub origin_country: Vec<String>,
@@ -756,15 +756,15 @@ pub struct TmdbSearch<T> {
 pub struct TmdbSearchMovieResult {
     pub backdrop_path: Option<String>,
     pub poster_path: Option<String>,
-    pub popularity: f64,
+    pub popularity: Option<f64>,
     pub id: usize,
-    pub vote_average: f64,
+    pub vote_average: Option<f64>,
     pub overview: String,
-    pub release_date: String,
+    pub release_date: Option<String>,
     pub origin_country: Option<Vec<String>>,
-    pub genre_ids: Vec<usize>,
+    pub genre_ids: Option<Vec<usize>>,
     pub original_language: String,
-    pub vote_count: usize,
+    pub vote_count: Option<usize>,
     pub title: String,
     pub original_title: Option<String>,
 }
