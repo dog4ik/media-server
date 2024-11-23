@@ -28,9 +28,9 @@ use crate::{
         ContentIdentifier, Library, LibraryItem, Source, TranscodePayload, Video,
     },
     metadata::{
-        tmdb_api::TmdbApi, ContentType, DiscoverMetadataProvider, ExternalIdMetadata,
-        MetadataProvider, MetadataProvidersStack, MovieMetadata, ShowMetadata,
-        ShowMetadataProvider,
+        metadata_stack::MetadataProvidersStack, tmdb_api::TmdbApi, ContentType,
+        DiscoverMetadataProvider, ExternalIdMetadata, MetadataProvider, MovieMetadata,
+        ShowMetadata, ShowMetadataProvider,
     },
     progress::{TaskKind, TaskResource, VideoTaskType},
     torrent::TorrentClient,
@@ -591,7 +591,10 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             .collect();
 
         new_episodes.sort_unstable_by(|a, b| {
-            a.identifier.title.to_lowercase().cmp(&b.identifier.title.to_lowercase())
+            a.identifier
+                .title
+                .to_lowercase()
+                .cmp(&b.identifier.title.to_lowercase())
         });
 
         let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
@@ -616,7 +619,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         while let Some(result) = show_scan_handles.join_next().await {
             match result {
-                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
+                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err: {e}"),
                 Err(e) => tracing::error!("Show reconciliation task panicked: {e}"),
                 Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
             }
@@ -664,7 +667,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         while let Some(result) = movie_scan_handles.join_next().await {
             match result {
-                Ok(Err(e)) => tracing::error!("Movie reconciliation task failed with err {}", e),
+                Ok(Err(e)) => tracing::error!("Movie reconciliation task failed with err: {e}"),
                 Err(e) => tracing::error!("Movie reconciliation task panicked: {e}"),
                 Ok(Ok(_)) => tracing::trace!("Joined movie reconciliation task"),
             }
@@ -1005,11 +1008,16 @@ async fn handle_episode(
 ) -> anyhow::Result<i64> {
     let season = item.identifier.season as usize;
     let episode = item.identifier.episode as usize;
-    let duration = item.source.video.fetch_duration().await?;
     let Ok(local_episode) = db
         .episode(&local_show_id.to_string(), season, episode)
         .await
     else {
+        println!(
+            "fetching duration for episode: {}",
+            item.source.video.path().display()
+        );
+        // We spend seconds here if file is incomplete
+        let duration = item.source.video.fetch_duration().await?;
         for provider in providers {
             let p = MetadataProvider::from_str(provider.provider_identifier())
                 .expect("all providers are known");

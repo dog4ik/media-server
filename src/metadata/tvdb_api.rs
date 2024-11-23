@@ -13,8 +13,8 @@ use serde::Deserialize;
 use crate::app_state::AppError;
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata,
-    LimitedRequestClient, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
+    request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
+    ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
     MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
 
@@ -162,7 +162,7 @@ impl MovieMetadataProvider for TvdbApi {
 #[axum::async_trait]
 impl ShowMetadataProvider for TvdbApi {
     async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError> {
-        todo!()
+        self.fetch_show(show_id.parse()?).await.map(|r| r.into())
     }
 
     async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError> {
@@ -190,7 +190,7 @@ impl DiscoverMetadataProvider for TvdbApi {
             .search_multi(query)
             .await?
             .into_iter()
-            .map(|r| r.into())
+            .filter_map(|r| r.try_into().ok())
             .collect())
     }
 
@@ -303,12 +303,15 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
 
 impl From<TvdbSearchResult> for MovieMetadata {
     fn from(val: TvdbSearchResult) -> Self {
-        let poster = MetadataImage::new(val.image_url.parse().unwrap());
+        let poster = val
+            .image_url
+            .and_then(|url| url.parse().ok())
+            .map(|url| MetadataImage::new(url));
 
         MovieMetadata {
             metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
-            poster: Some(poster),
+            poster,
             backdrop: None,
             plot: val.overview,
             release_date: val.first_air_time,
@@ -320,12 +323,15 @@ impl From<TvdbSearchResult> for MovieMetadata {
 
 impl From<TvdbSearchResult> for ShowMetadata {
     fn from(val: TvdbSearchResult) -> Self {
-        let poster = MetadataImage::new(val.image_url.parse().unwrap());
+        let poster = val
+            .image_url
+            .and_then(|url| url.parse().ok())
+            .map(|url| MetadataImage::new(url));
 
         ShowMetadata {
             metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
-            poster: Some(poster),
+            poster,
             backdrop: None,
             plot: val.overview,
             release_date: val.first_air_time,
@@ -335,23 +341,27 @@ impl From<TvdbSearchResult> for ShowMetadata {
     }
 }
 
-impl From<TvdbSearchResult> for MetadataSearchResult {
-    fn from(val: TvdbSearchResult) -> Self {
+impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
+    type Error = AppError;
+    fn try_from(val: TvdbSearchResult) -> Result<Self, Self::Error> {
         let content_type = match val.search_type.as_ref() {
             "series" => ContentType::Show,
             "movie" => ContentType::Movie,
-            rest => panic!("unknown content type: {}", rest),
+            _ => Err(anyhow::anyhow!("Unknown content type: {}", val.search_type))?,
         };
-        let poster = MetadataImage::new(val.image_url.parse().unwrap());
+        let poster = val
+            .image_url
+            .and_then(|url| url.parse().ok())
+            .map(|url| MetadataImage::new(url));
 
-        MetadataSearchResult {
+        Ok(MetadataSearchResult {
             title: val.name,
-            poster: Some(poster),
+            poster,
             plot: val.overview,
             metadata_provider: MetadataProvider::Tvdb,
             content_type,
             metadata_id: val.tvdb_id,
-        }
+        })
     }
 }
 
@@ -373,20 +383,20 @@ impl TryInto<ExternalIdMetadata> for TvdbRemoteIds {
 
 #[derive(Debug, Clone, Deserialize)]
 struct TvdbSearchResult {
-    country: String,
+    country: Option<String>,
     id: String,
-    image_url: String,
+    image_url: Option<String>,
     name: String,
     first_air_time: Option<String>,
     overview: Option<String>,
-    primary_language: String,
+    primary_language: Option<String>,
     primary_type: String,
     status: Option<String>,
     #[serde(rename = "type")]
     search_type: String,
     tvdb_id: String,
     year: Option<String>,
-    slug: String,
+    slug: Option<String>,
     overviews: Option<HashMap<String, String>>,
     translations: HashMap<String, String>,
     remote_ids: Option<Vec<TvdbRemoteIds>>,
@@ -398,35 +408,35 @@ struct TvdbEpisode {
     id: usize,
     series_id: usize,
     name: String,
-    aired: String,
+    aired: Option<String>,
     runtime: Option<usize>,
     name_translations: Option<Vec<String>>,
     overview: Option<String>,
     overview_translations: Option<Vec<String>>,
     image: Option<String>,
-    image_type: usize,
+    image_type: Option<usize>,
     is_movie: usize,
     seasons: Option<Vec<TvdbSeasonBaseRecord>>,
     number: usize,
     season_number: usize,
-    last_updated: String,
+    last_updated: Option<String>,
     finale_type: Option<String>,
-    year: String,
+    year: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TvdbSeasonBaseRecord {
     id: usize,
-    image: String,
-    image_type: usize,
-    last_updated: String,
-    name: String,
+    image: Option<String>,
+    image_type: Option<usize>,
+    last_updated: Option<String>,
+    name: Option<String>,
     name_translations: Option<Vec<String>>,
     number: usize,
     overview_translations: Option<Vec<String>>,
     series_id: usize,
-    year: String,
+    year: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -462,7 +472,7 @@ struct TvdbArtwork {
     id: usize,
     image: String,
     thumbnail: String,
-    language: String,
+    language: Option<String>,
     #[serde(rename = "type")]
     artwork_type: usize,
     score: usize,
@@ -481,23 +491,23 @@ struct TvdbSeriesExtendedRecord {
     name_translations: Option<Vec<String>>,
     overview_translations: Option<Vec<String>>,
     first_aired: Option<String>,
-    last_aired: String,
-    next_aired: String,
-    score: usize,
-    original_country: String,
-    original_language: String,
+    last_aired: Option<String>,
+    next_aired: Option<String>,
+    score: Option<usize>,
+    original_country: Option<String>,
+    original_language: Option<String>,
     default_season_type: usize,
     is_order_randomized: bool,
-    last_updated: String,
+    last_updated: Option<String>,
     average_runtime: Option<usize>,
     episodes: Vec<TvdbEpisode>,
     overview: Option<String>,
-    year: String,
+    year: Option<String>,
     artworks: Vec<TvdbArtwork>,
     genres: Vec<TvdbGenre>,
     trailers: Vec<TvdbTrailer>,
     remote_ids: Vec<TvdbRemoteIds>,
-    characters: Vec<TvdbCharacter>,
+    characters: Option<Vec<TvdbCharacter>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -562,11 +572,11 @@ struct TvdbCharacter {
     image: Option<String>,
     sort: usize,
     is_featured: bool,
-    url: String,
+    url: Option<String>,
     name_translations: Option<Vec<String>>,
     overview_translations: Option<Vec<String>>,
-    people_type: String,
-    person_name: String,
+    people_type: Option<String>,
+    person_name: Option<String>,
     #[serde(rename = "personImgURL")]
     person_img_url: Option<String>,
 }

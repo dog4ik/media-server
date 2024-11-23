@@ -1,9 +1,8 @@
-use std::fmt::Display;
-
 pub mod action;
 pub mod connection_manager;
 pub mod content_directory;
 mod device_description;
+mod eventing;
 pub mod router;
 mod service;
 mod service_variables;
@@ -12,37 +11,6 @@ pub mod templates;
 mod urn;
 
 pub const SERVER_UUID: uuid::Uuid = uuid::uuid!("8bbd544b-5a70-4491-89ac-e89476ebb3e9");
-
-#[derive(Debug, Clone, Copy)]
-pub struct UpnpAgent<'a> {
-    os: &'a str,
-    os_version: &'a str,
-    upnp_version: &'a str,
-    product: &'a str,
-    product_version: &'a str,
-}
-
-impl<'a> TryFrom<&'a str> for UpnpAgent<'a> {
-    type Error = anyhow::Error;
-
-    fn try_from(value: &'a str) -> Result<Self, Self::Error> {
-        todo!()
-    }
-}
-
-impl Display for UpnpAgent<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{os}/{os_version} UPnp/{upnp_version} {product}/{product_version}",
-            os = self.os,
-            os_version = self.os_version,
-            upnp_version = self.upnp_version,
-            product = self.product,
-            product_version = self.product_version
-        )
-    }
-}
 
 pub trait XmlReaderExt {
     fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event>;

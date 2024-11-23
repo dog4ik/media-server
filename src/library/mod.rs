@@ -479,9 +479,9 @@ pub async fn symphony_duration(path: impl AsRef<Path>) -> anyhow::Result<Duratio
         &Default::default(),
     )?;
 
-    let default_video = probed.format.default_track().unwrap();
-    let time_base = default_video.codec_params.time_base.unwrap();
-    let n_frames = default_video.codec_params.n_frames.unwrap();
+    let default_video = probed.format.default_track().context("get default track")?;
+    let time_base = default_video.codec_params.time_base.context("time base")?;
+    let n_frames = default_video.codec_params.n_frames.context("n frames")?;
     let time = time_base.calc_time(n_frames);
     Ok(time.into())
 }
@@ -490,7 +490,6 @@ impl Video {
     /// Returns struct compatible with database Video table
     pub async fn into_db_video(&self) -> DbVideo {
         let now = time::OffsetDateTime::now_utc();
-        // let duration = self.fetch_duration().await.unwrap_or_default().as_secs() as i64;
 
         DbVideo {
             id: None,
@@ -591,6 +590,11 @@ impl Video {
     /// Get file size in bytes
     pub fn file_size(&self) -> u64 {
         std::fs::metadata(&self.path).expect("to have access").len()
+    }
+
+    /// Get file size in bytes
+    pub async fn async_file_size(&self) -> std::io::Result<u64> {
+        tokio::fs::metadata(&self.path).await.map(|m| m.len())
     }
 
     /// Delete self
@@ -858,6 +862,14 @@ impl utoipa::PartialSchema for Resolution {
 impl Resolution {
     pub fn new(width: usize, height: usize) -> Self {
         Self((width, height))
+    }
+
+    pub fn width(&self) -> usize {
+        self.0 .0
+    }
+
+    pub fn height(&self) -> usize {
+        self.0 .1
     }
 }
 

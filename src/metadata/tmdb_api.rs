@@ -4,7 +4,7 @@ use std::{collections::HashMap, time::Duration};
 
 use anyhow::anyhow;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, ACCEPT_ENCODING},
+    header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION},
     Client, Method, Request, Url,
 };
 use serde::Deserialize;
@@ -13,8 +13,8 @@ use time::Date;
 use crate::app_state::AppError;
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata,
-    LimitedRequestClient, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
+    request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
+    ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
     MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
 

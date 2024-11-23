@@ -8,11 +8,8 @@ use crate::{IntoXml, XmlWriter};
 use super::{
     filter::Filter,
     property_name::{PropertyValue, ValueType},
-    Container, ContainerProperty, Item, ItemProperty, ObjectProperty,
+    Container, Item, ObjectProperty,
 };
-
-const UPNP_NS: &str = "upnp";
-const DC_NS: &str = "dc";
 
 macro_rules! impl_basic_property {
     ($name:literal for $type:ident) => {
@@ -196,6 +193,16 @@ impl Date {
         time::format_description::well_known::Rfc3339;
 }
 
+impl std::str::FromStr for Date {
+    type Err = time::error::Parse;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Date {
+            date: time::PrimitiveDateTime::parse(s, &Self::FORMAT)?,
+        })
+    }
+}
+
 impl ObjectProperty for Date {
     const NAME: &str = "dc:date";
 }
@@ -205,6 +212,18 @@ impl IntoXml for Date {
         w.create_element("dc:date")
             .write_text_content(BytesText::new(&formatted))?;
         Ok(())
+    }
+}
+
+impl Into<PropertyValue> for Date {
+    fn into(self) -> PropertyValue {
+        PropertyValue {
+            ns: Some("dc"),
+            name: "date",
+            is_allowed: false,
+            value: ValueType::Value(Box::new(self)),
+            dependant_properties: vec![],
+        }
     }
 }
 
@@ -232,6 +251,18 @@ impl IntoXml for RecordedDuration {
         w.create_element("upnp:recordedDuration")
             .write_text_content(BytesText::new(&upnp_duration.to_string()))?;
         Ok(())
+    }
+}
+
+impl Into<PropertyValue> for RecordedDuration {
+    fn into(self) -> PropertyValue {
+        PropertyValue {
+            ns: Some("upnp"),
+            name: "recordedDuration",
+            is_allowed: false,
+            value: ValueType::Value(Box::new(self)),
+            dependant_properties: vec![],
+        }
     }
 }
 
@@ -335,6 +366,27 @@ pub mod res {
                 daylight_saving: None,
                 framerate: None,
             }
+        }
+
+        pub fn set_duartion<T: Into<UpnpDuration>>(&mut self, duration: impl Into<Option<T>>) {
+            let duration = duration.into();
+            self.duration = duration.map(|d| d.into());
+        }
+
+        pub fn set_resoulution(&mut self, resolution: impl Into<Option<UpnpResolution>>) {
+            self.resolution = resolution.into()
+        }
+
+        pub fn set_bitrate(&mut self, bitrate: impl Into<Option<usize>>) {
+            self.bitrate = bitrate.into()
+        }
+
+        pub fn set_size(&mut self, size: impl Into<Option<u64>>) {
+            self.size = size.into()
+        }
+
+        pub fn set_audio_channels(&mut self, audio_channels: impl Into<Option<usize>>) {
+            self.nr_audio_channels = audio_channels.into()
         }
     }
 

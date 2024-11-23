@@ -242,6 +242,10 @@ impl ConfigStore {
         store.register_value::<IntroMinDuration>();
         store.register_value::<IntroDetectionFfmpegBuild>();
         store.register_value::<WebUiPath>();
+        store.register_value::<ShowProvidersOrder>();
+        store.register_value::<MovieProvidersOrder>();
+        store.register_value::<DiscoverProvidersOrder>();
+        store.register_value::<TorrentIndexesOrder>();
         store.register_value::<UpnpEnabled>();
         store.register_value::<UpnpTtl>();
 
@@ -766,6 +770,59 @@ impl Default for UpnpTtl {
         Self(2)
     }
 }
+
+/// Discover metadata providers order
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+pub struct DiscoverProvidersOrder(pub Vec<String>);
+impl ConfigValue for DiscoverProvidersOrder {}
+impl Default for DiscoverProvidersOrder {
+    fn default() -> Self {
+        Self(vec![
+            "local".to_owned(),
+            "tmdb".to_owned(),
+            "tvdb".to_owned(),
+        ])
+    }
+}
+
+/// Show metadata providers order
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+pub struct ShowProvidersOrder(pub Vec<String>);
+impl ConfigValue for ShowProvidersOrder {}
+impl Default for ShowProvidersOrder {
+    fn default() -> Self {
+        Self(vec![
+            "local".to_owned(),
+            "tmdb".to_owned(),
+            "tvdb".to_owned(),
+        ])
+    }
+}
+
+/// Movie metadata providers order
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+pub struct MovieProvidersOrder(pub Vec<String>);
+impl ConfigValue for MovieProvidersOrder {}
+impl Default for MovieProvidersOrder {
+    fn default() -> Self {
+        Self(vec![
+            "local".to_owned(),
+            "tmdb".to_owned(),
+            "tvdb".to_owned(),
+        ])
+    }
+}
+
+/// Torrent indexes providers order
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+pub struct TorrentIndexesOrder(pub Vec<String>);
+impl ConfigValue for TorrentIndexesOrder {}
+impl Default for TorrentIndexesOrder {
+    fn default() -> Self {
+        Self(vec!["tpb".to_owned()])
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

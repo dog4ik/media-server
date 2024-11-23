@@ -1,5 +1,5 @@
 #![feature(iter_intersperse)]
-#![feature(os_str_display)]
+#![feature(iter_array_chunks)]
 #![feature(array_chunks)]
 pub mod app_state;
 pub mod config;

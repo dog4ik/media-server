@@ -3,10 +3,6 @@ use std::{
     collections::{hash_map::Entry, HashMap},
     fmt::Display,
     str::FromStr,
-    sync::{
-        atomic::{AtomicU32, Ordering},
-        Arc,
-    },
 };
 
 use anyhow::Context;
@@ -41,20 +37,17 @@ pub trait ContentDirectoryHandler {
         &self,
         object_id: &str,
     ) -> impl std::future::Future<Output = Result<properties::DidlResponse, ActionError>> + Send;
+    fn system_update_id(&self) -> impl std::future::Future<Output = u32> + Send;
 }
 
 #[derive(Debug, Clone)]
 pub struct ContentDirectoryService<T: ContentDirectoryHandler> {
     pub handler: T,
-    pub update_id: Arc<AtomicU32>,
 }
 
 impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
     pub fn new(handler: T) -> Self {
-        Self {
-            handler,
-            update_id: Arc::new(AtomicU32::new(0)),
-        }
+        Self { handler }
     }
 }
 
@@ -68,6 +61,7 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         requested_count: u32,
         sort_criteria: String,
     ) -> anyhow::Result<(String, u32, u32, u32)> {
+        let update_id = self.handler.system_update_id().await;
         tracing::debug!(
             object_id,
             %browse_flag,
@@ -89,17 +83,12 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         let number_returned = result.len();
         let total_matches = result.len();
         let result = result.into_xml().unwrap();
-        let update_id = self.update_id.load(Ordering::Acquire);
         Ok((
             result,
             number_returned as u32,
             total_matches as u32,
             update_id,
         ))
-    }
-
-    fn get_system_update_id(&self) -> u32 {
-        self.update_id.load(Ordering::Acquire)
     }
 }
 
@@ -234,6 +223,8 @@ impl SVariable for SearchCapabilities {
 }
 
 mod property_name {
+    use std::fmt::Debug;
+
     use crate::IntoXml;
 
     use super::filter::{FilterType, PropertyFilter};
@@ -271,15 +262,23 @@ mod property_name {
         }
     }
 
-    #[derive(Debug)]
     pub enum ValueType {
-        Value(Box<dyn IntoXml>),
+        Value(Box<dyn IntoXml + Send>),
         NestedProperties(Vec<PropertyValue>),
     }
 
     impl ValueType {
-        pub fn basic(value: impl IntoXml + 'static) -> Self {
+        pub fn basic(value: impl IntoXml + 'static + Send) -> Self {
             Self::Value(Box::new(value))
+        }
+    }
+
+    impl Debug for ValueType {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                ValueType::Value(_) => write!(f, "Value"),
+                ValueType::NestedProperties(p) => write!(f, "{:?}", p),
+            }
         }
     }
 
@@ -631,7 +630,7 @@ impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDire
                         inputs.next()?,
                         inputs.next()?,
                         inputs.next()?,
-                        inputs.next().unwrap(),
+                        inputs.next()?,
                         inputs.next()?,
                     )
                     .await?;
@@ -643,7 +642,7 @@ impl<T: ContentDirectoryHandler + Send + Sync + 'static> Service for ContentDire
             "GetSearchCapabilities" => {
                 todo!()
             }
-            "GetSystemUpdateID" => self.get_system_update_id().into_value_list(),
+            "GetSystemUpdateID" => self.handler.system_update_id().await.into_value_list(),
             rest => Err(anyhow::anyhow!("unhandled action: {rest}"))?,
         };
         Ok(values)
@@ -913,11 +912,17 @@ impl IntoXml for Container {
 }
 
 #[derive(Debug)]
-struct UpnpDuration(std::time::Duration);
+pub struct UpnpDuration(pub std::time::Duration);
 
 impl UpnpDuration {
     pub fn new(duration: std::time::Duration) -> Self {
         Self(duration)
+    }
+}
+
+impl From<std::time::Duration> for UpnpDuration {
+    fn from(value: std::time::Duration) -> Self {
+        Self(value)
     }
 }
 

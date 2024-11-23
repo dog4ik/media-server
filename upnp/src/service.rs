@@ -18,6 +18,11 @@ pub trait Service {
         name: &'a str,
         inputs: ArgumentScanner<'a>,
     ) -> impl std::future::Future<Output = anyhow::Result<impl IntoValueList>> + Send;
+    //fn event_handler<'a>(
+    //    &self,
+    //    name: &'a str,
+    //    inputs: ArgumentScanner<'a>,
+    //) -> impl std::future::Future<Output = anyhow::Result<impl IntoValueList>> + Send;
 }
 
 #[derive(Debug, Clone)]

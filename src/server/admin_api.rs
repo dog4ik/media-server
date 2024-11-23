@@ -35,8 +35,8 @@ use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
 use crate::metadata::{
-    ContentType, EpisodeMetadata, MetadataProvidersStack, MovieMetadata, SeasonMetadata,
-    ShowMetadata,
+    metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MovieMetadata,
+    SeasonMetadata, ShowMetadata,
 };
 use crate::progress::{Task, TaskKind, TaskResource, VideoTaskType};
 use crate::stream::transcode_stream::TranscodeStream;
@@ -900,7 +900,7 @@ pub async fn order_providers(
     })
 }
 
-/// Update providers order
+/// Get providers order
 #[utoipa::path(
     get,
     path = "/api/configuration/providers",
@@ -909,7 +909,7 @@ pub async fn order_providers(
     ),
     tag = "Configuration",
 )]
-pub async fn providers_order(
+pub async fn get_providers_order(
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Json<Vec<ProviderOrder>> {
     let movie_order = ProviderOrder {

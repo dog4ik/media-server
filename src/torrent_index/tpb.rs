@@ -2,11 +2,11 @@ use reqwest::{Client, Method, Request, Url};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-use crate::{app_state::AppError, metadata::LimitedRequestClient};
+use crate::{app_state::AppError, metadata::request_client::LimitedRequestClient};
 
 use super::{Torrent, TorrentIndex};
 
-const TRACKERS: &[&str] = &[
+const TRACKERS: [&str; 9] = [
     "udp://tracker.opentrackr.org:1337",
     "udp://tracker.openbittorrent.com:6969/announce",
     "udp://open.stealth.si:80/announce",
@@ -33,7 +33,8 @@ impl Default for TpbApi {
 impl TpbApi {
     pub fn new() -> Self {
         let client = Client::new();
-        let limited_client = LimitedRequestClient::new(client, 3, std::time::Duration::from_secs(1));
+        let limited_client =
+            LimitedRequestClient::new(client, 3, std::time::Duration::from_secs(1));
         let base_url = Url::parse("https://apibay.org/q.php").unwrap();
         Self {
             client: limited_client,

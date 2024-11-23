@@ -612,6 +612,56 @@ where
         }
     }
 
+    /// Local season episodes with local video id
+    fn get_local_season_episodes(
+        self,
+        show_id: i64,
+        season: usize,
+    ) -> impl std::future::Future<Output = Result<Vec<DbEpisode>, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let season = season as i64;
+            let episodes = sqlx::query_as!(
+                DbEpisode,
+                r#"SELECT episodes.* FROM episodes
+            JOIN shows ON shows.id = seasons.show_id
+            JOIN seasons ON seasons.id = episodes.season_id
+            WHERE show_id = ? AND seasons.number = ?;"#,
+                show_id,
+                season,
+            )
+            .fetch_all(&mut *conn)
+            .await?;
+
+            //let episodes = sqlx::query!(
+            //    r#"SELECT episodes.* FROM episodes
+            //JOIN seasons ON seasons.id = episodes.season_id
+            //JOIN shows ON shows.id = seasons.show_id
+            //WHERE show_id = ?;"#,
+            //    season
+            //)
+            //.fetch_all(&mut *conn)
+            //.await?;
+            //let episodes = episodes
+            //    .into_iter()
+            //    .map(|d| {
+            //        let ep = DbEpisode {
+            //            id: Some(d.id),
+            //            video_id: d.video_id,
+            //            season_id: d.season_id,
+            //            title: d.title,
+            //            number: d.number,
+            //            plot: d.plot,
+            //            release_date: d.release_date,
+            //            duration: d.duration,
+            //            poster: d.poster,
+            //        };
+            //    })
+            //    .collect();
+            Ok(episodes)
+        }
+    }
+
     fn get_season(
         self,
         show_id: i64,

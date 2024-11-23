@@ -12,10 +12,7 @@ use crate::{
     library::{
         is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
     },
-    metadata::{
-        ContentType, EpisodeMetadata, MetadataProvider, MetadataProvidersStack, MovieMetadata,
-        ShowMetadata,
-    },
+    metadata::{metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata},
     progress::{Progress, ProgressSpeed, ResourceTask, TaskError},
 };
 

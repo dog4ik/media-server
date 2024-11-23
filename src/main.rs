@@ -7,8 +7,9 @@ use media_server::app_state::AppState;
 use media_server::config::{self, AppResources, Args, ConfigFile, ConfigValue, APP_RESOURCES};
 use media_server::db::Db;
 use media_server::library::Library;
+use media_server::metadata::metadata_stack::MetadataProvidersStack;
 use media_server::metadata::tmdb_api::TmdbApi;
-use media_server::metadata::MetadataProvidersStack;
+use media_server::metadata::tvdb_api::TvdbApi;
 use media_server::progress::TaskResource;
 use media_server::server::{admin_api, public_api, torrent_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
@@ -68,21 +69,36 @@ async fn main() {
 
     let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
+
+    let mut providers_stack = MetadataProvidersStack::default();
+
+    providers_stack.add_show_provider(db);
+    providers_stack.add_movie_provider(db);
+    providers_stack.add_discover_provider(db);
+
     let Some(tmdb_key) = config::CONFIG.get_value::<config::TmdbKey>().0 else {
         panic!("Missing tmdb api token, consider passing it in cli, configuration file or {} environment variable", config::TmdbKey::ENV_KEY.unwrap());
     };
     let tmdb_api = TmdbApi::new(tmdb_key);
     let tmdb_api = Box::leak(Box::new(tmdb_api));
+    providers_stack.add_show_provider(tmdb_api);
+    providers_stack.add_movie_provider(tmdb_api);
+    providers_stack.add_discover_provider(tmdb_api);
+
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
-    let torrent_client = Box::leak(Box::new(torrent_client));
 
-    let providers_stack = MetadataProvidersStack {
-        discover_providers_stack: Mutex::new(vec![db, tmdb_api]),
-        show_providers_stack: Mutex::new(vec![db, tmdb_api]),
-        movie_providers_stack: Mutex::new(vec![db, tmdb_api]),
-        torrent_indexes_stack: Mutex::new(vec![tpb_api]),
-    };
+    providers_stack.add_torrent_provider(tpb_api);
+
+    if let Some(tvdb_key) = config::CONFIG.get_value::<config::TvdbKey>().0 {
+        let tvdb_api = TvdbApi::new(&tvdb_key);
+        let tvdb_api = Box::leak(Box::new(tvdb_api));
+        providers_stack.add_show_provider(tvdb_api);
+        providers_stack.add_movie_provider(tvdb_api);
+        providers_stack.add_discover_provider(tvdb_api);
+    }
+
+    let torrent_client = Box::leak(Box::new(torrent_client));
 
     let providers_stack = Box::leak(Box::new(providers_stack));
 
@@ -243,7 +259,10 @@ async fn main() {
             post(admin_api::reset_server_configuration),
         )
         .route("/configuration/providers", put(admin_api::order_providers))
-        .route("/configuration/providers", get(admin_api::providers_order))
+        .route(
+            "/configuration/providers",
+            get(admin_api::get_providers_order),
+        )
         .route("/log/latest", get(admin_api::latest_log))
         .route("/tasks", get(admin_api::get_tasks))
         .route("/tasks/:id", delete(admin_api::cancel_task))

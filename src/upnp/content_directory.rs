@@ -1,4 +1,11 @@
-use std::{fmt::Display, str::FromStr};
+use std::{
+    fmt::Display,
+    str::FromStr,
+    sync::{
+        atomic::{self, AtomicU32},
+        Arc,
+    },
+};
 
 use anyhow::Context;
 use upnp::{
@@ -11,23 +18,28 @@ use upnp::{
             res::{ProtocolInfo, Resource},
             DidlResponse,
         },
-        Container, ContentDirectoryHandler, Item,
+        Container, ContentDirectoryHandler, Item, UpnpResolution,
     },
 };
 
-use crate::db::{self, Db, DbActions};
+use crate::{
+    app_state::AppState,
+    db::{self, DbActions},
+};
 
 #[derive(Clone)]
 pub struct MediaServerContentDirectory {
-    db: Db,
+    app_state: AppState,
     server_location: String,
+    update_id: Arc<AtomicU32>,
 }
 
 impl MediaServerContentDirectory {
-    pub fn new(db: Db, server_location: String) -> Self {
+    pub fn new(app_state: AppState, server_location: String) -> Self {
         Self {
-            db,
+            app_state,
             server_location,
+            update_id: AtomicU32::new(0).into(),
         }
     }
 
@@ -61,7 +73,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn all_shows(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
-        let shows = self.db.all_shows(requested_count).await?;
+        let shows = self.app_state.db.all_shows(requested_count).await?;
         let mut containers = Vec::with_capacity(shows.len());
         for show in shows {
             let poster_url = format!(
@@ -88,7 +100,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn show(&self, show_id: i64) -> anyhow::Result<DidlResponse> {
-        let show = self.db.get_show(show_id).await?;
+        let show = self.app_state.db.get_show(show_id).await?;
         let seasons = show.seasons.unwrap_or_default();
         let mut containers = Vec::with_capacity(seasons.len());
         for season in seasons {
@@ -110,20 +122,28 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn show_season(&self, show_id: i64, season: i64) -> anyhow::Result<DidlResponse> {
-        let show_metadata = self.db.get_show(show_id).await?;
-        let season_metadata = self.db.get_season(show_id, season as usize).await?;
-        let episodes = season_metadata.episodes;
+        let db = self.app_state.db;
+        let show_metadata = db.get_show(show_id).await?;
+        let episodes = db
+            .get_local_season_episodes(show_id, season as usize)
+            .await?;
         let mut items = Vec::with_capacity(episodes.len());
         for episode in episodes {
+            let source = {
+                let library = self.app_state.library.lock().unwrap();
+                library.get_source(episode.video_id).unwrap().clone()
+            };
+            let metadata = source.video.metadata().await;
+            let id = episode.id.unwrap();
             let poster_url = format!(
                 "{server_url}/api/episode/{episode_id}/poster",
                 server_url = self.server_location,
-                episode_id = episode.metadata_id,
+                episode_id = id,
             );
             let watch_url = format!(
                 "{server_url}/api/local_episode/{episode_id}/watch",
                 server_url = self.server_location,
-                episode_id = episode.metadata_id
+                episode_id = id,
             );
             let season_id = ContentId::Season { show_id, season };
             let item_id = ContentId::Episode {
@@ -141,14 +161,36 @@ impl MediaServerContentDirectory {
             item.set_property(properties::EpisodeNumber(episode.number as u32));
             item.set_property(properties::EpisodeSeason(season as u32));
             item.set_property(properties::SeriesTitle(show_metadata.title.clone()));
+            //if let Some(release_date) = episode.release_date {
+            //    item.set_property(
+            //        properties::Date::from_str(&release_date).expect("rfc 3339 date"),
+            //    );
+            //}
             if let Some(amount) = show_metadata.episodes_amount {
                 item.set_property(properties::EpisodeCount(amount as u32));
             }
             if let Some(description) = episode.plot {
                 item.set_property(properties::Description(description));
             }
-            let watch_resource =
+            let mut watch_resource =
                 Resource::new(watch_url, ProtocolInfo::http_get("video/matroska".into()));
+            let runtime = std::time::Duration::from_secs(episode.duration as u64);
+            item.set_property(properties::RecordedDuration(runtime));
+            watch_resource.set_duartion(runtime);
+            if let Ok(metadata) = metadata {
+                if let Some(res) = metadata.resolution() {
+                    watch_resource.set_resoulution(UpnpResolution::new(res.width(), res.height()));
+                };
+                if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
+                    watch_resource.set_audio_channels(audio_channels as usize);
+                };
+                watch_resource.set_bitrate(metadata.bitrate());
+            }
+
+            if let Ok(size) = source.video.async_file_size().await {
+                watch_resource.set_size(size);
+            }
+
             item.set_property(watch_resource);
             item.base.set_upnp_class(ItemType::VideoItem(None));
             items.push(item);
@@ -166,6 +208,7 @@ impl MediaServerContentDirectory {
         episode: i64,
     ) -> anyhow::Result<DidlResponse> {
         let episode_metadata = self
+            .app_state
             .db
             .get_episode(show_id, season as usize, episode as usize)
             .await?;
@@ -207,7 +250,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn all_movies(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
-        let movies = self.db.all_movies(requested_count).await?;
+        let movies = self.app_state.db.all_movies(requested_count).await?;
         let mut items = Vec::with_capacity(movies.len());
         for movie in movies {
             let poster_url = format!(
@@ -269,7 +312,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn movie_metadata(&self, movie_id: i64) -> anyhow::Result<DidlResponse> {
-        let movie = self.db.get_movie(movie_id).await?;
+        let movie = self.app_state.db.get_movie(movie_id).await?;
         let poster_url = format!(
             "{server_url}/api/movie/{movie_id}/poster",
             server_url = self.server_location,
@@ -301,7 +344,7 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn show_metadata(&self, show_id: i64) -> anyhow::Result<DidlResponse> {
-        let show = self.db.get_show(show_id).await?;
+        let show = self.app_state.db.get_show(show_id).await?;
         let poster_url = format!(
             "{server_url}/api/show/{show_id}/poster",
             server_url = self.server_location,
@@ -324,7 +367,11 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn season_metadata(&self, show_id: i64, season: i64) -> anyhow::Result<DidlResponse> {
-        let season_metadata = self.db.get_season(show_id, season as usize).await?;
+        let season_metadata = self
+            .app_state
+            .db
+            .get_season(show_id, season as usize)
+            .await?;
         let season_id = ContentId::Season { show_id, season };
         let mut container = Container::new(
             season_id.to_string(),
@@ -456,5 +503,9 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
                 episode,
             } => Ok(self.episode_metadata(show_id, season, episode).await?),
         }
+    }
+
+    async fn system_update_id(&self) -> u32 {
+        self.update_id.load(atomic::Ordering::Acquire)
     }
 }

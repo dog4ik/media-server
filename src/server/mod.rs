@@ -87,7 +87,7 @@ pub struct SerdeDuration {
         admin_api::reset_server_configuration,
         admin_api::server_capabilities,
         admin_api::order_providers,
-        admin_api::providers_order,
+        admin_api::get_providers_order,
         admin_api::latest_log,
         admin_api::get_tasks,
         admin_api::progress,

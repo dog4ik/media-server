@@ -18,9 +18,10 @@ use crate::library::assets::{
 use crate::library::{
     AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
+use crate::metadata::tmdb_api::TmdbApi;
 use crate::metadata::{
-    EpisodeMetadata, ExternalIdMetadata, MetadataProvidersStack, MetadataSearchResult,
-    MovieMetadata, SeasonMetadata, ShowMetadata,
+    metadata_stack::MetadataProvidersStack, EpisodeMetadata, ExternalIdMetadata,
+    MetadataSearchResult, MovieMetadata, SeasonMetadata, ShowMetadata,
 };
 use crate::torrent_index::Torrent;
 use crate::{app_state::AppState, db::Db};

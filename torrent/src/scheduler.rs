@@ -731,7 +731,7 @@ impl Scheduler {
     }
 
     pub fn is_torrent_finished(&self) -> bool {
-        self.pending_pieces.is_empty()
+        self.pending_pieces.is_empty() && self.piece_table.iter().all(|p| p.is_saving == false)
     }
 
     /// Get progress percent and the amount of pending_pieces
