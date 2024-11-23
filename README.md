@@ -7,6 +7,7 @@ The project is designed to be a media library for easy searching and downloading
 - [x] Metadata fetching
 - [x] Torrent client
 - [x] Media transcoding
+- [x] UPnP capabilities
 
 ### Required dependencies
 
@@ -23,8 +24,11 @@ The project is designed to be a media library for easy searching and downloading
 
 ### Build from source
 
-1. Install required dependencies and run database migrations.
-2. Run `cargo b -r`. To build with tray icon for Windows run `cargo b -r --features windows-tray`
+1. Install rust and sqlx-cli `cargo install sqlx-cli`
+2. Set `DATABASE_URL` environment varible to `sqlite://db/database.sqlite`.
+3. Create database directory `db`
+3. Install required dependencies and run database migrations `sqlx database create`, `sqlx migrate run`.
+4. Run `cargo build`. To build with tray icon for Windows run `cargo b -r --features windows-tray`
 
 ### Windows installation
 
@@ -40,7 +44,7 @@ From my experience Microsoft Edge supports more audio codecs while Chrome can pl
 
 You can download [custom chromium build](https://github.com/cjw1115/enable-chromium-ac3-ec3-system-decoding) or build chromium yourself with build flag `enable_platform_ac3_eac3_audio` enabled.
 This custom build can play almost any video format.
-Windows installation comes with fresh electron build, where flag `enable_platform_ac3_eac3_audio` enabled
+You can download custom electron build with Windows Installer, built with flag `enable_platform_ac3_eac3_audio` enabled
 
 ### Related projects
 
