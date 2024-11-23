@@ -1,4 +1,4 @@
-use std::{path::Path, process::Stdio, time::Duration};
+use std::{ops::RangeBounds, path::Path, process::Stdio, time::Duration};
 
 use tokio::process::{Child, Command};
 
@@ -39,6 +39,22 @@ struct Intro<'a> {
 pub struct IntroRange {
     pub start: Duration,
     pub end: Duration,
+}
+
+impl IntroRange {
+    pub fn new(range: impl RangeBounds<Duration>) -> Self {
+        let start = match range.start_bound() {
+            std::ops::Bound::Included(d) => *d,
+            std::ops::Bound::Excluded(d) => *d,
+            std::ops::Bound::Unbounded => panic!("intro range must be bounded"),
+        };
+        let end = match range.end_bound() {
+            std::ops::Bound::Included(d) => *d,
+            std::ops::Bound::Excluded(d) => *d,
+            std::ops::Bound::Unbounded => panic!("intro range must be bounded"),
+        };
+        Self { start, end }
+    }
 }
 
 impl Intro<'_> {
@@ -118,7 +134,7 @@ impl Chromaprint {
         let window_size = intro.data.len();
         let allowed_errors = window_size * 8 / 100 * ACCEPT_ERROR_RATE;
         for (window_start, window) in self.fingerprint.windows(window_size).enumerate() {
-            if check_bit_errors(allowed_errors, window, intro.data) {
+            if check_bit_errors(allowed_errors -10, window, intro.data) {
                 return Some(Intro {
                     start: window_start,
                     data: &self.fingerprint[window_start..window_start + window_size],
@@ -296,4 +312,117 @@ pub async fn intro_detection(
     let positions = tokio::task::spawn_blocking(move || detect_intros(fingerprints, min_duration));
     let positions = positions.await?;
     Ok(positions)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crate::intro_detection::detect_intros;
+
+    use super::{Chromaprint, IntroRange};
+
+    const TEST_MIN_INTRO_DURATION: Duration = Duration::from_secs(20);
+
+    fn test_range(range: IntroRange, expected: IntroRange, threshold: Duration, ep: usize) {
+        assert!(
+            range.start.abs_diff(expected.start) < threshold,
+            "episode {ep} got wrong start range {:?}/{:?}, expected {:?}/{:?}",
+            range.start,
+            range.end,
+            expected.start,
+            expected.end,
+        );
+        assert!(
+            range.end.abs_diff(expected.end) < threshold,
+            "episode {ep} got end range {:?}, expected {:?}",
+            range.end,
+            expected.end,
+        );
+    }
+
+    #[test]
+    fn test_intros() {
+        let expected_intros = [
+            (
+                include_bytes!("../tests_data/fp/friends.s10/1.chromaprint"),
+                IntroRange::new(Duration::from_secs(130)..Duration::from_secs(174)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/2.chromaprint"),
+                IntroRange::new(Duration::from_secs(89)..Duration::from_secs(125)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/3.chromaprint"),
+                IntroRange::new(Duration::from_secs(76)..Duration::from_secs(120)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/4.chromaprint"),
+                IntroRange::new(Duration::from_secs(70)..Duration::from_secs(104)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/5.chromaprint"),
+                IntroRange::new(Duration::from_secs(125)..Duration::from_secs(169)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/6.chromaprint"),
+                IntroRange::new(Duration::from_secs(108)..Duration::from_secs(144)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/7.chromaprint"),
+                IntroRange::new(Duration::from_secs(76)..Duration::from_secs(110)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/8.chromaprint"),
+                IntroRange::new(Duration::from_secs(99)..Duration::from_secs(144)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/9.chromaprint"),
+                IntroRange::new(Duration::from_secs(80)..Duration::from_secs(115)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/10.chromaprint"),
+                IntroRange::new(Duration::from_secs(78)..Duration::from_secs(112)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/11.chromaprint"),
+                IntroRange::new(Duration::from_secs(75)..Duration::from_secs(120)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/12.chromaprint"),
+                IntroRange::new(Duration::from_secs(79)..Duration::from_secs(124)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/13.chromaprint"),
+                IntroRange::new(Duration::from_secs(63)..Duration::from_secs(98)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/14.chromaprint"),
+                IntroRange::new(Duration::from_secs(91)..Duration::from_secs(136)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/15.chromaprint"),
+                IntroRange::new(Duration::from_secs(164)..Duration::from_secs(198)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/16.chromaprint"),
+                IntroRange::new(Duration::from_secs(95)..Duration::from_secs(139)),
+            ),
+            (
+                include_bytes!("../tests_data/fp/friends.s10/17.chromaprint"),
+                IntroRange::new(Duration::from_secs(80)..Duration::from_secs(125)),
+            ),
+        ];
+
+        let fingerprints = expected_intros
+            .into_iter()
+            .map(|f| Chromaprint::new(f.0.to_vec()))
+            .collect();
+        let intros = detect_intros(fingerprints, TEST_MIN_INTRO_DURATION);
+        for (i, (range, (_, expected_range))) in intros.into_iter().zip(expected_intros).enumerate()
+        {
+            let range = range.unwrap();
+            test_range(range, expected_range, Duration::from_secs(1), i + 1);
+        }
+    }
 }
