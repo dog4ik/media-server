@@ -16,6 +16,8 @@ use socket2::{Domain, Protocol, Type};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
 
+use crate::templates::UpnpAgent;
+
 use super::{
     device_description::{self, UDN},
     router, urn, SERVER_UUID,
@@ -26,9 +28,6 @@ const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 190
 const NOTIFY_INTERVAL_DURATION: Duration = Duration::from_secs(90);
 
 const CACHE_CONTROL: usize = 1800;
-
-// TODO: Real values please
-const SERVER: &str = "Linux/6.10.10 UPnP/2.0 MediaServer/1.0";
 
 async fn sleep_rand_millis_duration(range: &Range<u64>) {
     let range = {
@@ -65,6 +64,7 @@ async fn resolve_local_addr() -> anyhow::Result<SocketAddr> {
 pub struct SsdpListenerConfig {
     pub location_port: u16,
     pub ttl: Option<u32>,
+    pub user_agent: UpnpAgent<'static>,
 }
 
 #[derive(Debug)]
@@ -73,6 +73,7 @@ pub struct SsdpListener {
     boot_id: usize,
     location: String,
     config_id: usize,
+    user_agent: UpnpAgent<'static>,
 }
 
 impl SsdpListener {
@@ -93,6 +94,7 @@ impl SsdpListener {
             boot_id: 8399389,
             location,
             config_id: 9999,
+            user_agent: config.user_agent,
         })
     }
 
@@ -100,7 +102,7 @@ impl SsdpListener {
         let default_announce = Announce {
             cache_control: CACHE_CONTROL,
             location: self.location.clone(),
-            server: SERVER.to_string(),
+            server: self.user_agent.to_string(),
             notification_type: NotificationType::RootDevice,
             usn: USN::root_device(UDN::new(SERVER_UUID)),
             boot_id: self.boot_id,
@@ -118,8 +120,6 @@ impl SsdpListener {
             tokio::select! {
                 Ok((read, sender)) = self.socket.recv_from(&mut buf) => {
                     let data = &buf[..read];
-                    // TODO: this will block everything because it sleeps. We must be able to
-                    // respond to others meanwhile.
                     if let Err(e) = self.handle_message(data, sender).await {
                         tracing::warn!("Failed to handle ssdp message: {e}");
                     };
@@ -141,7 +141,7 @@ impl SsdpListener {
         let default_announce = Announce {
             cache_control: CACHE_CONTROL,
             location: self.location.clone(),
-            server: SERVER.to_string(),
+            server: self.user_agent.to_string(),
             notification_type: NotificationType::RootDevice,
             usn: USN::root_device(UDN::new(SERVER_UUID)),
             boot_id: self.boot_id,
@@ -152,7 +152,13 @@ impl SsdpListener {
             BroadcastMessage::Search(msg) => {
                 let socket = self.socket.clone();
                 let search_target = msg.st.clone();
-                tracing::debug!(user_agent = ?msg.user_agent, mx = ?msg.mx, st = %msg.st, "search message",);
+                tracing::debug!(
+                    user_agent = ?msg.user_agent,
+                    mx = ?msg.mx,
+                    st = %msg.st,
+                    addr = %sender,
+                    "Search message"
+                );
                 tokio::spawn(async move {
                     if let Some(mx) = msg.mx {
                         let sleep_range = 1..(mx.saturating_sub(1) as u64).clamp(1, 5) * 1000;

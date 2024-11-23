@@ -5,12 +5,14 @@ use std::{
     fmt::Display,
     io::BufRead,
     path::{Path, PathBuf},
-    sync::LazyLock, time::SystemTime,
+    sync::LazyLock,
+    time::SystemTime,
 };
 
 use anyhow::Context;
 use clap::Parser;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use sysinfo::System;
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncWriteExt},
@@ -1007,6 +1009,9 @@ pub struct AppResources {
     pub base_path: PathBuf,
     #[schema(value_type = String)]
     pub log_path: PathBuf,
+    pub os: String,
+    pub os_version: String,
+    pub app_version: &'static str,
 }
 
 pub static APP_RESOURCES: LazyLock<AppResources> = LazyLock::new(AppResources::new);
@@ -1100,6 +1105,10 @@ impl AppResources {
         } else {
             binary_path.clone().unwrap()
         };
+        let (os_version, os) = System::kernel_version()
+            .zip(System::long_os_version())
+            .expect("all supported targets give us os version");
+        let app_version = std::env!("CARGO_PKG_VERSION");
         Self {
             start_time,
             config_path,
@@ -1110,6 +1119,9 @@ impl AppResources {
             binary_path,
             base_path,
             log_path,
+            os_version,
+            os,
+            app_version,
         }
     }
 }
