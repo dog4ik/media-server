@@ -85,15 +85,18 @@ impl TmdbApi {
     pub fn new(api_key: String) -> Self {
         let mut headers = HeaderMap::new();
         headers.insert(ACCEPT_ENCODING, HeaderValue::from_str("compress").unwrap());
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
+        );
 
-        let params = [("api_key", api_key.clone())];
         let client = Client::builder()
             .default_headers(headers)
             .build()
             .expect("build to succeed");
         let limited_client =
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
-        let base_url = Url::parse_with_params(Self::API_URL, params).expect("url to parse");
+        let base_url = Url::parse(Self::API_URL).expect("url to parse");
         Self {
             api_key,
             client: limited_client,
