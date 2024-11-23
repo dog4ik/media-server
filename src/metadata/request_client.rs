@@ -42,6 +42,7 @@ impl LimitedRequestClient {
     {
         let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
         let url = req.url().to_string();
+        tracing::trace!("Sending request: {}", url);
         self.request_tx
             .send((req, tx))
             .await
@@ -53,7 +54,11 @@ impl LimitedRequestClient {
                 tracing::error!("Request in {} failed: {}", url, e);
                 anyhow::anyhow!("Request failed: {}", e)
             })?;
-        tracing::trace!("Succeeded request: {}", url);
+        tracing::trace!(
+            status = response.status().as_u16(),
+            url,
+            "Provider response"
+        );
         match response.status().as_u16() {
             200 => Ok(response.json().await.unwrap()),
             404 => Err(AppError::not_found("Provider responded with 404")),
