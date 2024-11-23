@@ -107,14 +107,22 @@ impl TmdbApi {
 
     pub async fn trending_shows(&self) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
         let mut url = self.base_url.clone();
-        url.path_segments_mut().unwrap().push("trending").push("tv").push("day");
+        url.path_segments_mut()
+            .unwrap()
+            .push("trending")
+            .push("tv")
+            .push("day");
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
     }
 
     pub async fn trending_movies(&self) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
         let mut url = self.base_url.clone();
-        url.path_segments_mut().unwrap().push("trending").push("movie").push("day");
+        url.path_segments_mut()
+            .unwrap()
+            .push("trending")
+            .push("movie")
+            .push("day");
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
     }

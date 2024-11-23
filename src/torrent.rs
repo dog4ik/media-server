@@ -4,20 +4,27 @@ use std::{
     sync::Mutex,
 };
 
+use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::watch, task::JoinSet};
-use torrent::{DownloadHandle, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile};
+use torrent::{
+    DownloadHandle, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile, ResumeData,
+};
 
 use crate::{
+    db::Db,
     library::{
         is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
     },
-    metadata::{metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata},
+    metadata::{
+        metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider,
+        MovieMetadata, ShowMetadata,
+    },
     progress::{Progress, ProgressSpeed, ResourceTask, TaskError},
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct TorrentDownload {
+pub struct PendingTorrent {
     pub info_hash: [u8; 20],
     #[serde(skip)]
     pub download_handle: DownloadHandle,
@@ -26,7 +33,7 @@ pub struct TorrentDownload {
     pub torrent_info: TorrentInfo,
 }
 
-impl TorrentDownload {
+impl PendingTorrent {
     pub fn handle(&self) -> TorrentHandle {
         TorrentHandle {
             download_handle: self.download_handle.clone(),
@@ -66,11 +73,49 @@ impl ResourceTask for TorrentHandle {
     }
 }
 
+#[allow(async_fn_in_trait)]
+pub trait TorrentManager {
+    async fn create_torrent(
+        &self,
+        info: &Info,
+        tracker_list: &Vec<Url>,
+        output_location: &PathBuf,
+        enabled_files: &Vec<usize>,
+    ) -> anyhow::Result<()>;
+    async fn read_torrents(&self) -> anyhow::Result<Vec<ResumeData>>;
+    async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()>;
+    async fn delete_torrent(&self, hash: [u8; 20]) -> anyhow::Result<()>;
+}
+
+impl TorrentManager for Db {
+    async fn create_torrent(
+        &self,
+        info: &Info,
+        tracker_list: &Vec<Url>,
+        output_location: &PathBuf,
+        enabled_files: &Vec<usize>,
+    ) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    async fn read_torrents(&self) -> anyhow::Result<Vec<ResumeData>> {
+        todo!()
+    }
+
+    async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()> {
+        todo!()
+    }
+
+    async fn delete_torrent(&self, hash: [u8; 20]) -> anyhow::Result<()> {
+        todo!()
+    }
+}
+
 #[derive(Debug)]
 pub struct TorrentClient {
     pub client: torrent::Client,
     resolved_magnet_links: Mutex<HashMap<[u8; 20], Info>>,
-    pending_downloads: Mutex<Vec<TorrentDownload>>,
+    torrents: Mutex<Vec<PendingTorrent>>,
 }
 
 impl TorrentClient {
@@ -79,7 +124,7 @@ impl TorrentClient {
         Ok(Self {
             client,
             resolved_magnet_links: HashMap::new().into(),
-            pending_downloads: Vec::new().into(),
+            torrents: Vec::new().into(),
         })
     }
 
@@ -103,7 +148,7 @@ impl TorrentClient {
         Ok(info)
     }
 
-    pub async fn download(
+    pub async fn add_torrent(
         &self,
         save_location: PathBuf,
         trackers: Vec<reqwest::Url>,
@@ -119,19 +164,19 @@ impl TorrentClient {
             .download(save_location, trackers, info, enabled_files, progress_tx)
             .await?;
 
-        let torrent = TorrentDownload {
+        let torrent = PendingTorrent {
             info_hash,
             download_handle,
             progress_watcher: progress_rx,
             torrent_info: torrent_metadata,
         };
         let handle = torrent.handle();
-        self.pending_downloads.lock().unwrap().push(torrent);
+        self.torrents.lock().unwrap().push(torrent);
         Ok(handle)
     }
 
-    pub fn remove_download(&self, info_hash: [u8; 20]) -> Option<TorrentDownload> {
-        let mut downloads = self.pending_downloads.lock().unwrap();
+    pub fn remove_download(&self, info_hash: [u8; 20]) -> Option<PendingTorrent> {
+        let mut downloads = self.torrents.lock().unwrap();
         let download = downloads
             .iter()
             .position(|x| x.info_hash == info_hash)
@@ -142,8 +187,8 @@ impl TorrentClient {
         download
     }
 
-    pub fn get_download(&self, info_hash: &[u8; 20]) -> Option<TorrentDownload> {
-        let downloads = self.pending_downloads.lock().unwrap();
+    pub fn get_download(&self, info_hash: &[u8; 20]) -> Option<PendingTorrent> {
+        let downloads = self.torrents.lock().unwrap();
         downloads
             .iter()
             .find(|x| x.info_hash == *info_hash)
@@ -151,7 +196,7 @@ impl TorrentClient {
     }
 
     pub fn all_downloads(&self) -> Vec<TorrentInfo> {
-        let downloads = self.pending_downloads.lock().unwrap();
+        let downloads = self.torrents.lock().unwrap();
         downloads.iter().map(|d| d.torrent_info.clone()).collect()
     }
 }

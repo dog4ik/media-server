@@ -142,7 +142,7 @@ pub struct SerdeDuration {
             torrent::TorrentContent,
             torrent::TorrentContents,
             torrent::ResolvedTorrentFile,
-            torrent::TorrentDownload,
+            torrent::PendingTorrent,
             progress::Task,
             progress::TaskKind,
             progress::VideoTaskType,

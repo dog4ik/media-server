@@ -1383,7 +1383,7 @@ pub async fn download_torrent(
     tracing::debug!("Selected torrent output: {}", save_location.display());
     let content = torrent_info.contents.content.clone();
     let handle = torrent_client
-        .download(
+        .add_torrent(
             save_location,
             tracker_list,
             info,

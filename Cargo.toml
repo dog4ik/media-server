@@ -57,6 +57,7 @@ serde_plain = "1.0.2"
 toml_edit = { version = "0.22.22", features = ["serde"] }
 symphonia = { version = "0.5.4", features = ["all"] }
 mp4 = "0.14.0"
+bitvec = "1.0.1"
 torrent = { path = "./torrent" }
 upnp = { path = "./upnp" }
 

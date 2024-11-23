@@ -15,8 +15,9 @@ use std::{
 use anyhow::bail;
 pub use download::{DownloadProgress, ProgressConsumer};
 use peer_listener::{NewPeer, PeerListener};
-use peers::Peer;
+use peers::{BitField, Peer};
 use reqwest::Url;
+pub use resumability::ResumeData;
 use storage::TorrentStorage;
 use tokio::{
     net::TcpStream,
@@ -38,6 +39,7 @@ mod peer_listener;
 mod peers;
 mod piece_picker;
 mod protocol;
+mod resumability;
 mod scheduler;
 mod seeder;
 mod storage;
@@ -114,7 +116,6 @@ impl Client {
     ) -> anyhow::Result<DownloadHandle> {
         let child_token = self.cancellation_token.child_token();
         let hash = info.hash();
-        // TODO: Trackers should know download/upload stats
         // TODO: Torrent resumability
         let initial_stat = DownloadStat::empty(info.total_size());
         let (peers_tx, peers_rx) = mpsc::channel(1000);
@@ -130,7 +131,9 @@ impl Client {
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let storage = TorrentStorage::new(&info, save_location, &enabled_files);
+        let bf = BitField::empty(info.pieces.len());
+        let save_location = save_location.as_ref().to_path_buf();
+        let storage = TorrentStorage::new(&info, bf, save_location, &enabled_files);
         let storage_handle = storage
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
@@ -138,6 +141,58 @@ impl Client {
         let download = Download::new(
             storage_handle,
             info,
+            enabled_files,
+            peers_rx,
+            trackers,
+            child_token,
+        );
+        let download_handle = download.start(progress_consumer, &self.task_tracker);
+        Ok(download_handle)
+    }
+
+    pub async fn open(
+        &self,
+        resume: ResumeData,
+        progress_consumer: impl ProgressConsumer,
+    ) -> anyhow::Result<DownloadHandle> {
+        let child_token = self.cancellation_token.child_token();
+        let hash = resume.info.hash();
+        let downloaded =
+            resume.bitfield.pieces().into_iter().count() as u64 * resume.info.piece_length as u64;
+        let left = resume.info.total_size() - downloaded;
+        let initial_stat = DownloadStat {
+            downloaded,
+            uploaded: 0,
+            left,
+        };
+        let (peers_tx, peers_rx) = mpsc::channel(1000);
+        tracing::info!("Connecting trackers");
+        let urls = resume.trackers;
+        let trackers = spawn_trackers(
+            urls,
+            hash,
+            self.udp_tracker_tx.clone(),
+            initial_stat,
+            self.task_tracker.clone(),
+            child_token.clone(),
+        )
+        .await;
+
+        self.peer_listener.subscribe(hash, peers_tx.clone()).await;
+        let enabled_files = resume.enabled_files;
+        let storage = TorrentStorage::new(
+            &resume.info,
+            resume.bitfield,
+            resume.save_location,
+            &enabled_files,
+        );
+        let storage_handle = storage
+            .spawn(&self.task_tracker, child_token.clone())
+            .await?;
+
+        let download = Download::new(
+            storage_handle,
+            resume.info,
             enabled_files,
             peers_rx,
             trackers,

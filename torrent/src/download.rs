@@ -1121,7 +1121,7 @@ impl Download {
     fn handle_storage_feedback(&mut self, storage_update: StorageFeedback) {
         match storage_update {
             StorageFeedback::Saved { piece_i } => {
-                // NOTE: this is wrong. last piece will be less than piece size
+                // NOTE: this is wrong. last piece might be less than piece size
                 self.stat.downloaded += self.scheduler.piece_size as u64;
                 self.scheduler.add_piece(piece_i);
                 if self.scheduler.is_torrent_finished() {

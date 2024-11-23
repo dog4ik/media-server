@@ -9,9 +9,9 @@ use reqwest::{header, StatusCode};
 use tokio::sync::mpsc;
 use torrent::ScheduleStrategy;
 
-use crate::torrent::TorrentDownload;
+use crate::torrent::PendingTorrent;
 
-impl TorrentDownload {
+impl PendingTorrent {
     pub async fn handle_request(
         &self,
         file_start: u64,

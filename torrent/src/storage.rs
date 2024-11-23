@@ -177,7 +177,12 @@ pub enum StorageFeedback {
 }
 
 impl TorrentStorage {
-    pub fn new(info: &Info, output_dir: impl AsRef<Path>, enabled_files: &[usize]) -> Self {
+    pub fn new(
+        info: &Info,
+        initial_bitfield: BitField,
+        output_dir: PathBuf,
+        enabled_files: &[usize],
+    ) -> Self {
         let output_files = info.output_files(&output_dir);
         let mut files_bitfield = BitField::empty(output_files.len());
         for enabled_idx in enabled_files {
@@ -185,12 +190,12 @@ impl TorrentStorage {
         }
 
         Self {
-            output_dir: output_dir.as_ref().to_path_buf(),
+            output_dir,
             output_files,
             piece_size: info.piece_length,
             total_length: info.total_size(),
             pieces: info.pieces.clone(),
-            bitfield: BitField::empty(info.pieces.len()),
+            bitfield: initial_bitfield,
             enabled_files: files_bitfield,
         }
     }
