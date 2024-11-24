@@ -117,6 +117,7 @@ pub struct SerdeDuration {
             metadata::MetadataSearchResult,
             metadata::ContentType,
             metadata::MetadataProvider,
+            metadata::Language,
             app_state::AppError,
             app_state::AppErrorKind,
             public_api::DetailedVideo,

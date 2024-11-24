@@ -11,9 +11,9 @@ use crate::{
     app_state::AppError,
     library::assets::{self, AssetDir},
     metadata::{
-        ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, MetadataImage,
-        MetadataProvider, MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata,
-        ShowMetadataProvider,
+        ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
+        MetadataImage, MetadataProvider, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+        ShowMetadata, ShowMetadataProvider,
     },
 };
 
@@ -935,11 +935,20 @@ impl Db {
 
 #[axum::async_trait]
 impl ShowMetadataProvider for Db {
-    async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError> {
+    async fn show(
+        &self,
+        show_id: &str,
+        _fetch_params: FetchParams,
+    ) -> Result<ShowMetadata, AppError> {
         self.pool.get_show(show_id.parse()?).await
     }
 
-    async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError> {
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        _fetch_params: FetchParams,
+    ) -> Result<SeasonMetadata, AppError> {
         self.pool.get_season(show_id.parse()?, season).await
     }
 
@@ -948,6 +957,7 @@ impl ShowMetadataProvider for Db {
         show_id: &str,
         season: usize,
         episode: usize,
+        _fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError> {
         self.pool
             .get_episode(show_id.parse()?, season, episode)
@@ -964,6 +974,7 @@ impl MovieMetadataProvider for Db {
     async fn movie(
         &self,
         movie_metadata_id: &str,
+        _fetch_params: FetchParams,
     ) -> Result<crate::metadata::MovieMetadata, AppError> {
         self.pool.get_movie(movie_metadata_id.parse()?).await
     }
@@ -978,6 +989,7 @@ impl DiscoverMetadataProvider for Db {
     async fn multi_search(
         &self,
         query: &str,
+        _fetch_params: FetchParams,
     ) -> Result<Vec<crate::metadata::MetadataSearchResult>, AppError> {
         use rand::seq::SliceRandom;
         let movies = self.pool.search_movie(query).await?;
@@ -990,13 +1002,18 @@ impl DiscoverMetadataProvider for Db {
         Ok(out)
     }
 
-    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError> {
+    async fn show_search(
+        &self,
+        query: &str,
+        _fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
         self.pool.search_show(query).await
     }
 
     async fn movie_search(
         &self,
         query: &str,
+        _fetch_params: FetchParams,
     ) -> Result<Vec<crate::metadata::MovieMetadata>, AppError> {
         self.pool.search_movie(query).await
     }

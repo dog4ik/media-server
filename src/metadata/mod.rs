@@ -19,6 +19,50 @@ pub mod tvdb_api;
 
 pub const METADATA_CACHE_SIZE: NonZero<usize> = NonZero::new(20).unwrap();
 
+#[derive(Debug, Clone, Copy, Default, utoipa::ToSchema, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Language {
+    #[default]
+    En,
+    Sp,
+    Ge,
+    Fr,
+    Ru,
+}
+
+impl Display for Language {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let language = match self {
+            Language::En => "en",
+            Language::Sp => "sp",
+            Language::Ge => "ge",
+            Language::Fr => "fr",
+            Language::Ru => "ru",
+        };
+        write!(f, "{}", language)
+    }
+}
+
+impl FromStr for Language {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "en" => Ok(Language::En),
+            "sp" => Ok(Language::Sp),
+            "ge" => Ok(Language::Ge),
+            "fr" => Ok(Language::Fr),
+            "ru" => Ok(Language::Ru),
+            _ => Err(anyhow::anyhow!("Unsupported language: {s}")),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FetchParams {
+    pub lang: Language,
+}
+
 #[derive(Debug, Clone, utoipa::ToSchema)]
 pub struct MetadataImage(pub Url);
 
@@ -94,7 +138,11 @@ impl Display for MetadataImage {
 pub trait MovieMetadataProvider {
     /// Query for movie
     #[allow(async_fn_in_trait)]
-    async fn movie(&self, movie_metadata_id: &str) -> Result<MovieMetadata, AppError>;
+    async fn movie(
+        &self,
+        movie_metadata_id: &str,
+        params: FetchParams,
+    ) -> Result<MovieMetadata, AppError>;
 
     /// Provider identifier
     fn provider_identifier(&self) -> &'static str;
@@ -104,11 +152,20 @@ pub trait MovieMetadataProvider {
 pub trait ShowMetadataProvider {
     /// Query for show
     #[allow(async_fn_in_trait)]
-    async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError>;
+    async fn show(
+        &self,
+        show_id: &str,
+        fetch_params: FetchParams,
+    ) -> Result<ShowMetadata, AppError>;
 
     /// Query for season
     #[allow(async_fn_in_trait)]
-    async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError>;
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        fetch_params: FetchParams,
+    ) -> Result<SeasonMetadata, AppError>;
 
     /// Query for episode
     #[allow(async_fn_in_trait)]
@@ -117,6 +174,7 @@ pub trait ShowMetadataProvider {
         show_id: &str,
         season: usize,
         episode: usize,
+        fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError>;
 
     /// Provider identifier
@@ -126,13 +184,25 @@ pub trait ShowMetadataProvider {
 #[axum::async_trait]
 pub trait DiscoverMetadataProvider {
     /// Multi search
-    async fn multi_search(&self, query: &str) -> Result<Vec<MetadataSearchResult>, AppError>;
+    async fn multi_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MetadataSearchResult>, AppError>;
 
     /// Show search
-    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError>;
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError>;
 
     /// Movie search
-    async fn movie_search(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError>;
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError>;
 
     /// External ids without self
     async fn external_ids(

@@ -16,8 +16,9 @@ use crate::app_state::AppError;
 
 use super::{
     request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
-    ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
-    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider, METADATA_CACHE_SIZE,
+    ExternalIdMetadata, FetchParams, MetadataImage, MetadataProvider, MetadataSearchResult,
+    MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    METADATA_CACHE_SIZE,
 };
 
 #[derive(Debug)]
@@ -147,7 +148,11 @@ impl TvdbApi {
 
 #[axum::async_trait]
 impl MovieMetadataProvider for TvdbApi {
-    async fn movie(&self, movie_metadata_id: &str) -> Result<MovieMetadata, AppError> {
+    async fn movie(
+        &self,
+        movie_metadata_id: &str,
+        params: FetchParams,
+    ) -> Result<MovieMetadata, AppError> {
         let id = movie_metadata_id.parse()?;
         if let Some(movie) = self.get_movie_from_cache(id) {
             return Ok(movie.into());
@@ -163,14 +168,23 @@ impl MovieMetadataProvider for TvdbApi {
 
 #[axum::async_trait]
 impl ShowMetadataProvider for TvdbApi {
-    async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError> {
+    async fn show(
+        &self,
+        show_id: &str,
+        fetch_params: FetchParams,
+    ) -> Result<ShowMetadata, AppError> {
         match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => Ok(s.into()),
             None => self.fetch_show(show_id.parse()?).await.map(Into::into),
         }
     }
 
-    async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError> {
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        fetch_params: FetchParams,
+    ) -> Result<SeasonMetadata, AppError> {
         let show = match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => s,
             None => self.fetch_show(show_id.parse()?).await?,
@@ -210,8 +224,9 @@ impl ShowMetadataProvider for TvdbApi {
         show_id: &str,
         season: usize,
         episode: usize,
+        fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError> {
-        let season = self.season(show_id, season).await?;
+        let season = self.season(show_id, season, fetch_params).await?;
         season
             .episodes
             .into_iter()
@@ -226,7 +241,11 @@ impl ShowMetadataProvider for TvdbApi {
 
 #[axum::async_trait]
 impl DiscoverMetadataProvider for TvdbApi {
-    async fn multi_search(&self, query: &str) -> Result<Vec<MetadataSearchResult>, AppError> {
+    async fn multi_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MetadataSearchResult>, AppError> {
         Ok(self
             .search_multi(query)
             .await?
@@ -235,7 +254,11 @@ impl DiscoverMetadataProvider for TvdbApi {
             .collect())
     }
 
-    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError> {
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
         Ok(self
             .search_series(query)
             .await?
@@ -244,7 +267,11 @@ impl DiscoverMetadataProvider for TvdbApi {
             .collect())
     }
 
-    async fn movie_search(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError> {
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError> {
         Ok(self
             .search_movie(query)
             .await?

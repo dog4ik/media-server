@@ -10,9 +10,9 @@ use crate::{
 };
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, MetadataProvider,
-    MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata,
-    ShowMetadataProvider,
+    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
+    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+    ShowMetadata, ShowMetadataProvider,
 };
 
 #[derive(Default)]
@@ -119,12 +119,14 @@ impl MetadataProvidersStack {
 
     pub async fn search_movie(&self, query: &str) -> anyhow::Result<Vec<MovieMetadata>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let lang: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: lang.0 };
         let mut out = Vec::new();
         let handles: Vec<_> = discover_providers
             .into_iter()
             .map(|p| {
                 let query = query.to_string();
-                tokio::spawn(async move { p.movie_search(&query).await })
+                tokio::spawn(async move { p.movie_search(&query, fetch_params).await })
             })
             .collect();
 
@@ -139,11 +141,13 @@ impl MetadataProvidersStack {
     pub async fn search_show(&self, query: &str) -> anyhow::Result<Vec<ShowMetadata>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
+        let lang: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: lang.0 };
         let handles: Vec<_> = discover_providers
             .into_iter()
             .map(|p| {
                 let query = query.to_string();
-                tokio::spawn(async move { p.show_search(&query).await })
+                tokio::spawn(async move { p.show_search(&query, fetch_params).await })
             })
             .collect();
 
@@ -158,11 +162,13 @@ impl MetadataProvidersStack {
     pub async fn multi_search(&self, query: &str) -> anyhow::Result<Vec<MetadataSearchResult>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
         let mut out = Vec::with_capacity(discover_providers.len());
+        let lang: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: lang.0 };
         let handles: Vec<_> = discover_providers
             .into_iter()
             .map(|p| {
                 let query = query.to_string();
-                tokio::spawn(async move { p.multi_search(&query).await })
+                tokio::spawn(async move { p.multi_search(&query, fetch_params).await })
             })
             .collect();
 
@@ -184,7 +190,11 @@ impl MetadataProvidersStack {
             .into_iter()
             .find(|p| p.provider_identifier() == provider.to_string())
             .context("provider is not supported")?;
-        provider.movie(movie_id).await
+
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
+
+        provider.movie(movie_id, fetch_params).await
     }
 
     pub async fn get_show(
@@ -197,7 +207,9 @@ impl MetadataProvidersStack {
             .into_iter()
             .find(|p| p.provider_identifier() == provider.to_string())
             .context("provider is not supported")?;
-        provider.show(show_id).await
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
+        provider.show(show_id, fetch_params).await
     }
 
     pub async fn get_season(
@@ -211,7 +223,9 @@ impl MetadataProvidersStack {
             .into_iter()
             .find(|p| p.provider_identifier() == provider.to_string())
             .context("provider is not supported")?;
-        provider.season(show_id, season).await
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
+        provider.season(show_id, season, fetch_params).await
     }
 
     pub async fn get_episode(
@@ -226,7 +240,11 @@ impl MetadataProvidersStack {
             .into_iter()
             .find(|p| p.provider_identifier() == provider.to_string())
             .context("provider is not supported")?;
-        provider.episode(show_id, season, episode).await
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
+        provider
+            .episode(show_id, season, episode, fetch_params)
+            .await
     }
 
     pub async fn get_external_ids(

@@ -12,12 +12,12 @@ use time::Date;
 
 use crate::app_state::AppError;
 
-use super::METADATA_CACHE_SIZE;
 use super::{
     request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
     ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
     MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
 };
+use super::{FetchParams, Language, METADATA_CACHE_SIZE};
 
 #[derive(Debug)]
 pub struct TmdbApi {
@@ -78,6 +78,11 @@ impl From<TmdbImage> for MetadataImage {
     fn from(val: TmdbImage) -> Self {
         MetadataImage::new(val.url)
     }
+}
+
+fn append_language(url: &mut Url, language: Language) {
+    url.query_pairs_mut()
+        .append_pair("language", &language.to_string());
 }
 
 impl TmdbApi {
@@ -155,14 +160,20 @@ impl TmdbApi {
         self.client.request(req).await
     }
 
-    async fn search_multi(&self, query: &str) -> Result<TmdbSearch<TmdbFindMultiResult>, AppError> {
+    async fn search_multi(
+        &self,
+        query: &str,
+        lang: Language,
+    ) -> Result<TmdbSearch<TmdbFindMultiResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
             .push("search")
             .push("multi");
-        url.query_pairs_mut().extend_pairs(query);
+        url.query_pairs_mut()
+            .extend_pairs(query)
+            .append_pair("language", &lang.to_string());
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
     }
@@ -171,6 +182,7 @@ impl TmdbApi {
         &self,
         tmdb_show_id: usize,
         season: usize,
+        fetch_params: FetchParams,
     ) -> Result<TmdbShowSeason, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
@@ -179,6 +191,7 @@ impl TmdbApi {
             .push(&tmdb_show_id.to_string())
             .push("season")
             .push(&season.to_string());
+        append_language(&mut url, fetch_params.lang);
         let req = Request::new(Method::GET, url);
         let response: TmdbShowSeason = self.client.request(req).await?;
 
@@ -192,6 +205,7 @@ impl TmdbApi {
         tmdb_show_id: usize,
         season: usize,
         episode: usize,
+        params: FetchParams,
     ) -> Result<TmdbSeasonEpisode, AppError> {
         //FIX: case when episode cant be found by metadata provider while we have its siblings in
         //cache
@@ -204,7 +218,7 @@ impl TmdbApi {
             );
             Ok(cache_episode)
         } else {
-            let response = self.tv_show_season(tmdb_show_id, season).await?;
+            let response = self.tv_show_season(tmdb_show_id, season, params).await?;
             self.update_cache(tmdb_show_id, season, response.episodes);
             self.get_from_cache(tmdb_show_id, season, episode)
                 .ok_or(AppError::not_found("Could not found episode in cache"))
@@ -245,23 +259,35 @@ impl TmdbApi {
         Ok(res)
     }
 
-    pub async fn movie_details(&self, movie_id: usize) -> Result<TmdbMovieDetails, AppError> {
+    pub async fn movie_details(
+        &self,
+        movie_id: usize,
+        lang: Language,
+    ) -> Result<TmdbMovieDetails, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
             .push("movie")
             .push(&movie_id.to_string());
+        url.query_pairs_mut()
+            .append_pair("language", &lang.to_string());
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
     }
 
-    pub async fn show_details(&self, show_id: usize) -> Result<TmdbShowDetails, AppError> {
+    pub async fn show_details(
+        &self,
+        show_id: usize,
+        lang: Language,
+    ) -> Result<TmdbShowDetails, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
             .push("tv")
             .push(&show_id.to_string());
+        url.query_pairs_mut()
+            .append_pair("language", &lang.to_string());
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
@@ -367,8 +393,14 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
 
 #[axum::async_trait]
 impl MovieMetadataProvider for TmdbApi {
-    async fn movie(&self, metadata_id: &str) -> Result<MovieMetadata, AppError> {
-        let movie = self.movie_details(metadata_id.parse()?).await?;
+    async fn movie(
+        &self,
+        metadata_id: &str,
+        params: FetchParams,
+    ) -> Result<MovieMetadata, AppError> {
+        let movie = self
+            .movie_details(metadata_id.parse()?, params.lang)
+            .await?;
         Ok(movie.into())
     }
 
@@ -379,8 +411,12 @@ impl MovieMetadataProvider for TmdbApi {
 
 #[axum::async_trait]
 impl ShowMetadataProvider for TmdbApi {
-    async fn show(&self, metadata_show_id: &str) -> Result<ShowMetadata, AppError> {
-        self.show_details(metadata_show_id.parse()?)
+    async fn show(
+        &self,
+        metadata_show_id: &str,
+        fetch_params: FetchParams,
+    ) -> Result<ShowMetadata, AppError> {
+        self.show_details(metadata_show_id.parse()?, fetch_params.lang)
             .await
             .map(|r| r.into())
     }
@@ -389,9 +425,12 @@ impl ShowMetadataProvider for TmdbApi {
         &self,
         metadata_show_id: &str,
         season: usize,
+        fetch_params: FetchParams,
     ) -> Result<SeasonMetadata, AppError> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
-        self.tv_show_season(show_id, season).await.map(|s| s.into())
+        self.tv_show_season(show_id, season, fetch_params)
+            .await
+            .map(|s| s.into())
     }
 
     async fn episode(
@@ -399,9 +438,10 @@ impl ShowMetadataProvider for TmdbApi {
         metadata_show_id: &str,
         season: usize,
         episode: usize,
+        fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
-        self.tv_show_episode(show_id, season, episode)
+        self.tv_show_episode(show_id, season, episode, fetch_params)
             .await
             .map(|e| e.into())
     }
@@ -413,8 +453,12 @@ impl ShowMetadataProvider for TmdbApi {
 
 #[axum::async_trait]
 impl DiscoverMetadataProvider for TmdbApi {
-    async fn multi_search(&self, query: &str) -> Result<Vec<MetadataSearchResult>, AppError> {
-        let content = self.search_multi(query).await?;
+    async fn multi_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MetadataSearchResult>, AppError> {
+        let content = self.search_multi(query, fetch_params.lang).await?;
         Ok(content
             .results
             .into_iter()
@@ -422,12 +466,20 @@ impl DiscoverMetadataProvider for TmdbApi {
             .collect())
     }
 
-    async fn show_search(&self, query: &str) -> Result<Vec<ShowMetadata>, AppError> {
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
         let shows = self.search_tv_show(query).await?;
         Ok(shows.results.into_iter().map(|x| x.into()).collect())
     }
 
-    async fn movie_search(&self, query: &str) -> Result<Vec<MovieMetadata>, AppError> {
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError> {
         let content = self.search_movie(query).await?;
         Ok(content.results.into_iter().map(|x| x.into()).collect())
     }

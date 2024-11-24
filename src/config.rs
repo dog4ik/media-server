@@ -21,6 +21,8 @@ use tokio::{
 };
 use utoipa::openapi::RefOr;
 
+use crate::metadata;
+
 fn camel_to_snake_case(input: &str) -> String {
     let mut snake = String::new();
     for (i, ch) in input.char_indices() {
@@ -248,6 +250,7 @@ impl ConfigStore {
         store.register_value::<TorrentIndexesOrder>();
         store.register_value::<UpnpEnabled>();
         store.register_value::<UpnpTtl>();
+        store.register_value::<MetadataLanguage>();
 
         store
     }
@@ -471,7 +474,7 @@ impl<T: ConfigValue> utoipa::PartialSchema for UtoipaConfigValue<T> {
                 schema::Schema::AnyOf(_) => panic!("Can't handle any_of schema type"),
                 _ => panic!("Can't handle other schema type"),
             },
-            RefOr::Ref(r) => panic!("Can't ref type: {}", r.ref_location),
+            RefOr::Ref(r) => RefOr::Ref(r.clone()),
         };
         let key = T::KEY.unwrap_or(&snake_name);
         let key_schema = schema::ObjectBuilder::new()
@@ -519,7 +522,8 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<IntroDetectionFfmpegBuild>::schema())
             .item(UtoipaConfigValue::<WebUiPath>::schema())
             .item(UtoipaConfigValue::<UpnpEnabled>::schema())
-            .item(UtoipaConfigValue::<UpnpTtl>::schema());
+            .item(UtoipaConfigValue::<UpnpTtl>::schema())
+            .item(UtoipaConfigValue::<MetadataLanguage>::schema());
         let array = schema::ArrayBuilder::new().items(schema).build();
         array.into()
     }
@@ -820,6 +824,16 @@ impl ConfigValue for TorrentIndexesOrder {}
 impl Default for TorrentIndexesOrder {
     fn default() -> Self {
         Self(vec!["tpb".to_owned()])
+    }
+}
+
+/// Metadata language
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+pub struct MetadataLanguage(pub metadata::Language);
+impl ConfigValue for MetadataLanguage {}
+impl Default for MetadataLanguage {
+    fn default() -> Self {
+        Self(metadata::Language::default())
     }
 }
 

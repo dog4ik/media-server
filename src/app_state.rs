@@ -29,7 +29,7 @@ use crate::{
     },
     metadata::{
         metadata_stack::MetadataProvidersStack, tmdb_api::TmdbApi, ContentType,
-        DiscoverMetadataProvider, ExternalIdMetadata, MetadataProvider, MovieMetadata,
+        DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider, MovieMetadata,
         ShowMetadata, ShowMetadataProvider,
     },
     progress::{TaskKind, TaskResource, VideoTaskType},
@@ -175,6 +175,11 @@ impl IntoResponse for AppError {
 }
 
 impl AppState {
+    pub fn metadata_fetch_params(&self) -> FetchParams {
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        FetchParams { lang: language.0 }
+    }
+
     pub async fn get_source_by_id(&self, id: i64) -> Result<Source, AppError> {
         let library = self.library.lock().unwrap();
         library
@@ -214,6 +219,8 @@ impl AppState {
 
     pub async fn reset_show_metadata(&self, show_id: i64) -> Result<(), AppError> {
         self.partial_refresh().await;
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
         let orphans = sqlx::query!(
             r#"SELECT videos.id FROM videos 
 JOIN episodes ON episodes.video_id = videos.id
@@ -248,9 +255,16 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let identifier = show_episodes.first().unwrap();
-                let local_show_id = handle_series(identifier, &db, discover_providers).await?;
-                handle_seasons_and_episodes(&db, local_show_id, show_episodes, &show_providers)
-                    .await?;
+                let local_show_id =
+                    handle_series(identifier, &db, fetch_params, discover_providers).await?;
+                handle_seasons_and_episodes(
+                    &db,
+                    local_show_id,
+                    show_episodes,
+                    fetch_params,
+                    &show_providers,
+                )
+                .await?;
                 Ok(())
             });
         }
@@ -274,12 +288,14 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         )
             .fetch_one(&self.db.pool).await?;
         self.db.remove_movie(movie_id).await?;
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
         let movie = {
             let library = self.library.lock().unwrap();
             library.get_movie(video.id).unwrap()
         };
         let discover_providers = self.providers_stack.discover_providers();
-        handle_movie(movie, self.db, discover_providers).await?;
+        handle_movie(movie, self.db, fetch_params, discover_providers).await?;
         Ok(())
     }
 
@@ -287,6 +303,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         &self,
         show_id: i64,
         new_metadata: ShowMetadata,
+        fetch_params: FetchParams,
     ) -> Result<(), AppError> {
         self.partial_refresh().await;
         let orphans = sqlx::query!(
@@ -355,7 +372,14 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         };
 
         let show_providers = self.providers_stack.show_providers();
-        handle_seasons_and_episodes(self.db, local_show_id, orphans, &show_providers).await?;
+        handle_seasons_and_episodes(
+            self.db,
+            local_show_id,
+            orphans,
+            fetch_params,
+            &show_providers,
+        )
+        .await?;
 
         Ok(())
     }
@@ -599,6 +623,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
 
+        let language: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: language.0 };
+
         for mut show_episodes in new_episodes
             .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
             .map(Vec::from)
@@ -610,9 +637,16 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let show_providers = providers_stack.show_providers();
             show_scan_handles.spawn(async move {
                 let identifier = show_episodes.first().unwrap();
-                let local_show_id = handle_series(identifier, &db, discover_providers).await?;
-                handle_seasons_and_episodes(&db, local_show_id, show_episodes, &show_providers)
-                    .await?;
+                let local_show_id =
+                    handle_series(identifier, &db, fetch_params, discover_providers).await?;
+                handle_seasons_and_episodes(
+                    &db,
+                    local_show_id,
+                    show_episodes,
+                    fetch_params,
+                    &show_providers,
+                )
+                .await?;
                 Ok(())
             });
         }
@@ -661,8 +695,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         for movie in new_movies {
             let discover_providers = discover_providers.clone();
             let db = self.db;
-            movie_scan_handles
-                .spawn(async move { handle_movie(movie, db, discover_providers).await });
+            movie_scan_handles.spawn(async move {
+                handle_movie(movie, db, fetch_params, discover_providers).await
+            });
         }
 
         while let Some(result) = movie_scan_handles.join_next().await {
@@ -746,6 +781,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 async fn handle_series(
     item: &LibraryItem<ShowIdentifier>,
     db: &Db,
+    search_params: FetchParams,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
     // BUG: this will perform search with full text search so for example if we search for Dexter it will
@@ -761,7 +797,10 @@ async fn handle_series(
             if provider.provider_identifier() == "local" {
                 continue;
             }
-            if let Ok(search_result) = provider.show_search(&item.identifier.title).await {
+            if let Ok(search_result) = provider
+                .show_search(&item.identifier.title, search_params)
+                .await
+            {
                 let Some(first_result) = search_result.into_iter().next() else {
                     continue;
                 };
@@ -897,6 +936,7 @@ async fn handle_seasons_and_episodes(
     db: &Db,
     local_show_id: i64,
     mut show_episodes: Vec<LibraryItem<ShowIdentifier>>,
+    fetch_params: FetchParams,
     show_providers: &Vec<&'static (dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<()> {
     show_episodes.sort_unstable_by_key(|x| x.identifier.season);
@@ -918,6 +958,7 @@ async fn handle_seasons_and_episodes(
                 local_show_id,
                 external_ids.clone(),
                 season,
+                fetch_params,
                 &db,
                 &show_providers,
             )
@@ -935,6 +976,7 @@ async fn handle_seasons_and_episodes(
                         local_season_id,
                         episode,
                         &db,
+                        fetch_params,
                         &show_providers,
                     )
                     .await
@@ -971,16 +1013,20 @@ async fn handle_season(
     local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
     item: LibraryItem<ShowIdentifier>,
+    fetch_params: FetchParams,
     db: &Db,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
     let season = item.identifier.season as usize;
-    let Ok(local_season) = db.season(&local_show_id.to_string(), season).await else {
+    let Ok(local_season) = db
+        .season(&local_show_id.to_string(), season, fetch_params)
+        .await
+    else {
         for provider in providers {
             let p = MetadataProvider::from_str(provider.provider_identifier())
                 .expect("all providers are known");
             if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
-                let Ok(season) = provider.season(&id.id, season).await else {
+                let Ok(season) = provider.season(&id.id, season, fetch_params).await else {
                     continue;
                 };
                 let id = db
@@ -1004,12 +1050,13 @@ async fn handle_episode(
     local_season_id: i64,
     item: LibraryItem<ShowIdentifier>,
     db: &Db,
+    fetch_params: FetchParams,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
     let season = item.identifier.season as usize;
     let episode = item.identifier.episode as usize;
     let Ok(local_episode) = db
-        .episode(&local_show_id.to_string(), season, episode)
+        .episode(&local_show_id.to_string(), season, episode, fetch_params)
         .await
     else {
         println!(
@@ -1022,7 +1069,10 @@ async fn handle_episode(
             let p = MetadataProvider::from_str(provider.provider_identifier())
                 .expect("all providers are known");
             if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
-                let Ok(episode) = provider.episode(&id.id, season, episode).await else {
+                let Ok(episode) = provider
+                    .episode(&id.id, season, episode, fetch_params)
+                    .await
+                else {
                     continue;
                 };
                 let poster = episode.poster.clone();
@@ -1057,6 +1107,7 @@ async fn handle_episode(
 async fn handle_movie(
     item: LibraryItem<MovieIdentifier>,
     db: &Db,
+    fetch_params: FetchParams,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
     let db_movies = db.search_movie(&item.identifier.title).await?;
@@ -1066,7 +1117,10 @@ async fn handle_movie(
             != item.identifier.title.split_whitespace().count()
     {
         for provider in providers {
-            if let Ok(search_result) = provider.movie_search(&item.identifier.title).await {
+            if let Ok(search_result) = provider
+                .movie_search(&item.identifier.title, fetch_params)
+                .await
+            {
                 let Some(first_result) = search_result.into_iter().next() else {
                     continue;
                 };

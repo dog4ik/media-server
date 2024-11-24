@@ -366,7 +366,8 @@ pub async fn fix_show_metadata(
         .providers_stack
         .get_show(&new_id.id, provider_query.provider)
         .await?;
-    app_state.fix_show_metadata(show_id, show).await
+    let params = app_state.metadata_fetch_params();
+    app_state.fix_show_metadata(show_id, show, params).await
 }
 
 /// Fix movie metadata match
@@ -418,6 +419,7 @@ pub async fn fix_metadata(
     Query(content_type_query): Query<ContentTypeQuery>,
     Query(new_id): Query<StringIdQuery>,
 ) -> Result<(), AppError> {
+    let params = app_state.metadata_fetch_params();
     match content_type_query.content_type {
         ContentType::Movie => {
             let movie = app_state
@@ -431,7 +433,7 @@ pub async fn fix_metadata(
                 .providers_stack
                 .get_show(&new_id.id, provider_query.provider)
                 .await?;
-            app_state.fix_show_metadata(content_id, show).await
+            app_state.fix_show_metadata(content_id, show, params).await
         }
     }
 }
