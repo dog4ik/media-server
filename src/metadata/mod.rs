@@ -1,4 +1,4 @@
-use std::{fmt::Display, str::FromStr, time::Duration};
+use std::{fmt::Display, num::NonZero, str::FromStr, time::Duration};
 
 use crate::{
     app_state::AppError,
@@ -16,6 +16,8 @@ pub mod request_client;
 pub mod tmdb_api;
 #[allow(unused)]
 pub mod tvdb_api;
+
+pub const METADATA_CACHE_SIZE: NonZero<usize> = NonZero::new(20).unwrap();
 
 #[derive(Debug, Clone, utoipa::ToSchema)]
 pub struct MetadataImage(pub Url);

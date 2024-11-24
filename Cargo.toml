@@ -23,6 +23,7 @@ uuid = { version = "1.11.0", features = ["v4", "serde"] }
 reqwest = { version = "0.12.9", features = ["json", "stream"] }
 serde = { version = "1.0.215", features = ["serde_derive"] }
 rand = "0.8.5"
+lru = "0.12.5"
 
 [dependencies]
 tokio = { workspace = true, features = ["full"] }
@@ -36,6 +37,7 @@ uuid = { workspace = true, features = ["v4", "serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["serde_derive"] }
 rand = { workspace = true }
+lru = { workspace = true }
 base64 = "0.22.1"
 bytes = "1.8.0"
 clap = { version = "4.5.21", features = ["derive"] }

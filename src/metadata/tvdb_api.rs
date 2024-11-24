@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use lru::LruCache;
 use reqwest::{
     header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client, Method, Request, Url,
@@ -16,14 +17,14 @@ use crate::app_state::AppError;
 use super::{
     request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
     ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
-    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider, METADATA_CACHE_SIZE,
 };
 
 #[derive(Debug)]
 pub struct TvdbApi {
     client: LimitedRequestClient,
-    show_cache: Mutex<HashMap<usize, TvdbSeriesExtendedRecord>>,
-    movie_cache: Mutex<HashMap<usize, TvdbMovieExtendedRecord>>,
+    show_cache: Mutex<LruCache<usize, TvdbSeriesExtendedRecord>>,
+    movie_cache: Mutex<LruCache<usize, TvdbMovieExtendedRecord>>,
     base_url: Url,
 }
 
@@ -43,8 +44,8 @@ impl TvdbApi {
         let base_url = Url::parse(Self::API_URL).expect("url to parse");
         Self {
             client: limited_client,
-            show_cache: Mutex::new(HashMap::new()),
-            movie_cache: Mutex::new(HashMap::new()),
+            show_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
+            movie_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             base_url,
         }
     }
@@ -111,7 +112,7 @@ impl TvdbApi {
         let req = Request::new(Method::GET, url);
         let res: TvdbResponse<TvdbMovieExtendedRecord> = self.client.request(req).await?;
         let mut movie_cache = self.movie_cache.lock().unwrap();
-        movie_cache.insert(id, res.data.clone());
+        movie_cache.put(id, res.data.clone());
         Ok(res.data)
     }
 
@@ -131,7 +132,7 @@ impl TvdbApi {
         let req = Request::new(Method::GET, url);
         let res: TvdbResponse<TvdbSeriesExtendedRecord> = self.client.request(req).await?;
         let mut show_cache = self.show_cache.lock().unwrap();
-        show_cache.insert(id, res.data.clone());
+        show_cache.put(id, res.data.clone());
         Ok(res.data)
     }
 
