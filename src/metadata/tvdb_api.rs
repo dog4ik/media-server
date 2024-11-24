@@ -1,5 +1,6 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
+    fmt::Display,
     sync::Mutex,
     time::Duration,
 };
@@ -162,11 +163,45 @@ impl MovieMetadataProvider for TvdbApi {
 #[axum::async_trait]
 impl ShowMetadataProvider for TvdbApi {
     async fn show(&self, show_id: &str) -> Result<ShowMetadata, AppError> {
-        self.fetch_show(show_id.parse()?).await.map(|r| r.into())
+        match self.get_show_from_cache(show_id.parse()?) {
+            Some(s) => Ok(s.into()),
+            None => self.fetch_show(show_id.parse()?).await.map(Into::into),
+        }
     }
 
     async fn season(&self, show_id: &str, season: usize) -> Result<SeasonMetadata, AppError> {
-        todo!()
+        let show = match self.get_show_from_cache(show_id.parse()?) {
+            Some(s) => s,
+            None => self.fetch_show(show_id.parse()?).await?,
+        };
+        let mut episodes = show.episodes;
+        let episodes = episodes
+            .into_iter()
+            .filter(|e| e.season_number == season)
+            .map(|e| e.into())
+            .collect();
+        let season = show
+            .seasons
+            .into_iter()
+            .find(|s| s.number == season)
+            .ok_or(AppError::not_found("Season not found"))?;
+
+        let plot = season
+            .overview_translations
+            .and_then(|t| t.into_iter().next());
+        let poster = season
+            .image
+            .and_then(|i| Some(MetadataImage::new(i.parse().ok()?)));
+
+        Ok(SeasonMetadata {
+            metadata_id: show.id.to_string(),
+            metadata_provider: MetadataProvider::Tvdb,
+            release_date: season.year,
+            episodes,
+            plot,
+            poster,
+            number: season.number,
+        })
     }
 
     async fn episode(
@@ -175,7 +210,12 @@ impl ShowMetadataProvider for TvdbApi {
         season: usize,
         episode: usize,
     ) -> Result<EpisodeMetadata, AppError> {
-        todo!()
+        let season = self.season(show_id, season).await?;
+        season
+            .episodes
+            .into_iter()
+            .find(|e| e.number == episode)
+            .ok_or(AppError::not_found("episode is not found"))
     }
 
     fn provider_identifier(&self) -> &'static str {
@@ -249,14 +289,20 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
         let poster = self
             .image
             .map(|p| MetadataImage::new(Url::parse(&p).unwrap()));
-        // 3 is somehow 16 / 9 image
+        // 3 means 16 / 9 image
         let backdrop = self
             .artworks
             .iter()
             .find(|a| a.artwork_type == 3)
             .and_then(|a| Some(MetadataImage::new(Url::parse(&a.image).ok()?)));
 
-        let seasons: HashSet<_> = self.episodes.iter().map(|x| x.season_number).collect();
+        // season_number 0 is extras
+        let seasons: BTreeSet<_> = self
+            .seasons
+            .iter()
+            .map(|s| s.number)
+            .filter(|s| *s != 0)
+            .collect();
 
         ShowMetadata {
             metadata_id: self.id.to_string(),
@@ -274,7 +320,9 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
 
 impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
     fn into(self) -> MovieMetadata {
-        let poster = Some(self.image).map(|p| MetadataImage::new(Url::parse(&p).unwrap()));
+        let poster = self
+            .image
+            .map(|p| MetadataImage::new(Url::parse(&p).unwrap()));
         // 3 is somehow 16 / 9 image
         let backdrop = self
             .artworks
@@ -293,7 +341,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             metadata_provider: MetadataProvider::Tvdb,
             poster,
             backdrop,
-            plot: Some(plot),
+            plot,
             release_date: self.first_release.map(|r| r.date),
             runtime: self.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: self.name,
@@ -341,6 +389,22 @@ impl From<TvdbSearchResult> for ShowMetadata {
     }
 }
 
+impl From<TvdbEpisode> for EpisodeMetadata {
+    fn from(value: TvdbEpisode) -> Self {
+        let poster = value.image.map(Into::into);
+        Self {
+            metadata_id: value.id.to_string(),
+            metadata_provider: MetadataProvider::Tvdb,
+            release_date: value.year,
+            number: value.number,
+            title: value.name,
+            plot: value.overview,
+            season_number: value.season_number,
+            runtime: value.runtime.map(|r| Duration::from_secs(r as u64 * 60)),
+            poster,
+        }
+    }
+}
 impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
     type Error = AppError;
     fn try_from(val: TvdbSearchResult) -> Result<Self, Self::Error> {
@@ -382,6 +446,30 @@ impl TryInto<ExternalIdMetadata> for TvdbRemoteIds {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct TvdbPoster(String);
+
+impl TvdbPoster {
+    const BASE_PATH: &str = "https://artworks.thetvdb.com";
+}
+
+impl Display for TvdbPoster {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", Self::BASE_PATH, self.0)
+    }
+}
+
+impl From<TvdbPoster> for MetadataImage {
+    fn from(value: TvdbPoster) -> Self {
+        Self(
+            value
+                .to_string()
+                .parse()
+                .expect("Tvdb images are valid urls"),
+        )
+    }
+}
+
+#[derive(Debug, Clone, Deserialize)]
 struct TvdbSearchResult {
     country: Option<String>,
     id: String,
@@ -413,9 +501,9 @@ struct TvdbEpisode {
     name_translations: Option<Vec<String>>,
     overview: Option<String>,
     overview_translations: Option<Vec<String>>,
-    image: Option<String>,
+    image: Option<TvdbPoster>,
     image_type: Option<usize>,
-    is_movie: usize,
+    is_movie: Option<usize>,
     seasons: Option<Vec<TvdbSeasonBaseRecord>>,
     number: usize,
     season_number: usize,
@@ -453,8 +541,8 @@ struct TvdbTrailer {
     id: usize,
     name: String,
     url: String,
-    language: String,
-    runtime: usize,
+    language: Option<String>,
+    runtime: Option<usize>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -471,11 +559,11 @@ struct TvdbRemoteIds {
 struct TvdbArtwork {
     id: usize,
     image: String,
-    thumbnail: String,
+    thumbnail: Option<String>,
     language: Option<String>,
     #[serde(rename = "type")]
     artwork_type: usize,
-    score: usize,
+    score: Option<usize>,
     width: usize,
     height: usize,
     includes_text: bool,
@@ -497,6 +585,7 @@ struct TvdbSeriesExtendedRecord {
     original_country: Option<String>,
     original_language: Option<String>,
     default_season_type: usize,
+    seasons: Vec<TvdbSeasonBaseRecord>,
     is_order_randomized: bool,
     last_updated: Option<String>,
     average_runtime: Option<usize>,
@@ -515,12 +604,12 @@ struct TvdbSeriesExtendedRecord {
 struct TvdbMovieExtendedRecord {
     id: String,
     name: String,
-    image: String,
+    image: Option<String>,
     translations: TvdbTranslations,
-    score: usize,
+    score: Option<usize>,
     runtime: Option<usize>,
     last_updated: String,
-    year: String,
+    year: Option<String>,
     trailers: Vec<TvdbTrailer>,
     genres: Vec<TvdbGenre>,
     artworks: Vec<TvdbArtwork>,
@@ -528,8 +617,8 @@ struct TvdbMovieExtendedRecord {
     characters: Vec<TvdbCharacter>,
     budget: Option<String>,
     box_office: Option<String>,
-    original_country: String,
-    original_language: String,
+    original_country: Option<String>,
+    original_language: Option<String>,
     first_release: Option<TvdbRelease>,
 }
 
@@ -543,7 +632,7 @@ struct TvdbTranslations {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TvdbTranslation {
-    overview: String,
+    overview: Option<String>,
     language: String,
     tagline: Option<String>,
     is_primary: Option<bool>,
@@ -561,7 +650,7 @@ struct TvdbRelease {
 struct TvdbCharacter {
     id: usize,
     name: String,
-    people_id: usize,
+    people_id: Option<usize>,
     series_id: Option<usize>,
     series: Option<usize>,
     movie: Option<usize>,
