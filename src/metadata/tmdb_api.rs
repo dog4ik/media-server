@@ -136,6 +136,7 @@ impl TmdbApi {
     pub async fn search_movie(
         &self,
         query: &str,
+        lang: Language,
     ) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
@@ -143,7 +144,9 @@ impl TmdbApi {
             .unwrap()
             .push("search")
             .push("movie");
-        url.query_pairs_mut().extend_pairs(query);
+        url.query_pairs_mut()
+            .extend_pairs(query)
+            .append_pair("language", &lang.to_string());
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
     }
@@ -151,11 +154,14 @@ impl TmdbApi {
     pub async fn search_tv_show(
         &self,
         query: &str,
+        language: Language,
     ) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("search").push("tv");
-        url.query_pairs_mut().extend_pairs(query);
+        url.query_pairs_mut()
+            .extend_pairs(query)
+            .append_pair("language", &language.to_string());
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
     }
@@ -471,7 +477,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<ShowMetadata>, AppError> {
-        let shows = self.search_tv_show(query).await?;
+        let shows = self.search_tv_show(query, fetch_params.lang).await?;
         Ok(shows.results.into_iter().map(|x| x.into()).collect())
     }
 
@@ -480,7 +486,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<MovieMetadata>, AppError> {
-        let content = self.search_movie(query).await?;
+        let content = self.search_movie(query, fetch_params.lang).await?;
         Ok(content.results.into_iter().map(|x| x.into()).collect())
     }
 
