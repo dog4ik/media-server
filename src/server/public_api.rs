@@ -755,7 +755,7 @@ pub async fn get_movie(
         ("id", description = "Show id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -780,7 +780,7 @@ pub async fn show_poster(
         ("id", description = "Season id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -805,7 +805,7 @@ pub async fn season_poster(
         ("id", description = "Show id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, description = "Image not found", body = AppError)
     ),
@@ -830,7 +830,7 @@ pub async fn show_backdrop(
         ("id", description = "Movie id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -855,7 +855,7 @@ pub async fn movie_poster(
         ("id", description = "Movie id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, body = AppError)
     ),
@@ -880,7 +880,7 @@ pub async fn movie_backdrop(
         ("id", description = "Episode id"),
     ),
     responses(
-        (status = 200, content_type = "image/jpeg"),
+        (status = 200, content_type = "image/*"),
         (status = 304),
         (status = 404, body = AppError)
     ),
