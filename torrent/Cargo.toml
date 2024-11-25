@@ -9,22 +9,22 @@ edition = "2021"
 clap = { version = "4.5.20", features = ["derive"] }
 
 [dependencies]
+lru = { workspace = true }
 serde_bencode = "0.2.4"
 serde_urlencoded = "0.7.1"
-serde_json = "1.0.116"
-serde = { version = "1.0.199", features = ["serde_derive"] }
-anyhow = "1.0.82"
+serde = { workspace = true }
+anyhow = { workspace = true }
 bytes = { version = "1.6.0", features = ["serde"] }
 sha1 = "0.10.6"
 hex = "0.4.3"
-tokio = { version = "1.37.0", features = ["full"] }
-tokio-util = { version = "0.7.10", features = ["full"] }
+tokio = { workspace = true }
+tokio-util = { workspace = true }
 tokio-stream = { version = "0.1.15", features = ["full"] }
-reqwest = "0.12.4"
-rand = "0.8.5"
-tracing = "0.1.40"
+reqwest = { workspace = true }
+rand = { workspace = true }
+tracing = { workspace = true }
 tracing-test = "0.2.4"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
-uuid = { version = "1.8.0", features = ["v4", "serde"] }
+uuid = { workspace = true }
 sysinfo = "0.30.12"
 flume = { version = "0.11.0", features = ["async"] }

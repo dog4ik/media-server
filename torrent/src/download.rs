@@ -575,12 +575,6 @@ pub struct TrackerStats {
     pub leechers: Option<usize>,
 }
 
-impl Display for DownloadProgress {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", serde_json::to_string(&self).unwrap())
-    }
-}
-
 pub trait ProgressConsumer: Send + 'static {
     fn consume_progress(&mut self, progress: DownloadProgress);
 }
