@@ -11,6 +11,8 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
+pub mod library_scan;
+pub mod local_provider;
 pub mod metadata_stack;
 pub mod request_client;
 pub mod tmdb_api;
@@ -24,20 +26,22 @@ pub const METADATA_CACHE_SIZE: NonZero<usize> = NonZero::new(20).unwrap();
 pub enum Language {
     #[default]
     En,
-    Sp,
-    Ge,
+    Es,
+    De,
     Fr,
     Ru,
+    Ja,
 }
 
 impl Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let language = match self {
             Language::En => "en",
-            Language::Sp => "sp",
-            Language::Ge => "ge",
+            Language::Es => "es",
+            Language::De => "de",
             Language::Fr => "fr",
             Language::Ru => "ru",
+            Language::Ja => "ja",
         };
         write!(f, "{}", language)
     }
@@ -49,10 +53,11 @@ impl FromStr for Language {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "en" => Ok(Language::En),
-            "sp" => Ok(Language::Sp),
-            "ge" => Ok(Language::Ge),
+            "es" => Ok(Language::Es),
+            "de" => Ok(Language::De),
             "fr" => Ok(Language::Fr),
             "ru" => Ok(Language::Ru),
+            "ja" => Ok(Language::Ja),
             _ => Err(anyhow::anyhow!("Unsupported language: {s}")),
         }
     }
@@ -363,10 +368,9 @@ impl From<ShowMetadata> for MetadataSearchResult {
 }
 
 impl EpisodeMetadata {
-    pub fn into_db_episode(self, season_id: i64, video_id: i64, duration: Duration) -> DbEpisode {
+    pub fn into_db_episode(self, season_id: i64, duration: Duration) -> DbEpisode {
         DbEpisode {
             id: None,
-            video_id,
             season_id,
             title: self.title,
             number: self.number as i64,
@@ -419,7 +423,7 @@ impl ShowMetadata {
 }
 
 impl MovieMetadata {
-    pub async fn into_db_movie(self, video_id: i64, duration: Duration) -> DbMovie {
+    pub fn into_db_movie(self, duration: Duration) -> DbMovie {
         let poster;
         if let Some(metadata_image) = self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -430,7 +434,6 @@ impl MovieMetadata {
 
         DbMovie {
             id: None,
-            video_id,
             title: self.title,
             release_date: self.release_date,
             poster,
