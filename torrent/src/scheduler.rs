@@ -2,6 +2,7 @@ use std::{cmp::Reverse, fmt::Display, ops::Range};
 
 use anyhow::ensure;
 use bytes::Bytes;
+use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::{
@@ -213,6 +214,10 @@ impl PendingPieceV2 {
         };
         Ok(())
     }
+
+    pub fn is_sub_rational(&self) -> bool {
+        self.is_sub_rational
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -384,11 +389,9 @@ impl Scheduler {
                         utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
                     let pending_piece = PendingPieceV2::new(piece_len);
                     self.pending_pieces.push(new_piece);
-                    self.piece_table[new_piece].pending_blocks = Some(pending_piece);
                     let pending_piece = self.piece_table[new_piece]
                         .pending_blocks
-                        .as_mut()
-                        .expect("just inserted it");
+                        .insert(pending_piece);
 
                     while let Some(position) = pending_piece.pend_block(peer.id) {
                         let block = Block::from_position(new_piece as u32, position);
@@ -424,11 +427,9 @@ impl Scheduler {
                     let pending_piece = PendingPieceV2::new_sub_rational(piece_len);
                     self.sub_rational_amount += 1;
                     self.pending_pieces.push(new_piece);
-                    self.piece_table[new_piece].pending_blocks = Some(pending_piece);
                     let pending_piece = self.piece_table[new_piece]
                         .pending_blocks
-                        .as_mut()
-                        .expect("just inserted it");
+                        .insert(pending_piece);
 
                     while let Some(position) = pending_piece.pend_block(peer.id) {
                         let block = Block::from_position(new_piece as u32, position);
@@ -451,6 +452,9 @@ impl Scheduler {
                 }
                 // Endgame mode
                 None => {
+                    let mut rng = rand::thread_rng();
+                    // shuffle pending pieces so pick distribution is even
+                    self.pending_pieces.shuffle(&mut rng);
                     for piece_idx in self
                         .pending_pieces
                         .iter()
@@ -459,7 +463,7 @@ impl Scheduler {
                         let pending_piece = &mut self.piece_table[*piece_idx];
                         let pending_blocks = pending_piece.pending_blocks.as_mut().unwrap();
                         for (position, pending_block) in
-                            pending_blocks.pend_blocks_endgame(schedule_amount, peer.id)
+                            pending_blocks.pend_blocks_endgame(schedule_amount - took, peer.id)
                         {
                             let block = Block::from_position(*piece_idx as u32, position);
                             match peer.message_tx.try_send(PeerMessage::request(block)) {
@@ -584,7 +588,6 @@ impl Scheduler {
 
     /// Handle failed piece save
     pub fn fail_piece(&mut self, piece_idx: usize) {
-        tracing::warn!("Failed to save piece {piece_idx}");
         let piece_len = self.piece_length(piece_idx);
         let piece = &mut self.piece_table[piece_idx];
         piece.is_saving = false;
@@ -743,14 +746,6 @@ impl Scheduler {
             downloaded_pieces as f64 / total_pieces as f64 * 100.,
             pending_pieces,
         )
-    }
-
-    pub fn peers(&self) -> &Vec<ActivePeer> {
-        &self.peers
-    }
-
-    pub fn peers_mut(&mut self) -> &mut Vec<ActivePeer> {
-        &mut self.peers
     }
 
     pub fn strategy(&self) -> ScheduleStrategy {

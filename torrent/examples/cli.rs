@@ -4,7 +4,10 @@ use std::{
 };
 
 use clap::{ArgGroup, Parser, Subcommand};
-use torrent::{Client, ClientConfig, DownloadProgress, Info, MagnetLink, TorrentFile};
+use tokio::sync::mpsc;
+use torrent::{
+    Client, ClientConfig, DownloadProgress, DownloadState, Info, MagnetLink, TorrentFile,
+};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
@@ -140,15 +143,25 @@ async fn main() {
                     unreachable!();
                 }
             };
+            let (tx, mut rx) = mpsc::channel(100);
             let output = output.unwrap_or(PathBuf::from("."));
             let files = files.unwrap_or_else(|| (0..info.output_files(&output).len()).collect());
-            let mut handle = client
-                .download(output, announce_list, info, files, show_progress)
+            client
+                .download(output, announce_list, info, files, tx)
                 .await
                 .unwrap();
-            tokio::select! {
-                _ = handle.wait() => {},
-                _ = tokio::signal::ctrl_c() => {}
+            loop {
+                tokio::select! {
+                    Some(progress) = rx.recv() => {
+                        if progress.state == DownloadState::Seeding {
+                            break;
+                        }
+                        show_progress(progress);
+                    },
+                    _ = tokio::signal::ctrl_c() => {
+                        break;
+                    }
+                }
             }
             client.shutdown().await;
             println!("Done");

@@ -12,7 +12,7 @@ windows-tray = ["dep:tray-icon", "dep:open", "dep:image", "dep:winit"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace.dependencies]
-tokio = { version = "1.41.1", features = ["full"] }
+tokio = { version = "1.41.1", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.12", features = ["full"] }
 anyhow = "1.0.93"
 axum = { version = "0.7.9", features = ["macros", "tracing", "multipart"] }
@@ -24,9 +24,10 @@ reqwest = { version = "0.12.9", features = ["json", "stream"] }
 serde = { version = "1.0.215", features = ["serde_derive"] }
 rand = "0.8.5"
 lru = "0.12.5"
+sysinfo = "0.32.1"
 
 [dependencies]
-tokio = { workspace = true, features = ["full"] }
+tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["macros", "tracing", "multipart"] }
@@ -38,12 +39,12 @@ reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["serde_derive"] }
 rand = { workspace = true }
 lru = { workspace = true }
+sysinfo = { workspace = true }
 base64 = "0.22.1"
 bytes = "1.8.0"
 clap = { version = "4.5.21", features = ["derive"] }
 crc32fast = { version = "1.4.2", features = ["nightly"] }
 dirs = "5.0.1"
-sysinfo = "0.32.0"
 dotenvy = "0.15.7"
 notify = { version = "7.0.0", default-features = false, features = ["macos_kqueue"] }
 serde_json = "1.0.133"

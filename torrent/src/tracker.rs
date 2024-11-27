@@ -20,7 +20,7 @@ use crate::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
-    utils,
+    utils, BitField, Info,
 };
 
 pub const ID: [u8; 20] = *b"00112233445566778899";
@@ -213,6 +213,25 @@ impl DownloadStat {
             left,
         }
     }
+
+    pub fn new(bitfield: &BitField, info: &Info) -> Self {
+        let total_pieces = info.pieces.len();
+        let piece_len = info.piece_length;
+        let total_len = info.total_size();
+        let mut downloaded = 0;
+        for piece_i in bitfield.pieces() {
+            if piece_i == total_pieces - 1 {
+                downloaded += utils::piece_size(piece_i, piece_len, total_len)
+            } else {
+                downloaded += piece_len as u64
+            }
+        }
+        Self {
+            downloaded,
+            uploaded: 0,
+            left: total_len - downloaded,
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -362,6 +381,11 @@ impl Tracker {
                 Some(command) = self.commands.recv() => {
                     match command {
                         TrackerCommand::Reannounce(stat) => {
+                            if stat.downloaded == 0 {
+                                self.announce_payload.event = TrackerEvent::Started;
+                            } else {
+                                self.announce_payload.event = TrackerEvent::Empty;
+                            }
                             self.announce_payload.downloaded = stat.downloaded;
                             self.announce_payload.uploaded = stat.uploaded;
                             self.announce_payload.left = stat.left;
@@ -434,6 +458,7 @@ pub enum TrackerStatus {
     Error(String),
 }
 
+/// This tracker handle is used inside download loop
 #[derive(Debug)]
 pub struct DownloadTracker {
     pub response_rx: mpsc::Receiver<TrackerResponse>,

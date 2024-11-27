@@ -44,7 +44,6 @@ pub struct DownloadHandle {
     pub download_tx: mpsc::Sender<DownloadMessage>,
     pub cancellation_token: CancellationToken,
     pub storage: StorageHandle,
-    total_pieces: usize,
 }
 
 impl DownloadHandle {
@@ -93,17 +92,6 @@ impl DownloadHandle {
             .send(DownloadMessage::SetFilePriority { file_idx, priority })
             .await?;
         Ok(())
-    }
-
-    /// Resolves when storage bitfield becomes full
-    /// This method is cancellation safe
-    pub async fn wait(&mut self) {
-        while let Ok(_) = self.storage.bitfield.changed().await {
-            let bf = self.storage.bitfield.borrow_and_update();
-            if bf.is_full(self.total_pieces) {
-                break;
-            }
-        }
     }
 }
 
@@ -612,6 +600,18 @@ impl ProgressConsumer for tokio::sync::watch::Sender<DownloadProgress> {
     }
 }
 
+impl ProgressConsumer for flume::Sender<DownloadProgress> {
+    fn consume_progress(&mut self, progress: DownloadProgress) {
+        let _ = self.send(progress);
+    }
+}
+
+impl ProgressConsumer for () {
+    fn consume_progress(&mut self, _progress: DownloadProgress) {
+        ()
+    }
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, Default, PartialEq)]
 pub enum DownloadState {
     Paused,
@@ -643,7 +643,6 @@ pub struct Download {
     info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     storage_rx: mpsc::Receiver<StorageFeedback>,
-    storage_tx: mpsc::Sender<StorageFeedback>,
     new_peers: mpsc::Receiver<NewPeer>,
     new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
     pending_new_peers_ips: HashSet<SocketAddr>,
@@ -662,6 +661,7 @@ pub struct Download {
 
 impl Download {
     pub fn new(
+        storage_feedback: mpsc::Receiver<StorageFeedback>,
         storage: StorageHandle,
         t: Info,
         enabled_files: Vec<usize>,
@@ -671,7 +671,6 @@ impl Download {
     ) -> Self {
         let info_hash = t.hash();
         let active_peers = JoinSet::new();
-        let (storage_tx, storage_rx) = mpsc::channel(100);
         let output_files = t.output_files("");
         let pending_files =
             PendingFiles::from_output_files(t.piece_length, &output_files, enabled_files);
@@ -689,8 +688,7 @@ impl Download {
             trackers,
             info_hash,
             peers_handles: active_peers,
-            storage_rx,
-            storage_tx,
+            storage_rx: storage_feedback,
             scheduler,
             storage,
             pex_history: PexHistory::new(),
@@ -711,7 +709,6 @@ impl Download {
         let (download_tx, download_rx) = mpsc::channel(100);
         let download_handle = DownloadHandle {
             download_tx,
-            total_pieces: self.scheduler.piece_table.len(),
             cancellation_token: self.cancellation_token.clone(),
             storage: self.storage.clone(),
         };
@@ -904,12 +901,11 @@ impl Download {
                 if is_full {
                     let pending_blocks = piece.pending_blocks.take().unwrap();
                     piece.is_saving = true;
+                    if pending_blocks.is_sub_rational() {
+                        self.scheduler.sub_rational_amount -= 1;
+                    }
                     self.storage
-                        .try_save_piece(
-                            *pending_piece,
-                            pending_blocks.as_bytes(),
-                            self.storage_tx.clone(),
-                        )
+                        .try_save_piece(*pending_piece, pending_blocks.as_bytes())
                         .unwrap();
                 }
                 !is_full

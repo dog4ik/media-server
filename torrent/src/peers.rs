@@ -402,13 +402,13 @@ impl Peer {
         match tokio::time::timeout(Duration::from_secs(2), socket.write_all(&buf)).await {
             Ok(Ok(_)) => Ok(()),
             Err(_) => {
-                tracing::error!("Peer write timed out");
+                tracing::debug!("Peer write timed out");
                 Err(PeerError::timeout(
                     "failed to send message to peer (Timeout)",
                 ))
             }
             Ok(Err(e)) => {
-                tracing::error!(
+                tracing::debug!(
                     "Peer connection error while sending {msg_description} message: {e}"
                 );
                 Err(PeerError::connection("peer connection failed"))

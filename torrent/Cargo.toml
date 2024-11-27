@@ -26,5 +26,5 @@ tracing = { workspace = true }
 tracing-test = "0.2.4"
 tracing-subscriber = { version = "0.3.18", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 uuid = { workspace = true }
-sysinfo = "0.30.12"
+sysinfo = { workspace = true }
 flume = { version = "0.11.0", features = ["async"] }

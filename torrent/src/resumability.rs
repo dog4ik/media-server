@@ -12,3 +12,21 @@ pub struct ResumeData {
     pub enabled_files: Vec<usize>,
     pub save_location: PathBuf,
 }
+
+impl ResumeData {
+    pub fn empty(
+        info: Info,
+        tracker_list: Vec<Url>,
+        enabled_files: Vec<usize>,
+        save_location: PathBuf,
+    ) -> Self {
+        let bitfield = BitField::empty(info.pieces.len());
+        Self {
+            bitfield,
+            info,
+            trackers: tracker_list,
+            enabled_files,
+            save_location,
+        }
+    }
+}

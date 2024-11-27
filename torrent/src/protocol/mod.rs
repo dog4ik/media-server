@@ -142,8 +142,8 @@ impl Info {
 pub struct Hashes(pub Vec<[u8; 20]>);
 
 impl Hashes {
-    pub fn get_hash(&self, piece: usize) -> Option<[u8; 20]> {
-        self.0.get(piece).copied()
+    pub fn get_hash(&self, piece: usize) -> Option<&[u8; 20]> {
+        self.0.get(piece)
     }
 }
 
