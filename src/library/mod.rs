@@ -1,5 +1,5 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::Infallible,
     fmt::Display,
     io::SeekFrom,
@@ -110,7 +110,7 @@ pub async fn explore_show_dirs(
     }
 
     tx.commit().await.expect("if this fails we are cooked");
-    tracing::debug!("Video reconcilliation took: {:?}", start.elapsed());
+    tracing::debug!(took = ?start.elapsed(), "Finished video reconcilliation");
 }
 
 pub async fn explore_movie_dirs(
@@ -488,13 +488,16 @@ pub async fn symphony_duration(path: impl AsRef<Path>) -> anyhow::Result<Duratio
 
 impl Video {
     /// Returns struct compatible with database Video table
-    pub async fn into_db_video(&self) -> DbVideo {
+    pub fn into_db_video(&self) -> DbVideo {
         let now = time::OffsetDateTime::now_utc();
 
         DbVideo {
             id: None,
             path: self.path.to_string_lossy().to_string(),
             size: self.file_size() as i64,
+            episode_id: None,
+            movie_id: None,
+            is_prime: false,
             scan_date: now.to_string(),
         }
     }
@@ -527,7 +530,7 @@ impl Video {
         let video_id: Result<i64, anyhow::Error> = match res {
             Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
-                let db_video = self.into_db_video().await;
+                let db_video = self.into_db_video();
                 let id = tx.insert_video(db_video).await?;
                 Ok(id)
             }

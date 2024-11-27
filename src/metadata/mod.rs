@@ -35,15 +35,20 @@ pub enum Language {
 
 impl Display for Language {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let language = match self {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl Language {
+    fn as_str(&self) -> &'static str {
+        match self {
             Language::En => "en",
             Language::Es => "es",
             Language::De => "de",
             Language::Fr => "fr",
             Language::Ru => "ru",
             Language::Ja => "ja",
-        };
-        write!(f, "{}", language)
+        }
     }
 }
 
@@ -63,7 +68,7 @@ impl FromStr for Language {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy)]
 pub struct FetchParams {
     pub lang: Language,
 }

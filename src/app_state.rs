@@ -223,7 +223,7 @@ impl AppState {
         let fetch_params = FetchParams { lang: language.0 };
         let orphans = sqlx::query!(
             r#"SELECT videos.id FROM videos 
-JOIN episodes ON episodes.video_id = videos.id
+JOIN episodes ON episodes.id = videos.episode_id
 JOIN seasons ON seasons.id = episodes.season_id
 JOIN shows ON shows.id = seasons.show_id
 WHERE shows.id = ? ORDER BY seasons.number;"#,
@@ -283,7 +283,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     pub async fn reset_movie_metadata(&self, movie_id: i64) -> Result<(), AppError> {
         self.partial_refresh().await;
         let video = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN movies ON movies.video_id = videos.id WHERE movies.id = ?",
+            "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
             movie_id
         )
             .fetch_one(&self.db.pool).await?;
@@ -308,7 +308,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         self.partial_refresh().await;
         let orphans = sqlx::query!(
             r#"SELECT videos.id FROM videos 
-JOIN episodes ON episodes.video_id = videos.id
+JOIN episodes ON episodes.id = videos.episode_id
 JOIN seasons ON seasons.id = episodes.season_id
 JOIN shows ON shows.id = seasons.show_id
 WHERE shows.id = ? ORDER BY seasons.number;"#,
@@ -391,7 +391,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     ) -> Result<(), AppError> {
         self.partial_refresh().await;
         let video = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN movies ON movies.video_id = videos.id WHERE movies.id = ?",
+            "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
             target_movie_id
         )
             .fetch_one(&self.db.pool).await?;
@@ -580,84 +580,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
         let start = Instant::now();
-        self.partial_refresh().await;
-        let local_episodes: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            library.episodes().collect()
-        };
-
-        let db_episodes_videos = sqlx::query!(
-            r#"SELECT videos.id as "video_id" FROM videos
-        JOIN episodes ON videos.id = episodes.video_id"#
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
-
-        let missing_episodes = db_episodes_videos
-            .iter()
-            .filter(|d| !local_episodes.iter().any(|x| x.source.id == d.video_id));
-
-        for missing_episode in missing_episodes {
-            let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
-            match tx.remove_video(missing_episode.video_id).await {
-                Ok(_) => {
-                    let _ = tx.commit().await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to remove video: {e}");
-                }
-            };
-        }
-
-        let mut new_episodes: Vec<_> = local_episodes
-            .into_iter()
-            .filter(|l| !db_episodes_videos.iter().any(|d| d.video_id == l.source.id))
-            .collect();
-
-        new_episodes.sort_unstable_by(|a, b| {
-            a.identifier
-                .title
-                .to_lowercase()
-                .cmp(&b.identifier.title.to_lowercase())
-        });
-
-        let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
-
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
-
-        for mut show_episodes in new_episodes
-            .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
-            .map(Vec::from)
-        {
-            show_episodes.sort_unstable_by_key(|x| x.identifier.season);
-            let db = self.db.clone();
-            let providers_stack = self.providers_stack;
-            let discover_providers = providers_stack.discover_providers();
-            let show_providers = providers_stack.show_providers();
-            show_scan_handles.spawn(async move {
-                let identifier = show_episodes.first().unwrap();
-                let local_show_id =
-                    handle_series(identifier, &db, fetch_params, discover_providers).await?;
-                handle_seasons_and_episodes(
-                    &db,
-                    local_show_id,
-                    show_episodes,
-                    fetch_params,
-                    &show_providers,
-                )
-                .await?;
-                Ok(())
-            });
-        }
-
-        while let Some(result) = show_scan_handles.join_next().await {
-            match result {
-                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err: {e}"),
-                Err(e) => tracing::error!("Show reconciliation task panicked: {e}"),
-                Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
-            }
-        }
+        self.partial_refresh().await;
 
         let local_movies: Vec<_> = {
             let library = self.library.lock().unwrap();
@@ -666,7 +591,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
         let db_movies_videos = sqlx::query!(
             r#"SELECT videos.id as "video_id" FROM videos
-        JOIN movies ON videos.id = movies.video_id"#
+        JOIN movies ON videos.movie_id = movies.id"#
         )
         .fetch_all(&self.db.pool)
         .await?;
@@ -705,6 +630,80 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 Ok(Err(e)) => tracing::error!("Movie reconciliation task failed with err: {e}"),
                 Err(e) => tracing::error!("Movie reconciliation task panicked: {e}"),
                 Ok(Ok(_)) => tracing::trace!("Joined movie reconciliation task"),
+            }
+        }
+        let local_episodes: Vec<_> = {
+            let library = self.library.lock().unwrap();
+            library.episodes().collect()
+        };
+
+        let db_episodes_videos = sqlx::query!(
+            r#"SELECT videos.id as "video_id" FROM videos
+        JOIN episodes ON videos.episode_id = episodes.id"#
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
+
+        let missing_episodes = db_episodes_videos
+            .iter()
+            .filter(|d| !local_episodes.iter().any(|x| x.source.id == d.video_id));
+
+        for missing_episode in missing_episodes {
+            let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
+            match tx.remove_video(missing_episode.video_id).await {
+                Ok(_) => {
+                    let _ = tx.commit().await;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to remove video: {e}");
+                }
+            };
+        }
+
+        let mut new_episodes: Vec<_> = local_episodes
+            .into_iter()
+            .filter(|l| !db_episodes_videos.iter().any(|d| d.video_id == l.source.id))
+            .collect();
+
+        new_episodes.sort_unstable_by(|a, b| {
+            a.identifier
+                .title
+                .to_lowercase()
+                .cmp(&b.identifier.title.to_lowercase())
+        });
+
+        let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
+
+        for mut show_episodes in new_episodes
+            .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
+            .map(Vec::from)
+        {
+            show_episodes.sort_unstable_by_key(|x| x.identifier.season);
+            let db = self.db.clone();
+            let providers_stack = self.providers_stack;
+            let discover_providers = providers_stack.discover_providers();
+            let show_providers = providers_stack.show_providers();
+            show_scan_handles.spawn(async move {
+                let identifier = show_episodes.first().unwrap();
+                let local_show_id =
+                    handle_series(identifier, &db, fetch_params, discover_providers).await?;
+                handle_seasons_and_episodes(
+                    &db,
+                    local_show_id,
+                    show_episodes,
+                    fetch_params,
+                    &show_providers,
+                )
+                .await?;
+                Ok(())
+            });
+        }
+
+        while let Some(result) = show_scan_handles.join_next().await {
+            match result {
+                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err: {e}"),
+                Err(e) => tracing::error!("Show reconciliation task panicked: {e}"),
+                Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
             }
         }
 
@@ -886,9 +885,37 @@ async fn handle_movie_metadata(
     let metadata_provider = metadata.metadata_provider;
     let poster_url = metadata.poster.clone();
     let backdrop_url = metadata.backdrop.clone();
-    let local_id = db
-        .insert_movie(metadata.into_db_movie(movie.source.id, duration).await)
-        .await?;
+    let db_movie = metadata.into_db_movie(duration);
+    let mut tx = db.begin().await.unwrap();
+    let local_id = tx.insert_movie(db_movie).await.unwrap();
+    tx.update_video_movie_id(movie.source.id, local_id)
+        .await
+        .unwrap();
+    for external_id in external_ids {
+        println!(
+            "Inserting external id for the movie: {}",
+            external_id.provider
+        );
+        let db_external_id = DbExternalId {
+            metadata_provider: external_id.provider.to_string(),
+            metadata_id: external_id.id,
+            movie_id: Some(local_id),
+            is_prime: false.into(),
+            ..Default::default()
+        };
+        let _ = tx.insert_external_id(db_external_id).await;
+    }
+    tx.insert_external_id(DbExternalId {
+        metadata_provider: metadata_provider.to_string(),
+        metadata_id: metadata_id.clone(),
+        movie_id: Some(local_id),
+        is_prime: true.into(),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+
     let poster_job = poster_url.map(|url| {
         let poster_asset = PosterAsset::new(local_id, PosterContentType::Movie);
         save_asset_from_url_with_frame_fallback(url.to_string(), poster_asset, &movie.source)
@@ -897,38 +924,19 @@ async fn handle_movie_metadata(
         let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Movie);
         save_asset_from_url(url.to_string(), backdrop_asset)
     });
-    let insert_job = db.insert_external_id(DbExternalId {
-        metadata_provider: metadata_provider.to_string(),
-        metadata_id: metadata_id.clone(),
-        movie_id: Some(local_id),
-        is_prime: true.into(),
-        ..Default::default()
-    });
     match (poster_job, backdrop_job) {
         (Some(poster_job), Some(backdrop_job)) => {
-            let _ = tokio::join!(poster_job, backdrop_job, insert_job);
+            let _ = tokio::join!(poster_job, backdrop_job);
         }
         (Some(poster_job), None) => {
-            let _ = tokio::join!(poster_job, insert_job);
+            let _ = poster_job.await;
         }
         (None, Some(backdrop_job)) => {
-            let _ = tokio::join!(backdrop_job, insert_job);
+            let _ = backdrop_job.await;
         }
-        (None, None) => {
-            let _ = insert_job.await;
-        }
+        _ => {}
     }
 
-    for external_id in external_ids {
-        let db_external_id = DbExternalId {
-            metadata_provider: external_id.provider.to_string(),
-            metadata_id: external_id.id,
-            movie_id: Some(local_id),
-            is_prime: false.into(),
-            ..Default::default()
-        };
-        let _ = db.insert_external_id(db_external_id).await;
-    }
     Ok(local_id)
 }
 
@@ -945,7 +953,7 @@ async fn handle_seasons_and_episodes(
         .await
         .unwrap();
     let mut seasons_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
-    for season_episodes in show_episodes
+    for mut season_episodes in show_episodes
         .chunk_by(|a, b| a.identifier.season == b.identifier.season)
         .map(Vec::from)
     {
@@ -965,7 +973,11 @@ async fn handle_seasons_and_episodes(
             .await?;
             let mut episodes_scan_handles: JoinSet<anyhow::Result<i64>> = JoinSet::new();
             tracing::debug!("Season's episodes count: {}", season_episodes.len());
-            for episode in season_episodes {
+            season_episodes.sort_unstable_by_key(|x| x.identifier.episode);
+            for episode in season_episodes
+                .chunk_by(|a, b| a.identifier.episode == b.identifier.episode)
+                .map(Vec::from)
+            {
                 let db = db.clone();
                 let show_providers = show_providers.clone();
                 let external_ids = external_ids.clone();
@@ -1048,19 +1060,20 @@ async fn handle_episode(
     local_show_id: i64,
     external_shows_ids: Vec<ExternalIdMetadata>,
     local_season_id: i64,
-    item: LibraryItem<ShowIdentifier>,
+    items: Vec<LibraryItem<ShowIdentifier>>,
     db: &Db,
     fetch_params: FetchParams,
     providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
 ) -> anyhow::Result<i64> {
+    let item = items.first().expect("episodes are chunked");
     let season = item.identifier.season as usize;
     let episode = item.identifier.episode as usize;
     let Ok(local_episode) = db
         .episode(&local_show_id.to_string(), season, episode, fetch_params)
         .await
     else {
-        println!(
-            "fetching duration for episode: {}",
+        tracing::trace!(
+            "Fetching duration for the episode: {}",
             item.source.video.path().display()
         );
         // We spend seconds here if file is incomplete
@@ -1076,14 +1089,11 @@ async fn handle_episode(
                     continue;
                 };
                 let poster = episode.poster.clone();
-                let local_id = db
-                    .insert_episode(episode.into_db_episode(
-                        local_season_id,
-                        item.source.id,
-                        duration,
-                    ))
-                    .await
-                    .unwrap();
+                let db_episode = episode.into_db_episode(local_season_id, duration);
+                let mut tx = db.begin().await?;
+                let local_id = tx.insert_episode(db_episode).await?;
+                tx.update_video_episode_id(item.source.id, local_id).await?;
+                tx.commit().await?;
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);
                     let _ = save_asset_from_url_with_frame_fallback(
@@ -1128,7 +1138,8 @@ async fn handle_movie(
                 // leave original url in if saving fails
                 let external_ids = provider
                     .external_ids(&first_result.metadata_id, ContentType::Movie)
-                    .await?;
+                    .await
+                    .unwrap_or_default();
                 let local_id =
                     handle_movie_metadata(db, first_result, item, external_ids, duration).await?;
                 return Ok(local_id);
@@ -1199,6 +1210,7 @@ pub async fn episode_metadata_fallback(
     season_id: i64,
     duration: Duration,
 ) -> anyhow::Result<i64> {
+    let mut tx = db.begin().await?;
     let fallback_episode = DbEpisode {
         release_date: None,
         plot: None,
@@ -1207,11 +1219,12 @@ pub async fn episode_metadata_fallback(
         title: format!("Episode {}", file.identifier.episode),
         id: None,
         duration: duration.as_secs() as i64,
-        video_id: file.source.id,
         season_id,
     };
     let video_metadata = file.source.video.metadata().await?;
-    let id = db.insert_episode(fallback_episode).await?;
+    let id = tx.insert_episode(fallback_episode).await?;
+    tx.update_video_episode_id(file.source.id, id).await?;
+    tx.commit().await?;
     let poster_asset = PosterAsset::new(id, PosterContentType::Episode);
     fs::create_dir_all(poster_asset.path().parent().unwrap())
         .await
@@ -1235,7 +1248,6 @@ pub async fn movie_metadata_fallback(
     let title = first_letter.into_iter().chain(chars).collect();
     let fallback_movie = DbMovie {
         id: None,
-        video_id: file.source.id,
         poster: None,
         backdrop: None,
         plot: None,
@@ -1243,12 +1255,16 @@ pub async fn movie_metadata_fallback(
         duration: duration.as_secs() as i64,
         title,
     };
-    let id = db.insert_movie(fallback_movie).await?;
+    let mut tx = db.begin().await?;
+    let id = tx.insert_movie(fallback_movie).await?;
+
     let poster_asset = PosterAsset::new(id, PosterContentType::Movie);
-    fs::create_dir_all(poster_asset.path().parent().unwrap())
-        .await
-        .unwrap();
-    let _ = ffmpeg::pull_frame(file.source.video.path(), poster_asset.path(), duration / 2).await;
+    fs::create_dir_all(poster_asset.path().parent().unwrap()).await?;
+    if let Err(e) =
+        ffmpeg::pull_frame(file.source.video.path(), poster_asset.path(), duration / 2).await
+    {
+        tracing::warn!("Failed to create video thumbnail: {e}");
+    };
     Ok(id)
 }
 

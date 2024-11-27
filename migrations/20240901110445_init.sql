@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS seasons (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMEN
                                     poster TEXT,
                                     FOREIGN KEY (show_id) REFERENCES shows (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS episodes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
-                                    video_id INTEGER NOT NULL UNIQUE,
                                     season_id INTEGER NOT NULL,
                                     title TEXT NOT NULL, 
                                     number INTEGER NOT NULL,
@@ -33,17 +32,14 @@ CREATE TABLE IF NOT EXISTS episodes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREME
                                     poster TEXT,
                                     release_date TEXT,
                                     duration INTEGER NOT NULL,
-                                    FOREIGN KEY (video_id) REFERENCES videos (id),
                                     FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS movies (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                                    video_id INTEGER NOT NULL UNIQUE,
                                     title TEXT NOT NULL,
                                     backdrop TEXT,
                                     plot TEXT,
                                     poster TEXT,
                                     release_date TEXT,
-                                    duration INTEGER NOT NULL,
-                                    FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
+                                    duration INTEGER NOT NULL);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS movies_fts_idx USING fts5(title, plot, content='movies', content_rowid='id');
 CREATE TRIGGER IF NOT EXISTS movies_tbl_ai AFTER INSERT ON movies BEGIN
@@ -60,7 +56,12 @@ END;
 CREATE TABLE IF NOT EXISTS videos (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
                                     path TEXT NOT NULL UNIQUE,
                                     size INTEGER NOT NULL,
-                                    scan_date DATETIME DEFAULT CURRENT_TIMESTAMP);
+                                    episode_id INTEGER,
+                                    movie_id INTEGER,
+                                    is_prime BOOL NOT NULL,
+                                    scan_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                                    FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE SET NULL,
+                                    FOREIGN KEY (movie_id) REFERENCES movies (id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
                                     language TEXT NOT NULL,
                                     hash TEXT NOT NULL,

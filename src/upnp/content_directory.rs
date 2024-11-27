@@ -129,19 +129,19 @@ impl MediaServerContentDirectory {
             .await?;
         let mut items = Vec::with_capacity(episodes.len());
         for episode in episodes {
-            let source = {
-                let library = self.app_state.library.lock().unwrap();
-                library.get_source(episode.video_id).unwrap().clone()
+            let Ok(video_ids) = sqlx::query!(
+                "SELECT id FROM videos WHERE videos.episode_id = ?",
+                episode.id
+            )
+            .fetch_all(&db.pool)
+            .await
+            .map(|r| r.into_iter().map(|r| r.id).collect::<Vec<_>>()) else {
+                continue;
             };
-            let metadata = source.video.metadata().await;
+
             let id = episode.id.unwrap();
             let poster_url = format!(
                 "{server_url}/api/episode/{episode_id}/poster",
-                server_url = self.server_location,
-                episode_id = id,
-            );
-            let watch_url = format!(
-                "{server_url}/api/local_episode/{episode_id}/watch",
                 server_url = self.server_location,
                 episode_id = id,
             );
@@ -156,6 +156,43 @@ impl MediaServerContentDirectory {
                 season_id.to_string(),
                 episode.title.clone(),
             );
+            {
+                for id in video_ids {
+                    let watch_url = format!(
+                        "{server_url}/api/video/{video_id}/watch",
+                        server_url = self.server_location,
+                        video_id = id,
+                    );
+                    let source = {
+                        let library = self.app_state.library.lock().unwrap();
+                        library.get_source(id).unwrap().clone()
+                    };
+
+                    let metadata = source.video.metadata().await;
+                    let mut watch_resource = Resource::new(
+                        watch_url.clone(),
+                        ProtocolInfo::http_get("video/matroska".into()),
+                    );
+                    if let Ok(size) = source.video.async_file_size().await {
+                        watch_resource.set_size(size);
+                    }
+                    let runtime = std::time::Duration::from_secs(episode.duration as u64);
+                    watch_resource.set_duartion(runtime);
+                    if let Ok(metadata) = metadata {
+                        if let Some(res) = metadata.resolution() {
+                            watch_resource
+                                .set_resoulution(UpnpResolution::new(res.width(), res.height()));
+                        };
+                        if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
+                            watch_resource.set_audio_channels(audio_channels as usize);
+                        };
+                        watch_resource.set_bitrate(metadata.bitrate());
+                    }
+                    item.set_property(watch_resource);
+                    item.set_property(properties::RecordedDuration(runtime));
+                }
+            }
+
             item.set_property(properties::AlbumArtUri(poster_url));
             item.set_property(properties::ProgramTitle(episode.title));
             item.set_property(properties::EpisodeNumber(episode.number as u32));
@@ -172,26 +209,7 @@ impl MediaServerContentDirectory {
             if let Some(description) = episode.plot {
                 item.set_property(properties::Description(description));
             }
-            let mut watch_resource =
-                Resource::new(watch_url, ProtocolInfo::http_get("video/matroska".into()));
-            let runtime = std::time::Duration::from_secs(episode.duration as u64);
-            item.set_property(properties::RecordedDuration(runtime));
-            watch_resource.set_duartion(runtime);
-            if let Ok(metadata) = metadata {
-                if let Some(res) = metadata.resolution() {
-                    watch_resource.set_resoulution(UpnpResolution::new(res.width(), res.height()));
-                };
-                if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
-                    watch_resource.set_audio_channels(audio_channels as usize);
-                };
-                watch_resource.set_bitrate(metadata.bitrate());
-            }
 
-            if let Ok(size) = source.video.async_file_size().await {
-                watch_resource.set_size(size);
-            }
-
-            item.set_property(watch_resource);
             item.base.set_upnp_class(ItemType::VideoItem(None));
             items.push(item);
         }

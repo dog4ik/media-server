@@ -283,8 +283,9 @@ pub async fn video_content_metadata(
     let metadata = match video.identifier {
         ContentIdentifier::Show(_) => {
             let query = sqlx::query!(
-                r#"SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM episodes
-            JOIN seasons ON seasons.id = episodes.season_id WHERE episodes.video_id = ?;"#,
+                r#"SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM videos
+            JOIN episodes ON episodes.id = videos.episode_id
+            JOIN seasons ON seasons.id = episodes.season_id WHERE videos.id = ?;"#,
                 video_id
             )
             .fetch_one(&db.pool)
@@ -300,7 +301,8 @@ pub async fn video_content_metadata(
         }
         ContentIdentifier::Movie(_) => {
             let query = sqlx::query!(
-                r#"SELECT id FROM movies WHERE movies.video_id = ?;"#,
+                r#"SELECT movies.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE videos.id = ?;
+                "#,
                 video_id
             )
             .fetch_one(&db.pool)
@@ -423,10 +425,10 @@ pub async fn watch_episode(
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let video_id = sqlx::query!("SELECT video_id FROM episodes WHERE id = ?;", episode_id)
+    let video_id = sqlx::query!("SELECT id FROM videos WHERE episode_id = ?;", episode_id)
         .fetch_one(&state.db.pool)
         .await?
-        .video_id;
+        .id;
 
     watch(Path(video_id), variant, State(state), range).await
 }
@@ -451,10 +453,10 @@ pub async fn watch_movie(
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let video_id = sqlx::query!("SELECT video_id FROM movies WHERE id = ?;", movie_id)
+    let video_id = sqlx::query!("SELECT id FROM videos WHERE movie_id = ?;", movie_id)
         .fetch_one(&state.db.pool)
         .await?
-        .video_id;
+        .id;
     watch(Path(video_id), variant, State(state), range).await
 }
 
@@ -506,10 +508,14 @@ pub async fn local_episode_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
 ) -> Result<Json<EpisodeMetadata>, AppError> {
-    let episode_id = sqlx::query!(r#"SELECT id FROM episodes WHERE video_id = ?"#, id)
-        .fetch_one(&db.pool)
-        .await?;
-    Ok(Json(db.get_episode_by_id(episode_id.id).await?))
+    let episode_id = sqlx::query!(
+        r#"SELECT videos.episode_id as "episode_id!: i64"
+    FROM videos WHERE id = ? AND videos.episode_id NOT NULL"#,
+        id
+    )
+    .fetch_one(&db.pool)
+    .await?;
+    Ok(Json(db.get_episode_by_id(episode_id.episode_id).await?))
 }
 
 #[utoipa::path(
@@ -528,10 +534,10 @@ pub async fn local_movie_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
 ) -> Result<Json<MovieMetadata>, AppError> {
-    let movie_id = sqlx::query!(r#"SELECT id FROM movies WHERE video_id = ?"#, id)
+    let movie_id = sqlx::query!(r#"SELECT movie_id as "movie_id!: i64" FROM videos WHERE id = ? AND videos.movie_id NOT NULL"#, id)
         .fetch_one(&db.pool)
         .await?;
-    Ok(Json(db.get_movie(movie_id.id).await?))
+    Ok(Json(db.get_movie(movie_id.movie_id).await?))
 }
 
 #[utoipa::path(
@@ -626,16 +632,16 @@ pub async fn contents_video(
 ) -> Result<Json<DetailedVideo>, AppError> {
     let video_id = match content_type.content_type {
         crate::metadata::ContentType::Movie => {
-            sqlx::query!("SELECT video_id FROM movies WHERE id = ?", id)
+            sqlx::query!("SELECT id FROM videos WHERE movie_id = ?", id)
                 .fetch_one(&state.db.pool)
                 .await
-                .map(|x| x.video_id)
+                .map(|x| x.id)
         }
         crate::metadata::ContentType::Show => {
-            sqlx::query!("SELECT video_id FROM episodes WHERE id = ?", id)
+            sqlx::query!("SELECT id FROM videos WHERE episode_id = ?", id)
                 .fetch_one(&state.db.pool)
                 .await
-                .map(|x| x.video_id)
+                .map(|x| x.id)
         }
     }?;
     get_video_by_id(Path(video_id), State(state)).await
@@ -1152,7 +1158,8 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.video_id AS video_id, movies.id AS movie_id FROM history
-    JOIN movies ON movies.video_id = history.video_id WHERE history.is_finished = false
+    JOIN videos ON videos.id = history.video_id
+    JOIN movies ON movies.id = videos.movie_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 3;"#
     )
     .fetch_all(&db.pool)
@@ -1192,7 +1199,8 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.video_id AS video_id, episodes.number AS episode_number, seasons.show_id AS show_id,
         seasons.number AS season_number FROM history 
-    JOIN episodes ON episodes.video_id = history.video_id
+    JOIN videos ON videos.id = history.video_id
+    JOIN episodes ON episodes.id = videos.episode_id
     JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 50;"#
     )

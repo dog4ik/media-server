@@ -311,7 +311,7 @@ pub async fn delete_movie(
     let AppState { db, library, .. } = state;
     let video_id = sqlx::query!(
         r#"SELECT videos.id FROM movies
-        JOIN videos ON movies.video_id = videos.id
+        JOIN videos ON movies.id = videos.movie_id
         WHERE movies.id = ?;"#,
         id
     )
@@ -1284,7 +1284,7 @@ pub async fn detect_intros(
     let video_ids = sqlx::query!(
         r#"SELECT videos.id FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
-        JOIN videos ON videos.id = episodes.video_id
+        JOIN videos ON videos.episode_id = episodes.id
         WHERE seasons.show_id = ? AND seasons.number = ?;"#,
         show_id,
         season,

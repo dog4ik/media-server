@@ -16,9 +16,9 @@ use crate::app_state::AppError;
 
 use super::{
     request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
-    ExternalIdMetadata, FetchParams, MetadataImage, MetadataProvider, MetadataSearchResult,
-    MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
-    METADATA_CACHE_SIZE,
+    ExternalIdMetadata, FetchParams, Language, MetadataImage, MetadataProvider,
+    MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata,
+    ShowMetadataProvider, METADATA_CACHE_SIZE,
 };
 
 #[derive(Debug)]
@@ -98,7 +98,11 @@ impl TvdbApi {
     }
 
     // https://api4.thetvdb.com/v4/movies/113/extended?meta=translations&short=false
-    async fn fetch_movie(&self, id: usize) -> Result<TvdbMovieExtendedRecord, AppError> {
+    async fn fetch_movie(
+        &self,
+        id: usize,
+        params: FetchParams,
+    ) -> Result<TvdbMovieExtendedRecord, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut path| {
@@ -109,7 +113,8 @@ impl TvdbApi {
             .unwrap();
         url.query_pairs_mut()
             .append_pair("meta", "translations")
-            .append_pair("short", "false");
+            .append_pair("short", "false")
+            .append_pair("language", params.lang.as_str());
         let req = Request::new(Method::GET, url);
         let res: TvdbResponse<TvdbMovieExtendedRecord> = self.client.request(req).await?;
         let mut movie_cache = self.movie_cache.lock().unwrap();
@@ -118,7 +123,11 @@ impl TvdbApi {
     }
 
     // https://api4.thetvdb.com/v4/series/366524/extended?meta=episodes&short=false
-    async fn fetch_show(&self, id: usize) -> Result<TvdbSeriesExtendedRecord, AppError> {
+    async fn fetch_show(
+        &self,
+        id: usize,
+        params: FetchParams,
+    ) -> Result<TvdbSeriesExtendedRecord, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut path| {
@@ -129,7 +138,8 @@ impl TvdbApi {
             .unwrap();
         url.query_pairs_mut()
             .append_pair("meta", "episodes")
-            .append_pair("short", "false");
+            .append_pair("short", "false")
+            .append_pair("language", params.lang.as_str());
         let req = Request::new(Method::GET, url);
         let res: TvdbResponse<TvdbSeriesExtendedRecord> = self.client.request(req).await?;
         let mut show_cache = self.show_cache.lock().unwrap();
@@ -157,7 +167,7 @@ impl MovieMetadataProvider for TvdbApi {
         if let Some(movie) = self.get_movie_from_cache(id) {
             return Ok(movie.into());
         }
-        let movie = self.fetch_movie(id).await?;
+        let movie = self.fetch_movie(id, params).await?;
         Ok(movie.into())
     }
 
@@ -175,7 +185,10 @@ impl ShowMetadataProvider for TvdbApi {
     ) -> Result<ShowMetadata, AppError> {
         match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => Ok(s.into()),
-            None => self.fetch_show(show_id.parse()?).await.map(Into::into),
+            None => self
+                .fetch_show(show_id.parse()?, fetch_params)
+                .await
+                .map(Into::into),
         }
     }
 
@@ -187,7 +200,7 @@ impl ShowMetadataProvider for TvdbApi {
     ) -> Result<SeasonMetadata, AppError> {
         let show = match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => s,
-            None => self.fetch_show(show_id.parse()?).await?,
+            None => self.fetch_show(show_id.parse()?, fetch_params).await?,
         };
         let mut episodes = show.episodes;
         let episodes = episodes
@@ -301,8 +314,8 @@ impl DiscoverMetadataProvider for TvdbApi {
         }
 
         let fresh_ids = match content_hint {
-            ContentType::Movie => self.fetch_movie(id).await.map(|x| x.remote_ids),
-            ContentType::Show => self.fetch_show(id).await.map(|x| x.remote_ids),
+            ContentType::Movie => self.fetch_movie(id, FetchParams::default()).await.map(|x| x.remote_ids),
+            ContentType::Show => self.fetch_show(id, FetchParams::default()).await.map(|x| x.remote_ids),
         }?;
         return Ok(retrieve_ids(fresh_ids));
     }

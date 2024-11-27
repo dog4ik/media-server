@@ -54,6 +54,7 @@ where
         DELETE FROM history;
         DELETE FROM external_ids;
         DELETE FROM episode_intro;
+        DELETE FROM assets;
         ",
             )
             .execute(&mut *conn)
@@ -71,14 +72,13 @@ where
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO movies 
             (title, release_date, poster,
-            backdrop, plot, video_id, duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            backdrop, plot, duration)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
                 movie.title,
                 movie.release_date,
                 movie.poster,
                 movie.backdrop,
                 movie.plot,
-                movie.video_id,
                 movie.duration,
             );
             query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -135,9 +135,8 @@ where
             let mut conn = self.acquire().await?;
             let episode_query = sqlx::query!(
                 "INSERT OR IGNORE INTO episodes
-            (video_id, season_id, title, number, plot, release_date, poster, duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
-                episode.video_id,
+            (season_id, title, number, plot, release_date, poster, duration)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
                 episode.season_id,
                 episode.title,
                 episode.number,
@@ -160,10 +159,13 @@ where
             tracing::debug!("Inserting new video: {}", db_video.path);
             let video_query = sqlx::query!(
                 "INSERT INTO videos
-            (path, size)
-            VALUES (?, ?) RETURNING id;",
+            (path, size, movie_id, episode_id, is_prime)
+            VALUES (?, ?, ?, ?, ?) RETURNING id;",
                 db_video.path,
                 db_video.size,
+                db_video.movie_id,
+                db_video.episode_id,
+                db_video.is_prime,
             );
             video_query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
@@ -290,27 +292,21 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing video");
-            let remove_query = sqlx::query!("DELETE FROM videos WHERE id = ?;", id);
+            let remove_query = sqlx::query!(
+                "DELETE FROM videos WHERE id = ? RETURNING episode_id, movie_id;",
+                id
+            );
+            let remove_result = remove_query.fetch_one(&mut *conn).await?;
 
-            if let Ok(episode) = sqlx::query!(r#"SELECT id FROM episodes WHERE video_id = ?"#, id)
-                .fetch_one(&mut *conn)
-                .await
-            {
-                let _ = conn.remove_episode(episode.id).await;
-                remove_query.execute(&mut *conn).await?;
+            if let Some(episode_id) = remove_result.episode_id {
+                let _ = conn.remove_episode(episode_id).await;
                 return Ok(());
             }
 
-            if let Ok(movie) = sqlx::query!(r#"SELECT id FROM movies WHERE video_id = ?"#, id)
-                .fetch_one(&mut *conn)
-                .await
-            {
-                let _ = conn.remove_movie(movie.id).await;
-                remove_query.execute(&mut *conn).await?;
+            if let Some(movie_id) = remove_result.movie_id {
+                let _ = conn.remove_movie(movie_id).await;
                 return Ok(());
             }
-
-            remove_query.execute(&mut *conn).await?;
 
             Ok(())
         }
@@ -323,12 +319,10 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing episode");
-            let delete_episode_result = sqlx::query!(
-                "DELETE FROM episodes WHERE id = ? RETURNING season_id, video_id",
-                id
-            )
-            .fetch_one(&mut *conn)
-            .await?;
+            let delete_episode_result =
+                sqlx::query!("DELETE FROM episodes WHERE id = ? RETURNING season_id", id)
+                    .fetch_one(&mut *conn)
+                    .await?;
 
             let season_id = delete_episode_result.season_id;
 
@@ -508,6 +502,42 @@ where
         }
     }
 
+    fn update_video_episode_id(
+        self,
+        video_id: i64,
+        episode_id: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "UPDATE videos SET episode_id = ? WHERE id = ?",
+                episode_id,
+                video_id,
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
+    fn update_video_movie_id(
+        self,
+        video_id: i64,
+        movie_id: i64,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "UPDATE videos SET movie_id = ? WHERE id = ?",
+                movie_id,
+                video_id,
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
     fn all_movies(
         self,
         limit: impl Into<Option<i64>>,
@@ -633,31 +663,6 @@ where
             .fetch_all(&mut *conn)
             .await?;
 
-            //let episodes = sqlx::query!(
-            //    r#"SELECT episodes.* FROM episodes
-            //JOIN seasons ON seasons.id = episodes.season_id
-            //JOIN shows ON shows.id = seasons.show_id
-            //WHERE show_id = ?;"#,
-            //    season
-            //)
-            //.fetch_all(&mut *conn)
-            //.await?;
-            //let episodes = episodes
-            //    .into_iter()
-            //    .map(|d| {
-            //        let ep = DbEpisode {
-            //            id: Some(d.id),
-            //            video_id: d.video_id,
-            //            season_id: d.season_id,
-            //            title: d.title,
-            //            number: d.number,
-            //            plot: d.plot,
-            //            release_date: d.release_date,
-            //            duration: d.duration,
-            //            poster: d.poster,
-            //        };
-            //    })
-            //    .collect();
             Ok(episodes)
         }
     }
@@ -683,7 +688,7 @@ where
 
             let episodes: Vec<_> = sqlx::query!(
                 "SELECT episodes.* FROM episodes 
-JOIN videos ON videos.id = episodes.video_id
+JOIN videos ON videos.episode_id = episodes.id
 WHERE season_id = ? ORDER BY number ASC",
                 season.id
             )
@@ -735,7 +740,7 @@ WHERE season_id = ? ORDER BY number ASC",
                 "SELECT episodes.*, seasons.number as season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN shows ON shows.id = seasons.show_id
-            JOIN videos ON videos.id = episodes.video_id
+            JOIN videos ON videos.episode_id = episodes.id
             WHERE shows.id = ? AND seasons.number = ? AND episodes.number = ?;",
                 show_id,
                 season,
@@ -868,7 +873,7 @@ WHERE season_id = ? ORDER BY number ASC",
             let episodes = sqlx::query!(
                 r#"SELECT episodes.*, seasons.number AS season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
-            JOIN videos ON videos.id = episodes.video_id
+            JOIN videos ON videos.episode_id = episodes.id
             WHERE title = ? COLLATE NOCASE"#,
                 query
             )
@@ -1103,7 +1108,6 @@ pub struct DbSeason {
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbMovie {
     pub id: Option<i64>,
-    pub video_id: i64,
     pub title: String,
     pub plot: Option<String>,
     pub poster: Option<String>,
@@ -1115,7 +1119,6 @@ pub struct DbMovie {
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbEpisode {
     pub id: Option<i64>,
-    pub video_id: i64,
     pub season_id: i64,
     pub title: String,
     pub number: i64,
@@ -1129,7 +1132,10 @@ pub struct DbEpisode {
 pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
+    pub is_prime: bool,
     pub size: i64,
+    pub movie_id: Option<i64>,
+    pub episode_id: Option<i64>,
     pub scan_date: String,
 }
 
