@@ -369,8 +369,8 @@ impl From<TmdbShowSeason> for SeasonMetadata {
         SeasonMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
-            release_date: Some(val.air_date),
-            plot: Some(val.overview),
+            release_date: val.air_date,
+            plot: val.overview,
             episodes: val.episodes.into_iter().map(|e| e.into()).collect(),
             poster,
             number: val.season_number,
@@ -386,11 +386,11 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
         EpisodeMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
-            release_date: Some(val.air_date),
+            release_date: val.air_date,
             number: val.episode_number,
             title: val.name,
             runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
-            plot: Some(val.overview),
+            plot: val.overview,
             season_number: val.season_number,
             poster,
         }
@@ -750,12 +750,12 @@ pub struct TmdbGuestStars {
 }
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSeasonEpisode {
-    pub air_date: String,
+    pub air_date: Option<String>,
     pub episode_number: usize,
     pub crew: Vec<Option<TmdbCrew>>,
     pub guest_stars: Vec<Option<TmdbGuestStars>>,
     pub name: String,
-    pub overview: String,
+    pub overview: Option<String>,
     pub id: usize,
     pub production_code: Option<String>,
     /// Duration in minutes
@@ -768,10 +768,10 @@ pub struct TmdbSeasonEpisode {
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbShowSeason {
     pub _id: String,
-    pub air_date: String,
+    pub air_date: Option<String>,
     pub episodes: Vec<TmdbSeasonEpisode>,
     pub name: String,
-    pub overview: String,
+    pub overview: Option<String>,
     pub id: usize,
     pub poster_path: Option<String>,
     pub season_number: usize,
