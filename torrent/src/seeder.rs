@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::{collections::HashMap, num::NonZeroUsize};
 
 use bytes::Bytes;
 
@@ -6,9 +6,10 @@ use crate::{download::Block, protocol::peer::PeerMessage, storage::StorageHandle
 
 const CACHE_SIZE: usize = 10;
 
+#[derive(Debug)]
 pub struct Seeder {
     pending_retrieves: HashMap<u32, Vec<flume::Sender<PeerMessage>>>,
-    cache: BTreeMap<u32, Bytes>,
+    piece_cache: lru::LruCache<u32, Bytes>,
     storage: StorageHandle,
 }
 
@@ -16,16 +17,18 @@ impl Seeder {
     pub fn new(storage: StorageHandle) -> Self {
         Self {
             pending_retrieves: HashMap::new(),
-            cache: BTreeMap::new(),
+            piece_cache: lru::LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
             storage,
         }
     }
 
-    pub fn request_block(&mut self, block: Block) -> Option<Bytes> {
-        if let Some(cache_piece) = self.cache.get(&block.piece) {
-            return Some(cache_piece.slice(block.range()));
+    pub async fn request_block(&mut self, block: Block) -> Option<Bytes> {
+        if let Some(cache_piece) = self.piece_cache.get(&block.piece) {
+            Some(cache_piece.slice(block.range()))
+        } else {
+            let bytes = self.storage.retrieve_blocking(block.piece as usize).await?;
+            self.piece_cache.put(block.piece, bytes.clone());
+            Some(bytes.slice(block.range()))
         }
-
-        None
     }
 }

@@ -136,6 +136,15 @@ impl Info {
     pub fn hex_pieces_hashes(&self) -> Vec<String> {
         self.pieces.0.iter().map(hex::encode).collect()
     }
+
+    pub fn as_bytes(&self) -> Vec<u8> {
+        serde_bencode::to_bytes(&self).unwrap()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
+        let info = serde_bencode::from_bytes(bytes)?;
+        Ok(info)
+    }
 }
 
 #[derive(Debug, Clone)]

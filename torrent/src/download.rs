@@ -21,12 +21,12 @@ use crate::{
         peer::{ExtensionHandshake, HandShake, PeerMessage},
         pex::{PexEntry, PexHistory, PexHistoryEntry, PexMessage},
         ut_metadata::UtMessage,
-        Info,
     },
     scheduler::{PendingFiles, Scheduler},
+    seeder::Seeder,
     storage::{StorageFeedback, StorageHandle},
     tracker::{DownloadStat, DownloadTracker},
-    NewPeer,
+    DownloadParams, NewPeer,
 };
 
 #[derive(Debug, Clone)]
@@ -43,7 +43,6 @@ pub enum DownloadMessage {
 pub struct DownloadHandle {
     pub download_tx: mpsc::Sender<DownloadMessage>,
     pub cancellation_token: CancellationToken,
-    pub storage: StorageHandle,
 }
 
 impl DownloadHandle {
@@ -563,13 +562,13 @@ pub struct TrackerStats {
     pub leechers: Option<usize>,
 }
 
-pub trait ProgressConsumer: Send + 'static {
+pub trait ProgressConsumer: Send + 'static + Clone {
     fn consume_progress(&mut self, progress: DownloadProgress);
 }
 
 impl<F> ProgressConsumer for F
 where
-    F: FnMut(DownloadProgress) + Send + 'static,
+    F: FnMut(DownloadProgress) + Send + 'static + Clone,
 {
     fn consume_progress(&mut self, progress: DownloadProgress) {
         self(progress);
@@ -657,28 +656,33 @@ pub struct Download {
     last_optimistic_unchoke: Instant,
     last_choke: Instant,
     stat: DownloadStat,
+    seeder: Seeder,
 }
 
 impl Download {
     pub fn new(
         storage_feedback: mpsc::Receiver<StorageFeedback>,
         storage: StorageHandle,
-        t: Info,
-        enabled_files: Vec<usize>,
+        download_params: DownloadParams,
         new_peers: mpsc::Receiver<NewPeer>,
         trackers: Vec<DownloadTracker>,
         cancellation_token: CancellationToken,
     ) -> Self {
+        let t = download_params.info;
         let info_hash = t.hash();
         let active_peers = JoinSet::new();
         let output_files = t.output_files("");
-        let pending_files =
-            PendingFiles::from_output_files(t.piece_length, &output_files, enabled_files);
+        let pending_files = PendingFiles::from_output_files(
+            t.piece_length,
+            &output_files,
+            download_params.enabled_files,
+        );
 
-        // TODO: consider disabled and downloaded pieces
-        let stat = DownloadStat::empty(t.total_size());
+        let stat = DownloadStat::new(&download_params.bitfield, &t);
 
-        let scheduler = Scheduler::new(t, pending_files);
+        let scheduler = Scheduler::new(t, pending_files, &download_params.bitfield);
+        let state = scheduler.torrent_state();
+        let seeder = Seeder::new(storage.clone());
 
         Self {
             new_peers,
@@ -693,11 +697,12 @@ impl Download {
             storage,
             pex_history: PexHistory::new(),
             cancellation_token,
-            state: DownloadState::default(),
+            state,
             tick_duration: DEFAULT_TICK_DURATION,
             last_optimistic_unchoke: Instant::now(),
             last_choke: Instant::now(),
             stat,
+            seeder,
         }
     }
 
@@ -710,7 +715,6 @@ impl Download {
         let download_handle = DownloadHandle {
             download_tx,
             cancellation_token: self.cancellation_token.clone(),
-            storage: self.storage.clone(),
         };
         task_tracker.spawn(self.work(progress, download_rx));
         download_handle

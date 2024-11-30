@@ -4,15 +4,17 @@ use std::{
     sync::Mutex,
 };
 
-use reqwest::Url;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::watch, task::JoinSet};
+use tokio::{
+    sync::{mpsc, watch},
+    task::JoinSet,
+};
 use torrent::{
-    DownloadHandle, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile, ResumeData,
+    DownloadHandle, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile,
 };
 
 use crate::{
-    db::Db,
+    db::{Db, DbActions},
     library::{
         is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
     },
@@ -54,15 +56,17 @@ impl ResourceTask for TorrentHandle {
             return Err(TaskError::Failure);
         }
         let progress = self.progress.borrow_and_update();
-        let progress = if progress.state == DownloadState::Pending {
-            let download_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
-            Progress {
-                is_finished: false,
-                percent: Some(progress.percent as f32),
-                speed: Some(ProgressSpeed::BytesPerSec(download_speed as usize)),
+        let progress = match progress.state {
+            DownloadState::Pending => {
+                let download_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
+                Progress {
+                    is_finished: false,
+                    percent: Some(progress.percent as f32),
+                    speed: Some(ProgressSpeed::BytesPerSec(download_speed as usize)),
+                }
             }
-        } else {
-            Progress::finished()
+            DownloadState::Seeding => Progress::finished(),
+            _ => unimplemented!("{} state", progress.state),
         };
         Ok(progress)
     }
@@ -75,31 +79,25 @@ impl ResourceTask for TorrentHandle {
 
 #[allow(async_fn_in_trait)]
 pub trait TorrentManager {
-    async fn create_torrent(
-        &self,
-        info: &Info,
-        tracker_list: &Vec<Url>,
-        output_location: &PathBuf,
-        enabled_files: &Vec<usize>,
-    ) -> anyhow::Result<()>;
-    async fn read_torrents(&self) -> anyhow::Result<Vec<ResumeData>>;
+    async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()>;
+    async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>>;
     async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()>;
     async fn delete_torrent(&self, hash: [u8; 20]) -> anyhow::Result<()>;
 }
 
 impl TorrentManager for Db {
-    async fn create_torrent(
-        &self,
-        info: &Info,
-        tracker_list: &Vec<Url>,
-        output_location: &PathBuf,
-        enabled_files: &Vec<usize>,
-    ) -> anyhow::Result<()> {
-        todo!()
+    async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()> {
+        self.insert_torrent(params.into()).await?;
+        Ok(())
     }
 
-    async fn read_torrents(&self) -> anyhow::Result<Vec<ResumeData>> {
-        todo!()
+    async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>> {
+        Ok(self
+            .all_torrents(100)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 
     async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()> {
@@ -116,16 +114,30 @@ pub struct TorrentClient {
     pub client: torrent::Client,
     resolved_magnet_links: Mutex<HashMap<[u8; 20], Info>>,
     torrents: Mutex<Vec<PendingTorrent>>,
+    progress_rx: mpsc::Receiver<DownloadProgress>,
+    progress_tx: mpsc::Sender<DownloadProgress>,
 }
 
 impl TorrentClient {
     pub async fn new(config: torrent::ClientConfig) -> anyhow::Result<Self> {
         let client = torrent::Client::new(config).await?;
+        let (tx, rx) = mpsc::channel(100);
         Ok(Self {
             client,
             resolved_magnet_links: HashMap::new().into(),
             torrents: Vec::new().into(),
+            progress_rx: rx,
+            progress_tx: tx,
         })
+    }
+
+    pub async fn load_torrents(&mut self, manager: impl TorrentManager) -> anyhow::Result<()> {
+        for torrent in manager.read_torrents().await? {
+            let Ok(handle) = self.client.open(torrent, self.progress_tx.clone()).await else {
+                continue;
+            };
+        }
+        Ok(())
     }
 
     pub async fn resolve_magnet_link(&self, magnet_link: &MagnetLink) -> anyhow::Result<Info> {
@@ -150,19 +162,13 @@ impl TorrentClient {
 
     pub async fn add_torrent(
         &self,
-        save_location: PathBuf,
-        trackers: Vec<reqwest::Url>,
-        info: Info,
+        params: DownloadParams,
         torrent_metadata: TorrentInfo,
-        enabled_files: Vec<usize>,
     ) -> anyhow::Result<TorrentHandle> {
-        let info_hash = info.hash();
+        let info_hash = params.info.hash();
         let (progress_tx, progress_rx) = watch::channel(DownloadProgress::default());
 
-        let download_handle = self
-            .client
-            .download(save_location, trackers, info, enabled_files, progress_tx)
-            .await?;
+        let download_handle = self.client.open(params, progress_tx).await?;
 
         let torrent = PendingTorrent {
             info_hash,

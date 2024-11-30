@@ -542,6 +542,12 @@ impl BitField {
     }
 }
 
+impl From<Vec<u8>> for BitField {
+    fn from(value: Vec<u8>) -> Self {
+        BitField(value)
+    }
+}
+
 #[cfg(test)]
 mod test {
 

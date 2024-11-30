@@ -1,5 +1,4 @@
 #![feature(array_chunks)]
-#![feature(iter_repeat_n)]
 #![feature(assert_matches)]
 #![feature(iter_array_chunks)]
 #![feature(iter_collect_into)]
@@ -7,7 +6,6 @@
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, SocketAddrV4},
-    path::Path,
     sync::Arc,
     time::Duration,
 };
@@ -17,7 +15,7 @@ pub use download::{DownloadProgress, ProgressConsumer};
 use peer_listener::{NewPeer, PeerListener};
 use peers::Peer;
 use reqwest::Url;
-pub use resumability::ResumeData;
+pub use resumability::DownloadParams;
 use storage::TorrentStorage;
 use tokio::{
     net::TcpStream,
@@ -107,64 +105,18 @@ impl Client {
         self.task_tracker.wait().await
     }
 
-    pub async fn download(
-        &self,
-        save_location: impl AsRef<Path>,
-        trackers: Vec<Url>,
-        info: Info,
-        enabled_files: Vec<usize>,
-        progress_consumer: impl ProgressConsumer,
-    ) -> anyhow::Result<DownloadHandle> {
-        let child_token = self.cancellation_token.child_token();
-        let hash = info.hash();
-        // TODO: Torrent resumability
-        let initial_stat = DownloadStat::empty(info.total_size());
-        let (peers_tx, peers_rx) = mpsc::channel(1000);
-        let (feedback_tx, feedback_rx) = mpsc::channel(100);
-        tracing::info!("Connecting trackers");
-        let trackers = spawn_trackers(
-            trackers,
-            hash,
-            self.udp_tracker_tx.clone(),
-            initial_stat,
-            self.task_tracker.clone(),
-            child_token.clone(),
-        )
-        .await;
-
-        self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let bf = BitField::empty(info.pieces.len());
-        let save_location = save_location.as_ref().to_path_buf();
-        let storage = TorrentStorage::new(feedback_tx, &info, bf, save_location, &enabled_files);
-        let storage_handle = storage
-            .spawn(&self.task_tracker, child_token.clone())
-            .await?;
-
-        let download = Download::new(
-            feedback_rx,
-            storage_handle,
-            info,
-            enabled_files,
-            peers_rx,
-            trackers,
-            child_token,
-        );
-        let download_handle = download.start(progress_consumer, &self.task_tracker);
-        Ok(download_handle)
-    }
-
     pub async fn open(
         &self,
-        resume: ResumeData,
+        params: DownloadParams,
         progress_consumer: impl ProgressConsumer,
     ) -> anyhow::Result<DownloadHandle> {
         let child_token = self.cancellation_token.child_token();
-        let hash = resume.info.hash();
-        let initial_stat = DownloadStat::new(&resume.bitfield, &resume.info);
+        let hash = params.info.hash();
+        let initial_stat = DownloadStat::new(&params.bitfield, &params.info);
         let (peers_tx, peers_rx) = mpsc::channel(1000);
         let (feedback_tx, feedback_rx) = mpsc::channel(100);
         tracing::info!("Connecting trackers");
-        let urls = resume.trackers;
+        let urls = params.trackers.clone();
         let trackers = spawn_trackers(
             urls,
             hash,
@@ -176,14 +128,7 @@ impl Client {
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let enabled_files = resume.enabled_files;
-        let storage = TorrentStorage::new(
-            feedback_tx,
-            &resume.info,
-            resume.bitfield,
-            resume.save_location,
-            &enabled_files,
-        );
+        let storage = TorrentStorage::new(feedback_tx, params.clone());
         let storage_handle = storage
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
@@ -191,14 +136,19 @@ impl Client {
         let download = Download::new(
             feedback_rx,
             storage_handle,
-            resume.info,
-            enabled_files,
+            params,
             peers_rx,
             trackers,
             child_token,
         );
         let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)
+    }
+
+    pub async fn validate(&self, params: DownloadParams) -> anyhow::Result<BitField> {
+        let (feedback_tx, _) = mpsc::channel(100);
+        let mut storage = TorrentStorage::new(feedback_tx, params.clone());
+        storage.revalidate().await
     }
 
     pub async fn resolve_magnet_link(&self, link: &MagnetLink) -> anyhow::Result<Info> {
@@ -260,9 +210,6 @@ impl Client {
                             tracing::warn!("ut_metadata retrieval task failed: {e}");
                         },
                         Err(e) => {
-                            if ut_metadata_set.is_empty() {
-                                bail!("No one managed to send metadata");
-                            }
                             panic!("ut_metadata retrieval task panicked: {e}");
                         },
                     }

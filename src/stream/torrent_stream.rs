@@ -23,7 +23,6 @@ impl PendingTorrent {
             .map(|h| h.0)
             .unwrap_or(headers::Range::bytes(0..).unwrap());
         let (stream_tx, stream_rx) = mpsc::channel::<anyhow::Result<Bytes>>(5);
-        let mut storage_handle = self.download_handle.storage.clone();
         let (start, end) = range
             .satisfiable_ranges(file_size)
             .next()

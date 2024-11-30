@@ -12,9 +12,9 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     peers::BitField,
-    protocol::{Hashes, Info, OutputFile},
+    protocol::{Hashes, OutputFile},
     scheduler::BLOCK_LENGTH,
-    utils::{verify_iter_sha1, verify_sha1},
+    DownloadParams,
 };
 
 pub mod hash_verification;
@@ -180,13 +180,11 @@ pub enum StorageFeedback {
 }
 
 impl TorrentStorage {
-    pub fn new(
-        feedback_tx: mpsc::Sender<StorageFeedback>,
-        info: &Info,
-        initial_bitfield: BitField,
-        output_dir: PathBuf,
-        enabled_files: &[usize],
-    ) -> Self {
+    pub fn new(feedback_tx: mpsc::Sender<StorageFeedback>, torrent_params: DownloadParams) -> Self {
+        let info = torrent_params.info;
+        let output_dir = torrent_params.save_location;
+        let enabled_files = torrent_params.enabled_files;
+        let bitfield = torrent_params.bitfield;
         let s = sysinfo::System::new();
         let workers = s
             .physical_core_count()
@@ -195,7 +193,7 @@ impl TorrentStorage {
         let output_files = info.output_files(&output_dir);
         let mut files_bitfield = BitField::empty(output_files.len());
         for enabled_idx in enabled_files {
-            files_bitfield.add(*enabled_idx).unwrap();
+            files_bitfield.add(enabled_idx).unwrap();
         }
         let hasher = Hasher::new(workers);
 
@@ -206,7 +204,7 @@ impl TorrentStorage {
             piece_size: info.piece_length,
             total_length: info.total_size(),
             pieces: info.pieces.clone(),
-            bitfield: initial_bitfield,
+            bitfield,
             enabled_files: files_bitfield,
             file_handles: FileHandles::new(),
             hasher,
@@ -218,7 +216,9 @@ impl TorrentStorage {
         tracker: &TaskTracker,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<StorageHandle> {
-        let save_location_metadata = self.output_dir.metadata()?;
+        let save_location_metadata = fs::metadata(&self.output_dir)
+            .await
+            .context("save directory metadata")?;
         if !save_location_metadata.is_dir() {
             return Err(anyhow::anyhow!(
                 "Save directory must be a directory, got {:?}",
@@ -395,29 +395,24 @@ impl TorrentStorage {
                 continue;
             }
 
-            let insert_offset = piece_start.checked_sub(file_start).unwrap_or_default();
+            let read_offset = piece_start.checked_sub(file_start).unwrap_or_default();
             let f = match self.file_handles.opened_files.get_mut(&file_idx) {
                 Some(f) => f,
                 None => {
                     tracing::debug!("Creating file handle: {}", file.path().display());
-                    let file_handle = fs::OpenOptions::new()
-                        .create(true)
-                        .write(true)
-                        .open(file.path())
-                        .await?;
-                    file_handle.set_len(file.length()).await?;
+                    let file_handle = fs::OpenOptions::new().read(true).open(file.path()).await?;
                     self.file_handles.opened_files.put(file_idx, file_handle);
                     self.file_handles.opened_files.get_mut(&file_idx).unwrap()
                 }
             };
-            f.seek(SeekFrom::Start(insert_offset)).await?;
-            let range_start = if file_start > piece_start {
+            f.seek(SeekFrom::Start(read_offset)).await?;
+            let range_start = if piece_start < file_start {
                 (file_start - piece_start) as usize
             } else {
                 0
             };
             let range_end = if file_end < piece_end {
-                (piece_end - file_end) as usize
+                (piece_length as u64 - (piece_end - file_end)) as usize
             } else {
                 piece_length as usize
             };
@@ -425,25 +420,57 @@ impl TorrentStorage {
             file_offset += file.length();
         }
         let bytes = bytes.freeze();
-        let hash = self.pieces.get_hash(piece_i).unwrap();
-        if !verify_sha1(hash, &bytes) {
-            panic!("Failed to verify hash of retrieved piece");
-        };
         Ok(bytes)
     }
 
-    pub async fn recheck_pieces(&mut self) -> anyhow::Result<()> {
-        let bitfield = self.bitfield.clone();
-        for i in bitfield.pieces() {
-            let bytes = self.retrieve_piece(i).await?;
-            if !verify_sha1(&self.pieces.0[i], &bytes) {
-                anyhow::bail!("Failed to verify hash of the piece: {}", i);
+    pub async fn revalidate(&mut self) -> anyhow::Result<BitField> {
+        let mut bitfield = BitField::empty(self.pieces.len());
+        let mut current_piece = 0;
+        let mut verified_pieces = 0;
+        let total_pieces = self.pieces.len();
+        let s = sysinfo::System::new();
+        let workers = s.physical_core_count().unwrap_or(4);
+        let mut hasher = Hasher::new(workers);
+        const CONCURRENCY: usize = 50;
+        for _ in 0..CONCURRENCY {
+            let bytes = self.retrieve_piece(current_piece).await?;
+            let payload = Payload {
+                hash: self.pieces[current_piece],
+                piece_i: current_piece,
+                data: vec![bytes],
+            };
+            hasher.pend_job(payload).await;
+            current_piece += 1;
+            if current_piece >= total_pieces {
+                break;
             }
         }
-        Ok(())
+        loop {
+            let res = hasher.recv().await;
+            verified_pieces += 1;
+            if res.is_verified {
+                bitfield.add(res.piece_i).unwrap();
+            }
+
+            if verified_pieces >= total_pieces {
+                break;
+            }
+
+            if current_piece < total_pieces {
+                let bytes = self.retrieve_piece(current_piece).await?;
+                let payload = Payload {
+                    hash: self.pieces[current_piece],
+                    piece_i: current_piece,
+                    data: vec![bytes],
+                };
+                current_piece += 1;
+                hasher.pend_job(payload).await;
+            }
+        }
+        Ok(bitfield)
     }
 
-    pub async fn pend_hash_validation(&mut self, piece_i: usize, data: ReadyPiece) {
+    async fn pend_hash_validation(&mut self, piece_i: usize, data: ReadyPiece) {
         let hash = self.pieces.0[piece_i];
         let payload = Payload {
             hash,

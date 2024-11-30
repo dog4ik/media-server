@@ -6,7 +6,8 @@ use std::{
 use clap::{ArgGroup, Parser, Subcommand};
 use tokio::sync::mpsc;
 use torrent::{
-    Client, ClientConfig, DownloadProgress, DownloadState, Info, MagnetLink, TorrentFile,
+    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink,
+    TorrentFile,
 };
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -146,10 +147,8 @@ async fn main() {
             let (tx, mut rx) = mpsc::channel(100);
             let output = output.unwrap_or(PathBuf::from("."));
             let files = files.unwrap_or_else(|| (0..info.output_files(&output).len()).collect());
-            client
-                .download(output, announce_list, info, files, tx)
-                .await
-                .unwrap();
+            let torrent_params = DownloadParams::empty(info, announce_list, files, output);
+            client.open(torrent_params, tx).await.unwrap();
             loop {
                 tokio::select! {
                     Some(progress) = rx.recv() => {

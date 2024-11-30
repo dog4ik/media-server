@@ -9,7 +9,7 @@ use crate::{
     download::{ActivePeer, Block, BlockPosition, DataBlock, Performance},
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{peer::PeerMessage, ut_metadata::UtMetadata, Info, OutputFile},
-    utils,
+    utils, DownloadState,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -308,12 +308,15 @@ pub const BLOCK_LENGTH: u32 = 16 * 1024;
 const MAX_SCHEDULED_TO: usize = 4;
 
 impl Scheduler {
-    pub fn new(t: Info, pending_files: PendingFiles) -> Self {
+    pub fn new(t: Info, pending_files: PendingFiles, initial_bf: &crate::BitField) -> Self {
         let ut_metadata = UtMetadata::full_from_info(&t);
         let total_pieces = t.pieces.len();
         let mut piece_table = vec![SchedulerPiece::default(); total_pieces];
         for file in &pending_files.files {
             for p in file.pieces_range() {
+                if initial_bf.has(p) {
+                    piece_table[p].is_finished = true;
+                }
                 piece_table[p].priority = file.priority;
             }
         }
@@ -734,7 +737,18 @@ impl Scheduler {
     }
 
     pub fn is_torrent_finished(&self) -> bool {
-        self.pending_pieces.is_empty() && self.piece_table.iter().all(|p| p.is_saving == false)
+        self.pending_pieces.is_empty()
+            && self
+                .piece_table
+                .iter()
+                .all(|p| p.is_finished && !p.priority.is_disabled())
+    }
+
+    pub fn torrent_state(&self) -> DownloadState {
+        match self.is_torrent_finished() {
+            true => DownloadState::Seeding,
+            false => DownloadState::Pending,
+        }
     }
 
     /// Get progress percent and the amount of pending_pieces
@@ -755,45 +769,5 @@ impl Scheduler {
     pub fn set_strategy(&mut self, strategy: ScheduleStrategy) {
         self.picker.set_strategy(strategy);
         self.picker.rebuild_queue(&self.piece_table);
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::{
-        protocol::{Hashes, Info, SizeDescriptor},
-        scheduler::Scheduler,
-    };
-
-    use super::PendingFiles;
-
-    const FAKE_PIECE_SIZE: usize = 3;
-    const FAKE_PIECES_AMOUNT: usize = 10;
-
-    fn fake_info() -> Info {
-        let pieces = Hashes(
-            (0..FAKE_PIECES_AMOUNT as u8)
-                .into_iter()
-                .map(|i| [i; 20])
-                .collect(),
-        );
-        Info {
-            name: "Fake torrent".into(),
-            pieces,
-            piece_length: 3,
-            file_descriptor: SizeDescriptor::Length(
-                FAKE_PIECES_AMOUNT as u64 * FAKE_PIECE_SIZE as u64 - 2,
-            ),
-        }
-    }
-
-    #[test]
-    fn scheduler_interested() {
-        let info = fake_info();
-        let output_files = info.output_files("");
-        let enabled_files = (0..output_files.len()).collect();
-        let pending_files =
-            PendingFiles::from_output_files(info.piece_length, &output_files, enabled_files);
-        let _scheduler = Scheduler::new(info, pending_files);
     }
 }

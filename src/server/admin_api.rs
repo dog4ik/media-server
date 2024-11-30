@@ -21,7 +21,7 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
-use torrent::{MagnetLink, TorrentFile};
+use torrent::{DownloadParams, MagnetLink, TorrentFile};
 use tracing::{debug, info};
 use uuid::Uuid;
 
@@ -1337,24 +1337,20 @@ pub async fn detect_intros(
     tag = "Torrent",
 )]
 pub async fn download_torrent(
-    State(app_state): State<AppState>,
-    Json(payload): Json<TorrentDownloadPayload>,
-) -> Result<(), AppError> {
-    let AppState {
+    State(AppState {
         providers_stack,
         torrent_client,
         tasks,
         ..
-    } = app_state;
+    }): State<AppState>,
+    Json(payload): Json<TorrentDownloadPayload>,
+) -> Result<(), AppError> {
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
         .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
     let tracker_list = magnet_link.all_trackers().ok_or(AppError::bad_request(
         "Magnet links without tracker list are not supported",
     ))?;
-    let info = torrent_client
-        .resolve_magnet_link(&magnet_link)
-        .await
-        .map_err(|e| AppError::bad_request(e.to_string()))?;
+    let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
     let info_hash = info.hash();
     let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
 
@@ -1373,26 +1369,19 @@ pub async fn download_torrent(
                 .content
                 .as_ref()
                 .map(|c| c.content_type())?;
-            let movie_folders: config::MovieFolders = config::CONFIG.get_value();
-            let show_folders: config::ShowFolders = config::CONFIG.get_value();
-            match content_type {
-                ContentType::Show => show_folders.first(),
-                ContentType::Movie => movie_folders.first(),
-            }
-            .map(|f| f.to_owned())
+            let folders = match content_type {
+                ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
+                ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
+            };
+            folders
+                .into_iter()
+                .find(|f| f.try_exists().unwrap_or(false))
         })
         .ok_or(AppError::bad_request("Could not determine save location"))?;
     tracing::debug!("Selected torrent output: {}", save_location.display());
     let content = torrent_info.contents.content.clone();
-    let handle = torrent_client
-        .add_torrent(
-            save_location,
-            tracker_list,
-            info,
-            torrent_info,
-            enabled_files,
-        )
-        .await?;
+    let params = DownloadParams::empty(info, tracker_list, enabled_files, save_location);
+    let handle = torrent_client.add_torrent(params, torrent_info).await?;
 
     tasks.tracker.spawn(async move {
         let _ = tasks
