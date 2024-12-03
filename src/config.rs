@@ -502,7 +502,7 @@ impl<T: ConfigValue> utoipa::PartialSchema for UtoipaConfigValue<T> {
 
 impl utoipa::ToSchema for UtoipaConfigSchema {
     fn name() -> std::borrow::Cow<'static, str> {
-        "UtoipaConfigSchema".into()
+        "ConfigSchema".into()
     }
 }
 
