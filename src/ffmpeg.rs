@@ -246,7 +246,7 @@ impl FFprobeOutput {
 
     /// Duration
     pub fn duration(&self) -> Duration {
-        std::time::Duration::from_secs(
+        Duration::from_secs(
             self.format
                 .duration
                 .parse::<f64>()
@@ -395,7 +395,7 @@ impl<T: FFmpegTask + Send> ResourceTask for FFmpegRunningJob<T> {
             Some(progress) = self.stdout.next_progress_chunk() => {
                 Ok(Progress {
                     is_finished: false,
-                    speed: Some(ProgressSpeed::RelativeSpeed(progress.relative_speed())),
+                    speed: Some(ProgressSpeed::RelativeSpeed{ speed: progress.relative_speed() }),
                     percent: Some(progress.percent(&self.duration)),
                 })
             }
@@ -840,6 +840,13 @@ pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow:
 
 static PULL_FRAME_PERMITS: Semaphore = Semaphore::const_new(4);
 
+fn format_ffmpeg_time(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    format!("{:0>2}:{:0>2}:{:0>2}", hours, minutes % 60, seconds % 60)
+}
+
 /// Pull the frame at specified time location
 pub async fn pull_frame(
     input_file: impl AsRef<Path>,
@@ -848,13 +855,7 @@ pub async fn pull_frame(
 ) -> anyhow::Result<()> {
     let _guard = PULL_FRAME_PERMITS.acquire().await.unwrap();
     let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
-    let format_time = |duration: Duration| {
-        let seconds = duration.as_secs();
-        let minutes = seconds / 60;
-        let hours = minutes / 60;
-        format!("{:0>2}:{:0>2}:{:0>2}", hours, minutes % 60, seconds % 60)
-    };
-    let time = format_time(timing);
+    let time = format_ffmpeg_time(timing);
     let args: &[&OsStr] = &[
         "-hide_banner".as_ref(),
         "-loglevel".as_ref(),
@@ -880,4 +881,30 @@ pub async fn pull_frame(
     } else {
         Err(anyhow!("ffmpeg process was unexpectedly terminated"))
     }
+}
+
+pub fn spawn_chromaprint_command(path: impl AsRef<Path>, take: Duration) -> std::io::Result<Child> {
+    let path = path.as_ref().to_path_buf();
+    let str_path = path.to_string_lossy();
+    let ffmpeg: config::IntroDetectionFfmpegBuild = config::CONFIG.get_value();
+    tokio::process::Command::new(ffmpeg.0)
+        .args([
+            "-hide_banner",
+            "-i",
+            &str_path,
+            "-to",
+            &format_ffmpeg_time(take),
+            "-ac",
+            "2",
+            "-map",
+            "0:a:0",
+            "-f",
+            "chromaprint",
+            "-fp_format",
+            "raw",
+            "-",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
 }
