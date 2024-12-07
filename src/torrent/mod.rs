@@ -144,7 +144,7 @@ impl TorrentClient {
                     torrent_hash,
                     progress,
                 };
-                let _ = progress_tx.blocking_send(torrent_progress);
+                let _ = progress_tx.try_send(torrent_progress);
             };
 
             let Ok(handle) = self.client.open(torrent, progress_handler).await else {
@@ -186,7 +186,7 @@ impl TorrentClient {
                 torrent_hash: info_hash,
                 progress,
             };
-            let _ = progress_tx.blocking_send(torrent_progress);
+            let _ = progress_tx.try_send(torrent_progress);
         };
 
         let download_handle = self.client.open(params, progress_handler).await?;
