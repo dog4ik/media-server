@@ -1013,12 +1013,8 @@ impl Capabilities {
         let lines = output.stdout.lines();
 
         // skip description header
-        let mut lines = lines.skip_while(|line| {
-            !line
-                .as_ref()
-                .map(|l| l.starts_with(" ---"))
-                .unwrap_or(false)
-        });
+        let mut lines =
+            lines.skip_while(|line| !line.as_ref().map_or(false, |l| l.starts_with(" ---")));
         lines.next();
 
         let mut codecs = Vec::new();
