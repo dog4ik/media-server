@@ -331,7 +331,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(val.overview),
+            plot: val.overview,
             release_date: val.release_date,
             runtime: None,
             title: val.title,
@@ -353,8 +353,8 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             metadata_provider: MetadataProvider::Tmdb,
             poster,
             backdrop,
-            plot: Some(val.overview),
-            release_date: Some(val.first_air_date),
+            plot: val.overview,
+            release_date: val.first_air_date,
             title: val.name,
             ..Default::default()
         }
@@ -595,13 +595,12 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 content_type = ContentType::Show;
             }
             Self::Episode(_) => return Err(anyhow!("Episode is not implemented")),
-            Self::Person(_) => return Err(anyhow!("Person is not implemented")),
             Self::Other {} => return Err(anyhow!("Other is not implemented")),
         };
         Ok(MetadataSearchResult {
             title,
             poster,
-            plot: Some(plot),
+            plot,
             metadata_id: tmdb_id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             content_type,
@@ -632,7 +631,6 @@ pub struct TmdbFindByIdResult {
 pub enum TmdbFindMultiResult {
     Movie(TmdbSearchMovieResult),
     Show(TmdbSearchShowResult),
-    Person(TmdbPerson),
     Episode(TmdbSeasonEpisode),
     Other {},
 }
@@ -655,47 +653,29 @@ pub struct TmdbShowDetails {
     pub first_air_date: Option<String>,
     pub genres: Option<Vec<TmdbGenre>>,
     pub id: usize,
-    pub in_production: bool,
-    pub languages: Option<Vec<String>>,
     pub last_air_date: Option<String>,
-    pub last_episode_to_air: Option<TmdbEpisodeToAir>,
     pub name: String,
-    pub next_episode_to_air: Option<TmdbEpisodeToAir>,
     pub number_of_episodes: usize,
     pub number_of_seasons: usize,
-    pub origin_country: Option<Vec<String>>,
     pub original_language: Option<String>,
     pub original_name: String,
     pub overview: String,
-    pub popularity: Option<f64>,
     pub poster_path: Option<String>,
-    pub tagline: Option<String>,
-    pub vote_average: Option<f64>,
-    pub vote_count: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbMovieDetails {
-    pub adult: bool,
     pub backdrop_path: Option<String>,
-    pub budget: Option<usize>,
     pub genres: Option<Vec<TmdbGenre>>,
-    pub homepage: Option<String>,
     pub id: usize,
     pub imdb_id: Option<String>,
     pub original_language: Option<String>,
     pub original_title: Option<String>,
     pub overview: String,
-    pub popularity: Option<f64>,
     pub poster_path: Option<String>,
     pub release_date: Option<String>,
-    pub revenue: Option<isize>,
     pub runtime: Option<usize>,
-    pub status: Option<String>,
-    pub tagline: Option<String>,
     pub title: String,
-    pub vote_average: Option<f64>,
-    pub vote_count: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -709,11 +689,8 @@ pub struct TmdbEpisodeToAir {
     pub id: usize,
     pub name: String,
     pub overview: String,
-    pub vote_average: Option<f64>,
-    pub vote_count: usize,
-    pub air_date: String,
+    pub air_date: Option<String>,
     pub episode_number: usize,
-    pub episode_type: Option<String>,
     pub runtime: Option<usize>,
     pub season_number: usize,
     pub show_id: usize,
@@ -757,17 +734,13 @@ pub struct TmdbSeasonEpisode {
     pub name: String,
     pub overview: Option<String>,
     pub id: usize,
-    pub production_code: Option<String>,
     /// Duration in minutes
     pub runtime: Option<usize>,
     pub season_number: usize,
     pub still_path: Option<String>,
-    pub vote_average: Option<f64>,
-    pub vote_count: usize,
 }
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbShowSeason {
-    pub _id: String,
     pub air_date: Option<String>,
     pub episodes: Vec<TmdbSeasonEpisode>,
     pub name: String,
@@ -775,22 +748,15 @@ pub struct TmdbShowSeason {
     pub id: usize,
     pub poster_path: Option<String>,
     pub season_number: usize,
-    pub vote_average: Option<f64>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearchShowResult {
     pub poster_path: Option<String>,
-    pub popularity: Option<f64>,
     pub id: usize,
     pub backdrop_path: Option<String>,
-    pub vote_average: Option<f64>,
-    pub overview: String,
-    pub first_air_date: String,
-    pub origin_country: Vec<String>,
-    pub genre_ids: Vec<usize>,
-    pub original_language: String,
-    pub vote_count: usize,
+    pub overview: Option<String>,
+    pub first_air_date: Option<String>,
     pub name: String,
     pub original_name: String,
 }
@@ -807,20 +773,9 @@ pub struct TmdbSearch<T> {
 pub struct TmdbSearchMovieResult {
     pub backdrop_path: Option<String>,
     pub poster_path: Option<String>,
-    pub popularity: Option<f64>,
     pub id: usize,
-    pub vote_average: Option<f64>,
-    pub overview: String,
+    pub overview: Option<String>,
     pub release_date: Option<String>,
-    pub origin_country: Option<Vec<String>>,
-    pub genre_ids: Option<Vec<usize>>,
-    pub original_language: String,
-    pub vote_count: Option<usize>,
     pub title: String,
     pub original_title: Option<String>,
-}
-
-#[derive(Deserialize, Debug, Clone)]
-pub struct TmdbPerson {
-    // todo
 }

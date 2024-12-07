@@ -314,8 +314,14 @@ impl DiscoverMetadataProvider for TvdbApi {
         }
 
         let fresh_ids = match content_hint {
-            ContentType::Movie => self.fetch_movie(id, FetchParams::default()).await.map(|x| x.remote_ids),
-            ContentType::Show => self.fetch_show(id, FetchParams::default()).await.map(|x| x.remote_ids),
+            ContentType::Movie => self
+                .fetch_movie(id, FetchParams::default())
+                .await
+                .map(|x| x.remote_ids),
+            ContentType::Show => self
+                .fetch_show(id, FetchParams::default())
+                .await
+                .map(|x| x.remote_ids),
         }?;
         return Ok(retrieve_ids(fresh_ids));
     }
@@ -378,7 +384,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             .unwrap()
             .overview;
         MovieMetadata {
-            metadata_id: self.id,
+            metadata_id: self.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
             poster,
             backdrop,
@@ -512,20 +518,16 @@ impl From<TvdbPoster> for MetadataImage {
 
 #[derive(Debug, Clone, Deserialize)]
 struct TvdbSearchResult {
-    country: Option<String>,
     id: String,
     image_url: Option<String>,
     name: String,
     first_air_time: Option<String>,
     overview: Option<String>,
     primary_language: Option<String>,
-    primary_type: String,
-    status: Option<String>,
     #[serde(rename = "type")]
     search_type: String,
     tvdb_id: String,
     year: Option<String>,
-    slug: Option<String>,
     overviews: Option<HashMap<String, String>>,
     translations: HashMap<String, String>,
     remote_ids: Option<Vec<TvdbRemoteIds>>,
@@ -544,12 +546,10 @@ struct TvdbEpisode {
     overview_translations: Option<Vec<String>>,
     image: Option<TvdbPoster>,
     image_type: Option<usize>,
-    is_movie: Option<usize>,
     seasons: Option<Vec<TvdbSeasonBaseRecord>>,
     number: usize,
     season_number: usize,
     last_updated: Option<String>,
-    finale_type: Option<String>,
     year: Option<String>,
 }
 
@@ -573,7 +573,6 @@ struct TvdbSeasonBaseRecord {
 struct TvdbGenre {
     id: usize,
     name: String,
-    slug: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -604,7 +603,6 @@ struct TvdbArtwork {
     language: Option<String>,
     #[serde(rename = "type")]
     artwork_type: usize,
-    score: Option<usize>,
     width: usize,
     height: usize,
     includes_text: bool,
@@ -615,17 +613,14 @@ struct TvdbArtwork {
 struct TvdbSeriesExtendedRecord {
     id: usize,
     name: String,
-    slug: Option<String>,
     image: Option<String>,
     name_translations: Option<Vec<String>>,
     overview_translations: Option<Vec<String>>,
     first_aired: Option<String>,
     last_aired: Option<String>,
     next_aired: Option<String>,
-    score: Option<usize>,
     original_country: Option<String>,
     original_language: Option<String>,
-    default_season_type: usize,
     seasons: Vec<TvdbSeasonBaseRecord>,
     is_order_randomized: bool,
     last_updated: Option<String>,
@@ -635,7 +630,6 @@ struct TvdbSeriesExtendedRecord {
     year: Option<String>,
     artworks: Vec<TvdbArtwork>,
     genres: Vec<TvdbGenre>,
-    trailers: Vec<TvdbTrailer>,
     remote_ids: Vec<TvdbRemoteIds>,
     characters: Option<Vec<TvdbCharacter>>,
 }
@@ -643,21 +637,16 @@ struct TvdbSeriesExtendedRecord {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TvdbMovieExtendedRecord {
-    id: String,
+    id: usize,
     name: String,
     image: Option<String>,
     translations: TvdbTranslations,
-    score: Option<usize>,
     runtime: Option<usize>,
-    last_updated: String,
     year: Option<String>,
-    trailers: Vec<TvdbTrailer>,
     genres: Vec<TvdbGenre>,
     artworks: Vec<TvdbArtwork>,
     remote_ids: Vec<TvdbRemoteIds>,
     characters: Vec<TvdbCharacter>,
-    budget: Option<String>,
-    box_office: Option<String>,
     original_country: Option<String>,
     original_language: Option<String>,
     first_release: Option<TvdbRelease>,
@@ -690,7 +679,7 @@ struct TvdbRelease {
 #[serde(rename_all = "camelCase")]
 struct TvdbCharacter {
     id: usize,
-    name: String,
+    name: Option<String>,
     people_id: Option<usize>,
     series_id: Option<usize>,
     series: Option<usize>,
@@ -700,8 +689,6 @@ struct TvdbCharacter {
     #[serde(rename = "type")]
     character_type: usize,
     image: Option<String>,
-    sort: usize,
-    is_featured: bool,
     url: Option<String>,
     name_translations: Option<Vec<String>>,
     overview_translations: Option<Vec<String>>,
