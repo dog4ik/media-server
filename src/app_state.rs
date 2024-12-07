@@ -32,7 +32,7 @@ use crate::{
         DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider, MovieMetadata,
         ShowMetadata, ShowMetadataProvider,
     },
-    progress::{TaskKind, TaskResource, VideoTaskType},
+    progress::{TaskResource, VideoTask, VideoTaskKind},
     torrent::TorrentClient,
     torrent_index::tpb::TpbApi,
     utils,
@@ -180,7 +180,7 @@ impl AppState {
         FetchParams { lang: language.0 }
     }
 
-    pub async fn get_source_by_id(&self, id: i64) -> Result<Source, AppError> {
+    pub fn get_source_by_id(&self, id: i64) -> Result<Source, AppError> {
         let library = self.library.lock().unwrap();
         library
             .get_source(id)
@@ -189,7 +189,7 @@ impl AppState {
     }
 
     pub async fn remove_video(&self, id: i64) -> Result<(), AppError> {
-        let source = self.get_source_by_id(id).await?;
+        let source = self.get_source_by_id(id)?;
         source
             .video
             .delete()
@@ -416,11 +416,17 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
     /// TODO: this whole thing is wrong on so many levels
     pub async fn extract_subs(&self, video_id: i64) -> Result<(), AppError> {
-        let source = self.get_source_by_id(video_id).await?;
+        let source = self.get_source_by_id(video_id)?;
         let mut jobs = Vec::new();
         let task_id = self
             .tasks
-            .start_video_task(video_id, VideoTaskType::Subtitles, None)
+            .start_task(
+                VideoTask {
+                    video_id,
+                    kind: VideoTaskKind::Subtitles,
+                },
+                None,
+            )
             .unwrap();
         let subtitles_asset = SubtitlesDirAsset::new(video_id);
         let subtitles_dir = subtitles_asset.path();
@@ -465,7 +471,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         video_id: i64,
         subs_track: usize,
     ) -> Result<String, AppError> {
-        let video = self.get_source_by_id(video_id).await?.video;
+        let video = self.get_source_by_id(video_id)?.video;
         let metadata = video.metadata().await?;
         let track_number = {
             metadata
@@ -485,7 +491,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         video_id: i64,
         payload: TranscodePayload,
     ) -> Result<(), AppError> {
-        let source = self.get_source_by_id(video_id).await?;
+        let source = self.get_source_by_id(video_id)?;
         let video_metadata = source.video.metadata().await?;
         let variants_dir = source.variants_dir();
         fs::create_dir_all(variants_dir.temp_path()).await?;
@@ -503,9 +509,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let transcode_result = task_resource
                 .observe_task(
                     job,
-                    TaskKind::Video {
+                    VideoTask {
                         video_id,
-                        task_type: VideoTaskType::Transcode,
+                        kind: VideoTaskKind::Transcode,
                     },
                 )
                 .await;
@@ -540,7 +546,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     }
 
     pub async fn generate_previews(&self, video_id: i64) -> Result<(), AppError> {
-        let source = self.get_source_by_id(video_id).await?;
+        let source = self.get_source_by_id(video_id)?;
         let video_metadata = source.video.metadata().await?;
         let previews_dir = source.previews_dir();
         let count = previews_dir.previews_count();
@@ -557,9 +563,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             let job_result = task_resource
                 .observe_task(
                     job,
-                    TaskKind::Video {
+                    VideoTask {
                         video_id,
-                        task_type: VideoTaskType::Previews,
+                        kind: VideoTaskKind::Previews,
                     },
                 )
                 .await;

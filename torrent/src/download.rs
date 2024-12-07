@@ -562,13 +562,13 @@ pub struct TrackerStats {
     pub leechers: Option<usize>,
 }
 
-pub trait ProgressConsumer: Send + 'static + Clone {
+pub trait ProgressConsumer: Send + 'static {
     fn consume_progress(&mut self, progress: DownloadProgress);
 }
 
 impl<F> ProgressConsumer for F
 where
-    F: FnMut(DownloadProgress) + Send + 'static + Clone,
+    F: FnMut(DownloadProgress) + Send + 'static,
 {
     fn consume_progress(&mut self, progress: DownloadProgress) {
         self(progress);

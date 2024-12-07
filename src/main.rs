@@ -19,7 +19,6 @@ use media_server::upnp::Upnp;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use torrent::ClientConfig;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use utoipa::OpenApi;
@@ -51,12 +50,6 @@ async fn main() {
         .allow_methods(Any)
         .allow_origin(Any)
         .allow_headers(Any);
-
-    let torrent_config = ClientConfig {
-        cancellation_token: Some(cancellation_token.child_token()),
-        ..Default::default()
-    };
-    let torrent_client = TorrentClient::new(torrent_config).await.unwrap();
 
     let db = Db::connect(&APP_RESOURCES.database_path)
         .await
@@ -98,13 +91,15 @@ async fn main() {
         providers_stack.add_discover_provider(tvdb_api);
     }
 
-    let torrent_client = Box::leak(Box::new(torrent_client));
-
-    let providers_stack = Box::leak(Box::new(providers_stack));
-
     let tasks = TaskResource::new(cancellation_token.clone());
     let tasks = Box::leak(Box::new(tasks));
     let tracker = tasks.tracker.clone();
+
+    let torrent_client = TorrentClient::new(tasks).await.unwrap();
+
+    let torrent_client = Box::leak(Box::new(torrent_client));
+
+    let providers_stack = Box::leak(Box::new(providers_stack));
 
     let app_state = AppState {
         library,
@@ -243,8 +238,14 @@ async fn main() {
         .route("/torrent/download", post(admin_api::download_torrent))
         .route("/torrent/all", get(torrent_api::all_torrents))
         .route("/search/content", get(public_api::search_content))
-        .route("/search/trending_shows", get(public_api::get_trending_shows))
-        .route("/search/trending_movies", get(public_api::get_trending_movies))
+        .route(
+            "/search/trending_shows",
+            get(public_api::get_trending_shows),
+        )
+        .route(
+            "/search/trending_movies",
+            get(public_api::get_trending_movies),
+        )
         .route("/configuration", get(admin_api::server_configuration))
         .route(
             "/configuration/capabilities",

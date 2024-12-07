@@ -11,88 +11,96 @@ use crate::{
     app_state::AppError, stream::transcode_stream::TranscodeStream, torrent::TorrentContent,
 };
 
-#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", tag = "task_kind")]
-pub enum VideoTaskType {
+#[derive(Debug, Clone, Eq, PartialEq, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoTaskKind {
     Transcode,
     LiveTranscode,
     Previews,
     Subtitles,
 }
 
-impl Display for VideoTaskType {
+impl Display for VideoTaskKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let msg = match self {
-            VideoTaskType::Transcode => "Transcoding",
-            VideoTaskType::LiveTranscode => "Live transcoding",
-            VideoTaskType::Previews => "Previews generation",
-            VideoTaskType::Subtitles => "Subtitles extraction",
+            VideoTaskKind::Transcode => "Transcoding",
+            VideoTaskKind::LiveTranscode => "Live transcoding",
+            VideoTaskKind::Previews => "Previews generation",
+            VideoTaskKind::Subtitles => "Subtitles extraction",
         };
         write!(f, "{msg}")
     }
 }
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", tag = "task_kind")]
-pub enum TaskKind {
-    Video {
-        video_id: i64,
-        task_type: VideoTaskType,
-    },
-    Torrent {
-        info_hash: [u8; 20],
-        content: Option<TorrentContent>,
-    },
-    Scan,
+#[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub struct VideoTask {
+    pub video_id: i64,
+    pub kind: VideoTaskKind,
 }
 
-impl PartialEq for TaskKind {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (
-                TaskKind::Video {
-                    video_id,
-                    task_type,
-                },
-                TaskKind::Video {
-                    video_id: other_video_id,
-                    task_type: other_task_type,
-                },
-            ) => video_id == other_video_id && task_type == other_task_type,
-            (
-                TaskKind::Torrent { info_hash, .. },
-                TaskKind::Torrent {
-                    info_hash: other_info_hash,
-                    ..
-                },
-            ) => info_hash == other_info_hash,
-            (TaskKind::Scan, TaskKind::Scan) => true,
-            _ => false,
-        }
+impl Display for VideoTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} for video: {}", self.kind, self.video_id)
     }
 }
 
-fn display_info_hash(hash: &[u8; 20]) -> String {
-    hash.iter().fold(String::with_capacity(40), |mut acc, x| {
-        let hex = format!("{:x}", x);
-        acc.push_str(&hex);
-        acc
-    })
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub struct TorrentTask {
+    pub info_hash: [u8; 20],
+    pub content: Option<TorrentContent>,
+}
+
+impl From<TorrentTask> for TaskKind {
+    fn from(value: TorrentTask) -> Self {
+        Self::Torrent(value)
+    }
+}
+
+impl Display for TorrentTask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fn display_info_hash(hash: &[u8; 20]) -> String {
+            hash.iter().fold(String::with_capacity(40), |mut acc, x| {
+                let hex = format!("{:x}", x);
+                acc.push_str(&hex);
+                acc
+            })
+        }
+        write!(
+            f,
+            "Torrent with info_hash: {}",
+            display_info_hash(&self.info_hash)
+        )
+    }
+}
+
+impl Eq for TorrentTask {}
+impl PartialEq for TorrentTask {
+    fn eq(&self, other: &Self) -> bool {
+        self.info_hash == other.info_hash
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "task_kind")]
+pub enum TaskKind {
+    Video(VideoTask),
+    Torrent(TorrentTask),
+    Scan,
+}
+
+impl From<VideoTask> for TaskKind {
+    fn from(value: VideoTask) -> Self {
+        Self::Video(value)
+    }
 }
 
 impl Display for TaskKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TaskKind::Scan => write!(f, "Library scan"),
-            TaskKind::Video {
-                video_id,
-                task_type,
-            } => write!(f, "{task_type} on video with id:{video_id}"),
-            TaskKind::Torrent { info_hash, .. } => write!(
-                f,
-                "Torrent with info_hash: {}",
-                display_info_hash(info_hash)
-            ),
+            TaskKind::Video(video_task) => video_task.fmt(f),
+            TaskKind::Torrent(torrent_task) => torrent_task.fmt(f),
         }
     }
 }
@@ -105,9 +113,10 @@ where
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
 pub struct Task {
     pub id: Uuid,
-    pub task: TaskKind,
+    pub kind: TaskKind,
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
     #[schema(value_type = bool)]
@@ -121,7 +130,7 @@ impl Task {
         Self {
             created: now,
             id,
-            task: kind,
+            kind,
             cancel: cancel_token,
         }
     }
@@ -234,21 +243,21 @@ impl Display for TaskError {
 }
 
 #[derive(Debug, Clone, Serialize, Copy, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", tag = "speed_type")]
 pub enum ProgressSpeed {
-    BytesPerSec(usize),
-    RelativeSpeed(f32),
+    BytesPerSec { bytes: usize },
+    RelativeSpeed { speed: f32 },
 }
 
 impl From<usize> for ProgressSpeed {
     fn from(value: usize) -> Self {
-        Self::BytesPerSec(value)
+        Self::BytesPerSec { bytes: value }
     }
 }
 
 impl From<f32> for ProgressSpeed {
     fn from(value: f32) -> Self {
-        Self::RelativeSpeed(value)
+        Self::RelativeSpeed { speed: value }
     }
 }
 
@@ -292,7 +301,7 @@ impl TaskResource {
     pub async fn observe_task<T: ResourceTask>(
         &self,
         mut task: T,
-        kind: TaskKind,
+        kind: impl Into<TaskKind>,
     ) -> Result<(), TaskError> {
         let ProgressChannel(channel) = self.progress_channel.clone();
         let child_token = self.parent_cancellation_token.child_token();
@@ -379,11 +388,11 @@ impl TaskResource {
 
     fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
         let mut tasks = self.tasks.lock().unwrap();
-        let duplicate = tasks.iter().find(|t| t.task == task.task);
+        let duplicate = tasks.iter().find(|t| t.kind == task.kind);
         if let Some(duplicate) = duplicate {
             error!(
                 "Failed to create task(): duplicate {} ({})",
-                task.task, duplicate.id
+                task.kind, duplicate.id
             );
             return Err(TaskError::Duplicate);
         }
@@ -394,26 +403,13 @@ impl TaskResource {
 
     pub fn start_task(
         &self,
-        kind: TaskKind,
+        kind: impl Into<TaskKind>,
         cancellation_token: Option<CancellationToken>,
     ) -> Result<Uuid, TaskError> {
-        let task = Task::new(kind, cancellation_token);
+        let task = Task::new(kind.into(), cancellation_token);
         let id = self.add_task(task)?;
         let _ = self.progress_channel.0.send(ProgressChunk::start(id));
         Ok(id)
-    }
-
-    pub fn start_video_task(
-        &self,
-        id: i64,
-        kind: VideoTaskType,
-        cancellation_token: Option<CancellationToken>,
-    ) -> Result<Uuid, TaskError> {
-        let kind = TaskKind::Video {
-            video_id: id,
-            task_type: kind,
-        };
-        self.start_task(kind, cancellation_token)
     }
 
     fn remove_task(&self, id: Uuid) -> Option<Task> {

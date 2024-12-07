@@ -1,17 +1,12 @@
 use std::{
     collections::HashMap,
-    path::{Path, PathBuf},
-    sync::Mutex,
+    path::Path,
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize};
-use tokio::{
-    sync::{mpsc, watch},
-    task::JoinSet,
-};
-use torrent::{
-    DownloadHandle, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink, OutputFile,
-};
+use tokio::{sync::mpsc, task::JoinSet};
+use torrent::{DownloadHandle, DownloadParams, DownloadProgress, Info, MagnetLink, OutputFile};
 
 use crate::{
     db::{Db, DbActions},
@@ -22,7 +17,7 @@ use crate::{
         metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider,
         MovieMetadata, ShowMetadata,
     },
-    progress::{Progress, ProgressSpeed, ResourceTask, TaskError},
+    progress::{TaskResource, TorrentTask},
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -30,8 +25,6 @@ pub struct PendingTorrent {
     pub info_hash: [u8; 20],
     #[serde(skip)]
     pub download_handle: DownloadHandle,
-    #[serde(skip)]
-    pub progress_watcher: watch::Receiver<DownloadProgress>,
     pub torrent_info: TorrentInfo,
 }
 
@@ -39,7 +32,6 @@ impl PendingTorrent {
     pub fn handle(&self) -> TorrentHandle {
         TorrentHandle {
             download_handle: self.download_handle.clone(),
-            progress: self.progress_watcher.clone(),
         }
     }
 }
@@ -47,34 +39,6 @@ impl PendingTorrent {
 #[derive(Debug, Clone)]
 pub struct TorrentHandle {
     pub download_handle: DownloadHandle,
-    progress: watch::Receiver<DownloadProgress>,
-}
-
-impl ResourceTask for TorrentHandle {
-    async fn progress(&mut self) -> Result<Progress, TaskError> {
-        if self.progress.changed().await.is_err() {
-            return Err(TaskError::Failure);
-        }
-        let progress = self.progress.borrow_and_update();
-        let progress = match progress.state {
-            DownloadState::Pending => {
-                let download_speed: u64 = progress.peers.iter().map(|p| p.download_speed).sum();
-                Progress {
-                    is_finished: false,
-                    percent: Some(progress.percent as f32),
-                    speed: Some(ProgressSpeed::BytesPerSec(download_speed as usize)),
-                }
-            }
-            DownloadState::Seeding => Progress::finished(),
-            _ => unimplemented!("{} state", progress.state),
-        };
-        Ok(progress)
-    }
-
-    async fn on_cancel(&mut self) -> anyhow::Result<()> {
-        self.download_handle.abort();
-        Ok(())
-    }
 }
 
 #[allow(async_fn_in_trait)]
@@ -110,30 +74,80 @@ impl TorrentManager for Db {
 }
 
 #[derive(Debug)]
+pub struct TorrentProgress {
+    torrent_hash: [u8; 20],
+    progress: DownloadProgress,
+}
+
+#[derive(Debug)]
 pub struct TorrentClient {
     pub client: torrent::Client,
     resolved_magnet_links: Mutex<HashMap<[u8; 20], Info>>,
-    torrents: Mutex<Vec<PendingTorrent>>,
-    progress_rx: mpsc::Receiver<DownloadProgress>,
-    progress_tx: mpsc::Sender<DownloadProgress>,
+    torrents: Arc<Mutex<Vec<PendingTorrent>>>,
+    progress_tx: mpsc::Sender<TorrentProgress>,
+}
+
+async fn handle_progress(
+    mut progress_rx: mpsc::Receiver<TorrentProgress>,
+    torrents: Arc<Mutex<Vec<PendingTorrent>>>,
+    tasks: &'static TaskResource,
+) {
+    while let Some(progress) = progress_rx.recv().await {
+        let torrents = torrents.lock().unwrap();
+        let pending_torrent = torrents
+            .iter()
+            .find(|t| t.info_hash == progress.torrent_hash);
+        match pending_torrent {
+            Some(_) => {}
+            None => {
+                let torrent_task = TorrentTask {
+                    info_hash: progress.torrent_hash,
+                    content: None,
+                };
+                let id = tasks
+                    .start_task(torrent_task, None)
+                    .expect("torrent is new");
+            }
+        }
+
+        todo!();
+    }
 }
 
 impl TorrentClient {
-    pub async fn new(config: torrent::ClientConfig) -> anyhow::Result<Self> {
+    pub async fn new(tasks: &'static TaskResource) -> anyhow::Result<Self> {
+        let config = torrent::ClientConfig {
+            cancellation_token: Some(tasks.parent_cancellation_token.clone()),
+            ..Default::default()
+        };
         let client = torrent::Client::new(config).await?;
-        let (tx, rx) = mpsc::channel(100);
+        let (progress_tx, progress_rx) = mpsc::channel(100);
+        let torrents = Arc::new(Mutex::new(Vec::new()));
+        {
+            let torrents = torrents.clone();
+            tokio::spawn(handle_progress(progress_rx, torrents, tasks));
+        }
         Ok(Self {
             client,
             resolved_magnet_links: HashMap::new().into(),
-            torrents: Vec::new().into(),
-            progress_rx: rx,
-            progress_tx: tx,
+            torrents,
+            progress_tx,
         })
     }
 
     pub async fn load_torrents(&mut self, manager: impl TorrentManager) -> anyhow::Result<()> {
         for torrent in manager.read_torrents().await? {
-            let Ok(handle) = self.client.open(torrent, self.progress_tx.clone()).await else {
+            let progress_tx = self.progress_tx.clone();
+            let torrent_hash = torrent.info.hash();
+            let progress_handler = move |progress: DownloadProgress| {
+                let torrent_progress = TorrentProgress {
+                    torrent_hash,
+                    progress,
+                };
+                let _ = progress_tx.blocking_send(torrent_progress);
+            };
+
+            let Ok(handle) = self.client.open(torrent, progress_handler).await else {
                 continue;
             };
         }
@@ -166,14 +180,20 @@ impl TorrentClient {
         torrent_metadata: TorrentInfo,
     ) -> anyhow::Result<TorrentHandle> {
         let info_hash = params.info.hash();
-        let (progress_tx, progress_rx) = watch::channel(DownloadProgress::default());
+        let progress_tx = self.progress_tx.clone();
+        let progress_handler = move |progress: DownloadProgress| {
+            let torrent_progress = TorrentProgress {
+                torrent_hash: info_hash,
+                progress,
+            };
+            let _ = progress_tx.blocking_send(torrent_progress);
+        };
 
-        let download_handle = self.client.open(params, progress_tx).await?;
+        let download_handle = self.client.open(params, progress_handler).await?;
 
         let torrent = PendingTorrent {
             info_hash,
             download_handle,
-            progress_watcher: progress_rx,
             torrent_info: torrent_metadata,
         };
         let handle = torrent.handle();

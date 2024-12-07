@@ -38,7 +38,7 @@ use crate::metadata::{
     metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MovieMetadata,
     SeasonMetadata, ShowMetadata,
 };
-use crate::progress::{Task, TaskKind, TaskResource, VideoTaskType};
+use crate::progress::{Task, TaskKind, TaskResource, VideoTask, VideoTaskKind};
 use crate::stream::transcode_stream::TranscodeStream;
 use crate::torrent::{
     DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentDownloadPayload,
@@ -1208,9 +1208,9 @@ pub async fn create_transcode_stream(
     let cancellation_token = tasks.parent_cancellation_token.child_token();
     let tracker = tasks.tracker.clone();
     let task_id = tasks.start_task(
-        TaskKind::Video {
+        VideoTask {
             video_id: id,
-            task_type: VideoTaskType::LiveTranscode,
+            kind: VideoTaskKind::LiveTranscode,
         },
         Some(cancellation_token.clone()),
     )?;
@@ -1340,7 +1340,6 @@ pub async fn download_torrent(
     State(AppState {
         providers_stack,
         torrent_client,
-        tasks,
         ..
     }): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
@@ -1351,7 +1350,6 @@ pub async fn download_torrent(
         "Magnet links without tracker list are not supported",
     ))?;
     let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
-    let info_hash = info.hash();
     let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
 
     let enabled_files = payload
@@ -1379,16 +1377,8 @@ pub async fn download_torrent(
         })
         .ok_or(AppError::bad_request("Could not determine save location"))?;
     tracing::debug!("Selected torrent output: {}", save_location.display());
-    let content = torrent_info.contents.content.clone();
     let params = DownloadParams::empty(info, tracker_list, enabled_files, save_location);
-    let handle = torrent_client.add_torrent(params, torrent_info).await?;
-
-    tasks.tracker.spawn(async move {
-        let _ = tasks
-            .observe_task(handle, TaskKind::Torrent { info_hash, content })
-            .await;
-        torrent_client.remove_download(info_hash)
-    });
+    torrent_client.add_torrent(params, torrent_info).await?;
 
     Ok(())
 }

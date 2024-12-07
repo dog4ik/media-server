@@ -6,6 +6,7 @@ use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Acquire, Error, FromRow, Pool, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
+use torrent::DownloadParams;
 
 use crate::{
     app_state::AppError,
@@ -246,6 +247,28 @@ where
                 intro.end_sec,
             );
             subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
+        }
+    }
+
+    fn insert_torrent(
+        self,
+        torrent: DbTorrent,
+    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let query = sqlx::query!(
+                "INSERT OR IGNORE INTO torrents
+            (info_hash, bitfield, enabled_files, trackers, save_location, bencoded_info)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+                torrent.info_hash,
+                torrent.bitfield,
+                torrent.enabled_files,
+                torrent.trackers,
+                torrent.save_location,
+                torrent.bencoded_info,
+            );
+
+            query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
     }
 
@@ -800,6 +823,19 @@ WHERE season_id = ? ORDER BY number ASC",
         }
     }
 
+    fn all_torrents(
+        self,
+        limit: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<DbTorrent>, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let torrents = sqlx::query_as!(DbTorrent, "select * from torrents LIMIT ?", limit)
+                .fetch_all(&mut *conn)
+                .await?;
+            Ok(torrents)
+        }
+    }
+
     fn search_movie(
         self,
         query: &str,
@@ -1178,4 +1214,64 @@ pub struct DbEpisodeIntro {
     pub video_id: i64,
     pub start_sec: i64,
     pub end_sec: i64,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DbTorrent {
+    pub id: Option<i64>,
+    pub bencoded_info: Vec<u8>,
+    pub trackers: String,
+    pub save_location: String,
+    pub info_hash: Vec<u8>,
+    pub bitfield: Vec<u8>,
+    /// Bitfield of enabled files
+    pub enabled_files: Vec<u8>,
+    pub added_at: Option<time::OffsetDateTime>,
+}
+
+impl From<DownloadParams> for DbTorrent {
+    fn from(params: DownloadParams) -> Self {
+        let enabled_files = params.enabled_files_bitfield();
+        let tracker_list = params.trackers;
+        let bitfield = params.bitfield.0;
+        let trackers: Vec<String> = tracker_list.iter().map(ToString::to_string).collect();
+        let trackers = trackers.join(",");
+        Self {
+            id: None,
+            bencoded_info: params.info.as_bytes(),
+            trackers,
+            save_location: params
+                .save_location
+                .to_owned()
+                .to_string_lossy()
+                .to_string(),
+            info_hash: params.info.hash().to_vec(),
+            bitfield,
+            enabled_files: enabled_files.0,
+            added_at: None,
+        }
+    }
+}
+
+impl Into<DownloadParams> for DbTorrent {
+    fn into(self) -> DownloadParams {
+        let bitfield = torrent::BitField::from(self.bitfield);
+        let info =
+            torrent::Info::from_bytes(&self.bencoded_info).expect("we don't screw up saving it");
+        let trackers = self
+            .trackers
+            .split(',')
+            .filter_map(|t| t.parse().ok())
+            .collect();
+        let enabled_files_bf = torrent::BitField::from(self.enabled_files);
+        let enabled_files = enabled_files_bf.pieces().collect();
+        let save_location = std::path::PathBuf::from(self.save_location);
+        DownloadParams {
+            bitfield,
+            info,
+            trackers,
+            enabled_files,
+            save_location,
+        }
+    }
 }

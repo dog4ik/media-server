@@ -146,7 +146,7 @@ pub struct SerdeDuration {
             torrent::PendingTorrent,
             progress::Task,
             progress::TaskKind,
-            progress::VideoTaskType,
+            progress::VideoTaskKind,
             progress::ProgressChunk,
             progress::ProgressSpeed,
             progress::ProgressStatus,
