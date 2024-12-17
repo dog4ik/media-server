@@ -22,7 +22,7 @@ use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use torrent::{DownloadParams, MagnetLink, TorrentFile};
-use tracing::{debug, info};
+use tracing::info;
 use uuid::Uuid;
 
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
@@ -31,6 +31,7 @@ use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
 use crate::db::{DbActions, DbEpisodeIntro};
+use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::TranscodePayload;
@@ -38,17 +39,12 @@ use crate::metadata::{
     metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MovieMetadata,
     SeasonMetadata, ShowMetadata,
 };
-use crate::progress::{Task, TaskKind, TaskResource, VideoTask, VideoTaskKind};
-use crate::stream::transcode_stream::TranscodeStream;
+use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
 use crate::torrent::{
     DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentDownloadPayload,
     TorrentInfo,
 };
-use crate::{
-    app_state::AppState,
-    db::Db,
-    progress::{ProgressChannel, ProgressChunk},
-};
+use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 /// Perform full library refresh
 #[utoipa::path(
@@ -61,15 +57,18 @@ use crate::{
     tag = "Videos",
 )]
 pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
-    let task_id = app_state.tasks.start_task(TaskKind::Scan, None)?;
+    let tasks = app_state.tasks;
+    let task_id = tasks.library_scan_tasks.start_task(LibraryScanTask, None)?;
     tokio::spawn(async move {
         match app_state.reconciliate_library().await {
             Ok(_) => {
-                app_state.tasks.finish_task(task_id);
+                tasks.library_scan_tasks.finish_task(task_id);
             }
             Err(err) => {
                 tracing::error!("Library reconcilliation task failed: {err}");
-                app_state.tasks.error_task(task_id);
+                tasks
+                    .library_scan_tasks
+                    .error_task(task_id, TaskError::Failure);
             }
         };
     });
@@ -567,7 +566,7 @@ pub struct CancelTaskPayload {
 /// Cancel task with provided id
 #[utoipa::path(
     delete,
-    path = "/api/tasks/{id}",
+    path = "/api/tasks/transcode/{id}",
     params(
         ("id", description = "Task id"),
     ),
@@ -577,72 +576,65 @@ pub struct CancelTaskPayload {
     ),
     tag = "Tasks",
 )]
-pub async fn cancel_task(
+pub async fn cancel_transcode_task(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
 ) -> Result<(), StatusCode> {
     tasks
+        .transcode_tasks
         .cancel_task(task_id)
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
-    Ok(())
+        .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
-/// Create fake task and progress. For debug purposes only
+/// Get all running transcode tasks
 #[utoipa::path(
-    post,
-    path = "/api/mock_progress",
-    params(
-        StringIdQuery,
-    ),
+    get,
+    path = "/api/tasks/transcode",
     responses(
-        (status = 200),
+        (status = 200, body = Vec<Task<TranscodeJob>>),
     ),
     tag = "Tasks",
 )]
-pub async fn mock_progress(
+pub async fn transcode_tasks(
     State(tasks): State<&'static TaskResource>,
-    Query(StringIdQuery { id: target }): Query<StringIdQuery>,
-) {
-    debug!("Emitting fake progress with target: {}", target);
-    let child_token = tasks.parent_cancellation_token.child_token();
-    let task_id = tasks
-        .start_task(TaskKind::Scan, Some(child_token.clone()))
-        .unwrap();
-    let ProgressChannel(channel) = &tasks.progress_channel;
-    let channel = channel.clone();
-    tokio::spawn(async move {
-        tokio::select! {
-            _ = async {
-                let mut progress = 0;
-                while progress <= 100 {
-                    let _ = channel.send(ProgressChunk::pending(task_id, Some(progress as f32), None));
-                    progress += 1;
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                tasks.finish_task(task_id);
-                debug!("finished fake progress with id: {}", task_id);
-            }=> {},
-            _ = child_token.cancelled() => {
-                tasks.cancel_task(task_id).expect("task to be canceleable");
-                debug!("Canceled fake progress with id: {}", task_id);
-            }
-        }
-    });
+) -> Json<serde_json::Value> {
+    Json(tasks.transcode_tasks.tasks())
+}
+
+/// Cancel task with provided id
+#[utoipa::path(
+    delete,
+    path = "/api/tasks/previews/{id}",
+    params(
+        ("id", description = "Task id"),
+    ),
+    responses(
+        (status = 200),
+        (status = 400, description = "Task can't be canceled or it is not found"),
+    ),
+    tag = "Tasks",
+)]
+pub async fn cancel_previews_task(
+    State(tasks): State<&'static TaskResource>,
+    Path(task_id): Path<Uuid>,
+) -> Result<(), StatusCode> {
+    tasks
+        .previews_tasks
+        .cancel_task(task_id)
+        .map_err(|_| StatusCode::BAD_REQUEST)
 }
 
 /// Get all running tasks
 #[utoipa::path(
     get,
-    path = "/api/tasks",
+    path = "/api/tasks/previews",
     responses(
-        (status = 200, body = Vec<Task>),
-        (status = 400, description = "Task can't be canceled or it is not found"),
+        (status = 200, body = Vec<Task<PreviewsJob>>),
     ),
     tag = "Tasks",
 )]
-pub async fn get_tasks(State(tasks): State<&'static TaskResource>) -> Json<Vec<Task>> {
-    let tasks = tasks.tasks.lock().unwrap().to_vec();
-    Json(tasks)
+pub async fn previews_tasks(State(tasks): State<&'static TaskResource>) -> Json<serde_json::Value> {
+    Json(tasks.previews_tasks.tasks())
 }
 
 /// SSE stream of current tasks progress
@@ -1188,7 +1180,7 @@ pub async fn transcoded_segment(
         ("id", description = "Video id"),
     ),
     responses(
-        (status = 200, body = Task),
+        (status = 200, body = Task<TranscodeJob>),
         (status = 404, description = "Video is not found"),
     ),
     tag = "Transcoding",
@@ -1196,41 +1188,8 @@ pub async fn transcoded_segment(
 pub async fn create_transcode_stream(
     Path(id): Path<i64>,
     State(app_state): State<AppState>,
-) -> Result<Json<Task>, AppError> {
-    let AppState { library, tasks, .. } = app_state;
-    let video_path = {
-        let library = library.lock().unwrap();
-        let source = library
-            .get_source(id)
-            .ok_or(AppError::not_found("Requested video is not found"))?;
-        source.video.path().to_path_buf()
-    };
-    let cancellation_token = tasks.parent_cancellation_token.child_token();
-    let tracker = tasks.tracker.clone();
-    let task_id = tasks.start_task(
-        VideoTask {
-            video_id: id,
-            kind: VideoTaskKind::LiveTranscode,
-        },
-        Some(cancellation_token.clone()),
-    )?;
-    let stream =
-        TranscodeStream::init(id, video_path, task_id, tracker, cancellation_token).await?;
-    {
-        let mut streams = tasks.active_streams.lock().unwrap();
-        streams.push(stream);
-    }
-    let task = {
-        tasks
-            .tasks
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|t| t.id == task_id)
-            .expect("Task to be created")
-            .clone()
-    };
-    Ok(Json(task))
+) -> Result<Json<Task<TranscodeJob>>, AppError> {
+    todo!()
 }
 
 /// M3U8 manifest of live transcode task

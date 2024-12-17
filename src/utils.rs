@@ -97,3 +97,10 @@ pub async fn local_addr() -> std::io::Result<SocketAddr> {
     socket.connect(SSDP_ADDR).await?;
     socket.local_addr()
 }
+
+pub fn stringify_info_hash(hash: &[u8; 20]) -> String {
+    hash.iter().fold(String::with_capacity(40), |mut acc, x| {
+        acc += &format!("{:x}", x);
+        acc
+    })
+}

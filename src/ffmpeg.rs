@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::{ExitStatus, Stdio};
@@ -16,7 +17,13 @@ use crate::config::{self};
 use crate::library::{
     AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, Video, VideoCodec,
 };
-use crate::progress::{Progress, ProgressSpeed, ResourceTask};
+use crate::progress::ProgressChunk;
+use crate::progress::ProgressDispatch;
+use crate::progress::ProgressStatus;
+use crate::progress::TaskProgress;
+use crate::progress::TaskTrait;
+use crate::progress::VideoTask;
+use crate::progress::VideoTaskKind;
 use crate::utils;
 use anyhow::{anyhow, Context};
 
@@ -376,6 +383,19 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
     Ok(metadata)
 }
 
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema, PartialEq)]
+pub struct TranscodeConfiguration {
+    audio_codec: AudioCodec,
+    video_codec: VideoCodec,
+    resolution: Resolution,
+}
+
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema, PartialEq)]
+pub struct VideoProgress {
+    relative_speed: f32,
+    percent: f32,
+}
+
 #[derive(Debug, Clone)]
 pub enum JobType {
     Previews,
@@ -386,22 +406,53 @@ pub enum JobType {
 
 pub trait FFmpegTask {
     fn args(&self) -> Vec<String>;
-    fn cancel(&mut self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send;
+    fn cancel(
+        output_path: &Path,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self: Sized;
 }
 
-impl<T: FFmpegTask + Send> ResourceTask for FFmpegRunningJob<T> {
-    async fn progress(&mut self) -> Result<crate::progress::Progress, crate::progress::TaskError> {
+impl TaskTrait for TranscodeJob {
+    type Identifier = VideoTask;
+    type Progress = VideoProgress;
+
+    fn identifier(&self) -> Self::Identifier {
+        VideoTask {
+            video_id: self.video_id,
+            kind: VideoTaskKind::Transcode,
+        }
+    }
+
+    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    where
+        Self: Sized,
+    {
+        TaskProgress::Transcode(ProgressChunk {
+            identificator: chunk.identificator,
+            status: chunk.status,
+        })
+    }
+}
+
+impl<T> ProgressDispatch<T> for FFmpegRunningJob<T>
+where
+    T: FFmpegTask + TaskTrait<Progress = VideoProgress, Identifier = VideoTask> + Send,
+{
+    async fn progress(
+        &mut self,
+    ) -> Result<ProgressStatus<VideoProgress>, crate::progress::TaskError> {
         tokio::select! {
             Some(progress) = self.stdout.next_progress_chunk() => {
-                Ok(Progress {
-                    is_finished: false,
-                    speed: Some(ProgressSpeed::RelativeSpeed{ speed: progress.relative_speed() }),
-                    percent: Some(progress.percent(&self.duration)),
-                })
+                let progress = VideoProgress {
+                    percent: progress.percent(&self.duration),
+                    relative_speed: progress.relative_speed(),
+                };
+                Ok(ProgressStatus::Pending { progress } )
             }
             Ok(result) = self.process.wait() => {
                 if result.success() {
-                    Ok(Progress::finished())
+                    Ok(ProgressStatus::Finish)
                 } else {
                     Err(crate::progress::TaskError::Failure)
                 }
@@ -410,19 +461,27 @@ impl<T: FFmpegTask + Send> ResourceTask for FFmpegRunningJob<T> {
     }
 
     async fn on_cancel(&mut self) -> anyhow::Result<()> {
-        self.job.cancel().await
+        T::cancel(&self.output).await
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq, utoipa::ToSchema, Serialize)]
 pub struct PreviewsJob {
+    video_id: i64,
+    #[schema(value_type = Vec<String>)]
     output_path: PathBuf,
+    #[schema(value_type = Vec<String>)]
     source_path: PathBuf,
 }
 
 impl PreviewsJob {
-    pub fn new(source_path: impl AsRef<Path>, output_path: impl AsRef<Path>) -> Self {
+    pub fn new(
+        video_id: i64,
+        source_path: impl AsRef<Path>,
+        output_path: impl AsRef<Path>,
+    ) -> Self {
         Self {
+            video_id,
             output_path: output_path.as_ref().to_path_buf(),
             source_path: source_path.as_ref().to_path_buf(),
         }
@@ -444,9 +503,34 @@ impl FFmpegTask for PreviewsJob {
         ]
     }
 
-    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
-        utils::clear_directory(&self.output_path).await?;
+    async fn cancel(output_file: &Path) -> Result<(), anyhow::Error>
+    where
+        Self: Sized,
+    {
+        utils::clear_directory(output_file).await?;
         Ok(())
+    }
+}
+
+impl TaskTrait for PreviewsJob {
+    type Identifier = VideoTask;
+    type Progress = VideoProgress;
+
+    fn identifier(&self) -> Self::Identifier {
+        VideoTask {
+            video_id: self.video_id,
+            kind: VideoTaskKind::Previews,
+        }
+    }
+
+    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    where
+        Self: Sized,
+    {
+        TaskProgress::Previews(ProgressChunk {
+            identificator: chunk.identificator,
+            status: chunk.status,
+        })
     }
 }
 
@@ -511,50 +595,60 @@ impl FFmpegTask for SubtitlesJob {
         args
     }
 
-    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
+    async fn cancel(path: &Path) -> Result<(), anyhow::Error>
+    where
+        Self: Sized,
+    {
         use tokio::fs;
-        fs::remove_file(&self.output_file_path).await?;
+        fs::remove_file(path).await?;
         Ok(())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, utoipa::ToSchema, Serialize, PartialEq)]
 pub struct TranscodeJob {
+    video_id: i64,
+    #[schema(value_type = Vec<String>)]
     pub output_path: PathBuf,
+    #[schema(value_type = Vec<String>)]
     pub source_path: PathBuf,
     payload: TranscodePayload,
+    configuration: TranscodeConfiguration,
     hw_accel: bool,
 }
 
 impl TranscodeJob {
-    pub fn from_source(
+    pub async fn from_source(
         source: &Source,
         output: impl AsRef<Path>,
         payload: TranscodePayload,
         hw_accel: bool,
     ) -> Result<Self, anyhow::Error> {
         let source_path = source.video.path().to_path_buf();
+        let metadata = source.video.metadata().await?;
+
+        let default_audio = metadata
+            .default_audio()
+            .or(metadata.audio_streams().into_iter().next())
+            .context("missing default audio")?;
+        let default_video = metadata
+            .default_video()
+            .or(metadata.video_streams().into_iter().next())
+            .context("missing default video")?;
+        let configuration = TranscodeConfiguration {
+            resolution: payload.resolution.unwrap_or(default_video.resolution()),
+            audio_codec: payload.audio_codec.clone().unwrap_or(default_audio.codec()),
+            video_codec: payload.video_codec.clone().unwrap_or(default_video.codec()),
+        };
 
         Ok(Self {
+            video_id: source.id,
             source_path,
             payload,
             output_path: output.as_ref().to_path_buf(),
+            configuration,
             hw_accel,
         })
-    }
-
-    pub fn new(
-        input_path: PathBuf,
-        output_path: PathBuf,
-        payload: TranscodePayload,
-        hw_accel: bool,
-    ) -> Self {
-        Self {
-            output_path,
-            source_path: input_path,
-            payload,
-            hw_accel,
-        }
     }
 }
 
@@ -589,9 +683,13 @@ impl FFmpegTask for TranscodeJob {
         args.push(self.output_path.to_string_lossy().to_string());
         args
     }
-    async fn cancel(&mut self) -> Result<(), anyhow::Error> {
+
+    async fn cancel(output_file: &Path) -> Result<(), anyhow::Error>
+    where
+        Self: Sized,
+    {
         use tokio::fs;
-        fs::remove_file(&self.output_path).await?;
+        fs::remove_file(output_file).await?;
         Ok(())
     }
 }
@@ -600,20 +698,26 @@ impl FFmpegTask for TranscodeJob {
 #[derive(Debug)]
 pub struct FFmpegRunningJob<T: FFmpegTask> {
     process: Child,
+    output: PathBuf,
     stdout: FFmpegProgressStdout,
-    pub job: T,
     duration: Duration,
+    _p: PhantomData<T>,
 }
 
 impl<T: FFmpegTask> FFmpegRunningJob<T> {
-    pub fn spawn(job: T, duration: Duration) -> anyhow::Result<FFmpegRunningJob<T>> {
-        let mut process = Self::run(&job.args())?;
+    pub fn spawn(
+        job: &T,
+        duration: Duration,
+        output_path: PathBuf,
+    ) -> anyhow::Result<FFmpegRunningJob<T>> {
+        let mut process = Self::run(job.args())?;
         let stdout = FFmpegProgressStdout::new(process.stdout.take().unwrap());
         Ok(Self {
+            output: output_path,
             process,
             stdout,
             duration,
-            job,
+            _p: PhantomData,
         })
     }
 
@@ -649,7 +753,7 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
     /// Kill task cleaning up garbage
     pub async fn cancel(mut self) -> Result<(), anyhow::Error> {
         self.kill().await;
-        self.job.cancel().await?;
+        T::cancel(&self.output).await?;
         Ok(())
     }
 
@@ -695,9 +799,7 @@ impl FFmpegProgress {
     /// Calculate percent of current point relative to given duration
     pub fn percent(&self, total_duration: &Duration) -> f32 {
         let current_duration = self.time.as_secs();
-        let percent = (current_duration as f32 / total_duration.as_secs() as f32) * 100.0;
-
-        percent
+        (current_duration as f32 / total_duration.as_secs() as f32) * 100.
     }
 
     /// Get speed of operation relative to the video playback

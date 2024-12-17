@@ -17,7 +17,8 @@ use crate::{
         metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider,
         MovieMetadata, ShowMetadata,
     },
-    progress::{TaskResource, TorrentTask},
+    progress::{ProgressChunk, ProgressStatus, TaskResource, TaskTrait},
+    utils,
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -26,6 +27,60 @@ pub struct PendingTorrent {
     #[serde(skip)]
     pub download_handle: DownloadHandle,
     pub torrent_info: TorrentInfo,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema, PartialEq)]
+pub struct TorrentTask {
+    /// Hex encoded info hash
+    pub info_hash: String,
+}
+
+impl TorrentTask {
+    pub fn new(info_hash: &[u8; 20]) -> Self {
+        Self {
+            info_hash: utils::stringify_info_hash(info_hash),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema, PartialEq)]
+pub struct CompactTorrentProgress {
+    percent: f32,
+    peers_amount: usize,
+    download_speed: u64,
+}
+
+impl CompactTorrentProgress {
+    pub fn new(progress: &DownloadProgress) -> Self {
+        Self {
+            percent: progress.percent as f32,
+            peers_amount: progress.peers.len(),
+            download_speed: progress.download_speed(),
+        }
+    }
+}
+
+impl TaskTrait for PendingTorrent {
+    type Identifier = TorrentTask;
+
+    type Progress = CompactTorrentProgress;
+
+    fn identifier(&self) -> Self::Identifier {
+        TorrentTask::new(&self.info_hash)
+    }
+
+    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    where
+        Self: Sized,
+    {
+        crate::progress::TaskProgress::Torrent(chunk)
+    }
+}
+
+impl PartialEq for PendingTorrent {
+    fn eq(&self, other: &Self) -> bool {
+        self.info_hash == other.info_hash
+    }
 }
 
 impl PendingTorrent {
@@ -89,28 +144,29 @@ pub struct TorrentClient {
 
 async fn handle_progress(
     mut progress_rx: mpsc::Receiver<TorrentProgress>,
-    torrents: Arc<Mutex<Vec<PendingTorrent>>>,
     tasks: &'static TaskResource,
 ) {
     while let Some(progress) = progress_rx.recv().await {
-        let torrents = torrents.lock().unwrap();
-        let pending_torrent = torrents
-            .iter()
-            .find(|t| t.info_hash == progress.torrent_hash);
-        match pending_torrent {
-            Some(_) => {}
-            None => {
-                let torrent_task = TorrentTask {
-                    info_hash: progress.torrent_hash,
-                    content: None,
-                };
-                let id = tasks
-                    .start_task(torrent_task, None)
-                    .expect("torrent is new");
-            }
-        }
-
-        todo!();
+        let mut torrents = tasks.torrent_tasks.tasks.lock().unwrap();
+        let Some(pending_torrent) = torrents
+            .iter_mut()
+            .find(|t| t.kind.info_hash == progress.torrent_hash)
+        else {
+            tracing::error!(
+                "Torrent with info_hash {} is not found",
+                utils::stringify_info_hash(&progress.torrent_hash)
+            );
+            continue;
+        };
+        let ident = pending_torrent.kind.identifier();
+        let progress = CompactTorrentProgress::new(&progress.progress);
+        let progress_chunk = ProgressChunk {
+            identificator: ident,
+            status: ProgressStatus::Pending { progress },
+        };
+        tasks
+            .torrent_tasks
+            .send_progress(pending_torrent.id, progress_chunk);
     }
 }
 
@@ -122,15 +178,11 @@ impl TorrentClient {
         };
         let client = torrent::Client::new(config).await?;
         let (progress_tx, progress_rx) = mpsc::channel(100);
-        let torrents = Arc::new(Mutex::new(Vec::new()));
-        {
-            let torrents = torrents.clone();
-            tokio::spawn(handle_progress(progress_rx, torrents, tasks));
-        }
+        tokio::spawn(handle_progress(progress_rx, tasks));
         Ok(Self {
             client,
-            resolved_magnet_links: HashMap::new().into(),
-            torrents,
+            resolved_magnet_links: Default::default(),
+            torrents: Default::default(),
             progress_tx,
         })
     }

@@ -4,14 +4,43 @@ use serde::Serialize;
 use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::{
-    app_state::AppError, stream::transcode_stream::TranscodeStream, torrent::TorrentContent,
+    app_state::AppError,
+    ffmpeg::{PreviewsJob, TranscodeJob},
+    stream::transcode_stream::TranscodeStream,
+    torrent::PendingTorrent,
 };
 
-#[derive(Debug, Clone, Eq, PartialEq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema, PartialEq)]
+#[serde(rename_all = "lowercase", tag = "task_type")]
+pub enum TaskProgress {
+    WatchSession(ProgressChunk<WatchTask>),
+    Transcode(ProgressChunk<TranscodeJob>),
+    Previews(ProgressChunk<PreviewsJob>),
+    Torrent(ProgressChunk<PendingTorrent>),
+    LibraryScan(ProgressChunk<LibraryScanTask>),
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct Notification {
+    #[serde(flatten)]
+    task_progress: TaskProgress,
+    /// This is used to cancel activity
+    activity_id: Uuid,
+}
+
+impl Notification {
+    pub fn new(id: Uuid, progress: impl Into<TaskProgress>) -> Self {
+        Self {
+            task_progress: progress.into(),
+            activity_id: id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoTaskKind {
     Transcode,
@@ -31,6 +60,7 @@ impl Display for VideoTaskKind {
         write!(f, "{msg}")
     }
 }
+
 #[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub struct VideoTask {
@@ -44,65 +74,229 @@ impl Display for VideoTask {
     }
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub struct TorrentTask {
-    pub info_hash: [u8; 20],
-    pub content: Option<TorrentContent>,
-}
+pub struct LibraryScanTask;
 
-impl From<TorrentTask> for TaskKind {
-    fn from(value: TorrentTask) -> Self {
-        Self::Torrent(value)
+impl TaskTrait for LibraryScanTask {
+    type Identifier = ();
+
+    type Progress = Vec<String>;
+
+    fn identifier(&self) -> Self::Identifier {
+        ()
+    }
+
+    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
+        TaskProgress::LibraryScan(chunk)
     }
 }
 
-impl Display for TorrentTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        fn display_info_hash(hash: &[u8; 20]) -> String {
-            hash.iter().fold(String::with_capacity(40), |mut acc, x| {
-                let hex = format!("{:x}", x);
-                acc.push_str(&hex);
-                acc
-            })
-        }
-        write!(
-            f,
-            "Torrent with info_hash: {}",
-            display_info_hash(&self.info_hash)
-        )
+#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub struct WatchTask {}
+
+impl TaskTrait for WatchTask {
+    type Identifier = ();
+
+    type Progress = ();
+
+    fn identifier(&self) -> Self::Identifier {
+        ()
+    }
+
+    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
+        TaskProgress::WatchSession(chunk)
     }
 }
 
-impl Eq for TorrentTask {}
-impl PartialEq for TorrentTask {
-    fn eq(&self, other: &Self) -> bool {
-        self.info_hash == other.info_hash
-    }
+#[derive(Debug)]
+pub struct TaskStorage<T: TaskTrait> {
+    pub tasks: Mutex<Vec<Task<T>>>,
+    progress_channel: ProgressChannel,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", tag = "task_kind")]
-pub enum TaskKind {
-    Video(VideoTask),
-    Torrent(TorrentTask),
-    Scan,
-}
-
-impl From<VideoTask> for TaskKind {
-    fn from(value: VideoTask) -> Self {
-        Self::Video(value)
-    }
-}
-
-impl Display for TaskKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            TaskKind::Scan => write!(f, "Library scan"),
-            TaskKind::Video(video_task) => video_task.fmt(f),
-            TaskKind::Torrent(torrent_task) => torrent_task.fmt(f),
+impl<T: TaskTrait> TaskStorage<T> {
+    fn new(progress_channel: ProgressChannel) -> Self {
+        Self {
+            tasks: Default::default(),
+            progress_channel,
         }
     }
+
+    fn remove_task(&self, id: Uuid) -> Option<Task<T>> {
+        let mut tasks = self.tasks.lock().unwrap();
+        let idx = tasks.iter().position(|t| t.id == id)?;
+        Some(tasks.remove(idx))
+    }
+
+    pub fn finish_task(&self, id: Uuid) -> Option<Task<T>> {
+        let task = self.remove_task(id)?;
+        let ident = task.kind.identifier();
+        let chunk = ProgressChunk {
+            identificator: ident,
+            status: ProgressStatus::Finish,
+        };
+        self.send_progress(id, chunk);
+        Some(task)
+    }
+
+    pub fn error_task(&self, id: Uuid, error: TaskError) -> Option<Task<T>> {
+        let task = self.remove_task(id)?;
+        let ident = task.kind.identifier();
+        let chunk = ProgressChunk {
+            identificator: ident,
+            status: ProgressStatus::Error {
+                message: Some(error.to_string()),
+            },
+        };
+        self.send_progress(id, chunk);
+        Some(task)
+    }
+
+    pub fn cancel_task(&self, id: Uuid) -> Result<(), TaskError> {
+        let mut task = self.remove_task(id).ok_or(TaskError::NotFound)?;
+        let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
+        cancel.cancel();
+        let chunk = ProgressChunk {
+            identificator: task.kind.identifier(),
+            status: ProgressStatus::Cancel,
+        };
+        self.send_progress(id, chunk);
+        Ok(())
+    }
+
+    pub fn send_progress(&self, task_id: Uuid, chunk: ProgressChunk<T>) {
+        if let Ok(mut tasks) = self.tasks.try_lock() {
+            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                task.latest_progress = chunk.clone();
+            };
+        } else {
+            tracing::warn!(%task_id, "Failed to lock task without blocking");
+        }
+        let task_progress = T::into_progress(chunk);
+        let notification = Notification {
+            task_progress,
+            activity_id: task_id,
+        };
+        let _ = self.progress_channel.0.send(notification);
+    }
+}
+
+impl<T: TaskTrait + PartialEq> TaskStorage<T> {
+    fn add_task(&self, task: Task<T>) -> Result<Uuid, TaskError> {
+        let mut tasks = self.tasks.lock().unwrap();
+        if tasks.iter().find(|t| t.kind == task.kind).is_some() {
+            return Err(TaskError::Duplicate);
+        }
+        let id = task.id;
+        tasks.push(task);
+        Ok(id)
+    }
+}
+
+impl<T: TaskTrait<Progress: Clone, Identifier: Clone> + PartialEq> TaskStorage<T> {
+    pub fn start_task(
+        &self,
+        kind: T,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Result<Uuid, TaskError> {
+        let task = Task::new(kind, cancellation_token);
+        let latest_progress = task.latest_progress.clone();
+        let id = self.add_task(task)?;
+        let task_progress = T::into_progress(latest_progress);
+        let notification = Notification {
+            task_progress,
+            activity_id: id,
+        };
+        let _ = self.progress_channel.0.send(notification);
+        Ok(id)
+    }
+}
+
+impl<T: TaskTrait + Serialize> TaskStorage<T> {
+    pub fn tasks(&self) -> serde_json::Value {
+        serde_json::to_value(&*self.tasks.lock().unwrap()).unwrap()
+    }
+}
+
+impl<T> TaskStorage<T>
+where
+    T: TaskTrait + PartialEq,
+{
+    pub async fn observe_task<P: ProgressDispatch<T>>(
+        &self,
+        task: T,
+        mut dispatch: P,
+    ) -> Result<(), TaskError> {
+        let identifier = task.identifier();
+        let child_token = CancellationToken::new();
+        let id = self.start_task(task, Some(child_token.clone()))?;
+
+        loop {
+            tokio::select! {
+                progress = dispatch.progress() => {
+                    match progress {
+                        Ok(progress) => {
+                            match progress {
+                                ProgressStatus::Finish => {
+                                    self.finish_task(id).unwrap();
+                                    return Ok(());
+                                }
+                                ProgressStatus::Pending { .. } => {
+                                    let task_progress = ProgressChunk {
+                                        identificator: identifier.clone(),
+                                        status: progress,
+                                    };
+                                    self.send_progress(id, task_progress);
+                                }
+                                ProgressStatus::Cancel => {
+                                    let _ = dispatch.on_cancel().await;
+                                }
+                                _ => {}
+                            }
+                        }
+                        Err(e) => {
+                            self.error_task(id, e).unwrap();
+                            return Err(e);
+                        }
+                    }
+                }
+                _ = child_token.cancelled() => {
+                    if let Err(err) = dispatch.on_cancel().await {
+                        tracing::error!("Task cleanup failed: {err}")
+                    };
+                    return Err(TaskError::Canceled)
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema, PartialEq)]
+pub struct ProgressChunk<T: TaskTrait> {
+    #[serde(flatten)]
+    pub identificator: T::Identifier,
+    pub status: ProgressStatus<T::Progress>,
+}
+
+impl<T: TaskTrait> Clone for ProgressChunk<T> {
+    fn clone(&self) -> Self {
+        Self {
+            identificator: self.identificator.clone(),
+            status: self.status.clone(),
+        }
+    }
+}
+
+pub trait TaskTrait {
+    type Identifier: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
+    type Progress: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
+
+    fn identifier(&self) -> Self::Identifier;
+    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress
+    where
+        Self: Sized;
 }
 
 fn ser_bool_option<S>(option: &Option<CancellationToken>, ser: S) -> Result<S::Ok, S::Error>
@@ -112,27 +306,36 @@ where
     ser.serialize_bool(option.is_some())
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub struct Task {
+pub struct Task<T: TaskTrait> {
     pub id: Uuid,
-    pub kind: TaskKind,
+    pub kind: T,
+    pub latest_progress: ProgressChunk<T>,
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
     #[schema(value_type = bool)]
     pub cancel: Option<CancellationToken>,
 }
 
-impl Task {
-    pub fn new(kind: TaskKind, cancel_token: Option<CancellationToken>) -> Self {
+impl<T: TaskTrait> Task<T> {
+    pub fn new(kind: T, cancel_token: Option<CancellationToken>) -> Self {
         let id = Uuid::new_v4();
         let now = time::OffsetDateTime::now_utc();
         Self {
             created: now,
             id,
+            latest_progress: ProgressChunk {
+                identificator: kind.identifier(),
+                status: ProgressStatus::Start,
+            },
             kind,
             cancel: cancel_token,
         }
+    }
+
+    pub fn latest_progress(&self) -> ProgressChunk<T> {
+        self.latest_progress.clone()
     }
 
     pub fn is_cancelable(&self) -> bool {
@@ -140,61 +343,20 @@ impl Task {
     }
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema, Eq, PartialEq)]
 #[serde(rename_all = "lowercase", tag = "progress_type")]
-pub enum ProgressStatus {
+pub enum ProgressStatus<T> {
+    #[default]
     Start,
     Finish,
     Pending {
-        speed: Option<ProgressSpeed>,
-        percent: Option<f32>,
+        progress: T,
     },
     Cancel,
-    Error,
+    Error {
+        message: Option<String>,
+    },
     Pause,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct ProgressChunk {
-    pub task_id: Uuid,
-    pub status: ProgressStatus,
-}
-
-impl ProgressChunk {
-    pub fn start(task_id: Uuid) -> Self {
-        Self {
-            task_id,
-            status: ProgressStatus::Start,
-        }
-    }
-
-    pub fn pending(task_id: Uuid, percent: Option<f32>, speed: Option<ProgressSpeed>) -> Self {
-        Self {
-            task_id,
-            status: ProgressStatus::Pending { speed, percent },
-        }
-    }
-
-    pub fn finish(task_id: Uuid) -> Self {
-        Self {
-            task_id,
-            status: ProgressStatus::Finish,
-        }
-    }
-
-    pub fn cancel(task_id: Uuid) -> Self {
-        Self {
-            task_id,
-            status: ProgressStatus::Cancel,
-        }
-    }
-
-    pub fn error(task_id: Uuid) -> Self {
-        Self {
-            task_id,
-            status: ProgressStatus::Error,
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -202,11 +364,14 @@ pub struct TaskResource {
     pub progress_channel: ProgressChannel,
     pub parent_cancellation_token: CancellationToken,
     pub tracker: TaskTracker,
-    pub tasks: Mutex<Vec<Task>>,
+    pub transcode_tasks: TaskStorage<TranscodeJob>,
+    pub previews_tasks: TaskStorage<PreviewsJob>,
+    pub library_scan_tasks: TaskStorage<LibraryScanTask>,
+    pub torrent_tasks: TaskStorage<PendingTorrent>,
     pub active_streams: Mutex<Vec<TranscodeStream>>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub enum TaskError {
     Failure,
     Duplicate,
@@ -242,46 +407,12 @@ impl Display for TaskError {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Copy, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", tag = "speed_type")]
-pub enum ProgressSpeed {
-    BytesPerSec { bytes: usize },
-    RelativeSpeed { speed: f32 },
-}
-
-impl From<usize> for ProgressSpeed {
-    fn from(value: usize) -> Self {
-        Self::BytesPerSec { bytes: value }
-    }
-}
-
-impl From<f32> for ProgressSpeed {
-    fn from(value: f32) -> Self {
-        Self::RelativeSpeed { speed: value }
-    }
-}
-
-#[derive(Debug)]
-pub struct Progress {
-    pub is_finished: bool,
-    pub percent: Option<f32>,
-    pub speed: Option<ProgressSpeed>,
-}
-
-impl Progress {
-    pub fn finished() -> Self {
-        Self {
-            is_finished: true,
-            percent: None,
-            speed: None,
-        }
-    }
-}
-
-pub trait ResourceTask {
+pub trait ProgressDispatch<T: TaskTrait> {
     /// Required method. Must be cancellation safe
-    fn progress(&mut self)
-        -> impl std::future::Future<Output = Result<Progress, TaskError>> + Send;
+    fn progress(
+        &mut self,
+    ) -> impl std::future::Future<Output = Result<ProgressStatus<T::Progress>, TaskError>> + Send;
+
     fn on_cancel(&mut self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
         std::future::ready(Ok(()))
     }
@@ -289,158 +420,22 @@ pub trait ResourceTask {
 
 impl TaskResource {
     pub fn new(cancellation_token: CancellationToken) -> Self {
+        let progress_channel = ProgressChannel::new();
         TaskResource {
-            progress_channel: ProgressChannel::new(),
             parent_cancellation_token: cancellation_token,
-            tasks: Mutex::new(Vec::new()),
+            transcode_tasks: TaskStorage::new(progress_channel.clone()),
+            library_scan_tasks: TaskStorage::new(progress_channel.clone()),
+            torrent_tasks: TaskStorage::new(progress_channel.clone()),
+            previews_tasks: TaskStorage::new(progress_channel.clone()),
             active_streams: Mutex::new(Vec::new()),
             tracker: TaskTracker::new(),
+            progress_channel,
         }
-    }
-
-    pub async fn observe_task<T: ResourceTask>(
-        &self,
-        mut task: T,
-        kind: impl Into<TaskKind>,
-    ) -> Result<(), TaskError> {
-        let ProgressChannel(channel) = self.progress_channel.clone();
-        let child_token = self.parent_cancellation_token.child_token();
-        let id = self.start_task(kind, Some(child_token.clone()))?;
-
-        loop {
-            tokio::select! {
-                progress = task.progress() => {
-                    match progress {
-                        Ok(progress) => {
-                            if progress.is_finished {
-                                let _ = self.finish_task(id);
-                                return Ok(());
-                            }
-                            let _ = channel.send(ProgressChunk::pending(
-                                id,
-                                progress.percent,
-                                progress.speed,
-                            ));
-                        },
-                        Err(e) => {
-                            let _ = self.error_task(id);
-                            return Err(e);
-                        },
-                    }
-                }
-                _ = child_token.cancelled() => {
-                    if let Err(err) = task.on_cancel().await {
-                        tracing::error!("Task cleanup failed: {err}")
-                    };
-                    let _ = self.cancel_task(id);
-                    return Ok(())
-                }
-            }
-        }
-    }
-
-    pub async fn run_future<F: std::future::Future>(
-        &self,
-        fut: F,
-        kind: TaskKind,
-    ) -> Result<F::Output, TaskError> {
-        let child_token = self.parent_cancellation_token.child_token();
-        let id = self.start_task(kind, Some(child_token.clone()))?;
-        tokio::select! {
-            result = self.tracker.track_future(fut) => {
-                let _ = self.finish_task(id);
-                Ok(result)
-            },
-            _ = child_token.cancelled() => {
-                let _ = self.cancel_task(id);
-                Err(TaskError::Canceled)
-            },
-        }
-    }
-
-    pub async fn run_result_future<R, E, F: std::future::Future<Output = Result<R, E>>>(
-        &self,
-        fut: F,
-        kind: TaskKind,
-    ) -> Result<R, TaskError> {
-        let child_token = self.parent_cancellation_token.child_token();
-        let id = self.start_task(kind, Some(child_token.clone()))?;
-        tokio::select! {
-            result = self.tracker.track_future(fut) => {
-                self.finish_task(id);
-                match result {
-                    Ok(r) => {
-                        self.finish_task(id);
-                        Ok(r)
-                    },
-                    Err(_) => {
-                        self.error_task(id);
-                        Err(TaskError::Failure)
-                    },
-                }
-            },
-            _ = child_token.cancelled() => {
-                let _ = self.cancel_task(id);
-                Err(TaskError::Canceled)
-            },
-        }
-    }
-
-    fn add_task(&self, task: Task) -> Result<Uuid, TaskError> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let duplicate = tasks.iter().find(|t| t.kind == task.kind);
-        if let Some(duplicate) = duplicate {
-            error!(
-                "Failed to create task(): duplicate {} ({})",
-                task.kind, duplicate.id
-            );
-            return Err(TaskError::Duplicate);
-        }
-        let id = task.id;
-        tasks.push(task);
-        Ok(id)
-    }
-
-    pub fn start_task(
-        &self,
-        kind: impl Into<TaskKind>,
-        cancellation_token: Option<CancellationToken>,
-    ) -> Result<Uuid, TaskError> {
-        let task = Task::new(kind.into(), cancellation_token);
-        let id = self.add_task(task)?;
-        let _ = self.progress_channel.0.send(ProgressChunk::start(id));
-        Ok(id)
-    }
-
-    fn remove_task(&self, id: Uuid) -> Option<Task> {
-        let mut tasks = self.tasks.lock().unwrap();
-        let idx = tasks.iter().position(|t| t.id == id)?;
-        Some(tasks.remove(idx))
-    }
-
-    pub fn finish_task(&self, id: Uuid) -> Option<Task> {
-        let task = self.remove_task(id)?;
-        let _ = self.progress_channel.0.send(ProgressChunk::finish(id));
-        Some(task)
-    }
-
-    pub fn error_task(&self, id: Uuid) -> Option<Task> {
-        let task = self.remove_task(id)?;
-        let _ = self.progress_channel.0.send(ProgressChunk::error(id));
-        Some(task)
-    }
-
-    pub fn cancel_task(&self, id: Uuid) -> Result<(), TaskError> {
-        let mut task = self.remove_task(id).ok_or(TaskError::NotFound)?;
-        let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
-        cancel.cancel();
-        let _ = self.progress_channel.0.send(ProgressChunk::cancel(id));
-        Ok(())
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct ProgressChannel(pub broadcast::Sender<ProgressChunk>);
+pub struct ProgressChannel(pub broadcast::Sender<Notification>);
 
 impl Default for ProgressChannel {
     fn default() -> Self {

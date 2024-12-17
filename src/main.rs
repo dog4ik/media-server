@@ -265,10 +265,11 @@ async fn main() {
             get(admin_api::get_providers_order),
         )
         .route("/log/latest", get(admin_api::latest_log))
-        .route("/tasks", get(admin_api::get_tasks))
-        .route("/tasks/:id", delete(admin_api::cancel_task))
+        .route("/tasks/transcode", get(admin_api::transcode_tasks))
+        .route("/tasks/transcode/:id", delete(admin_api::cancel_transcode_task))
+        .route("/tasks/previews", get(admin_api::previews_tasks))
+        .route("/tasks/previews/:id", delete(admin_api::cancel_previews_task))
         .route("/tasks/progress", get(admin_api::progress))
-        .route("/mock_progress", post(admin_api::mock_progress))
         .route("/scan", post(admin_api::reconciliate_lib))
         .route("/fix_metadata/:content_id", post(admin_api::fix_metadata))
         .route(

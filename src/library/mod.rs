@@ -664,7 +664,7 @@ impl Video {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Deserialize, Serialize, utoipa::ToSchema, PartialEq, Eq)]
 pub struct TranscodePayload {
     pub audio_codec: Option<AudioCodec>,
     pub audio_track: Option<usize>,
@@ -721,7 +721,7 @@ impl TranscodePayloadBuilder {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum AudioCodec {
     AAC,
@@ -778,7 +778,7 @@ impl<'de> Deserialize<'de> for AudioCodec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
     Hevc,
@@ -835,7 +835,7 @@ impl<'de> Deserialize<'de> for VideoCodec {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resolution(pub (usize, usize));
 
 impl utoipa::ToSchema for Resolution {

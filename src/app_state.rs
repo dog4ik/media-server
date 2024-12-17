@@ -32,7 +32,7 @@ use crate::{
         DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider, MovieMetadata,
         ShowMetadata, ShowMetadataProvider,
     },
-    progress::{TaskResource, VideoTask, VideoTaskKind},
+    progress::TaskResource,
     torrent::TorrentClient,
     torrent_index::tpb::TpbApi,
     utils,
@@ -418,16 +418,6 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     pub async fn extract_subs(&self, video_id: i64) -> Result<(), AppError> {
         let source = self.get_source_by_id(video_id)?;
         let mut jobs = Vec::new();
-        let task_id = self
-            .tasks
-            .start_task(
-                VideoTask {
-                    video_id,
-                    kind: VideoTaskKind::Subtitles,
-                },
-                None,
-            )
-            .unwrap();
         let subtitles_asset = SubtitlesDirAsset::new(video_id);
         let subtitles_dir = subtitles_asset.path();
         fs::create_dir_all(&subtitles_dir).await?;
@@ -437,7 +427,8 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 let job =
                     SubtitlesJob::from_source(&source.video, &subtitles_dir, stream.index).await?;
                 let output_file = job.output_file_path.clone();
-                let job = FFmpegRunningJob::spawn(job, video_metadata.duration())?;
+                let job =
+                    FFmpegRunningJob::spawn(&job, video_metadata.duration(), output_file.clone())?;
                 jobs.push((job, stream, output_file));
             }
         }
@@ -461,7 +452,6 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 }
             }
         }
-        self.tasks.finish_task(task_id).expect("task to exist");
         Ok(())
     }
 
@@ -499,21 +489,18 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         let variant_asset = source.variant(variant_id.to_string());
         let temp_path = variant_asset.temp_path();
         let hw_accel_enabled: config::HwAccel = config::CONFIG.get_value();
-        let job = TranscodeJob::from_source(&source, &temp_path, payload, hw_accel_enabled.0)?;
-        let temp_path = job.output_path.clone();
-        let job = FFmpegRunningJob::spawn(job, video_metadata.duration())?;
+        let transcode_job =
+            TranscodeJob::from_source(&source, &temp_path, payload, hw_accel_enabled.0).await?;
+        let temp_path = transcode_job.output_path.clone();
+        let running_job =
+            FFmpegRunningJob::spawn(&transcode_job, video_metadata.duration(), temp_path.clone())?;
         let task_resource = self.tasks;
         let library = self.library;
 
         self.tasks.tracker.spawn(async move {
             let transcode_result = task_resource
-                .observe_task(
-                    job,
-                    VideoTask {
-                        video_id,
-                        kind: VideoTaskKind::Transcode,
-                    },
-                )
+                .transcode_tasks
+                .observe_task(transcode_job, running_job)
                 .await;
             let resource_path = variant_asset.path();
             if let Err(err) = transcode_result {
@@ -555,19 +542,18 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         }
         let temp_dir = previews_dir.temp_path();
         fs::create_dir_all(&temp_dir).await?;
-        let job = ffmpeg::PreviewsJob::new(source.video.path(), &temp_dir);
-        let job = ffmpeg::FFmpegRunningJob::spawn(job, video_metadata.duration())?;
+        let previews_job = ffmpeg::PreviewsJob::new(video_id, source.video.path(), &temp_dir);
+        let running_job = ffmpeg::FFmpegRunningJob::spawn(
+            &previews_job,
+            video_metadata.duration(),
+            temp_dir.clone(),
+        )?;
 
         let task_resource = self.tasks;
         self.tasks.tracker.spawn(async move {
             let job_result = task_resource
-                .observe_task(
-                    job,
-                    VideoTask {
-                        video_id,
-                        kind: VideoTaskKind::Previews,
-                    },
-                )
+                .previews_tasks
+                .observe_task(previews_job, running_job)
                 .await;
             if job_result.is_ok() {
                 let resources_dir = previews_dir.path();

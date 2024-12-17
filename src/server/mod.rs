@@ -1,6 +1,7 @@
 use crate::app_state;
 use crate::config;
 use crate::db;
+use crate::ffmpeg;
 use crate::file_browser;
 use crate::library;
 use crate::metadata;
@@ -89,10 +90,11 @@ pub struct SerdeDuration {
         admin_api::order_providers,
         admin_api::get_providers_order,
         admin_api::latest_log,
-        admin_api::get_tasks,
+        admin_api::transcode_tasks,
+        admin_api::cancel_transcode_task,
+        admin_api::previews_tasks,
+        admin_api::cancel_previews_task,
         admin_api::progress,
-        admin_api::mock_progress,
-        admin_api::cancel_task,
         admin_api::reconciliate_lib,
         admin_api::clear_db,
         admin_api::create_transcode_stream,
@@ -144,12 +146,12 @@ pub struct SerdeDuration {
             torrent::TorrentContents,
             torrent::ResolvedTorrentFile,
             torrent::PendingTorrent,
-            progress::Task,
-            progress::TaskKind,
+            progress::Task<ffmpeg::TranscodeJob>,
+            progress::Task<ffmpeg::PreviewsJob>,
             progress::VideoTaskKind,
-            progress::ProgressChunk,
-            progress::ProgressSpeed,
-            progress::ProgressStatus,
+            progress::Notification,
+            progress::ProgressStatus<f32>,
+            progress::TaskProgress,
             tracing::JsonTracingEvent,
             torrent_index::Torrent,
             db::DbHistory,

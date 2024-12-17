@@ -554,6 +554,12 @@ pub struct DownloadProgress {
     pub state: DownloadState,
 }
 
+impl DownloadProgress {
+    pub fn download_speed(&self) -> u64 {
+        self.peers.iter().map(|p| p.download_speed).sum()
+    }
+}
+
 #[derive(Debug, serde::Serialize, Default)]
 pub struct TrackerStats {
     pub url: String,

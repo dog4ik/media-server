@@ -52,6 +52,7 @@ impl FromStr for InfoHash {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        anyhow::ensure!(s.len() == 40);
         pub fn decode_hex(s: &str) -> Result<Vec<u8>, std::num::ParseIntError> {
             (0..s.len())
                 .step_by(2)
@@ -59,9 +60,6 @@ impl FromStr for InfoHash {
                 .collect()
         }
         let bytes = decode_hex(s)?;
-        if bytes.len() != 20 {
-            anyhow::bail!("Expected 20 bytes");
-        }
         let mut array = [0u8; 20];
         array.copy_from_slice(&bytes);
         Ok(Self(array))
