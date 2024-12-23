@@ -78,13 +78,4 @@ impl<S: Service> UpnpService<S> {
             .find(|a| a.name() == name)
             .ok_or(ActionErrorCode::InvalidAction)?)
     }
-
-    pub fn input_scanner<'a>(
-        &'a self,
-        name: &str,
-        input: Vec<InArgumentPayload<'a>>,
-    ) -> Result<ArgumentScanner<'a>, ActionError> {
-        let action = self.find_action(name)?;
-        Ok(ArgumentScanner::new(input, action.in_variables()))
-    }
 }

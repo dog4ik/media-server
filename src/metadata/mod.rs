@@ -11,6 +11,7 @@ use serde::{
     Deserialize, Deserializer, Serialize,
 };
 
+#[allow(unused)]
 pub mod local_provider;
 pub mod metadata_stack;
 pub mod request_client;

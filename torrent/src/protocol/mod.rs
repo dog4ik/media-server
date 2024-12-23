@@ -11,6 +11,7 @@ use sha1::{Digest, Sha1};
 pub mod dht;
 pub mod extension;
 pub mod peer;
+#[allow(unused)]
 pub mod pex;
 pub mod tracker;
 pub mod ut_metadata;

@@ -6,6 +6,7 @@ pub mod config;
 pub mod db;
 pub mod ffmpeg;
 pub mod file_browser;
+#[allow(unused)]
 pub mod intro_detection;
 pub mod library;
 pub mod metadata;

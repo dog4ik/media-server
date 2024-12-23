@@ -25,7 +25,7 @@ use crate::{
     scheduler::{PendingFiles, Scheduler},
     seeder::Seeder,
     storage::{StorageFeedback, StorageHandle},
-    tracker::{DownloadStat, DownloadTracker},
+    tracker::{DownloadStat, DownloadTracker, TrackerStatus},
     DownloadParams, NewPeer,
 };
 
@@ -202,6 +202,7 @@ pub struct ActivePeer {
     pub last_pex_message_time: Instant,
     pub cancellation_token: CancellationToken,
     interested_pieces: usize,
+    #[allow(unused)]
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
     /// Amount of blocks that are in flight
@@ -237,6 +238,7 @@ impl ActivePeer {
         }
     }
 
+    #[allow(unused)]
     pub fn set_out_choke(&mut self, force: bool) -> anyhow::Result<()> {
         match force {
             true => self.message_tx.try_send(PeerMessage::Choke)?,
@@ -253,10 +255,6 @@ impl ActivePeer {
         }
         self.out_status.set_interest(force);
         Ok(())
-    }
-
-    pub fn can_schedule(&self) -> bool {
-        self.out_status.is_interested() && !self.in_status.is_choked()
     }
 
     pub fn send_extension_message<'e, T: Extension<'e>>(&self, msg: T) -> anyhow::Result<()> {
@@ -276,6 +274,7 @@ impl ActivePeer {
         Ok(())
     }
 
+    #[allow(unused)]
     pub fn send_pex_message(&mut self, latest_idx: usize) {
         // TODO: send the actual message
         self.last_pex_message_time = Instant::now();
@@ -566,6 +565,7 @@ pub struct FullStatePeer {
 pub struct FullStateTracker {
     pub url: String,
     pub last_announced_at: Instant,
+    pub status: TrackerStatus,
     pub announce_interval: Duration,
 }
 
@@ -711,6 +711,7 @@ pub struct Download {
     last_optimistic_unchoke: Instant,
     last_choke: Instant,
     stat: DownloadStat,
+    #[allow(unused)]
     seeder: Seeder,
     changes: Vec<StateChange>,
     info: crate::Info,
@@ -831,11 +832,7 @@ impl Download {
                     let block = DataBlock::new(index, begin, block);
                     self.scheduler.save_block(peer_idx, block);
                 }
-                PeerMessage::Cancel {
-                    index,
-                    begin,
-                    length,
-                } => {}
+                PeerMessage::Cancel { .. } => {}
                 PeerMessage::Extension {
                     extension_id,
                     payload,
@@ -1281,6 +1278,7 @@ impl Download {
             .map(|t| FullStateTracker {
                 url: t.url().to_owned(),
                 last_announced_at: t.last_announced_at,
+                status: t.status.clone(),
                 announce_interval: t.announce_interval,
             })
             .collect();

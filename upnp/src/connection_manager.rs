@@ -1,7 +1,7 @@
 use quick_xml::events::{BytesText, Event};
 
 use crate::{
-    action::{Action, ActionError, IntoValueList, OutArgument},
+    action::{Action, ActionError, IntoValueList},
     service::{ArgumentScanner, Service},
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
     templates::{service_description::ServiceDescription, SpecVersion},
@@ -130,7 +130,7 @@ pub trait ConnectionManagerHandler {
 
 #[derive(Debug, Clone)]
 pub struct ConnectionManagerService<T: ConnectionManagerHandler> {
-    handler: T,
+    pub handler: T,
 }
 
 impl<T: ConnectionManagerHandler> ConnectionManagerService<T> {
@@ -148,7 +148,7 @@ impl<T: ConnectionManagerHandler> ConnectionManagerService<T> {
 
     async fn get_current_connection_info(
         &self,
-        connection_id: String,
+        _connection_id: String,
     ) -> Result<(i32, i32, String, String, Direction, ConnectionStatus), ActionError> {
         todo!()
     }
@@ -159,23 +159,23 @@ impl<T: ConnectionManagerHandler> ConnectionManagerService<T> {
 
     async fn get_renderer_item_info(
         &self,
-        item_info_filter: String,
-        item_metadata_list: String,
+        _item_info_filter: String,
+        _item_metadata_list: String,
     ) -> Result<String, ActionError> {
         todo!()
     }
 
     async fn prepare_for_connection(
         &self,
-        remote_protocol_info: String,
-        peer_connection_manager: String,
-        connection_id: i32,
-        direction: Direction,
+        _remote_protocol_info: String,
+        _peer_connection_manager: String,
+        _connection_id: i32,
+        _direction: Direction,
     ) -> Result<(String, i32, i32), ActionError> {
         todo!()
     }
 
-    async fn connection_complete(&self, connection_id: String) -> Result<(), ActionError> {
+    async fn connection_complete(&self, _connection_id: String) -> Result<(), ActionError> {
         todo!()
     }
 }

@@ -4,7 +4,9 @@ use linear::Linear;
 
 use crate::{peers::BitField, scheduler::SchedulerPiece};
 
+#[allow(unused)]
 mod linear;
+#[allow(unused)]
 mod rare_first;
 
 #[derive(Debug, Clone)]

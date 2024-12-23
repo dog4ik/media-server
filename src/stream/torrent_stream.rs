@@ -22,7 +22,7 @@ impl PendingTorrent {
         let range = range
             .map(|h| h.0)
             .unwrap_or(headers::Range::bytes(0..).unwrap());
-        let (stream_tx, stream_rx) = mpsc::channel::<anyhow::Result<Bytes>>(5);
+        let (_, stream_rx) = mpsc::channel::<anyhow::Result<Bytes>>(5);
         let (start, end) = range
             .satisfiable_ranges(file_size)
             .next()
@@ -40,7 +40,7 @@ impl PendingTorrent {
         };
         let range = start + file_start..end + file_end;
         let piece_size = self.torrent_info.piece_length as usize;
-        let mut current_piece = range.start / piece_size as u64;
+        let current_piece = range.start / piece_size as u64;
         self.download_handle
             .set_strategy(ScheduleStrategy::Request(current_piece as usize))
             .await

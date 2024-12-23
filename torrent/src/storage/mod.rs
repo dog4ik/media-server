@@ -6,7 +6,7 @@ use hash_verification::{Hasher, Payload, WorkResult};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
-    sync::{mpsc, oneshot},
+    sync::mpsc,
 };
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
@@ -92,20 +92,11 @@ pub struct TorrentStorage {
 #[derive(Debug, Clone)]
 pub struct StorageHandle {
     pub message_tx: mpsc::Sender<StorageMessage>,
+    #[allow(unused)]
     pub cancellation_token: CancellationToken,
 }
 
 impl StorageHandle {
-    pub async fn save_piece(&self, insert_piece: usize, blocks: Vec<Bytes>) {
-        self.message_tx
-            .send(StorageMessage::Save {
-                piece_i: insert_piece,
-                blocks,
-            })
-            .await
-            .unwrap();
-    }
-
     pub fn try_save_piece(&self, insert_piece: usize, blocks: Vec<Bytes>) -> anyhow::Result<()> {
         self.message_tx.try_send(StorageMessage::Save {
             piece_i: insert_piece,
@@ -118,17 +109,6 @@ impl StorageHandle {
             .send(StorageMessage::RetrievePiece { piece_i })
             .await
             .unwrap();
-    }
-    pub async fn retrieve_blocking(&self, piece_i: usize) -> Option<Bytes> {
-        let (tx, rx) = oneshot::channel();
-        self.message_tx
-            .send(StorageMessage::RetrieveBlocking {
-                piece_i,
-                response: tx,
-            })
-            .await
-            .unwrap();
-        rx.await.unwrap()
     }
     pub async fn enable_file(&self, file_idx: usize) {
         self.message_tx
@@ -146,23 +126,10 @@ impl StorageHandle {
 
 #[derive(Debug)]
 pub enum StorageMessage {
-    Save {
-        piece_i: usize,
-        blocks: Vec<Bytes>,
-    },
-    EnableFile {
-        file_idx: usize,
-    },
-    DisableFile {
-        file_idx: usize,
-    },
-    RetrievePiece {
-        piece_i: usize,
-    },
-    RetrieveBlocking {
-        piece_i: usize,
-        response: oneshot::Sender<Option<Bytes>>,
-    },
+    Save { piece_i: usize, blocks: Vec<Bytes> },
+    EnableFile { file_idx: usize },
+    DisableFile { file_idx: usize },
+    RetrievePiece { piece_i: usize },
 }
 
 #[derive(Debug)]
@@ -287,10 +254,6 @@ impl TorrentStorage {
         match message {
             StorageMessage::Save { piece_i, blocks } => {
                 self.pend_hash_validation(piece_i, ReadyPiece(blocks)).await;
-            }
-            StorageMessage::RetrieveBlocking { piece_i, response } => {
-                let bytes = self.retrieve_piece(piece_i).await.ok();
-                let _ = response.send(bytes);
             }
             StorageMessage::RetrievePiece { piece_i } => {
                 // This will also block

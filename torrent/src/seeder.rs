@@ -26,9 +26,8 @@ impl Seeder {
         if let Some(cache_piece) = self.piece_cache.get(&block.piece) {
             Some(cache_piece.slice(block.range()))
         } else {
-            let bytes = self.storage.retrieve_blocking(block.piece as usize).await?;
-            self.piece_cache.put(block.piece, bytes.clone());
-            Some(bytes.slice(block.range()))
+            let _ = self.storage.retrieve_piece(block.piece as usize).await;
+            None
         }
     }
 }

@@ -21,7 +21,7 @@ impl ConnectionManagerHandler for MediaServerConnectionManager {
 
     fn get_current_connection_info(
         &self,
-        connection_id: String,
+        _connection_id: String,
     ) -> impl std::future::Future<
         Output = Result<
             (

@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     convert::Infallible,
     fmt::Display,
     io::SeekFrom,
@@ -43,13 +43,13 @@ use self::{
 };
 
 pub mod assets;
+#[allow(unused)]
 pub mod extras;
 pub mod identification;
 pub mod movie;
 pub mod show;
 
 const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
-const SUBS_EXTENSIONS: [&str; 1] = ["srt"];
 
 const EXTRAS_FOLDERS: [&str; 13] = [
     "behind the scenes",

@@ -39,6 +39,7 @@ mod piece_picker;
 mod protocol;
 mod resumability;
 mod scheduler;
+#[allow(unused)]
 mod seeder;
 mod storage;
 mod tracker;

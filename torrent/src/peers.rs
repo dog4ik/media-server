@@ -78,14 +78,6 @@ impl PeerError {
     pub fn connection(msg: &str) -> Self {
         Self::new(PeerErrorCause::Connection, msg)
     }
-
-    pub fn logic(msg: &str) -> Self {
-        Self::new(PeerErrorCause::PeerLogic, msg)
-    }
-
-    pub fn unhandled(msg: &str) -> Self {
-        Self::new(PeerErrorCause::Unhandled, msg)
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -298,15 +290,13 @@ impl Peer {
 
     pub async fn new_from_ip(ip: SocketAddr, info_hash: [u8; 20]) -> anyhow::Result<Self> {
         let socket = TcpStream::connect(ip).await?;
-        tracing::trace!(%ip, "Connected peer");
-        Self::new(socket, info_hash).await
-    }
-
-    pub fn supports_ut_metadata(&self) -> bool {
-        self.extension_handshake
+        let peer = Self::new(socket, info_hash).await?;
+        let client_name = peer
+            .extension_handshake
             .as_ref()
-            .and_then(|x| x.ut_metadata_id())
-            .is_some()
+            .and_then(|h| h.client_name());
+        tracing::trace!(%ip, ?client_name, "Connected peer");
+        Ok(peer)
     }
 
     pub async fn fetch_ut_metadata(&mut self) -> anyhow::Result<Info> {

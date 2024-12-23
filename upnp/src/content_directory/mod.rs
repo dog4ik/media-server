@@ -544,7 +544,7 @@ mod feature_list {
         const TYPE_NAME: crate::service_variables::DataType =
             crate::service_variables::DataType::String;
 
-        fn from_xml_value(value: &str) -> anyhow::Result<Self>
+        fn from_xml_value(_value: &str) -> anyhow::Result<Self>
         where
             Self: Sized,
         {
@@ -760,11 +760,15 @@ impl Item {
 
 impl IntoXml for Item {
     fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
-        let item_tag = BytesStart::new("item").with_attributes([
+        let mut item_tag = BytesStart::new("item").with_attributes([
             ("id", self.base.id.as_str()),
             ("parentID", self.base.parent_id.as_str()),
             ("restricted", if self.base.restricted { "1" } else { "0" }),
         ]);
+
+        if let Some(ref_id) = &self.base.ref_id {
+            item_tag.extend_attributes([("refID", ref_id.as_str())]);
+        };
 
         let item_tag_end = item_tag.to_end().into_owned();
         w.write_event(Event::Start(item_tag))?;

@@ -135,6 +135,10 @@ impl IntoXml for Device<'_> {
             w.create_element("modelURL")
                 .write_text_content(BytesText::new(model_url))?;
         }
+        if let Some(serial_number) = self.serial_number {
+            w.create_element("serialNumber")
+                .write_text_content(BytesText::new(serial_number))?;
+        }
         let udn = self.udn.to_string();
         w.create_element("UDN")
             .write_text_content(BytesText::new(&udn))?;

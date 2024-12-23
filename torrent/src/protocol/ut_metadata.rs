@@ -162,10 +162,6 @@ impl UtMetadata {
         Bytes::from_iter(iter)
     }
 
-    pub fn is_full(&self) -> bool {
-        self.downloaded == self.blocks.len()
-    }
-
     pub fn request_next_block(&mut self) -> Option<UtMessage> {
         let piece = self.blocks.iter().position(Option::is_none)?;
         Some(UtMessage::Request { piece })

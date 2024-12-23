@@ -30,7 +30,9 @@ pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
 #[derive(Debug, Clone)]
 pub struct AnnounceResult {
     pub interval: usize,
+    #[allow(unused)]
     pub leeachs: Option<usize>,
+    #[allow(unused)]
     pub seeds: Option<usize>,
     pub peers: Vec<SocketAddr>,
 }
@@ -90,24 +92,23 @@ impl AnnouncePayload {
             )
             .await?;
 
-        if let UdpTrackerMessageType::Announce {
-            interval,
-            leechers,
-            seeders,
-            peers,
-        } = res.message_type
-        {
-            Ok(AnnounceResult {
+        match res.message_type {
+            UdpTrackerMessageType::Announce {
+                interval,
+                leechers,
+                seeders,
+                peers,
+            } => Ok(AnnounceResult {
                 interval: interval as usize,
                 leeachs: Some(leechers as usize),
                 seeds: Some(seeders as usize),
                 peers,
-            })
-        } else {
-            Err(anyhow!(
+            }),
+            UdpTrackerMessageType::Error { message } => Err(anyhow!("Tracker Error: {message}")),
+            _ => Err(anyhow!(
                 "Expected announce response, got {:?}",
                 res.message_type
-            ))
+            )),
         }
     }
 }
@@ -298,6 +299,7 @@ impl TrackerHandle {
             .try_send(TrackerCommand::Reannounce(stat))
             .unwrap();
     }
+    #[allow(unused)]
     pub fn close(&self) {
         self.cancellation_token.cancel();
     }

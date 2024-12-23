@@ -6,10 +6,6 @@ use serde::{Deserialize, Serialize};
 
 use super::{IntoXml, XmlWriter};
 
-pub enum VariableKind {
-    Known(DataType),
-}
-
 #[derive(Debug, Default, Copy, Clone, Eq, PartialEq, Serialize, Deserialize)]
 pub enum DataType {
     Ui1,
@@ -41,17 +37,6 @@ pub enum DataType {
     Uuid,
 }
 
-const DATE_FORMAT: time::format_description::well_known::Iso8601 =
-    time::format_description::well_known::Iso8601;
-
-fn parse_date(str_val: &str) -> anyhow::Result<time::OffsetDateTime> {
-    let date = time::OffsetDateTime::parse(str_val, &DATE_FORMAT)?;
-    Ok(date)
-}
-fn parse_time(str_val: &str) -> anyhow::Result<time::Time> {
-    let date = time::Time::parse(str_val, &DATE_FORMAT)?;
-    Ok(date)
-}
 fn parse_bool(str_val: &str) -> anyhow::Result<bool> {
     match str_val {
         "1" => Ok(true),
@@ -420,7 +405,8 @@ pub trait SVariable: Sized {
 }
 
 #[derive(Debug, Clone)]
-pub struct VolumeVal(String);
+#[allow(unused)]
+struct VolumeVal(String);
 
 impl SVariable for VolumeVal {
     type VarType = String;

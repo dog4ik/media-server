@@ -8,7 +8,6 @@ use reqwest::{
     Client, Method, Request, Url,
 };
 use serde::Deserialize;
-use time::Date;
 
 use crate::app_state::AppError;
 
@@ -606,13 +605,6 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
             content_type,
         })
     }
-}
-
-fn parse_tmdb_date(input: &str) -> anyhow::Result<Date> {
-    use time::format_description::parse_borrowed;
-    let parsed = parse_borrowed::<2>("[year]-[month]-[day]").unwrap();
-    let date = Date::parse(input, &parsed)?;
-    Ok(date)
 }
 
 // Types

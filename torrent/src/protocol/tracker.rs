@@ -44,6 +44,7 @@ pub enum UdpTrackerRequestType {
         num_want: i32,
         port: u16,
     },
+    #[allow(unused)]
     Scrape {
         connection_id: u64,
         info_hashes: Vec<[u8; 20]>,
@@ -143,6 +144,7 @@ pub struct UdpTrackerMessage {
 }
 
 #[derive(Debug, Clone)]
+#[allow(unused)]
 pub struct UdpScrapeUnit {
     pub seeders: u32,
     pub completed: u32,
@@ -160,6 +162,7 @@ pub enum UdpTrackerMessageType {
         seeders: u32,
         peers: Vec<SocketAddr>,
     },
+    #[allow(unused)]
     Scrape {
         units: Vec<UdpScrapeUnit>,
     },
@@ -242,62 +245,6 @@ impl UdpTrackerMessage {
         Ok(UdpTrackerMessage {
             transaction_id,
             message_type,
-        })
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UdpConnectRequest {
-    pub protocol_id: u64,
-    pub action: u32,
-    pub transaction_id: u32,
-}
-
-impl UdpConnectRequest {
-    pub fn new() -> Self {
-        let transaction_id = rand::random();
-        let protocol_id = 0x41727101980;
-        Self {
-            protocol_id,
-            action: 0,
-            transaction_id,
-        }
-    }
-
-    pub fn as_bytes(&self) -> [u8; 16] {
-        let mut bytes: [u8; 16] = [0; 16];
-        let mut writer = bytes.writer();
-        writer.write_all(&self.protocol_id.to_be_bytes()).unwrap();
-        writer.write_all(&self.action.to_be_bytes()).unwrap();
-        writer
-            .write_all(&self.transaction_id.to_be_bytes())
-            .unwrap();
-        bytes
-    }
-}
-
-impl Default for UdpConnectRequest {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct UdpConnectResponse {
-    pub action: u32,
-    pub transaction_id: u32,
-    pub connection_id: u64,
-}
-
-impl UdpConnectResponse {
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        let action: u32 = u32::from_be_bytes(bytes[0..4].try_into()?);
-        let transaction_id: u32 = u32::from_be_bytes(bytes[4..8].try_into()?);
-        let connection_id: u64 = u64::from_be_bytes(bytes[8..16].try_into()?);
-        Ok(Self {
-            action,
-            transaction_id,
-            connection_id,
         })
     }
 }

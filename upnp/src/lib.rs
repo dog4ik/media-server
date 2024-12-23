@@ -1,7 +1,10 @@
 pub mod action;
+
+#[allow(unused, unused_variables)]
 pub mod connection_manager;
 pub mod content_directory;
 mod device_description;
+#[allow(unused)]
 mod eventing;
 pub mod router;
 mod service;

@@ -409,13 +409,6 @@ impl PeerMessage {
             length: block.length,
         }
     }
-    pub fn cancel(block: Block) -> Self {
-        Self::Cancel {
-            index: block.piece,
-            begin: block.offset,
-            length: block.length,
-        }
-    }
 }
 
 #[derive(Debug)]

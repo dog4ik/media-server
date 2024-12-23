@@ -1124,8 +1124,8 @@ pub async fn transcoded_segment(
     tag = "Transcoding",
 )]
 pub async fn create_transcode_stream(
-    Path(id): Path<i64>,
-    State(app_state): State<AppState>,
+    Path(_id): Path<i64>,
+    State(_app_state): State<AppState>,
 ) -> Result<Json<Task<TranscodeJob>>, AppError> {
     todo!()
 }
