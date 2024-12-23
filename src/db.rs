@@ -258,14 +258,33 @@ where
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO torrents
-            (info_hash, bitfield, enabled_files, trackers, save_location, bencoded_info)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            (info_hash, bitfield, trackers, save_location, bencoded_info)
+            VALUES (?, ?, ?, ?, ?) RETURNING id;",
                 torrent.info_hash,
                 torrent.bitfield,
-                torrent.enabled_files,
                 torrent.trackers,
                 torrent.save_location,
                 torrent.bencoded_info,
+            );
+
+            query.fetch_one(&mut *conn).await.map(|x| x.id)
+        }
+    }
+
+    fn insert_torrent_file(
+        self,
+        file: DbTorrentFile,
+    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let query = sqlx::query!(
+                "INSERT OR IGNORE INTO torrent_files
+            (torrent_id, relative_path, priority, idx)
+            VALUES (?, ?, ?, ?) RETURNING id;",
+                file.torrent_id,
+                file.relative_path,
+                file.priority,
+                file.idx,
             );
 
             query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -434,6 +453,18 @@ where
         }
     }
 
+    fn remove_torrent(
+        self,
+        info_hash: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let query = sqlx::query!("DELETE FROM torrents WHERE info_hash = ?", info_hash);
+            query.execute(&mut *conn).await?;
+            Ok(())
+        }
+    }
+
     fn update_show_metadata(
         self,
         id: i64,
@@ -519,6 +550,23 @@ where
                 poster,
                 metadata.release_date,
                 id
+            );
+            q.execute(&mut *conn).await?;
+            Ok(())
+        }
+    }
+
+    fn update_torrent_by_info_hash(
+        self,
+        info_hash: &[u8],
+        bitfield: &[u8],
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let q = sqlx::query!(
+                "UPDATE torrents SET bitfield = ? WHERE info_hash = ?",
+                bitfield,
+                info_hash,
             );
             q.execute(&mut *conn).await?;
             Ok(())
@@ -829,9 +877,44 @@ WHERE season_id = ? ORDER BY number ASC",
     ) -> impl std::future::Future<Output = Result<Vec<DbTorrent>, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let torrents = sqlx::query_as!(DbTorrent, "select * from torrents LIMIT ?", limit)
+            let torrents = sqlx::query_as!(DbTorrent, "SELECT * FROM torrents LIMIT ?", limit)
                 .fetch_all(&mut *conn)
                 .await?;
+            Ok(torrents)
+        }
+    }
+
+    fn get_torrent_by_info_hash(
+        self,
+        info_hash: &[u8; 20],
+    ) -> impl std::future::Future<Output = Result<DbTorrent, AppError>> + Send {
+        async move {
+            let info_hash = &info_hash[..];
+            let mut conn = self.acquire().await?;
+            let torrent = sqlx::query_as!(
+                DbTorrent,
+                "SELECT * FROM torrents WHERE torrents.info_hash = ?;",
+                info_hash,
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            Ok(torrent)
+        }
+    }
+
+    fn torrent_files(
+        self,
+        torrent_id: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<DbTorrentFile>, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let torrents = sqlx::query_as!(
+                DbTorrentFile,
+                "SELECT * FROM torrent_files WHERE torrent_id = ?",
+                torrent_id
+            )
+            .fetch_all(&mut *conn)
+            .await?;
             Ok(torrents)
         }
     }
@@ -1224,14 +1307,11 @@ pub struct DbTorrent {
     pub save_location: String,
     pub info_hash: Vec<u8>,
     pub bitfield: Vec<u8>,
-    /// Bitfield of enabled files
-    pub enabled_files: Vec<u8>,
     pub added_at: Option<time::OffsetDateTime>,
 }
 
 impl From<DownloadParams> for DbTorrent {
     fn from(params: DownloadParams) -> Self {
-        let enabled_files = params.enabled_files_bitfield();
         let tracker_list = params.trackers;
         let bitfield = params.bitfield.0;
         let trackers: Vec<String> = tracker_list.iter().map(ToString::to_string).collect();
@@ -1247,31 +1327,16 @@ impl From<DownloadParams> for DbTorrent {
                 .to_string(),
             info_hash: params.info.hash().to_vec(),
             bitfield,
-            enabled_files: enabled_files.0,
             added_at: None,
         }
     }
 }
 
-impl Into<DownloadParams> for DbTorrent {
-    fn into(self) -> DownloadParams {
-        let bitfield = torrent::BitField::from(self.bitfield);
-        let info =
-            torrent::Info::from_bytes(&self.bencoded_info).expect("we don't screw up saving it");
-        let trackers = self
-            .trackers
-            .split(',')
-            .filter_map(|t| t.parse().ok())
-            .collect();
-        let enabled_files_bf = torrent::BitField::from(self.enabled_files);
-        let enabled_files = enabled_files_bf.pieces().collect();
-        let save_location = std::path::PathBuf::from(self.save_location);
-        DownloadParams {
-            bitfield,
-            info,
-            trackers,
-            enabled_files,
-            save_location,
-        }
-    }
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DbTorrentFile {
+    pub id: Option<i64>,
+    pub torrent_id: i64,
+    pub priority: i64,
+    pub idx: i64,
+    pub relative_path: String,
 }

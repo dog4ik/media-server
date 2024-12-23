@@ -88,7 +88,7 @@ impl Display for ScheduleStrategy {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
 pub enum Priority {
     Disabled = 0,
     Low = 1,
@@ -112,12 +112,7 @@ impl TryFrom<usize> for Priority {
             1 => Self::Low,
             2 => Self::Medium,
             3 => Self::High,
-            _ => {
-                return Err(anyhow::anyhow!(
-                    "expected value in range 0..4, got {}",
-                    value
-                ))
-            }
+            _ => return Err(anyhow::anyhow!("expected value in range 0..4, got {value}",)),
         };
         Ok(priority)
     }

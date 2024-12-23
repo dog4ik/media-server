@@ -29,10 +29,16 @@ use crate::{
     DownloadParams, NewPeer,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum DownloadMessage {
     SetStrategy(ScheduleStrategy),
-    SetFilePriority { file_idx: usize, priority: Priority },
+    SetFilePriority {
+        file_idx: usize,
+        priority: Priority,
+    },
+    PostFullState {
+        tx: tokio::sync::oneshot::Sender<FullState>,
+    },
     Abort,
     Pause,
     Resume,
@@ -92,6 +98,15 @@ impl DownloadHandle {
             .await?;
         Ok(())
     }
+
+    pub async fn full_state(&self) -> anyhow::Result<FullState> {
+        use tokio::sync::oneshot;
+        let (tx, rx) = oneshot::channel();
+        self.download_tx
+            .send(DownloadMessage::PostFullState { tx })
+            .await?;
+        Ok(rx.await?)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -124,15 +139,6 @@ impl PerformanceHistory {
         self.history.push_front(perf);
     }
 
-    /// The latest measurement
-    pub fn last(&self) -> Option<&Performance> {
-        self.history.front()
-    }
-
-    pub fn reset(&mut self) {
-        *self = Self::new()
-    }
-
     pub fn avg_down_speed(&self) -> u64 {
         if self.history.is_empty() {
             return 0;
@@ -144,10 +150,10 @@ impl PerformanceHistory {
         avg / self.history.len() as u64
     }
 
-    pub fn avg_down_speed_sec(&self, tick_duration: &Duration) -> usize {
+    pub fn avg_down_speed_sec(&self, tick_duration: &Duration) -> u64 {
         let tick_secs = tick_duration.as_secs_f32();
         let download_speed = self.avg_down_speed() as f32 / tick_secs;
-        download_speed as usize
+        download_speed as u64
     }
 
     pub fn avg_up_speed(&self) -> u64 {
@@ -400,35 +406,6 @@ impl Performance {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
-/// Global offset of the block in torrent.
-pub struct BlockGlobalLocation(pub u64);
-
-impl BlockGlobalLocation {
-    pub fn from_block(block: &Block, piece_size: u32) -> Self {
-        Self(block.piece as u64 * piece_size as u64 + block.offset as u64 + block.length as u64)
-    }
-
-    pub fn block(&self, piece_size: u32, total_size: u64) -> Block {
-        let piece = self.0 / piece_size as u64;
-        let offset = self.0 % piece_size as u64;
-        let length = crate::utils::piece_size(piece as usize, piece_size, total_size);
-        Block {
-            piece: piece as u32,
-            offset: offset as u32,
-            length: length as u32,
-        }
-    }
-
-    pub fn piece(&self, piece_size: u32) -> usize {
-        (self.0 / piece_size as u64) as usize
-    }
-
-    pub fn offset(&self, piece_size: u32) -> u32 {
-        (self.0 % piece_size as u64) as u32
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Block {
     pub piece: u32,
@@ -538,20 +515,92 @@ impl Block {
     }
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub enum PeerStateChange {
+    Connect,
+    Disconnect,
+    InChoke(bool),
+    OutChoke(bool),
+    InInterested(bool),
+    OutInterested(bool),
+}
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+pub enum StateChange {
+    FinishedPiece(usize),
+    DownloadStateChange(DownloadState),
+    TrackerAnnounce(String),
+    FilePriorityChange {
+        file_idx: usize,
+        priority: Priority,
+    },
+    PeerStateChange {
+        ip: SocketAddr,
+        change: PeerStateChange,
+    },
+}
+
+#[derive(Debug)]
+pub struct FullStateFile {
+    pub path: std::path::PathBuf,
+    pub size: u64,
+    pub index: usize,
+    pub start_piece: usize,
+    pub end_piece: usize,
+    pub priority: Priority,
+}
+
+#[derive(Debug)]
+pub struct FullStatePeer {
+    pub addr: SocketAddr,
+    pub uploaded: u64,
+    pub downloaded: u64,
+    pub download_speed: u64,
+    pub upload_speed: u64,
+    pub in_status: Status,
+    pub out_status: Status,
+    pub interested_amount: usize,
+}
+
+#[derive(Debug)]
+pub struct FullStateTracker {
+    pub url: String,
+    pub last_announced_at: Instant,
+    pub announce_interval: Duration,
+}
+
+#[derive(Debug)]
+pub struct FullState {
+    pub name: String,
+    pub total_pieces: usize,
+    pub percent: f32,
+    pub total_size: u64,
+    pub info_hash: [u8; 20],
+    pub trackers: Vec<FullStateTracker>,
+    pub peers: Vec<FullStatePeer>,
+    pub files: Vec<FullStateFile>,
+    pub bitfield: BitField,
+    pub state: DownloadState,
+    pub pending_pieces: Vec<usize>,
+    pub tick_num: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PeerDownloadStats {
+    pub ip: SocketAddr,
     pub downloaded: u64,
     pub uploaded: u64,
     pub download_speed: u64,
     pub upload_speed: u64,
+    pub interested_amount: usize,
 }
 
-#[derive(Debug, serde::Serialize, Default)]
+#[derive(Debug, Clone, serde::Serialize, Default)]
 pub struct DownloadProgress {
     pub peers: Vec<PeerDownloadStats>,
-    pub pending_pieces: usize,
-    pub percent: f64,
-    pub state: DownloadState,
+    pub percent: f32,
+    pub changes: Vec<StateChange>,
+    pub tick_num: usize,
 }
 
 impl DownloadProgress {
@@ -663,6 +712,9 @@ pub struct Download {
     last_choke: Instant,
     stat: DownloadStat,
     seeder: Seeder,
+    changes: Vec<StateChange>,
+    info: crate::Info,
+    tick_num: usize,
 }
 
 impl Download {
@@ -674,19 +726,19 @@ impl Download {
         trackers: Vec<DownloadTracker>,
         cancellation_token: CancellationToken,
     ) -> Self {
-        let t = download_params.info;
-        let info_hash = t.hash();
+        let info = download_params.info;
+        let info_hash = info.hash();
         let active_peers = JoinSet::new();
-        let output_files = t.output_files("");
+        let output_files = info.output_files("");
         let pending_files = PendingFiles::from_output_files(
-            t.piece_length,
+            info.piece_length,
             &output_files,
             download_params.enabled_files,
         );
 
-        let stat = DownloadStat::new(&download_params.bitfield, &t);
+        let stat = DownloadStat::new(&download_params.bitfield, &info);
 
-        let scheduler = Scheduler::new(t, pending_files, &download_params.bitfield);
+        let scheduler = Scheduler::new(&info, pending_files, &download_params.bitfield);
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
 
@@ -709,6 +761,9 @@ impl Download {
             last_choke: Instant::now(),
             stat,
             seeder,
+            changes: Vec::new(),
+            info,
+            tick_num: 0,
         }
     }
 
@@ -728,13 +783,30 @@ impl Download {
 
     fn handle_peer_messages(&mut self, peer_idx: usize) {
         let peer_rx = self.scheduler.peers[peer_idx].message_rx.clone();
+        let ip = self.scheduler.peers[peer_idx].ip;
 
         while let Ok(peer_msg) = peer_rx.try_recv() {
+            let mut add_peer_change = |change: PeerStateChange| {
+                self.changes
+                    .push(StateChange::PeerStateChange { ip, change })
+            };
             match peer_msg {
-                PeerMessage::Choke => self.scheduler.handle_peer_choke(peer_idx),
-                PeerMessage::Unchoke => self.scheduler.handle_peer_unchoke(peer_idx),
-                PeerMessage::Interested => self.scheduler.handle_peer_interest(peer_idx),
-                PeerMessage::NotInterested => self.scheduler.handle_peer_uninterest(peer_idx),
+                PeerMessage::Choke => {
+                    self.scheduler.handle_peer_choke(peer_idx);
+                    add_peer_change(PeerStateChange::InChoke(true));
+                }
+                PeerMessage::Unchoke => {
+                    self.scheduler.handle_peer_unchoke(peer_idx);
+                    add_peer_change(PeerStateChange::InChoke(false));
+                }
+                PeerMessage::Interested => {
+                    self.scheduler.handle_peer_interest(peer_idx);
+                    add_peer_change(PeerStateChange::InInterested(true));
+                }
+                PeerMessage::NotInterested => {
+                    self.scheduler.handle_peer_uninterest(peer_idx);
+                    add_peer_change(PeerStateChange::InInterested(false));
+                }
                 PeerMessage::Have { index } => self
                     .scheduler
                     .handle_peer_have_msg(peer_idx, index as usize),
@@ -879,7 +951,7 @@ impl Download {
 
             let mut min_pex_tip = usize::MAX;
 
-            let prev_pending_amount = self.scheduler.pending_pieces.len();
+            //let prev_pending_amount = self.scheduler.pending_pieces.len();
 
             // 99% of time spent here
             let handle_peer_messages = Instant::now();
@@ -896,13 +968,13 @@ impl Download {
             );
 
             // iterate over newly added pieces
-            for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
-                for peer in &mut self.scheduler.peers {
-                    if peer.bitfield.has(*piece) {
-                        peer.add_interested();
-                    }
-                }
-            }
+            //for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
+            //    for peer in &mut self.scheduler.peers {
+            //        if peer.bitfield.has(*piece) {
+            //            peer.add_interested();
+            //        }
+            //    }
+            //}
 
             self.scheduler.pending_pieces.retain(|pending_piece| {
                 let piece = &mut self.scheduler.piece_table[*pending_piece];
@@ -962,11 +1034,12 @@ impl Download {
             }
 
             self.scheduler.register_performance();
-            self.handle_progress_dispatch(&mut progress);
-
             self.handle_tracker_updates(loop_start);
 
+            self.handle_progress_dispatch(&mut progress);
+
             tracing::debug!(took = ?loop_start.elapsed(), "Download tick finished");
+            self.tick_num += 1;
 
             // 4. We sleep until the next tick
             tokio::select! {
@@ -982,6 +1055,8 @@ impl Download {
     fn handle_tracker_updates(&mut self, loop_start: Instant) {
         for tracker in &mut self.trackers {
             if loop_start.duration_since(tracker.last_announced_at) > tracker.announce_interval {
+                self.changes
+                    .push(StateChange::TrackerAnnounce(tracker.url().to_owned()));
                 tracker.announce(self.stat);
             }
 
@@ -1009,7 +1084,7 @@ impl Download {
                         }
                     });
                 } else {
-                    tracing::warn!("Received duplicate peer {ip}");
+                    tracing::trace!("Received duplicate peer {ip}");
                 }
             }
         }
@@ -1060,6 +1135,10 @@ impl Download {
                 tracing::warn!("Failed to send pex initial message to peer: {e}")
             };
         }
+        self.changes.push(StateChange::PeerStateChange {
+            ip: active_peer.ip,
+            change: PeerStateChange::Connect,
+        });
         self.scheduler.add_peer(active_peer);
     }
 
@@ -1080,6 +1159,10 @@ impl Download {
             Ok((uuid, _)) => {
                 let idx = self.scheduler.get_peer_idx(&uuid).unwrap();
                 if let Some(removed_peer) = self.scheduler.remove_peer(idx) {
+                    self.changes.push(StateChange::PeerStateChange {
+                        ip: removed_peer,
+                        change: PeerStateChange::Disconnect,
+                    });
                     self.pex_history
                         .push_value(PexHistoryEntry::dropped(removed_peer));
                 };
@@ -1091,7 +1174,7 @@ impl Download {
     }
 
     fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
-        let (percent, pending_pieces) = self.scheduler.percent_pending_pieces();
+        let percent = self.scheduler.percent_pending_pieces();
         let peers = self
             .scheduler
             .peers
@@ -1102,18 +1185,22 @@ impl Download {
                     .avg_down_speed_sec(&self.tick_duration);
                 let upload_speed = p.performance_history.avg_up_speed_sec(&self.tick_duration);
                 PeerDownloadStats {
+                    ip: p.ip,
                     downloaded: p.downloaded,
                     uploaded: p.uploaded,
-                    download_speed: download_speed as u64,
-                    upload_speed: upload_speed as u64,
+                    interested_amount: p.interested_pieces,
+                    download_speed,
+                    upload_speed,
                 }
             })
             .collect();
+        let mut changes = Vec::new();
+        changes.append(&mut self.changes);
         let progress = DownloadProgress {
+            tick_num: self.tick_num,
             peers,
             percent,
-            pending_pieces,
-            state: self.state,
+            changes,
         };
         progress_consumer.consume_progress(progress);
     }
@@ -1124,9 +1211,12 @@ impl Download {
                 // NOTE: this is wrong. last piece might be less than piece size
                 self.stat.downloaded += self.scheduler.piece_size as u64;
                 self.scheduler.add_piece(piece_i);
+                self.changes.push(StateChange::FinishedPiece(piece_i));
                 if self.scheduler.is_torrent_finished() {
                     tracing::info!("Finished downloading torrent");
                     self.state = DownloadState::Seeding;
+                    self.changes
+                        .push(StateChange::DownloadStateChange(self.state));
                 };
             }
             StorageFeedback::Failed { piece_i } => {
@@ -1146,7 +1236,7 @@ impl Download {
     pub async fn handle_command(&mut self, command: DownloadMessage) {
         match command {
             DownloadMessage::SetStrategy(strategy) => {
-                if let ScheduleStrategy::Request(piece) = strategy {
+                if let ScheduleStrategy::Request(_) = strategy {
                     self.scheduler.max_pending_pieces = 2;
                 } else {
                     self.scheduler.max_pending_pieces = 40;
@@ -1159,6 +1249,8 @@ impl Download {
                 self.scheduler.set_strategy(strategy);
             }
             DownloadMessage::SetFilePriority { file_idx, priority } => {
+                self.changes
+                    .push(StateChange::FilePriorityChange { file_idx, priority });
                 self.scheduler.change_file_priority(file_idx, priority);
                 if priority == Priority::Disabled {
                     self.storage.disable_file(file_idx).await;
@@ -1176,7 +1268,85 @@ impl Download {
             DownloadMessage::Resume => {
                 tracing::warn!("Resume is not implemented")
             }
+            DownloadMessage::PostFullState { tx } => {
+                let _ = tx.send(self.full_state());
+            }
         };
+    }
+
+    pub fn full_state(&self) -> FullState {
+        let trackers = self
+            .trackers
+            .iter()
+            .map(|t| FullStateTracker {
+                url: t.url().to_owned(),
+                last_announced_at: t.last_announced_at,
+                announce_interval: t.announce_interval,
+            })
+            .collect();
+
+        let peers = self
+            .scheduler
+            .peers
+            .iter()
+            .map(|p| FullStatePeer {
+                addr: p.ip,
+                uploaded: p.uploaded,
+                downloaded: p.downloaded,
+                upload_speed: p.performance_history.avg_up_speed_sec(&self.tick_duration),
+                download_speed: p
+                    .performance_history
+                    .avg_down_speed_sec(&self.tick_duration),
+                in_status: p.in_status,
+                out_status: p.out_status,
+                interested_amount: p.interested_pieces,
+            })
+            .collect();
+        let output_files = self.info.output_files("");
+        let files = self
+            .scheduler
+            .pending_files
+            .files
+            .iter()
+            .map(|p| FullStateFile {
+                index: p.index,
+                start_piece: p.start_piece,
+                end_piece: p.end_piece,
+                path: output_files[p.index].path().to_owned(),
+                size: output_files[p.index].length(),
+                priority: p.priority,
+            })
+            .collect();
+
+        let mut bitfield = BitField::empty(self.scheduler.piece_table.len());
+        self.scheduler
+            .piece_table
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.is_finished)
+            .for_each(|(i, _)| bitfield.add(i).unwrap());
+
+        let info_hash = self.info_hash;
+        let name = self.info.name.clone();
+        let total_size = self.info.total_size();
+        let total_pieces = self.info.pieces.len();
+        let percent = self.scheduler.percent_pending_pieces();
+        let tick_num = self.tick_num;
+
+        FullState {
+            name,
+            total_pieces,
+            percent,
+            total_size,
+            info_hash,
+            trackers,
+            peers,
+            files,
+            bitfield,
+            state: self.state,
+            pending_pieces: self.scheduler.pending_pieces.clone(),
+            tick_num,
+        }
     }
 
     pub async fn handle_shutdown(&mut self) {

@@ -95,7 +95,8 @@ async fn main() {
     let tasks = Box::leak(Box::new(tasks));
     let tracker = tasks.tracker.clone();
 
-    let torrent_client = TorrentClient::new(tasks).await.unwrap();
+    let torrent_client = TorrentClient::new(tasks, db.clone()).await.unwrap();
+    torrent_client.load_torrents().await.unwrap();
 
     let torrent_client = Box::leak(Box::new(torrent_client));
 
@@ -229,14 +230,25 @@ async fn main() {
         .route("/torrent/search", get(public_api::search_torrent))
         .route(
             "/torrent/resolve_magnet_link",
-            get(admin_api::resolve_magnet_link),
+            get(torrent_api::resolve_magnet_link),
         )
         .route(
             "/torrent/parse_torrent_file",
-            post(admin_api::parse_torrent_file),
+            post(torrent_api::parse_torrent_file),
         )
-        .route("/torrent/download", post(admin_api::download_torrent))
+        .route("/torrent/open", post(torrent_api::open_torrent))
         .route("/torrent/all", get(torrent_api::all_torrents))
+        .route(
+            "/torrent/open_torrent_file",
+            post(torrent_api::open_torrent_file),
+        )
+        .route("/torrent/:info_hash/state", get(torrent_api::torrent_state))
+        .route(
+            "/torrent/:info_hash/file_priority",
+            post(torrent_api::set_file_priority),
+        )
+        .route("/torrent/updates", get(torrent_api::updates))
+        .route("/torrent/:info_hash", delete(torrent_api::delete_torrent))
         .route("/search/content", get(public_api::search_content))
         .route(
             "/search/trending_shows",
@@ -266,9 +278,15 @@ async fn main() {
         )
         .route("/log/latest", get(admin_api::latest_log))
         .route("/tasks/transcode", get(admin_api::transcode_tasks))
-        .route("/tasks/transcode/:id", delete(admin_api::cancel_transcode_task))
+        .route(
+            "/tasks/transcode/:id",
+            delete(admin_api::cancel_transcode_task),
+        )
         .route("/tasks/previews", get(admin_api::previews_tasks))
-        .route("/tasks/previews/:id", delete(admin_api::cancel_previews_task))
+        .route(
+            "/tasks/previews/:id",
+            delete(admin_api::cancel_previews_task),
+        )
         .route("/tasks/progress", get(admin_api::progress))
         .route("/scan", post(admin_api::reconciliate_lib))
         .route("/fix_metadata/:content_id", post(admin_api::fix_metadata))

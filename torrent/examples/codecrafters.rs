@@ -1,5 +1,5 @@
 use tokio::sync::mpsc;
-use torrent::{Client, ClientConfig, DownloadParams, DownloadState, TorrentFile};
+use torrent::{Client, ClientConfig, DownloadParams, DownloadState, StateChange, TorrentFile};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
@@ -18,8 +18,11 @@ async fn main() {
     client.open(resume_data, tx).await.unwrap();
     while let Some(progress) = rx.recv().await {
         println!("Progress: {}", progress.percent);
-        println!("Status: {}", progress.state);
-        if progress.state == DownloadState::Seeding {
+        if progress
+            .changes
+            .iter()
+            .any(|p| *p == StateChange::DownloadStateChange(DownloadState::Seeding))
+        {
             break;
         }
     }

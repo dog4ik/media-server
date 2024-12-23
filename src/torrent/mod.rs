@@ -2,14 +2,16 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 
+use anyhow::Context;
 use serde::{Deserialize, Serialize};
-use tokio::{sync::mpsc, task::JoinSet};
-use torrent::{DownloadHandle, DownloadParams, DownloadProgress, Info, MagnetLink, OutputFile};
+use tokio::{sync::broadcast, task::JoinSet};
+use torrent::{DownloadHandle, DownloadParams, Info, MagnetLink, OutputFile};
 
 use crate::{
-    db::{Db, DbActions},
+    db::{Db, DbActions, DbTorrentFile},
     library::{
         is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
     },
@@ -20,6 +22,288 @@ use crate::{
     progress::{ProgressChunk, ProgressStatus, TaskResource, TaskTrait},
     utils,
 };
+
+#[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema)]
+pub struct Status {
+    choked: bool,
+    interested: bool,
+}
+
+impl From<torrent::Status> for Status {
+    fn from(value: torrent::Status) -> Self {
+        Self {
+            choked: value.is_choked(),
+            interested: value.is_interested(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Priority {
+    Disabled = 0,
+    Low = 1,
+    Medium = 2,
+    High = 3,
+}
+
+impl From<torrent::Priority> for Priority {
+    fn from(value: torrent::Priority) -> Self {
+        match value {
+            torrent::Priority::Disabled => Self::Disabled,
+            torrent::Priority::Low => Self::Low,
+            torrent::Priority::Medium => Self::Medium,
+            torrent::Priority::High => Self::High,
+        }
+    }
+}
+
+impl Into<torrent::Priority> for Priority {
+    fn into(self) -> torrent::Priority {
+        match self {
+            Self::Disabled => torrent::Priority::Disabled,
+            Self::Low => torrent::Priority::Low,
+            Self::Medium => torrent::Priority::Medium,
+            Self::High => torrent::Priority::High,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
+pub struct StateFile {
+    pub path: Vec<String>,
+    pub start_piece: usize,
+    pub end_piece: usize,
+    pub size: u64,
+    pub index: usize,
+    pub priority: Priority,
+}
+
+impl From<torrent::FullStateFile> for StateFile {
+    fn from(value: torrent::FullStateFile) -> Self {
+        Self {
+            index: value.index,
+            size: value.size,
+            start_piece: value.start_piece,
+            end_piece: value.end_piece,
+            path: path_components(value.path),
+            priority: value.priority.into(),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, Copy, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadState {
+    Paused,
+    Pending,
+    Seeding,
+}
+
+impl From<torrent::DownloadState> for DownloadState {
+    fn from(value: torrent::DownloadState) -> Self {
+        match value {
+            torrent::DownloadState::Paused => Self::Paused,
+            torrent::DownloadState::Pending => Self::Pending,
+            torrent::DownloadState::Seeding => Self::Seeding,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct StatePeer {
+    pub addr: String,
+    pub uploaded: u64,
+    pub upload_speed: u64,
+    pub downloaded: u64,
+    pub download_speed: u64,
+    pub in_status: Status,
+    pub out_status: Status,
+    pub interested_amount: usize,
+}
+
+impl From<torrent::FullStatePeer> for StatePeer {
+    fn from(value: torrent::FullStatePeer) -> Self {
+        Self {
+            addr: value.addr.to_string(),
+            uploaded: value.uploaded,
+            upload_speed: value.upload_speed,
+            downloaded: value.downloaded,
+            download_speed: value.download_speed,
+            in_status: value.in_status.into(),
+            out_status: value.out_status.into(),
+            interested_amount: value.interested_amount,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct StateTracker {
+    pub url: String,
+    #[schema(value_type = crate::server::SerdeDuration)]
+    pub announce_interval: Duration,
+}
+
+impl From<torrent::FullStateTracker> for StateTracker {
+    fn from(value: torrent::FullStateTracker) -> Self {
+        Self {
+            url: value.url,
+            announce_interval: value.announce_interval,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TorrentState {
+    pub info_hash: String,
+    pub name: String,
+    pub total_pieces: usize,
+    pub percent: f32,
+    pub total_size: u64,
+    pub trackers: Vec<StateTracker>,
+    pub peers: Vec<StatePeer>,
+    pub files: Vec<StateFile>,
+    pub downloaded_pieces: Vec<bool>,
+    pub state: DownloadState,
+    pub pending_pieces: Vec<usize>,
+    pub tick_num: usize,
+}
+
+impl From<torrent::FullState> for TorrentState {
+    fn from(value: torrent::FullState) -> Self {
+        let downloaded_pieces = value
+            .bitfield
+            .all_pieces(value.total_pieces)
+            .into_iter()
+            .collect();
+        Self {
+            info_hash: utils::stringify_info_hash(&value.info_hash),
+            name: value.name,
+            total_pieces: value.total_pieces,
+            percent: value.percent,
+            total_size: value.total_size,
+            trackers: value.trackers.into_iter().map(Into::into).collect(),
+            peers: value.peers.into_iter().map(Into::into).collect(),
+            files: value.files.into_iter().map(Into::into).collect(),
+            downloaded_pieces,
+            state: value.state.into(),
+            pending_pieces: value.pending_pieces,
+            tick_num: value.tick_num,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "change_type", content = "value", rename_all = "lowercase")]
+pub enum PeerStateChange {
+    Connect,
+    Disconnect,
+    InChoke(bool),
+    OutChoke(bool),
+    InInterested(bool),
+    OutInterested(bool),
+}
+
+impl From<torrent::PeerStateChange> for PeerStateChange {
+    fn from(value: torrent::PeerStateChange) -> Self {
+        match value {
+            torrent::PeerStateChange::Connect => Self::Connect,
+            torrent::PeerStateChange::Disconnect => Self::Disconnect,
+            torrent::PeerStateChange::InChoke(v) => Self::InChoke(v),
+            torrent::PeerStateChange::OutChoke(v) => Self::OutChoke(v),
+            torrent::PeerStateChange::InInterested(v) => Self::InInterested(v),
+            torrent::PeerStateChange::OutInterested(v) => Self::OutInterested(v),
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "type", content = "change", rename_all = "lowercase")]
+pub enum StateChange {
+    PeerStateChange {
+        #[schema(value_type = String)]
+        ip: std::net::SocketAddr,
+        peer_change: PeerStateChange,
+    },
+    FinishedPiece(usize),
+    DownloadStateChange(DownloadState),
+    TrackerAnnounce(String),
+    FilePriorityChange {
+        file_idx: usize,
+        priority: Priority,
+    },
+}
+
+impl From<torrent::StateChange> for StateChange {
+    fn from(value: torrent::StateChange) -> Self {
+        match value {
+            torrent::StateChange::PeerStateChange { ip, change } => Self::PeerStateChange {
+                ip,
+                peer_change: change.into(),
+            },
+            torrent::StateChange::FinishedPiece(p) => Self::FinishedPiece(p),
+            torrent::StateChange::DownloadStateChange(s) => Self::DownloadStateChange(s.into()),
+            torrent::StateChange::TrackerAnnounce(t) => Self::TrackerAnnounce(t),
+            torrent::StateChange::FilePriorityChange { file_idx, priority } => {
+                Self::FilePriorityChange {
+                    file_idx,
+                    priority: priority.into(),
+                }
+            }
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct PeerDownloadStats {
+    #[schema(value_type = String)]
+    pub ip: std::net::SocketAddr,
+    pub downloaded: u64,
+    pub uploaded: u64,
+    pub download_speed: u64,
+    pub upload_speed: u64,
+    pub interested_amount: usize,
+}
+
+impl From<torrent::PeerDownloadStats> for PeerDownloadStats {
+    fn from(value: torrent::PeerDownloadStats) -> Self {
+        Self {
+            ip: value.ip,
+            downloaded: value.downloaded,
+            uploaded: value.uploaded,
+            download_speed: value.download_speed,
+            upload_speed: value.upload_speed,
+            interested_amount: value.interested_amount,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct DownloadProgress {
+    pub peers: Vec<PeerDownloadStats>,
+    pub percent: f32,
+    pub tick_num: usize,
+    pub changes: Vec<StateChange>,
+}
+
+impl DownloadProgress {
+    pub fn download_speed(&self) -> u64 {
+        self.peers.iter().map(|p| p.download_speed).sum()
+    }
+}
+
+impl From<torrent::DownloadProgress> for DownloadProgress {
+    fn from(value: torrent::DownloadProgress) -> Self {
+        let changes = value.changes.into_iter().map(Into::into).collect();
+        let peers = value.peers.into_iter().map(Into::into).collect();
+        Self {
+            peers,
+            percent: value.percent,
+            tick_num: value.tick_num,
+            changes,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct PendingTorrent {
@@ -100,38 +384,108 @@ pub struct TorrentHandle {
 pub trait TorrentManager {
     async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()>;
     async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>>;
-    async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()>;
-    async fn delete_torrent(&self, hash: [u8; 20]) -> anyhow::Result<()>;
+    async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()>;
+    async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()>;
+    async fn update_file_priority(
+        &self,
+        hash: &[u8; 20],
+        file_idx: usize,
+        priority: torrent::Priority,
+    ) -> anyhow::Result<()>;
 }
 
 impl TorrentManager for Db {
     async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()> {
-        self.insert_torrent(params.into()).await?;
+        let mut tx = self.begin().await?;
+        let torrent_id = tx.insert_torrent(params.clone().into()).await?;
+        for (i, file) in params.info.output_files("").iter().enumerate() {
+            let path = file.path().to_string_lossy();
+            let db_file = DbTorrentFile {
+                id: None,
+                torrent_id,
+                priority: torrent::Priority::default() as usize as i64,
+                idx: i as i64,
+                relative_path: path.to_string(),
+            };
+            tx.insert_torrent_file(db_file).await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
     async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>> {
-        Ok(self
-            .all_torrents(100)
+        let mut downloads = Vec::new();
+        for torrent in self.all_torrents(100).await? {
+            let files = self.torrent_files(torrent.id.unwrap()).await?;
+            let bitfield = torrent::BitField::from(torrent.bitfield);
+            let info = torrent::Info::from_bytes(&torrent.bencoded_info)
+                .expect("we don't screw up saving it");
+            let trackers = torrent
+                .trackers
+                .split(',')
+                .filter_map(|t| t.parse().ok())
+                .collect();
+            downloads.push(DownloadParams {
+                bitfield,
+                info,
+                trackers,
+                enabled_files: files
+                    .iter()
+                    .filter_map(|f| (f.priority != 0).then_some(f.idx as usize))
+                    .collect(),
+                save_location: torrent.save_location.into(),
+            })
+        }
+        Ok(downloads)
+    }
+
+    async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()> {
+        // BUG: This code introduces race condition.
+        let torrent = self.get_torrent_by_info_hash(hash).await?;
+        let mut bf = torrent::BitField(torrent.bitfield);
+        for piece in new_pieces {
+            bf.add(*piece).unwrap();
+        }
+        tracing::debug!("Applying {} pieces to bitfield", new_pieces.len());
+        self.update_torrent_by_info_hash(hash, &bf.0).await?;
+        Ok(())
+    }
+
+    async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()> {
+        self.remove_torrent(hash).await?;
+        Ok(())
+    }
+
+    async fn update_file_priority(
+        &self,
+        hash: &[u8; 20],
+        file_idx: usize,
+        priority: torrent::Priority,
+    ) -> anyhow::Result<()> {
+        let hash = &hash[..];
+        let torrent_id = sqlx::query!("SELECT id FROM torrents WHERE info_hash = ?;", hash)
+            .fetch_one(&self.pool)
             .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    async fn update_torrent(&self, hash: [u8; 20], bitfield: Vec<u8>) -> anyhow::Result<()> {
-        todo!()
-    }
-
-    async fn delete_torrent(&self, hash: [u8; 20]) -> anyhow::Result<()> {
-        todo!()
+            .id;
+        let priority = priority as usize as i64;
+        let idx = file_idx as i64;
+        sqlx::query!(
+            "UPDATE torrent_files SET priority = ? WHERE torrent_id = ? AND idx = ?",
+            priority,
+            torrent_id,
+            idx,
+        )
+        .execute(&self.pool)
+        .await?;
+        Ok(())
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TorrentProgress {
-    torrent_hash: [u8; 20],
-    progress: DownloadProgress,
+    pub torrent_hash: [u8; 20],
+    #[serde(flatten)]
+    pub progress: DownloadProgress,
 }
 
 #[derive(Debug)]
@@ -139,70 +493,144 @@ pub struct TorrentClient {
     pub client: torrent::Client,
     resolved_magnet_links: Mutex<HashMap<[u8; 20], Info>>,
     torrents: Arc<Mutex<Vec<PendingTorrent>>>,
-    progress_tx: mpsc::Sender<TorrentProgress>,
+    pub progress_broadcast: broadcast::Sender<Arc<TorrentProgress>>,
+    manager: Db,
+}
+
+pub fn progress_handler(
+    torrent_hash: [u8; 20],
+    broadcast: broadcast::Sender<Arc<TorrentProgress>>,
+) -> impl torrent::ProgressConsumer {
+    move |progress: torrent::DownloadProgress| {
+        //if progress.changes.is_empty() {
+        //    return;
+        //}
+        let _ = broadcast.send(Arc::new(TorrentProgress {
+            torrent_hash,
+            progress: progress.into(),
+        }));
+    }
 }
 
 async fn handle_progress(
-    mut progress_rx: mpsc::Receiver<TorrentProgress>,
+    progress_broadcast: broadcast::Sender<Arc<TorrentProgress>>,
     tasks: &'static TaskResource,
+    torrents: Arc<Mutex<Vec<PendingTorrent>>>,
+    manager: impl TorrentManager,
 ) {
-    while let Some(progress) = progress_rx.recv().await {
-        let mut torrents = tasks.torrent_tasks.tasks.lock().unwrap();
+    let mut sub = progress_broadcast.subscribe();
+    while let Ok(chunk) = sub.recv().await {
+        let mut new_pieces = Vec::new();
+        new_pieces.extend(chunk.progress.changes.iter().filter_map(|v| match v {
+            StateChange::FinishedPiece(p) => Some(*p),
+            _ => None,
+        }));
+
+        if !new_pieces.is_empty() {
+            if let Err(e) = manager
+                .update_torrent(&chunk.torrent_hash, &new_pieces)
+                .await
+            {
+                tracing::error!("Failed to update torrent state: {e}");
+                continue;
+            };
+        }
+        let mut torrents = torrents.lock().unwrap();
         let Some(pending_torrent) = torrents
             .iter_mut()
-            .find(|t| t.kind.info_hash == progress.torrent_hash)
+            .find(|t| t.info_hash == chunk.torrent_hash)
         else {
             tracing::error!(
                 "Torrent with info_hash {} is not found",
-                utils::stringify_info_hash(&progress.torrent_hash)
+                utils::stringify_info_hash(&chunk.torrent_hash)
             );
             continue;
         };
-        let ident = pending_torrent.kind.identifier();
-        let progress = CompactTorrentProgress::new(&progress.progress);
+        let ident = pending_torrent.identifier();
+        let progress = CompactTorrentProgress::new(&chunk.progress);
         let progress_chunk = ProgressChunk {
             identificator: ident,
             status: ProgressStatus::Pending { progress },
         };
         tasks
             .torrent_tasks
-            .send_progress(pending_torrent.id, progress_chunk);
+            // fix this crap
+            .send_progress(uuid::Uuid::new_v4(), progress_chunk);
     }
 }
 
 impl TorrentClient {
-    pub async fn new(tasks: &'static TaskResource) -> anyhow::Result<Self> {
+    pub async fn new(tasks: &'static TaskResource, manager: Db) -> anyhow::Result<Self> {
         let config = torrent::ClientConfig {
             cancellation_token: Some(tasks.parent_cancellation_token.clone()),
             ..Default::default()
         };
         let client = torrent::Client::new(config).await?;
-        let (progress_tx, progress_rx) = mpsc::channel(100);
-        tokio::spawn(handle_progress(progress_rx, tasks));
+        let (progress_broadcast, _) = broadcast::channel(20);
+        let torrents = Arc::new(Mutex::new(Vec::new()));
+        tokio::spawn(handle_progress(
+            progress_broadcast.clone(),
+            tasks,
+            torrents.clone(),
+            manager.clone(),
+        ));
         Ok(Self {
             client,
             resolved_magnet_links: Default::default(),
-            torrents: Default::default(),
-            progress_tx,
+            progress_broadcast,
+            torrents,
+            manager,
         })
     }
 
-    pub async fn load_torrents(&mut self, manager: impl TorrentManager) -> anyhow::Result<()> {
-        for torrent in manager.read_torrents().await? {
-            let progress_tx = self.progress_tx.clone();
-            let torrent_hash = torrent.info.hash();
-            let progress_handler = move |progress: DownloadProgress| {
-                let torrent_progress = TorrentProgress {
-                    torrent_hash,
-                    progress,
-                };
-                let _ = progress_tx.try_send(torrent_progress);
-            };
+    pub async fn load_torrents(&self) -> anyhow::Result<()> {
+        let start = Instant::now();
+        let mut count = 0;
+        for torrent in self.manager.read_torrents().await? {
+            let progress_handler =
+                progress_handler(torrent.info.hash(), self.progress_broadcast.clone());
 
-            let Ok(handle) = self.client.open(torrent, progress_handler).await else {
-                continue;
+            let mut files = Vec::new();
+            let mut file_offset = 0;
+            for (i, file) in torrent
+                .info
+                .output_files(&torrent.save_location)
+                .iter()
+                .enumerate()
+            {
+                let mut resolved_file = ResolvedTorrentFile::from_output_file(&file, file_offset);
+                resolved_file.enabled = torrent.enabled_files.contains(&i);
+                files.push(resolved_file);
+                file_offset += file.length();
+            }
+
+            let torrent_info = TorrentInfo {
+                name: torrent.info.name.clone(),
+                contents: TorrentContents::without_content(files),
+                piece_length: torrent.info.piece_length,
+                pieces_amount: torrent.info.pieces.len(),
+                total_size: torrent.info.total_size(),
+            };
+            let info_hash = torrent.info.hash();
+
+            match self.client.open(torrent, progress_handler).await {
+                Ok(download_handle) => {
+                    let torrent = PendingTorrent {
+                        info_hash,
+                        download_handle,
+                        torrent_info,
+                    };
+                    self.torrents.lock().unwrap().push(torrent);
+                    count += 1;
+                }
+                Err(e) => {
+                    tracing::error!("Failed to open torrent: {e}");
+                    continue;
+                }
             };
         }
+
+        tracing::info!(took = ?start.elapsed(), "Loaded {count} torrents");
         Ok(())
     }
 
@@ -229,53 +657,108 @@ impl TorrentClient {
     pub async fn add_torrent(
         &self,
         params: DownloadParams,
-        torrent_metadata: TorrentInfo,
+        torrent_info: TorrentInfo,
     ) -> anyhow::Result<TorrentHandle> {
+        self.manager.create_torrent(params.clone()).await?;
         let info_hash = params.info.hash();
-        let progress_tx = self.progress_tx.clone();
-        let progress_handler = move |progress: DownloadProgress| {
-            let torrent_progress = TorrentProgress {
-                torrent_hash: info_hash,
-                progress,
-            };
-            let _ = progress_tx.try_send(torrent_progress);
-        };
+        let progress_handler = progress_handler(info_hash, self.progress_broadcast.clone());
 
-        let download_handle = self.client.open(params, progress_handler).await?;
+        let download_handle = self.client.open(params.clone(), progress_handler).await?;
 
         let torrent = PendingTorrent {
             info_hash,
             download_handle,
-            torrent_info: torrent_metadata,
+            torrent_info,
         };
         let handle = torrent.handle();
         self.torrents.lock().unwrap().push(torrent);
         Ok(handle)
     }
 
-    pub fn remove_download(&self, info_hash: [u8; 20]) -> Option<PendingTorrent> {
-        let mut downloads = self.torrents.lock().unwrap();
-        let download = downloads
-            .iter()
-            .position(|x| x.info_hash == info_hash)
-            .map(|idx| downloads.swap_remove(idx));
+    pub async fn remove_download(&self, info_hash: [u8; 20]) -> Option<PendingTorrent> {
+        let download = {
+            let mut downloads = self.torrents.lock().unwrap();
+            downloads
+                .iter()
+                .position(|x| x.info_hash == info_hash)
+                .map(|idx| downloads.swap_remove(idx))
+        };
         if let Some(download) = &download {
             download.download_handle.abort();
+            if let Err(e) = self.manager.delete_torrent(&info_hash).await {
+                tracing::error!("Failed to remove torrent: {e}");
+            };
         }
         download
     }
 
     pub fn get_download(&self, info_hash: &[u8; 20]) -> Option<PendingTorrent> {
-        let downloads = self.torrents.lock().unwrap();
-        downloads
+        self.torrents
+            .lock()
+            .unwrap()
             .iter()
             .find(|x| x.info_hash == *info_hash)
             .cloned()
     }
 
-    pub fn all_downloads(&self) -> Vec<TorrentInfo> {
-        let downloads = self.torrents.lock().unwrap();
-        downloads.iter().map(|d| d.torrent_info.clone()).collect()
+    pub async fn update_file_priority(
+        &self,
+        info_hash: &[u8; 20],
+        idx: usize,
+        priority: torrent::Priority,
+    ) -> anyhow::Result<()> {
+        self.manager
+            .update_file_priority(info_hash, idx, priority)
+            .await?;
+        let mut torrents = self.torrents.lock().unwrap();
+        let torrent = torrents
+            .iter_mut()
+            .find(|x| x.info_hash == *info_hash)
+            .context("get torrent")?;
+
+        let file = torrent
+            .torrent_info
+            .contents
+            .files
+            .get_mut(idx)
+            .context("get torrent file")?;
+        file.enabled = !priority.is_disabled();
+        Ok(())
+    }
+
+    pub async fn all_downloads(&self) -> Vec<TorrentState> {
+        use tokio::sync::oneshot;
+        let recvs: Vec<_> = self
+            .torrents
+            .lock()
+            .unwrap()
+            .iter()
+            .filter_map(|d| {
+                let (tx, rx) = oneshot::channel();
+                d.download_handle
+                    .download_tx
+                    .try_send(torrent::DownloadMessage::PostFullState { tx })
+                    .ok()?;
+                Some(rx)
+            })
+            .collect();
+        let mut torrents = Vec::new();
+        for rx in recvs {
+            if let Ok(val) = rx.await {
+                torrents.push(val.into());
+            }
+        }
+        torrents
+    }
+
+    pub async fn full_progress(&self, info_hash: &[u8; 20]) -> Option<TorrentState> {
+        let download = self.get_download(info_hash)?;
+        download
+            .download_handle
+            .full_state()
+            .await
+            .ok()
+            .map(Into::into)
     }
 }
 
@@ -413,14 +896,14 @@ async fn parse_torrent_files(
     let mut all_files: Vec<ResolvedTorrentFile> = Vec::new();
     let mut show_identifiers: Vec<(usize, ShowIdentifier)> = Vec::new();
     let mut movie_identifiers: Vec<(usize, MovieIdentifier)> = Vec::new();
-    let mut offset = 0;
+    let mut file_offset = 0;
     for (i, output_file) in files.iter().enumerate() {
         let path = output_file.path().to_path_buf();
-        let resolved_file = ResolvedTorrentFile::from_output_file(output_file, offset);
+        let resolved_file = ResolvedTorrentFile::from_output_file(output_file, file_offset);
         let Some(file_name) = path.file_stem() else {
             tracing::warn!("Torrent file contains .dotfile: {}", path.display());
             all_files.push(resolved_file);
-            offset += output_file.length();
+            file_offset += output_file.length();
             continue;
         };
         if is_format_supported(&path) {
@@ -443,7 +926,7 @@ async fn parse_torrent_files(
             }
         }
         all_files.push(resolved_file);
-        offset += output_file.length();
+        file_offset += output_file.length();
     }
 
     if show_identifiers.is_empty() && movie_identifiers.is_empty() {

@@ -298,7 +298,7 @@ impl Peer {
 
     pub async fn new_from_ip(ip: SocketAddr, info_hash: [u8; 20]) -> anyhow::Result<Self> {
         let socket = TcpStream::connect(ip).await?;
-        tracing::info!("Connected peer: {:?}", ip);
+        tracing::trace!(%ip, "Connected peer");
         Self::new(socket, info_hash).await
     }
 

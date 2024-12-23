@@ -21,6 +21,7 @@ pub struct PendingFile {
 }
 
 impl PendingFile {
+    /// Inclusive start/end range of pieces that form this file
     pub fn pieces_range(&self) -> Range<usize> {
         self.start_piece..self.end_piece + 1
     }
@@ -28,7 +29,7 @@ impl PendingFile {
 
 #[derive(Debug, Clone)]
 pub struct PendingFiles {
-    files: Vec<PendingFile>,
+    pub files: Vec<PendingFile>,
 }
 
 impl PendingFiles {
@@ -84,15 +85,10 @@ impl PendingFiles {
         );
         None
     }
-
-    /// Iterator over enabled files in Priority order
-    pub fn enabled_files(&self) -> impl Iterator<Item = PendingFile> + '_ {
-        self.files.iter().copied().rev()
-    }
 }
 
 #[derive(Debug, Clone)]
-pub struct PendingPieceV2 {
+pub struct PendingPiece {
     piece: Vec<PendingBlockV2>,
     piece_length: u32,
     blocks_queue: Vec<BlockPosition>,
@@ -116,7 +112,7 @@ impl Default for PendingBlockV2 {
     }
 }
 
-impl PendingPieceV2 {
+impl PendingPiece {
     pub fn new(piece_size: u32) -> Self {
         // same as (piece_size + BLOCK_LENGTH - 1) / BLOCK_LENGTH;
         let blocks_amount = piece_size.div_ceil(BLOCK_LENGTH);
@@ -226,7 +222,7 @@ pub struct SchedulerPiece {
     pub is_finished: bool,
     pub is_saving: bool,
     pub priority: Priority,
-    pub pending_blocks: Option<PendingPieceV2>,
+    pub pending_blocks: Option<PendingPiece>,
 }
 
 impl SchedulerPiece {
@@ -305,11 +301,11 @@ pub struct Scheduler {
 pub const BLOCK_LENGTH: u32 = 16 * 1024;
 /// Maximum amount of peers allowed to schedule one block.
 /// 4 will be good fit because vec reallocates with capacity 4 after first push.
-const MAX_SCHEDULED_TO: usize = 4;
+// const MAX_SCHEDULED_TO: usize = 4;
 
 impl Scheduler {
-    pub fn new(t: Info, pending_files: PendingFiles, initial_bf: &crate::BitField) -> Self {
-        let ut_metadata = UtMetadata::full_from_info(&t);
+    pub fn new(t: &Info, pending_files: PendingFiles, initial_bf: &crate::BitField) -> Self {
+        let ut_metadata = UtMetadata::full_from_info(t);
         let total_pieces = t.pieces.len();
         let mut piece_table = vec![SchedulerPiece::default(); total_pieces];
         for file in &pending_files.files {
@@ -390,7 +386,7 @@ impl Scheduler {
                     let new_piece = self.picker.pop_next().expect("we peeking above");
                     let piece_len =
                         utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
-                    let pending_piece = PendingPieceV2::new(piece_len);
+                    let pending_piece = PendingPiece::new(piece_len);
                     self.pending_pieces.push(new_piece);
                     let pending_piece = self.piece_table[new_piece]
                         .pending_blocks
@@ -427,7 +423,7 @@ impl Scheduler {
                     };
                     let piece_len =
                         utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
-                    let pending_piece = PendingPieceV2::new_sub_rational(piece_len);
+                    let pending_piece = PendingPiece::new_sub_rational(piece_len);
                     self.sub_rational_amount += 1;
                     self.pending_pieces.push(new_piece);
                     let pending_piece = self.piece_table[new_piece]
@@ -529,7 +525,8 @@ impl Scheduler {
         debug_assert!(peer.out_status.is_interested());
         debug_assert!(!peer.in_status.is_choked());
 
-        let performance_kb = peer.performance_history.avg_down_speed_sec(tick_duration) / 1024;
+        let performance_kb =
+            peer.performance_history.avg_down_speed_sec(tick_duration) as usize / 1024;
         // currently it is 32 Mb (2048 blocks) in pipeline if peer uploading 10MB/s
         let rate = if performance_kb < 20 {
             performance_kb + 2
@@ -594,7 +591,7 @@ impl Scheduler {
         let piece_len = self.piece_length(piece_idx);
         let piece = &mut self.piece_table[piece_idx];
         piece.is_saving = false;
-        piece.pending_blocks = Some(PendingPieceV2::new(piece_len));
+        piece.pending_blocks = Some(PendingPiece::new(piece_len));
         self.picker.put_back(piece_idx);
     }
 
@@ -641,13 +638,14 @@ impl Scheduler {
 
     pub fn handle_peer_have_msg(&mut self, peer_idx: usize, piece: usize) {
         if piece >= self.piece_table.len() {
-            tracing::warn!("peer have piece out of bounds");
+            tracing::warn!(piece, "Peer have piece out of bounds");
             return;
         }
         let peer = &mut self.peers[peer_idx];
         if peer.bitfield.has(piece) {
-            tracing::warn!("peer sending have message with piece that is already in his bitfield");
+            tracing::warn!("Peer sending have message with piece that is already in his bitfield");
             // logic error
+            return;
         }
         peer.bitfield.add(piece).expect("bounds checked above");
         let piece = &mut self.piece_table[piece];
@@ -683,8 +681,8 @@ impl Scheduler {
             peer.add_interested();
         }
         if interested_pieces > 0 {
-            peer.set_out_choke(false).unwrap();
-            peer.set_out_interset(true).unwrap();
+            // TODO: Proper choked implementation
+            // peer.set_out_choke(false).unwrap();
         }
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity += 1;
@@ -716,18 +714,84 @@ impl Scheduler {
     pub fn change_file_priority(&mut self, idx: usize, new_priority: Priority) {
         if let Some((old, file)) = self.pending_files.change_file_priority(idx, new_priority) {
             let is_disabled = !old.is_disabled() && new_priority.is_disabled();
+            let is_enabled = old.is_disabled() && !new_priority.is_disabled();
+
             for piece in file.pieces_range() {
                 self.piece_table[piece].priority = file.priority;
             }
-            if is_disabled {
-                self.pending_pieces.retain(|p| {
-                    let disabled = !file.pieces_range().contains(p);
-                    if disabled {
-                        self.piece_table[*p].pending_blocks = None;
+
+            debug_assert!(!(is_enabled && is_disabled));
+
+            if is_disabled || is_enabled {
+                let file_range = file.pieces_range();
+                let prev_file = self
+                    .pending_files
+                    .files
+                    .iter()
+                    .find(|f| f.end_piece == file_range.start);
+                let next_file = self
+                    .pending_files
+                    .files
+                    .iter()
+                    .find(|f| f.start_piece == file_range.end);
+
+                let mut active_range = file_range;
+
+                if !prev_file.is_some_and(|f| !f.priority.is_disabled()) {
+                    active_range.start += 1;
+                }
+                if !next_file.is_some_and(|f| !f.priority.is_disabled()) {
+                    active_range.end -= 1;
+                }
+
+                for piece in active_range.clone() {
+                    if self.piece_table[piece].is_finished {
+                        continue;
                     }
-                    disabled
-                });
+                    for peer in &mut self.peers {
+                        if peer.bitfield.has(piece) {
+                            if is_disabled {
+                                peer.remove_interested();
+                            }
+                            if is_enabled {
+                                peer.add_interested();
+                            }
+                        }
+                    }
+                }
+
+                if is_disabled {
+                    // Keep priority of neighbor pieces
+                    if let Some(prev_file) = prev_file {
+                        self.piece_table[prev_file.end_piece].priority = prev_file.priority;
+                    }
+                    if let Some(next_file) = next_file {
+                        self.piece_table[next_file.start_piece].priority = next_file.priority;
+                    }
+
+                    // remove pending pieces that are now disabled
+                    // but keep border pieces that are not disabled
+                    self.pending_pieces.retain(|p| {
+                        // Keep pending pieces that are not disabled and border with disabled file
+                        if prev_file.is_some_and(|f| !f.priority.is_disabled() && f.end_piece == *p)
+                        {
+                            return true;
+                        }
+                        if next_file
+                            .is_some_and(|f| !f.priority.is_disabled() && f.start_piece == *p)
+                        {
+                            return true;
+                        }
+
+                        let piece_disabled = active_range.contains(p);
+                        if piece_disabled {
+                            self.piece_table[*p].pending_blocks = None;
+                        }
+                        !piece_disabled
+                    });
+                }
             }
+
             self.picker.rebuild_queue(&self.piece_table);
         };
     }
@@ -752,14 +816,13 @@ impl Scheduler {
     }
 
     /// Get progress percent and the amount of pending_pieces
-    pub fn percent_pending_pieces(&self) -> (f64, usize) {
-        let downloaded_pieces = self.downloaded_pieces;
-        let total_pieces = self.picker.len() + self.pending_pieces.len() + downloaded_pieces;
-        let pending_pieces = self.pending_pieces.len();
-        (
-            downloaded_pieces as f64 / total_pieces as f64 * 100.,
-            pending_pieces,
-        )
+    pub fn percent_pending_pieces(&self) -> f32 {
+        let total_pieces = self.picker.len() + self.pending_pieces.len() + self.downloaded_pieces;
+        // Happens when all pieces are being saved at the same time.
+        if total_pieces == 0 {
+            return 100.;
+        }
+        self.downloaded_pieces as f32 / total_pieces as f32 * 100.
     }
 
     pub fn strategy(&self) -> ScheduleStrategy {

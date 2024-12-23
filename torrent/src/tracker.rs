@@ -25,6 +25,7 @@ use crate::{
 
 pub const ID: [u8; 20] = *b"00112233445566778899";
 pub const PORT: u16 = 6881;
+pub const ANNOUNCE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct AnnounceResult {
@@ -392,10 +393,19 @@ impl Tracker {
                             if stat.left == 0 {
                                 self.announce_payload.event = TrackerEvent::Completed;
                             }
-                            match self.announce().await {
-                                Ok(_) => {},
-                                Err(e) => {
+                            match tokio::time::timeout(ANNOUNCE_TIMEOUT, self.announce()).await {
+                                Ok(Ok(_)) => {},
+                                Ok(Err(e)) => {
+                                    tracing::warn!(url = %self.url, "Announce request failed: {e}");
                                     self.send_response(TrackerResponse::Failure{ reason: e.to_string() }).await?;
+                                },
+                                Err(_) => {
+                                    tracing::warn!(url = %self.url, "Announce request timed out");
+                                    self.send_response(
+                                        TrackerResponse::Failure {
+                                            reason: format!("Tracker announce timed out") }
+                                    )
+                                    .await?;
                                 }
                             };
                         },

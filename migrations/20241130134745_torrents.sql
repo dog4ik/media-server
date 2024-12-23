@@ -1,8 +1,14 @@
 CREATE TABLE IF NOT EXISTS torrents(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
-                                    bencoded_info BLOB NOT NULL,
-                                    bitfield BLOB NOT NULL, 
-                                    save_location TEXT NOT NULL, 
-                                    enabled_files BLOB NOT NULL, 
-                                    trackers TEXT NOT NULL,
-                                    info_hash BLOB NOT NULL,
-                                    added_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+  bencoded_info BLOB NOT NULL,
+  bitfield BLOB NOT NULL, 
+  save_location TEXT NOT NULL, 
+  trackers TEXT NOT NULL,
+  info_hash BLOB NOT NULL UNIQUE,
+  added_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS torrent_files(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  torrent_id INTEGER NOT NULL,
+  priority INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
+  relative_path TEXT NOT NULL,
+  FOREIGN KEY (torrent_id) REFERENCES torrents (id) ON DELETE CASCADE);

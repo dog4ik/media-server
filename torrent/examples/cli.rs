@@ -6,8 +6,7 @@ use std::{
 use clap::{ArgGroup, Parser, Subcommand};
 use tokio::sync::mpsc;
 use torrent::{
-    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink,
-    TorrentFile,
+    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink, StateChange, TorrentFile
 };
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -91,8 +90,6 @@ fn show_progress(p: DownloadProgress) {
     println!("");
     println!("Progress: {}", p.percent);
     println!("Total Peers: {}", p.peers.len());
-    println!("Pending pieces: {}", p.pending_pieces);
-    println!("Download state: {}", p.state);
     println!(
         "TOTAL DOWNLOAD SPEED: {} mb",
         bytes_in_mb(total_download_speed)
@@ -152,7 +149,11 @@ async fn main() {
             loop {
                 tokio::select! {
                     Some(progress) = rx.recv() => {
-                        if progress.state == DownloadState::Seeding {
+                        if progress
+                            .changes
+                            .iter()
+                            .any(|p| *p == StateChange::DownloadStateChange(DownloadState::Seeding))
+                        {
                             break;
                         }
                         show_progress(progress);

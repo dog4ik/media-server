@@ -3,7 +3,7 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use axum::extract::{Multipart, Path, Query};
+use axum::extract::{Path, Query};
 use axum::http::StatusCode;
 use axum::{
     extract::State,
@@ -21,11 +21,10 @@ use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
-use torrent::{DownloadParams, MagnetLink, TorrentFile};
 use tracing::info;
 use uuid::Uuid;
 
-use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
+use super::{ContentTypeQuery, ProviderQuery, StringIdQuery};
 use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
@@ -40,10 +39,6 @@ use crate::metadata::{
     SeasonMetadata, ShowMetadata,
 };
 use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
-use crate::torrent::{
-    DownloadContentHint, ResolveMagnetLinkPayload, TorrentClient, TorrentDownloadPayload,
-    TorrentInfo,
-};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 /// Perform full library refresh
@@ -780,63 +775,6 @@ pub async fn reset_server_configuration() -> Result<(), AppError> {
     Ok(())
 }
 
-/// Parse .torrent file
-#[utoipa::path(
-    post,
-    path = "/api/torrent/parse_torrent_file",
-    params(
-        OptionalContentTypeQuery,
-    ),
-    responses(
-        (status = 200, body = TorrentInfo),
-        (status = 400, description = "Failed to parse torrent file"),
-    ),
-    tag = "Torrent",
-)]
-pub async fn parse_torrent_file(
-    State(providers_stack): State<&'static MetadataProvidersStack>,
-    Query(hint): Query<Option<DownloadContentHint>>,
-    mut multipart: Multipart,
-) -> Result<Json<TorrentInfo>, AppError> {
-    if let Ok(Some(field)) = multipart.next_field().await {
-        let data = field.bytes().await.unwrap();
-        let torrent_file =
-            TorrentFile::from_bytes(data).map_err(|x| AppError::bad_request(x.to_string()))?;
-        let torrent_info = TorrentInfo::new(&torrent_file.info, hint, providers_stack).await;
-        return Ok(Json(torrent_info));
-    }
-    Err(AppError::bad_request("Failed to handle multipart request"))
-}
-
-/// Resolve magnet link
-#[utoipa::path(
-    get,
-    path = "/api/torrent/resolve_magnet_link",
-    params(
-        ResolveMagnetLinkPayload,
-        ("content_type" = Option<ContentType>, Query, description = "Content type"),
-        ("metadata_provider" = Option<crate::metadata::MetadataProvider>, Query, description = "Metadata provider"),
-        ("metadata_id" = Option<String>, Query, description = "Metadata id"),
-    ),
-    responses(
-        (status = 200, body = TorrentInfo),
-        (status = 400, description = "Failed to parse magnet link"),
-    ),
-    tag = "Torrent",
-)]
-pub async fn resolve_magnet_link(
-    State(client): State<&'static TorrentClient>,
-    State(providers_stack): State<&'static MetadataProvidersStack>,
-    Query(payload): Query<ResolveMagnetLinkPayload>,
-    hint: Option<Query<DownloadContentHint>>,
-) -> Result<Json<TorrentInfo>, AppError> {
-    let magnet_link = MagnetLink::from_str(&payload.magnet_link)
-        .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
-    let info = client.resolve_magnet_link(&magnet_link).await?;
-    let torrent_info = TorrentInfo::new(&info, hint.map(|x| x.0), providers_stack).await;
-    Ok(Json(torrent_info))
-}
-
 #[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderType {
@@ -1281,64 +1219,6 @@ pub async fn detect_intros(
             tracing::warn!("Could not detect intro for video with id {id}");
         }
     }
-    Ok(())
-}
-
-/// Download torrent
-#[utoipa::path(
-    post,
-    path = "/api/torrent/download",
-    request_body = TorrentDownloadPayload,
-    responses(
-        (status = 200),
-        (status = 400),
-    ),
-    tag = "Torrent",
-)]
-pub async fn download_torrent(
-    State(AppState {
-        providers_stack,
-        torrent_client,
-        ..
-    }): State<AppState>,
-    Json(payload): Json<TorrentDownloadPayload>,
-) -> Result<(), AppError> {
-    let magnet_link = MagnetLink::from_str(&payload.magnet_link)
-        .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
-    let tracker_list = magnet_link.all_trackers().ok_or(AppError::bad_request(
-        "Magnet links without tracker list are not supported",
-    ))?;
-    let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
-    let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
-
-    let enabled_files = payload
-        .enabled_files
-        .unwrap_or_else(|| (0..info.files_amount()).collect());
-    for enabled_idx in &enabled_files {
-        torrent_info.contents.files[*enabled_idx].enabled = true;
-    }
-    let save_location = payload
-        .save_location
-        .map(PathBuf::from)
-        .or_else(|| {
-            let content_type = torrent_info
-                .contents
-                .content
-                .as_ref()
-                .map(|c| c.content_type())?;
-            let folders = match content_type {
-                ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-                ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
-            };
-            folders
-                .into_iter()
-                .find(|f| f.try_exists().unwrap_or(false))
-        })
-        .ok_or(AppError::bad_request("Could not determine save location"))?;
-    tracing::debug!("Selected torrent output: {}", save_location.display());
-    let params = DownloadParams::empty(info, tracker_list, enabled_files, save_location);
-    torrent_client.add_torrent(params, torrent_info).await?;
-
     Ok(())
 }
 

@@ -46,6 +46,15 @@ mod utils;
 
 pub use download::DownloadHandle;
 pub use download::DownloadState;
+pub use download::FullState;
+pub use download::FullStateFile;
+pub use download::FullStatePeer;
+pub use download::FullStateTracker;
+pub use download::PeerDownloadStats;
+pub use download::StateChange;
+pub use download::DownloadMessage;
+pub use download::PeerStateChange;
+pub use download::Status;
 pub use file::MagnetLink;
 pub use file::TorrentFile;
 pub use peers::BitField;
