@@ -248,7 +248,7 @@ impl ActivePeer {
         Ok(())
     }
 
-    pub fn set_out_interset(&mut self, force: bool) -> anyhow::Result<()> {
+    pub fn set_out_interest(&mut self, force: bool) -> anyhow::Result<()> {
         match force {
             true => self.message_tx.try_send(PeerMessage::Interested)?,
             false => self.message_tx.try_send(PeerMessage::NotInterested)?,
@@ -320,16 +320,26 @@ impl ActivePeer {
 
     pub fn add_interested(&mut self) {
         if self.interested_pieces == 0 {
-            self.set_out_interset(true).unwrap();
+            self.set_out_interest(true).unwrap();
         }
         self.interested_pieces += 1;
     }
 
     pub fn remove_interested(&mut self) {
         if self.interested_pieces == 1 {
-            self.set_out_interset(false).unwrap();
+            self.set_out_interest(false).unwrap();
         }
         self.interested_pieces -= 1;
+    }
+
+    pub fn update_interested_amount(&mut self, amount: usize) {
+        self.interested_pieces = amount;
+        if amount == 0 && self.out_status.is_interested() {
+            self.set_out_interest(false).unwrap();
+        }
+        if amount > 0 && !self.out_status.is_interested() {
+            self.set_out_interest(true).unwrap();
+        }
     }
 }
 
@@ -734,7 +744,7 @@ impl Download {
         let pending_files = PendingFiles::from_output_files(
             info.piece_length,
             &output_files,
-            download_params.enabled_files,
+            download_params.files,
         );
 
         let stat = DownloadStat::new(&download_params.bitfield, &info);

@@ -20,7 +20,7 @@ async fn main() {
         bitfield: full_bitfield,
         trackers: torrent.all_trackers(),
         info: torrent.info,
-        enabled_files,
+        files,
         save_location: PathBuf::from(".").canonicalize().unwrap(),
     };
     let start = Instant::now();

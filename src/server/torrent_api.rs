@@ -217,13 +217,17 @@ pub async fn open_torrent(
     ))?;
     let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
     let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
-
+    let mut files_priorities = vec![torrent::Priority::Disabled; info.files_amount()];
     let enabled_files = payload
         .enabled_files
         .unwrap_or_else(|| (0..info.files_amount()).collect());
-    dbg!(&enabled_files);
     for enabled_idx in &enabled_files {
-        torrent_info.contents.files[*enabled_idx].enabled = true;
+        if let Some(file) = torrent_info.contents.files.get_mut(*enabled_idx) {
+            file.priority = Priority::Medium;
+        }
+        if let Some(priority) = files_priorities.get_mut(*enabled_idx) {
+            *priority = torrent::Priority::Medium;
+        }
     }
     let save_location = payload
         .save_location
@@ -244,7 +248,7 @@ pub async fn open_torrent(
         })
         .ok_or(AppError::bad_request("Could not determine save location"))?;
     tracing::debug!("Selected torrent output: {}", save_location.display());
-    let params = DownloadParams::empty(info, tracker_list, enabled_files, save_location);
+    let params = DownloadParams::empty(info, tracker_list, files_priorities, save_location);
     torrent_client.add_torrent(params, torrent_info).await?;
 
     Ok(StatusCode::CREATED)
@@ -289,7 +293,6 @@ pub async fn open_torrent_file(
     MultipartTorrent {
         save_location,
         torrent_file,
-        ..
     }: MultipartTorrent,
 ) -> Result<(), AppError> {
     let torrent_info = TorrentInfo::new(&torrent_file.info, None, app_state.providers_stack).await;
@@ -310,10 +313,12 @@ pub async fn open_torrent_file(
         })
         .ok_or(AppError::bad_request("Could not determine save location"))?;
 
-    let enabled_files = (0..torrent_file.info.files_amount()).collect();
+    let file_priorities = (0..torrent_file.info.files_amount())
+        .map(|_| torrent::Priority::default())
+        .collect();
     let trackers = torrent_file.all_trackers();
     let download_params =
-        DownloadParams::empty(torrent_file.info, trackers, enabled_files, save_location);
+        DownloadParams::empty(torrent_file.info, trackers, file_priorities, save_location);
 
     app_state
         .torrent_client

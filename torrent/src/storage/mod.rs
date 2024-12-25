@@ -148,9 +148,9 @@ pub enum StorageFeedback {
 
 impl TorrentStorage {
     pub fn new(feedback_tx: mpsc::Sender<StorageFeedback>, torrent_params: DownloadParams) -> Self {
+        let enabled_files = torrent_params.enabled_files_bitfield();
         let info = torrent_params.info;
         let output_dir = torrent_params.save_location;
-        let enabled_files = torrent_params.enabled_files;
         let bitfield = torrent_params.bitfield;
         let s = sysinfo::System::new();
         let workers = s
@@ -158,10 +158,6 @@ impl TorrentStorage {
             .map_or(HASHER_WORKERS, |cores| cores / 2)
             .max(1);
         let output_files = info.output_files(&output_dir);
-        let mut files_bitfield = BitField::empty(output_files.len());
-        for enabled_idx in enabled_files {
-            files_bitfield.add(enabled_idx).unwrap();
-        }
         let hasher = Hasher::new(workers);
 
         Self {
@@ -172,7 +168,7 @@ impl TorrentStorage {
             total_length: info.total_size(),
             pieces: info.pieces.clone(),
             bitfield,
-            enabled_files: files_bitfield,
+            enabled_files,
             file_handles: FileHandles::new(),
             hasher,
         }

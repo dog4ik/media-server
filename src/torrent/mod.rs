@@ -38,13 +38,30 @@ impl From<torrent::Status> for Status {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Default, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Priority {
     Disabled = 0,
     Low = 1,
+    #[default]
     Medium = 2,
     High = 3,
+}
+
+impl TryFrom<usize> for Priority {
+    type Error = anyhow::Error;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Disabled),
+            1 => Ok(Self::Low),
+            2 => Ok(Self::Medium),
+            3 => Ok(Self::High),
+            _ => Err(anyhow::format_err!(
+                "expected priority number to be 0..4, got {value}"
+            )),
+        }
+    }
 }
 
 impl From<torrent::Priority> for Priority {
@@ -429,9 +446,9 @@ impl TorrentManager for Db {
                 bitfield,
                 info,
                 trackers,
-                enabled_files: files
+                files: files
                     .iter()
-                    .filter_map(|f| (f.priority != 0).then_some(f.idx as usize))
+                    .map(|f| Priority::try_from(f.priority as usize).unwrap().into())
                     .collect(),
                 save_location: torrent.save_location.into(),
             })
@@ -599,7 +616,7 @@ impl TorrentClient {
                 .enumerate()
             {
                 let mut resolved_file = ResolvedTorrentFile::from_output_file(&file, file_offset);
-                resolved_file.enabled = torrent.enabled_files.contains(&i);
+                resolved_file.priority = torrent.files[i].into();
                 files.push(resolved_file);
                 file_offset += file.length();
             }
@@ -722,7 +739,7 @@ impl TorrentClient {
             .files
             .get_mut(idx)
             .context("get torrent file")?;
-        file.enabled = !priority.is_disabled();
+        file.priority = priority.into();
         Ok(())
     }
 
@@ -815,7 +832,7 @@ pub struct ResolvedTorrentFile {
     pub offset: u64,
     pub size: u64,
     pub path: Vec<String>,
-    pub enabled: bool,
+    pub priority: Priority,
 }
 
 impl ResolvedTorrentFile {
@@ -824,7 +841,7 @@ impl ResolvedTorrentFile {
             offset,
             size: output_file.length(),
             path: path_components(output_file.path()),
-            enabled: false,
+            priority: Priority::Disabled,
         }
     }
 }
