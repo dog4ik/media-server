@@ -727,7 +727,7 @@ where
                 r#"SELECT episodes.* FROM episodes
             JOIN shows ON shows.id = seasons.show_id
             JOIN seasons ON seasons.id = episodes.season_id
-            WHERE show_id = ? AND seasons.number = ?;"#,
+            WHERE show_id = ? AND seasons.number = ? ORDER BY episodes.number;"#,
                 show_id,
                 season,
             )
