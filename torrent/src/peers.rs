@@ -1,16 +1,12 @@
 use std::{fmt::Display, net::SocketAddr, time::Duration};
 
 use anyhow::{anyhow, ensure, Context};
-use bytes::BytesMut;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
 };
 use tokio_stream::StreamExt;
-use tokio_util::{
-    codec::{Encoder, Framed},
-    sync::CancellationToken,
-};
+use tokio_util::{codec::Framed, sync::CancellationToken};
 use uuid::Uuid;
 
 use crate::protocol::{
@@ -140,18 +136,11 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let my_handshake = ExtensionHandshake::my_handshake();
-            let mut framer = MessageFramer;
-            let mut my_handshake_bytes = BytesMut::new();
-            framer.encode(
-                PeerMessage::ExtensionHandshake {
-                    payload: my_handshake,
-                },
-                &mut my_handshake_bytes,
-            )?;
+            let payload = ExtensionHandshake::my_handshake();
+            let message = PeerMessage::ExtensionHandshake { payload };
             let socket = messages_stream.get_mut();
-            socket
-                .write_all(&my_handshake_bytes)
+            message
+                .write_to(socket)
                 .await
                 .context("write my extension handshake")?;
 
@@ -225,18 +214,11 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let my_handshake = ExtensionHandshake::my_handshake();
-            let mut framer = MessageFramer;
-            let mut my_handshake_bytes = BytesMut::new();
-            framer.encode(
-                PeerMessage::ExtensionHandshake {
-                    payload: my_handshake,
-                },
-                &mut my_handshake_bytes,
-            )?;
+            let payload = ExtensionHandshake::my_handshake();
+            let message = PeerMessage::ExtensionHandshake { payload };
             let socket = messages_stream.get_mut();
-            socket
-                .write_all(&my_handshake_bytes)
+            message
+                .write_to(socket)
                 .await
                 .context("write my extension handshake")?;
 
@@ -382,14 +364,9 @@ impl Peer {
     }
 
     pub async fn send_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
-        let mut framer = MessageFramer;
-        let mut buf = BytesMut::new();
         let msg_description = peer_msg.to_string();
-        framer
-            .encode(peer_msg, &mut buf)
-            .expect("our own message to encode");
         let socket = self.stream.get_mut();
-        match tokio::time::timeout(Duration::from_secs(2), socket.write_all(&buf)).await {
+        match tokio::time::timeout(Duration::from_secs(2), peer_msg.write_to(socket)).await {
             Ok(Ok(_)) => Ok(()),
             Err(_) => {
                 tracing::debug!("Peer write timed out");
