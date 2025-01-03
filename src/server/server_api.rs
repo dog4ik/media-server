@@ -1828,7 +1828,7 @@ pub async fn cancel_transcode_task(
     get,
     path = "/api/tasks/transcode",
     responses(
-        (status = 200, body = Vec<Task<TranscodeJob>>),
+        (status = 200, body = inline(Vec<Task<TranscodeJob>>)),
     ),
     tag = "Tasks",
 )]
@@ -1866,7 +1866,7 @@ pub async fn cancel_previews_task(
     get,
     path = "/api/tasks/previews",
     responses(
-        (status = 200, body = Vec<Task<PreviewsJob>>),
+        (status = 200, body = inline(Vec<Task<PreviewsJob>>))
     ),
     tag = "Tasks",
 )]
