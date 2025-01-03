@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use connection_manager::MediaServerConnectionManager;
 use content_directory::MediaServerContentDirectory;
 use tokio_util::sync::CancellationToken;
@@ -80,6 +81,27 @@ async fn run_retry_ssdp(
     }
 }
 
+async fn recreate_uuid() -> anyhow::Result<uuid::Uuid> {
+    use time::OffsetDateTime;
+    use tokio::fs;
+    use uuid::Context;
+    use uuid::Timestamp;
+
+    let db = fs::metadata(&config::APP_RESOURCES.database_path).await?;
+    let created_date = db.created()?;
+    let date = OffsetDateTime::from(created_date);
+    let s = sysinfo::Networks::new_with_refreshed_list();
+    let mac = s
+        .values()
+        .find(|n| n.mac_address().0 != [0; 6])
+        .context("find network mac address")?;
+    let mac = &mac.mac_address().0;
+
+    let ctx = Context::new(0);
+    let ts = Timestamp::from_unix(ctx, date.second() as u64, date.nanosecond());
+    Ok(uuid::Uuid::new_v1(ts, mac))
+}
+
 impl Upnp {
     pub async fn init(app_state: AppState) -> Self {
         let os = &config::APP_RESOURCES.os;
@@ -89,6 +111,13 @@ impl Upnp {
         let tracker = app_state.tasks.tracker.clone();
         let port: config::Port = config::CONFIG.get_value();
         let ttl: config::UpnpTtl = config::CONFIG.get_value();
+
+        let uuid = recreate_uuid().await.unwrap_or_else(|_| {
+            tracing::error!("Failed to recreate uuid, using random one");
+            uuid::Uuid::new_v4()
+        });
+
+        tracing::debug!("Server uuid: {uuid}");
 
         let config = upnp::ssdp::SsdpListenerConfig {
             location_port: port.0,
@@ -100,11 +129,12 @@ impl Upnp {
                 product: config::AppResources::APP_NAME,
                 product_version,
             },
+            uuid,
         };
 
         tracker.spawn(run_retry_ssdp(config, cancellation_token));
 
-        let mut router = upnp::router::UpnpRouter::new("/upnp");
+        let mut router = upnp::router::UpnpRouter::new("/upnp", "Media server", uuid);
         match utils::local_addr().await {
             Ok(local_addr) => {
                 let server_location = format!("http://{}:{}", local_addr.ip(), port.0);

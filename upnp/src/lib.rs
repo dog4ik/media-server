@@ -13,8 +13,6 @@ pub mod ssdp;
 pub mod templates;
 mod urn;
 
-pub const SERVER_UUID: uuid::Uuid = uuid::uuid!("8bbd544b-5a70-4491-89ac-e89476ebb3e9");
-
 pub trait XmlReaderExt {
     fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event>;
     fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart>;

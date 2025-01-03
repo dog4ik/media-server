@@ -34,7 +34,7 @@ axum = { workspace = true, features = ["macros", "tracing", "multipart"] }
 axum-extra = { workspace = true, features = ["typed-header"] }
 time = { workspace = true, features = ["serde", "parsing"] }
 tracing = { workspace = true }
-uuid = { workspace = true, features = ["v4", "serde"] }
+uuid = { workspace = true, features = ["v4", "v1", "serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["serde_derive"] }
 rand = { workspace = true }

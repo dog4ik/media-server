@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::IntoXml;
 
-use super::{templates::SpecVersion, SERVER_UUID};
+use super::templates::SpecVersion;
 
 #[derive(Debug)]
 pub struct DeviceDescription<'a> {
@@ -37,7 +37,7 @@ impl DeviceDescription<'_> {
 }
 
 impl DeviceDescription<'_> {
-    pub fn new(friendly_name: String) -> Self {
+    pub fn new(friendly_name: String, uuid: uuid::Uuid) -> Self {
         Self {
             config_id: "9999",
             spec_version: SpecVersion::upnp_v1_1(),
@@ -51,7 +51,7 @@ impl DeviceDescription<'_> {
                 model_name: "Media server",
                 model_number: Some("1.0"),
                 model_url: Some("https://github.com/dog4ik/media-server"),
-                udn: UDN::new(SERVER_UUID),
+                udn: UDN::new(uuid),
                 icon_list: vec![
                     Icon {
                         mimetype: "image/webp",
@@ -78,12 +78,6 @@ impl DeviceDescription<'_> {
                 service_list: vec![Service::content_directory(), Service::connection_manager()],
             },
         }
-    }
-}
-
-impl Default for DeviceDescription<'_> {
-    fn default() -> Self {
-        Self::new("Media server".into())
     }
 }
 

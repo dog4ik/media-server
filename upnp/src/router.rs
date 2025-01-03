@@ -32,18 +32,18 @@ use super::{
     service::Service,
 };
 
-async fn serve_description() -> (HeaderMap, String) {
-    tracing::debug!("Serving device description");
-    let desc = device_description::DeviceDescription::new("Media server".into());
-    let mut headers = HeaderMap::new();
-    headers.typed_insert(headers::ContentType::xml());
-    (headers, desc.into_xml().unwrap())
-}
-
 pub const DESC_PATH: &str = "/devicedesc.xml";
 
 impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
-    pub fn new(path: &str) -> Self {
+    pub fn new(path: &str, name: &'static str, uuid: uuid::Uuid) -> Self {
+        let desc = device_description::DeviceDescription::new(name.to_owned(), uuid);
+        let desc = std::sync::Arc::new(desc);
+        let serve_description = move || async move {
+            tracing::debug!("Serving device description");
+            let mut headers = HeaderMap::new();
+            headers.typed_insert(headers::ContentType::xml());
+            (headers, desc.into_xml().unwrap())
+        };
         let router = Router::new().route(DESC_PATH, get(serve_description));
         Self {
             path: path.to_string(),
