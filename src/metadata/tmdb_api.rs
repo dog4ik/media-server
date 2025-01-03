@@ -396,7 +396,7 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl MovieMetadataProvider for TmdbApi {
     async fn movie(
         &self,
@@ -414,7 +414,7 @@ impl MovieMetadataProvider for TmdbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl ShowMetadataProvider for TmdbApi {
     async fn show(
         &self,
@@ -456,7 +456,7 @@ impl ShowMetadataProvider for TmdbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl DiscoverMetadataProvider for TmdbApi {
     async fn multi_search(
         &self,

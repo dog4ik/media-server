@@ -124,7 +124,6 @@ impl MultipartTorrent {
     }
 }
 
-#[axum::async_trait]
 impl<S> FromRequest<S> for MultipartTorrent
 where
     S: Send + Sync,
@@ -344,15 +343,15 @@ pub async fn open_torrent_file(
     tag = "Torrent",
 )]
 pub async fn resolve_magnet_link(
-    State(client): State<&'static TorrentClient>,
-    State(providers_stack): State<&'static MetadataProvidersStack>,
+    State(app_state): State<AppState>,
     Query(payload): Query<ResolveMagnetLinkPayload>,
-    hint: Option<Query<DownloadContentHint>>,
 ) -> Result<Json<TorrentInfo>, AppError> {
+    let client = app_state.torrent_client;
+    let providers_stack = app_state.providers_stack;
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
         .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
     let info = client.resolve_magnet_link(&magnet_link).await?;
-    let torrent_info = TorrentInfo::new(&info, hint.map(|x| x.0), providers_stack).await;
+    let torrent_info = TorrentInfo::new(&info, payload.hint, providers_stack).await;
     Ok(Json(torrent_info))
 }
 

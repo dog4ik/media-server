@@ -825,6 +825,7 @@ pub struct TorrentDownloadPayload {
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
 pub struct ResolveMagnetLinkPayload {
     pub magnet_link: String,
+    pub hint: Option<DownloadContentHint>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

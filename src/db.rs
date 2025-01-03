@@ -1057,7 +1057,7 @@ impl Db {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl ShowMetadataProvider for Db {
     async fn show(
         &self,
@@ -1093,7 +1093,7 @@ impl ShowMetadataProvider for Db {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl MovieMetadataProvider for Db {
     async fn movie(
         &self,
@@ -1108,7 +1108,7 @@ impl MovieMetadataProvider for Db {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl DiscoverMetadataProvider for Db {
     async fn multi_search(
         &self,

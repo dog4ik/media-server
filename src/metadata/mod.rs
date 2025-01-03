@@ -144,7 +144,7 @@ impl Display for MetadataImage {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 pub trait MovieMetadataProvider {
     /// Query for movie
     #[allow(async_fn_in_trait)]
@@ -158,7 +158,7 @@ pub trait MovieMetadataProvider {
     fn provider_identifier(&self) -> &'static str;
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 pub trait ShowMetadataProvider {
     /// Query for show
     #[allow(async_fn_in_trait)]
@@ -191,7 +191,7 @@ pub trait ShowMetadataProvider {
     fn provider_identifier(&self) -> &'static str;
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 pub trait DiscoverMetadataProvider {
     /// Multi search
     async fn multi_search(

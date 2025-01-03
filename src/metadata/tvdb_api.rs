@@ -156,7 +156,7 @@ impl TvdbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl MovieMetadataProvider for TvdbApi {
     async fn movie(
         &self,
@@ -176,7 +176,7 @@ impl MovieMetadataProvider for TvdbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl ShowMetadataProvider for TvdbApi {
     async fn show(
         &self,
@@ -252,7 +252,7 @@ impl ShowMetadataProvider for TvdbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl DiscoverMetadataProvider for TvdbApi {
     async fn multi_search(
         &self,

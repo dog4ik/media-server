@@ -23,7 +23,7 @@ pub struct Torrent {
     pub imdb_id: String,
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 pub trait TorrentIndex {
     async fn search_torrent(&self, query: &str) -> Result<Vec<Torrent>, AppError>;
     fn provider_identifier(&self) -> &'static str;

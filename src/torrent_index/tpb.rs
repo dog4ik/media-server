@@ -50,7 +50,7 @@ impl TpbApi {
     }
 }
 
-#[axum::async_trait]
+#[async_trait::async_trait]
 impl TorrentIndex for TpbApi {
     async fn search_torrent(&self, query: &str) -> Result<Vec<super::Torrent>, AppError> {
         Ok(self
