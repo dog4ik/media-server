@@ -1,5 +1,7 @@
 use tokio::sync::mpsc;
-use torrent::{Client, ClientConfig, DownloadParams, DownloadState, StateChange, TorrentFile};
+use torrent::{
+    Client, ClientConfig, DownloadParams, DownloadState, Priority, StateChange, TorrentFile,
+};
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
 
@@ -14,7 +16,12 @@ async fn main() {
     let torrent_file = TorrentFile::from_path("sample.torrent").expect("Torrent file to exist");
     let (tx, mut rx) = mpsc::channel(100);
     let tracker_list = torrent_file.all_trackers();
-    let resume_data = DownloadParams::empty(torrent_file.info, tracker_list, vec![0], ".".into());
+    let resume_data = DownloadParams::empty(
+        torrent_file.info,
+        tracker_list,
+        vec![Priority::default()],
+        ".".into(),
+    );
     client.open(resume_data, tx).await.unwrap();
     while let Some(progress) = rx.recv().await {
         println!("Progress: {}", progress.percent);

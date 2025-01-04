@@ -16,7 +16,7 @@ use peer_listener::{NewPeer, PeerListener};
 use peers::Peer;
 use reqwest::Url;
 pub use resumability::DownloadParams;
-use storage::TorrentStorage;
+use storage::{parts::PartsFile, TorrentStorage};
 use tokio::{
     net::TcpStream,
     sync::{mpsc, Semaphore},
@@ -46,15 +46,15 @@ mod tracker;
 mod utils;
 
 pub use download::DownloadHandle;
+pub use download::DownloadMessage;
 pub use download::DownloadState;
 pub use download::FullState;
 pub use download::FullStateFile;
 pub use download::FullStatePeer;
 pub use download::FullStateTracker;
 pub use download::PeerDownloadStats;
-pub use download::StateChange;
-pub use download::DownloadMessage;
 pub use download::PeerStateChange;
+pub use download::StateChange;
 pub use download::Status;
 pub use file::MagnetLink;
 pub use file::TorrentFile;
@@ -138,7 +138,8 @@ impl Client {
         .await;
 
         self.peer_listener.subscribe(hash, peers_tx.clone()).await;
-        let storage = TorrentStorage::new(feedback_tx, params.clone());
+        let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
+        let storage = TorrentStorage::new(feedback_tx, parts_file, params.clone());
         let storage_handle = storage
             .spawn(&self.task_tracker, child_token.clone())
             .await?;
@@ -157,7 +158,8 @@ impl Client {
 
     pub async fn validate(&self, params: DownloadParams) -> anyhow::Result<BitField> {
         let (feedback_tx, _) = mpsc::channel(100);
-        let mut storage = TorrentStorage::new(feedback_tx, params.clone());
+        let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
+        let mut storage = TorrentStorage::new(feedback_tx, parts_file, params);
         storage.revalidate().await
     }
 

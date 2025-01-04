@@ -77,7 +77,7 @@ impl Payload {
         let result = utils::verify_iter_sha1(&self.hash, self.data.iter());
         match result {
             true => {
-                tracing::debug!(piece = self.piece_i, took = ?start.elapsed(), "Worker {idx} Verified hash");
+                tracing::trace!(piece = self.piece_i, took = ?start.elapsed(), "Worker {idx} Verified hash");
             }
             false => {
                 tracing::error!(piece = self.piece_i, took = ?start.elapsed(), "Worker {idx} failed to verify hash");

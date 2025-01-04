@@ -1,6 +1,6 @@
 use std::{path::PathBuf, time::Instant};
 
-use torrent::{BitField, Client, ClientConfig, DownloadParams, TorrentFile};
+use torrent::{BitField, Client, ClientConfig, DownloadParams, Priority, TorrentFile};
 
 #[tokio::main]
 async fn main() {
@@ -11,11 +11,11 @@ async fn main() {
     let torrent = include_bytes!("../sample.torrent");
     let torrent = TorrentFile::from_bytes(torrent).unwrap();
     let total_pieces = torrent.info.pieces.len();
-    let enabled_files = (0..torrent.info.files_amount()).into_iter().collect();
     let mut full_bitfield = BitField::empty(total_pieces);
     for piece in 0..torrent.info.pieces.len() {
         full_bitfield.add(piece).unwrap();
     }
+    let files = vec![Priority::default(); torrent.info.files_amount()];
     let params = DownloadParams {
         bitfield: full_bitfield,
         trackers: torrent.all_trackers(),
@@ -25,10 +25,7 @@ async fn main() {
     };
     let start = Instant::now();
     let validated_bitfield = client.validate(params).await.unwrap();
-    println!(
-        "Validation took: {:?}",
-        start.elapsed()
-    );
+    println!("Validation took: {:?}", start.elapsed());
     if validated_bitfield.is_full(total_pieces) {
         println!("Torrent contents are valid!")
     }

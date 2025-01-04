@@ -1,5 +1,5 @@
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     fmt::Display,
     io::Write,
     net::SocketAddr,
@@ -22,7 +22,7 @@ use crate::{
         pex::{PexEntry, PexHistory, PexHistoryEntry, PexMessage},
         ut_metadata::UtMessage,
     },
-    scheduler::{PendingFiles, Scheduler},
+    scheduler::{self, PendingFiles, Scheduler},
     seeder::Seeder,
     storage::{StorageFeedback, StorageHandle},
     tracker::{DownloadStat, DownloadTracker, TrackerStatus},
@@ -66,16 +66,6 @@ impl DownloadHandle {
     /// Resume download
     pub async fn resume(&self) -> anyhow::Result<()> {
         self.download_tx.send(DownloadMessage::Resume).await?;
-        Ok(())
-    }
-
-    /// Notify scheduler about desired piece
-    pub async fn ask_piece(&self, piece: usize) -> anyhow::Result<()> {
-        self.download_tx
-            .send(DownloadMessage::SetStrategy(ScheduleStrategy::Request(
-                piece,
-            )))
-            .await?;
         Ok(())
     }
 
@@ -180,7 +170,56 @@ impl Default for PerformanceHistory {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
+pub struct InterestedPieces {
+    bf: BitField,
+    interested_amount: usize,
+}
+
+impl InterestedPieces {
+    pub fn new(piece_table: &Vec<scheduler::SchedulerPiece>, peer_bf: &BitField) -> Self {
+        let bf = BitField::empty(piece_table.len());
+
+        let mut this = Self {
+            bf,
+            interested_amount: 0,
+        };
+        this.recalculate(piece_table, peer_bf);
+        this
+    }
+
+    pub fn amount(&self) -> usize {
+        self.interested_amount
+    }
+
+    pub fn recalculate(&mut self, piece_table: &[scheduler::SchedulerPiece], peer_bf: &BitField) {
+        self.interested_amount = 0;
+        for (i, piece) in piece_table.iter().enumerate() {
+            if !piece.is_finished && !piece.priority.is_disabled() && peer_bf.has(i) {
+                self.interested_amount += 1;
+                self.bf.add(i).unwrap();
+            } else {
+                self.bf.remove(i).unwrap();
+            }
+        }
+    }
+
+    pub fn add_piece(&mut self, piece: usize) {
+        if !self.bf.has(piece) {
+            self.interested_amount += 1;
+            self.bf.add(piece).unwrap();
+        }
+    }
+
+    pub fn remove_piece(&mut self, piece: usize) {
+        if self.bf.has(piece) {
+            self.interested_amount -= 1;
+            self.bf.remove(piece).unwrap();
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct ActivePeer {
     pub id: Uuid,
     pub ip: SocketAddr,
@@ -201,7 +240,7 @@ pub struct ActivePeer {
     pub pex_idx: usize,
     pub last_pex_message_time: Instant,
     pub cancellation_token: CancellationToken,
-    interested_pieces: usize,
+    pub interested_pieces: InterestedPieces,
     #[allow(unused)]
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
@@ -214,6 +253,7 @@ impl ActivePeer {
         message_tx: flume::Sender<PeerMessage>,
         message_rx: flume::Receiver<PeerMessage>,
         peer: &Peer,
+        interested_pieces: InterestedPieces,
         pex_idx: usize,
         cancellation_token: CancellationToken,
     ) -> Self {
@@ -231,7 +271,7 @@ impl ActivePeer {
             pex_idx,
             last_pex_message_time: Instant::now(),
             cancellation_token,
-            interested_pieces: 0,
+            interested_pieces,
             handshake: peer.handshake.clone(),
             extension_handshake: peer.extension_handshake.clone(),
             pending_blocks: 0,
@@ -318,22 +358,23 @@ impl ActivePeer {
         self.cancellation_token.cancel();
     }
 
-    pub fn add_interested(&mut self) {
-        if self.interested_pieces == 0 {
+    pub fn add_interested(&mut self, piece: usize) {
+        self.interested_pieces.add_piece(piece);
+        if self.interested_pieces.amount() > 1 && !self.out_status.is_interested() {
             self.set_out_interest(true).unwrap();
         }
-        self.interested_pieces += 1;
     }
 
-    pub fn remove_interested(&mut self) {
-        if self.interested_pieces == 1 {
+    pub fn remove_interested(&mut self, piece: usize) {
+        self.interested_pieces.remove_piece(piece);
+        if self.interested_pieces.amount() == 0 && self.out_status.is_interested() {
             self.set_out_interest(false).unwrap();
         }
-        self.interested_pieces -= 1;
     }
 
-    pub fn update_interested_amount(&mut self, amount: usize) {
-        self.interested_pieces = amount;
+    pub fn recalculate_interested_amount(&mut self, table: &[scheduler::SchedulerPiece]) {
+        self.interested_pieces.recalculate(table, &self.bitfield);
+        let amount = self.interested_pieces.amount();
         if amount == 0 && self.out_status.is_interested() {
             self.set_out_interest(false).unwrap();
         }
@@ -710,7 +751,6 @@ pub struct Download {
     new_peers: mpsc::Receiver<NewPeer>,
     new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
     pending_new_peers_ips: HashSet<SocketAddr>,
-    pending_retrieves: HashMap<usize, Vec<(Uuid, Block)>>,
     trackers: Vec<DownloadTracker>,
     scheduler: Scheduler,
     storage: StorageHandle,
@@ -757,7 +797,6 @@ impl Download {
             new_peers,
             new_peers_join_set: JoinSet::new(),
             pending_new_peers_ips: HashSet::new(),
-            pending_retrieves: HashMap::new(),
             trackers,
             info_hash,
             peers_handles: active_peers,
@@ -833,6 +872,9 @@ impl Download {
                     };
                     // NOTE: this is wrong. We should add it when we are sending requested block.
                     self.stat.uploaded += block.length as u64;
+                    let peer = &self.scheduler.peers[peer_idx];
+                    tracing::info!("Peer {} requested piece: {index}", peer.ip);
+                    self.seeder.request_block(block, peer.message_tx.clone());
                 }
                 PeerMessage::Piece {
                     index,
@@ -1116,10 +1158,12 @@ impl Download {
         self.pex_history
             .push_value(PexHistoryEntry::added(peer.ip()));
         let pex_tip = self.pex_history.tip();
+        let interested_pieces = InterestedPieces::new(&self.scheduler.piece_table, &peer.bitfield);
         let active_peer = ActivePeer::new(
             message_tx,
             peer_message_rx,
             &peer,
+            interested_pieces,
             pex_tip,
             child_token.clone(),
         );
@@ -1195,7 +1239,7 @@ impl Download {
                     ip: p.ip,
                     downloaded: p.downloaded,
                     uploaded: p.uploaded,
-                    interested_amount: p.interested_pieces,
+                    interested_amount: p.interested_pieces.amount(),
                     download_speed,
                     upload_speed,
                 }
@@ -1230,11 +1274,8 @@ impl Download {
                 self.scheduler.fail_piece(piece_i);
             }
             StorageFeedback::Data { piece_i, bytes } => {
-                let retrieves = self.pending_retrieves.remove(&piece_i).unwrap();
                 if let Some(bytes) = bytes {
-                    for (id, block) in retrieves {
-                        self.scheduler.send_block_to_peer(&id, block, bytes.clone())
-                    }
+                    self.seeder.handle_retrieve(piece_i, bytes.clone());
                 }
             }
         }
@@ -1258,12 +1299,13 @@ impl Download {
             DownloadMessage::SetFilePriority { file_idx, priority } => {
                 self.changes
                     .push(StateChange::FilePriorityChange { file_idx, priority });
-                self.scheduler.change_file_priority(file_idx, priority);
-                if priority == Priority::Disabled {
-                    self.storage.disable_file(file_idx).await;
-                } else {
-                    self.storage.enable_file(file_idx).await;
-                }
+                if self.scheduler.change_file_priority(file_idx, priority) {
+                    if priority == Priority::Disabled {
+                        self.storage.disable_file(file_idx).await;
+                    } else {
+                        self.storage.enable_file(file_idx).await;
+                    }
+                };
             }
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
@@ -1307,7 +1349,7 @@ impl Download {
                     .avg_down_speed_sec(&self.tick_duration),
                 in_status: p.in_status,
                 out_status: p.out_status,
-                interested_amount: p.interested_pieces,
+                interested_amount: p.interested_pieces.amount(),
             })
             .collect();
         let output_files = self.info.output_files("");

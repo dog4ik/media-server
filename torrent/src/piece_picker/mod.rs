@@ -90,7 +90,7 @@ impl Display for ScheduleStrategy {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, Eq, Ord, PartialEq, PartialOrd, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Ord, PartialOrd, serde::Serialize)]
 pub enum Priority {
     Disabled = 0,
     Low = 1,

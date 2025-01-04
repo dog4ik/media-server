@@ -6,7 +6,8 @@ use std::{
 use clap::{ArgGroup, Parser, Subcommand};
 use tokio::sync::mpsc;
 use torrent::{
-    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink, StateChange, TorrentFile
+    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink,
+    Priority, StateChange, TorrentFile,
 };
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -143,7 +144,16 @@ async fn main() {
             };
             let (tx, mut rx) = mpsc::channel(100);
             let output = output.unwrap_or(PathBuf::from("."));
-            let files = files.unwrap_or_else(|| (0..info.output_files(&output).len()).collect());
+            let files = files.map_or(
+                vec![Priority::default(); info.files_amount()],
+                |enabled_files| {
+                    let mut files = vec![Priority::Disabled; info.files_amount()];
+                    for enabled in enabled_files {
+                        files[enabled] = Priority::default();
+                    }
+                    files
+                },
+            );
             let torrent_params = DownloadParams::empty(info, announce_list, files, output);
             client.open(torrent_params, tx).await.unwrap();
             loop {

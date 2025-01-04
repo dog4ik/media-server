@@ -195,11 +195,12 @@ impl PendingPiece {
         self.blocks_queue.push(block);
     }
 
-    pub fn save_block(&mut self, data_block: DataBlock) -> anyhow::Result<()> {
+    pub fn save_block(&mut self, data_block: DataBlock, sender: Uuid) -> anyhow::Result<()> {
         ensure!(data_block.offset + data_block.len() as u32 <= self.piece_length);
 
         let index = data_block.offset / BLOCK_LENGTH;
         let block = &mut self.piece[index as usize];
+        block.scheduled_to.retain(|id| *id != sender);
         if block.data.is_none() {
             block.data = Some(data_block.block);
             self.saved_amount += 1;
@@ -313,6 +314,7 @@ impl Scheduler {
             }
         }
         let picker = PiecePicker::new(&piece_table);
+        let downloaded_pieces = piece_table.iter().filter(|p| p.is_finished).count();
         Self {
             piece_size: t.piece_length,
             ut_metadata,
@@ -323,7 +325,7 @@ impl Scheduler {
             pending_files,
             piece_table,
             pending_pieces: Vec::new(),
-            downloaded_pieces: 0,
+            downloaded_pieces,
             sub_rational_amount: 0,
         }
     }
@@ -504,7 +506,7 @@ impl Scheduler {
         let peer = &mut self.peers[sender_idx];
         peer.downloaded += data_block.len() as u64;
         peer.pending_blocks -= 1;
-        match pending_blocks.save_block(data_block) {
+        match pending_blocks.save_block(data_block, peer.id) {
             Err(e) => {
                 // peer logic error
                 peer.cancel_peer();
@@ -551,22 +553,6 @@ impl Scheduler {
         }
     }
 
-    pub fn send_block_to_peer(&mut self, peer_id: &Uuid, block: Block, bytes: Bytes) {
-        if let Some(idx) = self.get_peer_idx(peer_id) {
-            let peer = &mut self.peers[idx];
-            let start = block.offset as usize;
-            let end = (block.offset + block.length) as usize;
-            peer.message_tx
-                .try_send(PeerMessage::Piece {
-                    begin: block.offset,
-                    index: block.piece,
-                    block: bytes.slice(start..end),
-                })
-                .unwrap();
-            peer.uploaded += block.length as u64;
-        }
-    }
-
     /// Add and announce piece to everyone
     pub fn add_piece(&mut self, piece: usize) {
         self.piece_table[piece].is_finished = true;
@@ -574,7 +560,7 @@ impl Scheduler {
         self.downloaded_pieces += 1;
         for peer in &mut self.peers {
             if peer.bitfield.has(piece) {
-                peer.remove_interested();
+                peer.remove_interested(piece);
             }
             let _ = peer.message_tx.try_send(PeerMessage::Have {
                 index: piece as u32,
@@ -644,10 +630,10 @@ impl Scheduler {
             return;
         }
         peer.bitfield.add(piece).expect("bounds checked above");
-        let piece = &mut self.piece_table[piece];
-        piece.rarity += 1;
-        if !piece.is_finished && piece.priority != Priority::Disabled {
-            peer.add_interested();
+        let scheduler_piece = &mut self.piece_table[piece];
+        scheduler_piece.rarity += 1;
+        if !scheduler_piece.is_finished && scheduler_piece.priority != Priority::Disabled {
+            peer.add_interested(piece);
         }
     }
 
@@ -672,11 +658,8 @@ impl Scheduler {
     }
 
     pub fn add_peer(&mut self, mut peer: ActivePeer) {
-        let interested_pieces = self.calculate_interested_amount(&peer);
-        for _ in 0..interested_pieces {
-            peer.add_interested();
-        }
-        if interested_pieces > 0 {
+        if peer.interested_pieces.amount() > 0 {
+            peer.set_out_interest(true).expect("channel is empty");
             // TODO: Proper choked implementation
             // peer.set_out_choke(false).unwrap();
         }
@@ -697,102 +680,92 @@ impl Scheduler {
         }
     }
 
-    pub fn calculate_interested_amount(&self, peer: &ActivePeer) -> usize {
-        self.piece_table
-            .iter()
-            .enumerate()
-            .filter(|(i, p)| {
-                p.priority != Priority::Disabled && !p.is_finished && peer.bitfield.has(*i)
-            })
-            .count()
-    }
-
-    pub fn change_file_priority(&mut self, idx: usize, new_priority: Priority) {
-        let Some((old, file)) = self.pending_files.change_file_priority(idx, new_priority) else {
-            return;
+    /// Returns whether new priority changed disabled state
+    pub fn change_file_priority(&mut self, idx: usize, new_priority: Priority) -> bool {
+        let Some((old_priority, file)) = self.pending_files.change_file_priority(idx, new_priority)
+        else {
+            return false;
         };
-        let is_disabled = !old.is_disabled() && new_priority.is_disabled();
-        let is_enabled = old.is_disabled() && !new_priority.is_disabled();
-
-        for piece in file.pieces_range() {
-            self.piece_table[piece].priority = file.priority;
-        }
-
+        let is_disabled = !old_priority.is_disabled() && new_priority.is_disabled();
+        let is_enabled = old_priority.is_disabled() && !new_priority.is_disabled();
         debug_assert!(!(is_enabled && is_disabled));
 
+        let prev_file = self
+            .pending_files
+            .files
+            .iter()
+            .find(|f| f.end_piece == file.start_piece);
+        let next_file = self
+            .pending_files
+            .files
+            .iter()
+            .find(|f| f.start_piece == file.end_piece);
+
+        for piece in file.pieces_range() {
+            self.piece_table[piece].priority = new_priority;
+        }
+
+        // Keep priority of neighbor pieces
+        if let Some(prev_file) = prev_file {
+            if prev_file.priority > new_priority {
+                self.piece_table[prev_file.end_piece].priority = prev_file.priority;
+            }
+        }
+        if let Some(next_file) = next_file {
+            if next_file.priority > new_priority {
+                self.piece_table[next_file.start_piece].priority = next_file.priority;
+            }
+        }
+
         if is_disabled || is_enabled {
-            let file_range = file.pieces_range();
-            let prev_file = self
-                .pending_files
-                .files
-                .iter()
-                .find(|f| f.end_piece == file.start_piece);
-            let next_file = self
-                .pending_files
-                .files
-                .iter()
-                .find(|f| f.start_piece == file.end_piece);
-
             for i in 0..self.peers.len() {
-                let peer = &self.peers[i];
-                let new_amount = self.calculate_interested_amount(peer);
                 let peer = &mut self.peers[i];
-                peer.update_interested_amount(new_amount);
+                peer.recalculate_interested_amount(&self.piece_table);
             }
 
-            if is_disabled {
-                // Keep priority of neighbor pieces
-                if let Some(prev_file) = prev_file {
-                    self.piece_table[prev_file.end_piece].priority = prev_file.priority;
-                }
-                if let Some(next_file) = next_file {
-                    self.piece_table[next_file.start_piece].priority = next_file.priority;
-                }
-
-                // remove pending pieces that are now disabled
-                // but keep border pieces that are not disabled
-                self.pending_pieces.retain(|p| {
-                    // Keep pending pieces that are not disabled and border with disabled file
-                    if prev_file.is_some_and(|f| !f.priority.is_disabled() && f.end_piece == *p) {
-                        return true;
-                    }
-                    if next_file.is_some_and(|f| !f.priority.is_disabled() && f.start_piece == *p) {
-                        return true;
-                    }
-
-                    let piece_disabled = file_range.contains(p);
-                    if piece_disabled {
-                        tracing::debug!("Cancelling piece {p}");
-                        let pending_blocks = self.piece_table[*p].pending_blocks.take().unwrap();
-                        if pending_blocks.is_sub_rational() {
-                            self.sub_rational_amount -= 1;
-                        }
-                        let blocks_amount = pending_blocks.piece.len();
-                        for (block_i, block) in pending_blocks.piece.into_iter().enumerate() {
-                            let begin = BLOCK_LENGTH * block_i as u32;
-                            let length = if block_i == blocks_amount - 1 {
-                                pending_blocks.piece_length - begin
-                            } else {
-                                BLOCK_LENGTH
-                            };
-                            let cancel_message = PeerMessage::Cancel {
-                                index: *p as u32,
-                                begin,
-                                length,
-                            };
-                            for id in block.scheduled_to {
-                                if let Some(peer) = self.peers.iter().find(|p| p.id == id) {
-                                    peer.message_tx.try_send(cancel_message.clone()).unwrap()
-                                }
-                            }
-                        }
-                    }
-                    !piece_disabled
-                });
-            }
+            //if is_disabled {
+            //    // remove pending pieces that are now disabled
+            //    // but keep border pieces that are not disabled
+            //    self.pending_pieces.retain(|p| {
+            //        // Keep pending pieces that are not disabled and border with disabled file
+            //
+            //        let piece_disabled = self.piece_table[*p].priority.is_disabled();
+            //        if piece_disabled {
+            //            tracing::debug!("Cancelling piece {p}");
+            //            let pending_blocks = self.piece_table[*p].pending_blocks.take().unwrap();
+            //            if pending_blocks.is_sub_rational() {
+            //                self.sub_rational_amount -= 1;
+            //            }
+            //            let blocks_amount = pending_blocks.piece.len();
+            //            for (block_i, block) in pending_blocks.piece.into_iter().enumerate() {
+            //                let begin = BLOCK_LENGTH * block_i as u32;
+            //                let length = if block_i == blocks_amount - 1 {
+            //                    pending_blocks.piece_length - begin
+            //                } else {
+            //                    BLOCK_LENGTH
+            //                };
+            //                let cancel_message = PeerMessage::Cancel {
+            //                    index: *p as u32,
+            //                    begin,
+            //                    length,
+            //                };
+            //                for id in block.scheduled_to {
+            //                    if let Some(peer) = self.peers.iter_mut().find(|p| p.id == id) {
+            //                        // BUG: we don't have guarantee that cancel will succeed.
+            //                        // This will cause subtract with overflow
+            //                        peer.pending_blocks -= 1;
+            //                        let _ = peer.message_tx.try_send(cancel_message.clone());
+            //                    }
+            //                }
+            //            }
+            //        }
+            //        !piece_disabled
+            //    });
+            //}
         }
 
         self.picker.rebuild_queue(&self.piece_table);
+        is_enabled || is_disabled
     }
 
     pub fn get_peer_idx(&self, peer_id: &Uuid) -> Option<usize> {

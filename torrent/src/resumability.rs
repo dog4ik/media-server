@@ -45,18 +45,4 @@ impl DownloadParams {
             save_location,
         }
     }
-
-    pub fn enabled_files_bitfield(&self) -> BitField {
-        let total_files = self.info.files_amount();
-        let mut bitfield = BitField::empty(total_files);
-        for enabled_file in self
-            .files
-            .iter()
-            .enumerate()
-            .filter_map(|(i, f)| (!f.is_disabled()).then_some(i))
-        {
-            bitfield.add(enabled_file).unwrap();
-        }
-        bitfield
-    }
 }
