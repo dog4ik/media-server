@@ -53,10 +53,13 @@ fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
 }
 
 async fn resolve_local_addr() -> anyhow::Result<SocketAddr> {
+    let google = Ipv4Addr::new(8, 8, 8, 8);
     // NOTE: this feels wrong. Find the better solution
     let socket =
         UdpSocket::bind(SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0))).await?;
-    socket.connect(SSDP_ADDR).await?;
+    socket
+        .connect(SocketAddr::V4(SocketAddrV4::new(google, 0)))
+        .await?;
     socket.local_addr().context("get local addr")
 }
 
