@@ -420,7 +420,7 @@ impl TorrentManager for Db {
             let db_file = DbTorrentFile {
                 id: None,
                 torrent_id,
-                priority: torrent::Priority::default() as usize as i64,
+                priority: params.files[i] as usize as i64,
                 idx: i as i64,
                 relative_path: path.to_string(),
             };
