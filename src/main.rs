@@ -11,7 +11,7 @@ use media_server::metadata::metadata_stack::MetadataProvidersStack;
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::tvdb_api::TvdbApi;
 use media_server::progress::TaskResource;
-use media_server::server::{server_api, torrent_api};
+use media_server::server::{server_api, torrent_api, OpenApiDoc};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
@@ -21,6 +21,8 @@ use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() {
@@ -334,7 +336,7 @@ async fn main() {
         .layer(Extension(log_channel))
         .nest("/api", server_api)
         .nest("/debug", debug_api)
-        // .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
+        .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .merge(upnp)
         .layer(cors)
         .fallback_service(assets_service)
