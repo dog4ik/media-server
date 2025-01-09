@@ -137,6 +137,7 @@ pub struct StatePeer {
     pub in_status: Status,
     pub out_status: Status,
     pub interested_amount: usize,
+    pub client_name: &'static str,
 }
 
 impl From<torrent::FullStatePeer> for StatePeer {
@@ -150,6 +151,7 @@ impl From<torrent::FullStatePeer> for StatePeer {
             in_status: value.in_status.into(),
             out_status: value.out_status.into(),
             interested_amount: value.interested_amount,
+            client_name: value.client_name,
         }
     }
 }

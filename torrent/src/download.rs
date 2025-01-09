@@ -383,6 +383,10 @@ impl ActivePeer {
             self.set_out_interest(true).unwrap();
         }
     }
+
+    pub fn client_name(&self) -> &'static str {
+        self.handshake.peer_id.client_name()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -611,6 +615,7 @@ pub struct FullStatePeer {
     pub in_status: Status,
     pub out_status: Status,
     pub interested_amount: usize,
+    pub client_name: &'static str,
 }
 
 #[derive(Debug)]
@@ -1354,6 +1359,8 @@ impl Download {
                 in_status: p.in_status,
                 out_status: p.out_status,
                 interested_amount: p.interested_pieces.amount(),
+                pending_blocks_amount: p.pending_blocks,
+                client_name: p.client_name(),
             })
             .collect();
         let output_files = self.info.output_files("");

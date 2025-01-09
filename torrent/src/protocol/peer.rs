@@ -15,10 +15,254 @@ use crate::{download::Block, peers::BitField};
 use super::{extension::Extension, pex, ut_metadata};
 
 #[derive(Debug, Clone)]
+pub struct PeerId(pub [u8; 20]);
+
+#[derive(Debug, Clone, Default)]
+pub struct PeerFP {
+    name: Box<[u8]>,
+    major: u32,
+    minor: u32,
+    revision: u32,
+    tag: u32,
+}
+
+impl std::fmt::Display for PeerFP {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{name} {major}.{minor}.{revision}.{tag}",
+            name = self.client_name(),
+            major = self.major,
+            minor = self.minor,
+            revision = self.revision,
+            tag = self.tag,
+        )
+    }
+}
+
+impl PeerFP {
+    fn parse_azure_style(id: &[u8; 20]) -> anyhow::Result<Self> {
+        // These macros early return if condition is not satisfied
+        let dash = b"-"[0];
+        anyhow::ensure!(id[0] == dash, "first byte must be dash");
+        anyhow::ensure!(id[7] == dash, "8th byte must be dash");
+
+        anyhow::ensure!(id[1].is_ascii());
+        anyhow::ensure!(id[2].is_ascii());
+
+        let name: [u8; 2] = [id[1], id[2]];
+        let major = char::from(id[3]).to_digit(10).context("parse major")?;
+        let minor = char::from(id[4]).to_digit(10).context("parse minor")?;
+        let revision = char::from(id[5]).to_digit(10).context("parse revision")?;
+        let tag = char::from(id[6]).to_digit(10).context("parse tag")?;
+
+        Ok(Self {
+            name: Box::new(name),
+            major,
+            minor,
+            revision,
+            tag,
+        })
+    }
+
+    fn parse_shadow_style(id: &[u8; 20]) -> anyhow::Result<Self> {
+        let first = char::from(id[0]);
+        anyhow::ensure!(first.is_alphanumeric());
+        let major;
+        let minor;
+        let revision;
+        if &id[4..6] == b"--" {
+            major = char::from(id[1]).to_digit(10).context("major version")?;
+            minor = char::from(id[2]).to_digit(10).context("minor version")?;
+            revision = char::from(id[3]).to_digit(10).context("revision version")?;
+        } else {
+            anyhow::ensure!(id[8] == 0);
+            anyhow::ensure!(id[1] <= 127);
+            anyhow::ensure!(id[2] <= 127);
+            anyhow::ensure!(id[3] <= 127);
+            major = id[1] as u32;
+            minor = id[2] as u32;
+            revision = id[3] as u32;
+        }
+
+        let tag = 0;
+        Ok(Self {
+            name: Box::new([id[0]]),
+            major,
+            minor,
+            revision,
+            tag,
+        })
+    }
+
+    fn parse_mainline_style(id: &[u8; 20]) -> anyhow::Result<Self> {
+        let str = String::from_utf8(id.to_vec())?;
+        let (first_char, rest) = str
+            .chars()
+            .next()
+            .zip(str.get(1..))
+            .context("split off first char")?;
+        anyhow::ensure!(first_char.is_ascii_graphic());
+        let parts: Vec<_> = rest.split('-').collect();
+        anyhow::ensure!(parts.len() == 4);
+        anyhow::ensure!(parts[3] == "--");
+        anyhow::ensure!(parts[0].len() == 3);
+        anyhow::ensure!(parts[1].len() == 3);
+        anyhow::ensure!(parts[2].len() == 3);
+
+        let major = parts[0].parse().context("parse major")?;
+        let minor = parts[1].parse().context("parse minor")?;
+        let revision = parts[2].parse().context("parse revision")?;
+        Ok(Self {
+            name: Box::new([first_char as u8]),
+            major,
+            minor,
+            revision,
+            tag: 0,
+        })
+    }
+
+    pub fn client_name(&self) -> &'static str {
+        match &self.name[..] {
+            b"7T" => "aTorrent for android",
+            b"A" => "ABC",
+            b"AB" => "AnyEvent BitTorrent",
+            b"AG" => "Ares",
+            b"AR" => "Arctic Torrent",
+            b"AT" => "Artemis",
+            b"AV" => "Avicora",
+            b"AX" => "BitPump",
+            b"AZ" => "Azureus",
+            b"A~" => "Ares",
+            b"BB" => "BitBuddy",
+            b"BC" => "BitComet",
+            b"BE" => "baretorrent",
+            b"BF" => "Bitflu",
+            b"BG" => "BTG",
+            b"BI" => "BiglyBT",
+            b"BL" => "BitBlinder",
+            b"BP" => "BitTorrent Pro",
+            b"BR" => "BitRocket",
+            b"BS" => "BTSlave",
+            b"BT" => "BitTorrent",
+            b"BU" => "BigUp",
+            b"BW" => "BitWombat",
+            b"BX" => "BittorrentX",
+            b"CD" => "Enhanced CTorrent",
+            b"CT" => "CTorrent",
+            b"DE" => "Deluge",
+            b"DP" => "Propagate Data Client",
+            b"EB" => "EBit",
+            b"ES" => "electric sheep",
+            b"FC" => "FileCroc",
+            b"FT" => "FoxTorrent",
+            b"FW" => "FrostWire",
+            b"FX" => "Freebox BitTorrent",
+            b"GS" => "GSTorrent",
+            b"HK" => "Hekate",
+            b"HL" => "Halite",
+            b"HN" => "Hydranode",
+            b"IL" => "iLivid",
+            b"KC" => "Koinonein",
+            b"KG" => "KGet",
+            b"KT" => "KTorrent",
+            b"LC" => "LeechCraft",
+            b"LH" => "LH-ABC",
+            b"LK" => "Linkage",
+            b"LP" => "lphant",
+            b"LR" => "LibreTorrent",
+            b"LT" => "libtorrent",
+            b"LW" => "Limewire",
+            b"M" => "Mainline",
+            b"ML" => "MLDonkey",
+            b"MO" => "Mono Torrent",
+            b"MP" => "MooPolice",
+            b"MR" => "Miro",
+            b"MT" => "Moonlight Torrent",
+            b"NX" => "Net Transport",
+            b"O" => "Osprey Permaseed",
+            b"OS" => "OneSwarm",
+            b"OT" => "OmegaTorrent",
+            b"PD" => "Pando",
+            b"Q" => "BTQueue",
+            b"QD" => "QQDownload",
+            b"QT" => "Qt 4",
+            b"R" => "Tribler",
+            b"RT" => "Retriever",
+            b"RZ" => "RezTorrent",
+            b"S" => "Shadow",
+            b"SB" => "Swiftbit",
+            b"SD" => "Xunlei",
+            b"SK" => "spark",
+            b"SN" => "ShareNet",
+            b"SS" => "SwarmScope",
+            b"ST" => "SymTorrent",
+            b"SZ" => "Shareaza",
+            b"S~" => "Shareaza (beta)",
+            b"T" => "BitTornado",
+            b"TB" => "Torch",
+            b"TL" => "Tribler",
+            b"TN" => "Torrent.NET",
+            b"TR" => "Transmission",
+            b"TS" => "TorrentStorm",
+            b"TT" => "TuoTu",
+            b"U" => "UPnP",
+            b"UL" => "uLeecher",
+            b"UM" => "uTorrent Mac",
+            b"UT" => "uTorrent",
+            b"VG" => "Vagaa",
+            b"WT" => "BitLet",
+            b"WY" => "FireTorrent",
+            b"XF" => "Xfplay",
+            b"XL" => "Xunlei",
+            b"XS" => "XSwifter",
+            b"XT" => "XanTorrent",
+            b"XX" => "Xtorrent",
+            b"ZO" => "Zona",
+            b"ZT" => "ZipTorrent",
+            b"lt" => "rTorrent",
+            b"pX" => "pHoeniX",
+            b"qB" => "qBittorrent",
+            b"st" => "SharkTorrent",
+            _ => "Unknown",
+        }
+    }
+}
+
+impl TryFrom<&[u8; 20]> for PeerFP {
+    type Error = anyhow::Error;
+
+    fn try_from(value: &[u8; 20]) -> Result<Self, Self::Error> {
+        Self::parse_azure_style(value)
+            .or_else(|_| Self::parse_shadow_style(value))
+            .or_else(|_| Self::parse_mainline_style(value))
+    }
+}
+
+impl PeerId {
+    pub fn my_id() -> Self {
+        let mut id: [u8; 20] = rand::random();
+        id[0] = b"-"[0];
+        (id[1], id[2]) = (b"M"[0], b"S"[0]);
+        id[3] = b"1"[0];
+        id[4] = b"0"[0];
+        id[5] = b"0"[0];
+        id[6] = b"0"[0];
+        Self(id)
+    }
+
+    pub fn client_name(&self) -> &'static str {
+        PeerFP::try_from(&self.0)
+            .map(|i| i.client_name())
+            .unwrap_or("unknown")
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct HandShake {
     pub reserved: [u8; 8],
     pub info_hash: [u8; 20],
-    pub peer_id: [u8; 20],
+    pub peer_id: PeerId,
 }
 
 impl HandShake {
@@ -32,7 +276,7 @@ impl HandShake {
         Self {
             info_hash,
             reserved,
-            peer_id: rand::random(),
+            peer_id: PeerId::my_id(),
         }
     }
 
@@ -59,7 +303,7 @@ impl HandShake {
 
         Ok(Self {
             reserved,
-            peer_id,
+            peer_id: PeerId(peer_id),
             info_hash,
         })
     }
@@ -72,7 +316,7 @@ impl HandShake {
         writer.write_all(b"BitTorrent protocol").unwrap();
         writer.write_all(&self.reserved).unwrap();
         writer.write_all(&self.info_hash).unwrap();
-        writer.write_all(&self.peer_id).unwrap();
+        writer.write_all(&self.peer_id.0).unwrap();
         out
     }
 
