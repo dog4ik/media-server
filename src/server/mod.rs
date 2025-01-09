@@ -111,6 +111,7 @@ pub struct SerdeDuration {
         torrent_api::torrent_state,
         torrent_api::updates,
         torrent_api::delete_torrent,
+        torrent_api::output_location,
     ),
     components(
         schemas(

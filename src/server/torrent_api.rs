@@ -25,6 +25,8 @@ use crate::{
     },
 };
 
+use super::ContentTypeQuery;
+
 #[derive(Debug, Clone)]
 pub struct InfoHash(pub [u8; 20]);
 
@@ -427,4 +429,35 @@ pub async fn delete_torrent(
         .await
         .ok_or(AppError::not_found("Torrent is not found"))?;
     Ok(())
+}
+
+/// Torrent default output location
+#[utoipa::path(
+    get,
+    path = "/api/torrent/output_location",
+    params(
+        ContentTypeQuery,
+    ),
+    responses(
+        (status = 200, body = Vec<String>),
+    ),
+    tag = "Torrent",
+)]
+pub async fn output_location(
+    Query(ContentTypeQuery { content_type }): Query<ContentTypeQuery>,
+) -> Json<Option<Vec<String>>> {
+    let dirs = match content_type {
+        ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
+        ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
+    };
+    for dir in dirs {
+        if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+            let components = dir
+                .components()
+                .map(|c| c.as_os_str().to_string_lossy().to_string())
+                .collect();
+            return Json(Some(components));
+        }
+    }
+    Json(None)
 }

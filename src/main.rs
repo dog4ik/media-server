@@ -258,6 +258,7 @@ async fn main() {
         )
         .route("/torrent/updates", get(torrent_api::updates))
         .route("/torrent/{info_hash}", delete(torrent_api::delete_torrent))
+        .route("/torrent/output_location", get(torrent_api::output_location))
         .route("/search/content", get(server_api::search_content))
         .route(
             "/search/trending_shows",
