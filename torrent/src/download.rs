@@ -245,6 +245,7 @@ pub struct ActivePeer {
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
     /// Amount of blocks that are in flight
+    /// Note that this number is approximate and not accurate because of race conditions between chokes and requests
     pub pending_blocks: usize,
 }
 
@@ -1266,6 +1267,9 @@ impl Download {
                 if self.scheduler.is_torrent_finished() {
                     tracing::info!("Finished downloading torrent");
                     self.state = DownloadState::Seeding;
+                    for peer in &mut self.scheduler.peers {
+                        peer.pending_blocks = 0;
+                    }
                     self.changes
                         .push(StateChange::DownloadStateChange(self.state));
                 };

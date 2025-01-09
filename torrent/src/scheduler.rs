@@ -505,7 +505,7 @@ impl Scheduler {
 
         let peer = &mut self.peers[sender_idx];
         peer.downloaded += data_block.len() as u64;
-        peer.pending_blocks -= 1;
+        peer.pending_blocks = peer.pending_blocks.saturating_sub(1);
         match pending_blocks.save_block(data_block, peer.id) {
             Err(e) => {
                 // peer logic error
@@ -610,6 +610,7 @@ impl Scheduler {
         let peer = &mut self.peers[peer_idx];
         let id = peer.id;
         peer.in_status.set_choke(true);
+        peer.pending_blocks = 0;
         self.drain_peer_blocks(id);
     }
 
