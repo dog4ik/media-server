@@ -1,4 +1,8 @@
-use std::{cmp::Reverse, fmt::Display, ops::Range};
+use std::{
+    cmp::{Ordering, Reverse},
+    fmt::Display,
+    ops::Range,
+};
 
 use anyhow::ensure;
 use bytes::Bytes;
@@ -243,13 +247,13 @@ impl PartialEq for SchedulerPiece {
 impl Eq for SchedulerPiece {}
 
 impl PartialOrd for SchedulerPiece {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
 impl Ord for SchedulerPiece {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+    fn cmp(&self, other: &Self) -> Ordering {
         if self.priority == other.priority {
             Reverse(self.rarity).cmp(&Reverse(other.rarity))
         } else {
@@ -296,9 +300,12 @@ pub struct Scheduler {
 }
 
 pub const BLOCK_LENGTH: u32 = 16 * 1024;
-/// Maximum amount of peers allowed to schedule one block.
-/// 4 will be good fit because vec reallocates with capacity 4 after first push.
-// const MAX_SCHEDULED_TO: usize = 4;
+///// Maximum amount of peers allowed to schedule one block.
+///// 4 will be good fit because vec reallocates with capacity 4 after first push.
+//const MAX_SCHEDULED_TO: usize = 4;
+
+/// Max amount of peers that allowed to be unchoked
+const UNCHOKE_SLOTS: usize = 5;
 
 impl Scheduler {
     pub fn new(t: &Info, pending_files: PendingFiles, initial_bf: &crate::BitField) -> Self {
@@ -661,17 +668,14 @@ impl Scheduler {
     pub fn add_peer(&mut self, mut peer: ActivePeer) {
         if peer.interested_pieces.amount() > 0 {
             peer.set_out_interest(true).expect("channel is empty");
-            // TODO: Proper choked implementation
-            // peer.set_out_choke(false).unwrap();
+        }
+        if self.peers.len() < UNCHOKE_SLOTS {
+            peer.set_out_choke(false).expect("channel is empty");
         }
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity += 1;
         }
         self.peers.push(peer);
-    }
-
-    pub async fn start(&mut self) {
-        tracing::info!("Started scheduler");
     }
 
     pub fn register_performance(&mut self) {
@@ -805,5 +809,85 @@ impl Scheduler {
     pub fn set_strategy(&mut self, strategy: ScheduleStrategy) {
         self.picker.set_strategy(strategy);
         self.picker.rebuild_queue(&self.piece_table);
+    }
+
+    pub fn rechoke_peer(&mut self) {
+        if self.peers.is_empty() {
+            return;
+        }
+        let mut unchoked_amount = self
+            .peers
+            .iter()
+            .filter(|p| !p.out_status.is_choked())
+            .count();
+        if let Some(to_choke) = self
+            .peers
+            .iter_mut()
+            .filter(|p| p.out_status.is_choked())
+            .min_by(|a, b| {
+                match a
+                    .performance_history
+                    .avg_up_speed()
+                    .cmp(&b.performance_history.avg_up_speed())
+                {
+                    Ordering::Equal => a.downloaded.cmp(&b.downloaded),
+                    Ordering::Less => Ordering::Less,
+                    Ordering::Greater => Ordering::Greater,
+                }
+            })
+        {
+            if to_choke.set_out_choke(true).is_ok() {
+                unchoked_amount -= 1;
+                tracing::debug!("Choking peer {}", to_choke.ip);
+            };
+        };
+
+        if let Some(to_unchoke) = self
+            .peers
+            .iter_mut()
+            .filter(|p| !p.out_status.is_choked() && p.in_status.is_interested())
+            .max_by(|a, b| {
+                match a
+                    .performance_history
+                    .avg_down_speed()
+                    .cmp(&b.performance_history.avg_down_speed())
+                {
+                    Ordering::Equal => a.downloaded.cmp(&b.downloaded),
+                    Ordering::Less => Ordering::Less,
+                    Ordering::Greater => Ordering::Greater,
+                }
+            })
+        {
+            if to_unchoke.set_out_choke(false).is_ok() {
+                unchoked_amount += 1;
+                tracing::debug!("Unchoking peer {}", to_unchoke.ip);
+            };
+        };
+
+        while unchoked_amount < UNCHOKE_SLOTS {
+            if let Some(to_unchoke) = self
+                .peers
+                .iter_mut()
+                .filter(|p| !p.out_status.is_choked() && p.in_status.is_interested())
+                .max_by(|a, b| {
+                    match a
+                        .performance_history
+                        .avg_down_speed()
+                        .cmp(&b.performance_history.avg_down_speed())
+                    {
+                        Ordering::Equal => a.downloaded.cmp(&b.downloaded),
+                        Ordering::Less => Ordering::Less,
+                        Ordering::Greater => Ordering::Greater,
+                    }
+                })
+            {
+                if to_unchoke.set_out_choke(false).is_ok() {
+                    unchoked_amount += 1;
+                    tracing::debug!("Unchoking peer {}", to_unchoke.ip);
+                };
+            } else {
+                break;
+            };
+        }
     }
 }

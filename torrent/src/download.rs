@@ -241,7 +241,6 @@ pub struct ActivePeer {
     pub last_pex_message_time: Instant,
     pub cancellation_token: CancellationToken,
     pub interested_pieces: InterestedPieces,
-    #[allow(unused)]
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
     /// Amount of blocks that are in flight
@@ -279,7 +278,6 @@ impl ActivePeer {
         }
     }
 
-    #[allow(unused)]
     pub fn set_out_choke(&mut self, force: bool) -> anyhow::Result<()> {
         match force {
             true => self.message_tx.try_send(PeerMessage::Choke)?,
@@ -615,6 +613,7 @@ pub struct FullStatePeer {
     pub in_status: Status,
     pub out_status: Status,
     pub interested_amount: usize,
+    pub pending_blocks_amount: usize,
     pub client_name: &'static str,
 }
 
@@ -650,6 +649,7 @@ pub struct PeerDownloadStats {
     pub download_speed: u64,
     pub upload_speed: u64,
     pub interested_amount: usize,
+    pub pending_blocks_amount: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize, Default)]
@@ -746,7 +746,7 @@ const MAX_PEER_CONNECTIONS: usize = 75;
 const DEFAULT_TICK_DURATION: Duration = Duration::from_millis(500);
 const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
 const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
-const PEER_CHANNEL_CAPACITY: usize = 500;
+const PEER_CHANNEL_CAPACITY: usize = 1000;
 
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
@@ -878,9 +878,17 @@ impl Download {
                     };
                     // NOTE: this is wrong. We should add it when we are sending requested block.
                     self.stat.uploaded += block.length as u64;
-                    let peer = &self.scheduler.peers[peer_idx];
-                    tracing::info!("Peer {} requested piece: {index}", peer.ip);
-                    self.seeder.request_block(block, peer.message_tx.clone());
+                    let peer = &mut self.scheduler.peers[peer_idx];
+                    if !peer.out_status.is_choked() && peer.in_status.is_interested() {
+                        peer.uploaded += block.length as u64;
+                        tracing::info!("Peer {} requested piece: {index}", peer.ip);
+                        self.seeder.request_block(block, peer.message_tx.clone());
+                    } else {
+                        tracing::warn!(
+                            "Peer {} requests piece while choked or not interested",
+                            peer.ip
+                        );
+                    }
                 }
                 PeerMessage::Piece {
                     index,
@@ -984,8 +992,6 @@ impl Download {
         mut progress: impl ProgressConsumer,
         mut commands_rx: mpsc::Receiver<DownloadMessage>,
     ) -> anyhow::Result<()> {
-        self.scheduler.start().await;
-
         // initial tracker announce
         for tracker in &mut self.trackers {
             tracker.announce(self.stat);
@@ -1059,6 +1065,7 @@ impl Download {
 
             if loop_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
                 self.last_choke = loop_start;
+                self.scheduler.rechoke_peer();
                 // choke someone
             }
 
@@ -1248,6 +1255,7 @@ impl Download {
                     interested_amount: p.interested_pieces.amount(),
                     download_speed,
                     upload_speed,
+                    pending_blocks_amount: p.pending_blocks,
                 }
             })
             .collect();
