@@ -239,16 +239,6 @@ impl TorrentStorage {
                 save_location_metadata.file_type()
             ));
         }
-        for file in &self.files {
-            if fs::try_exists(&file.path).await.unwrap_or(true) {
-                tracing::warn!("Output file already exists");
-            }
-            if let Some(parent) = file.path.parent() {
-                fs::create_dir_all(parent)
-                    .await
-                    .context("Init paths for torrent files")?;
-            }
-        }
         let token = cancellation_token.clone();
         let (message_tx, mut message_rx) = mpsc::channel(200);
         tracker.spawn(async move {
@@ -368,7 +358,7 @@ impl TorrentStorage {
                     .is_some_and(|prev| prev.end_piece(self.piece_length) == file_start_piece);
                 if border_next || border_prev {
                     if piece_i as u64 == self.total_length / self.piece_length {
-                        tracing::error!("Skipping the last piece");
+                        tracing::error!("Skipping the last piece to avoid .parts aligning issues");
                         continue;
                     };
                     if let Err(e) = self.parts_file.write_piece(piece_i, &blocks.0).await {
@@ -382,6 +372,9 @@ impl TorrentStorage {
             let f = match self.file_handles.opened_files.get_mut(&file_idx) {
                 Some(f) => f,
                 None => {
+                    if let Some(parent) = file.path.parent() {
+                        fs::create_dir_all(parent).await?;
+                    }
                     tracing::debug!("Creating file handle: {}", file.path.display());
                     let file_handle = fs::OpenOptions::new()
                         .create(true)
