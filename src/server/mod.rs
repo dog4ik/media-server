@@ -80,6 +80,7 @@ pub struct SerdeDuration {
         server_api::get_trending_shows,
         server_api::get_trending_movies,
         server_api::server_configuration,
+        server_api::server_version,
         server_api::update_server_configuration,
         server_api::reset_server_configuration,
         server_api::server_capabilities,

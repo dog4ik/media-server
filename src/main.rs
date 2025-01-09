@@ -268,6 +268,7 @@ async fn main() {
             get(server_api::get_trending_movies),
         )
         .route("/configuration", get(server_api::server_configuration))
+        .route("/version", get(server_api::server_version))
         .route(
             "/configuration/capabilities",
             get(server_api::server_capabilities),

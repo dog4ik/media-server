@@ -1957,6 +1957,19 @@ pub async fn server_configuration() -> Json<Vec<SerializedSetting>> {
     Json(config::CONFIG.json())
 }
 
+/// Server version
+#[utoipa::path(
+    get,
+    path = "/api/version",
+    responses(
+        (status = 200, body = String),
+    ),
+    tag = "Configuration",
+)]
+pub async fn server_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 /// Server capabalities
 #[utoipa::path(
     get,
