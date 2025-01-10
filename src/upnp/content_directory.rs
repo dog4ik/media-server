@@ -1,11 +1,4 @@
-use std::{
-    fmt::Display,
-    str::FromStr,
-    sync::{
-        atomic::{self, AtomicU32},
-        Arc,
-    },
-};
+use std::{fmt::Display, str::FromStr};
 
 use anyhow::Context;
 use upnp::{
@@ -31,7 +24,6 @@ use crate::{
 pub struct MediaServerContentDirectory {
     app_state: AppState,
     server_location: String,
-    update_id: Arc<AtomicU32>,
 }
 
 impl MediaServerContentDirectory {
@@ -39,7 +31,6 @@ impl MediaServerContentDirectory {
         Self {
             app_state,
             server_location,
-            update_id: AtomicU32::new(0).into(),
         }
     }
 
@@ -524,6 +515,10 @@ impl ContentDirectoryHandler for MediaServerContentDirectory {
     }
 
     async fn system_update_id(&self) -> u32 {
-        self.update_id.load(atomic::Ordering::Acquire)
+        self.app_state
+            .db
+            .get_system_id()
+            .await
+            .expect("system_id retrieval never fails") as u32
     }
 }

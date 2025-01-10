@@ -871,6 +871,16 @@ WHERE season_id = ? ORDER BY number ASC",
         }
     }
 
+    fn get_system_id(self) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let system_id = sqlx::query_as!(DbSystemId, "SELECT id from system_id")
+                .fetch_one(&mut *conn)
+                .await?;
+            Ok(system_id.id)
+        }
+    }
+
     fn all_torrents(
         self,
         limit: i64,
@@ -1339,4 +1349,9 @@ pub struct DbTorrentFile {
     pub priority: i64,
     pub idx: i64,
     pub relative_path: String,
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct DbSystemId {
+    pub id: i64,
 }
