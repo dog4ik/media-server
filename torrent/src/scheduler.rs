@@ -501,6 +501,8 @@ impl Scheduler {
 
     pub fn save_block(&mut self, sender_idx: usize, data_block: DataBlock) {
         let piece = data_block.piece as usize;
+        let peer = &mut self.peers[sender_idx];
+        peer.pending_blocks = peer.pending_blocks.saturating_sub(1);
         let scheduler_piece = &mut self.piece_table[piece];
         let Some(pending_blocks) = scheduler_piece.pending_blocks.as_mut() else {
             tracing::trace!(
@@ -510,9 +512,7 @@ impl Scheduler {
             return;
         };
 
-        let peer = &mut self.peers[sender_idx];
         peer.downloaded += data_block.len() as u64;
-        peer.pending_blocks = peer.pending_blocks.saturating_sub(1);
         match pending_blocks.save_block(data_block, peer.id) {
             Err(e) => {
                 // peer logic error
