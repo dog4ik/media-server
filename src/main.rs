@@ -1,4 +1,3 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 use axum::routing::{delete, get, patch, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
