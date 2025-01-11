@@ -98,13 +98,11 @@ pub struct WorkResult {
 fn worker(idx: usize, mut work_rx: mpsc::Receiver<Payload>, result_tx: mpsc::Sender<WorkResult>) {
     while let Some(work) = work_rx.blocking_recv() {
         let is_verified = work.verify_hash(idx);
-        result_tx
-            .try_send(WorkResult {
-                worker_idx: idx,
-                piece_i: work.piece_i,
-                is_verified,
-                piece: work.data,
-            })
-            .unwrap();
+        let _ = result_tx.try_send(WorkResult {
+            worker_idx: idx,
+            piece_i: work.piece_i,
+            is_verified,
+            piece: work.data,
+        });
     }
 }
