@@ -462,6 +462,7 @@ impl TorrentManager for Db {
         for torrent in self.all_torrents(100).await? {
             let files = self.torrent_files(torrent.id.unwrap()).await?;
             let bitfield = torrent::BitField::from(torrent.bitfield);
+            tracing::debug!("Loaded bitfield with {} pieces", bitfield.pieces().count());
             let info = torrent::Info::from_bytes(&torrent.bencoded_info)
                 .expect("we don't screw up saving it");
             let trackers = torrent
@@ -589,11 +590,14 @@ async fn handle_progress(
     manager: impl TorrentManager,
 ) {
     let mut sub = progress_broadcast.subscribe();
-    while let Ok(TorrentProgress {
-        torrent_hash,
-        progress: Progress::Pending(progress),
-    }) = sub.recv().await.as_deref()
-    {
+    while let Ok(chunk) = sub.recv().await.as_deref() {
+        let TorrentProgress {
+            torrent_hash,
+            progress: Progress::Pending(progress),
+        } = chunk
+        else {
+            continue;
+        };
         let mut new_pieces = Vec::new();
         new_pieces.extend(progress.changes.iter().filter_map(|v| match v {
             StateChange::FinishedPiece(p) => Some(*p),
