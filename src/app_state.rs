@@ -204,6 +204,88 @@ impl AppState {
         Ok(())
     }
 
+    pub async fn delete_movie(&self, id: i64) -> Result<(), AppError> {
+        let mut tx = self.db.begin().await?;
+        let ids = sqlx::query!("SELECT id FROM videos WHERE movie_id = ?", id)
+            .fetch_all(&mut *tx)
+            .await?;
+        for video in ids {
+            tx.remove_video(video.id).await?;
+            if let Some(video) = {
+                let mut library = self.library.lock().unwrap();
+                library.remove_video(video.id)
+            } {
+                video.source.video.delete().await?;
+                let _ = video.source.delete_all_resources().await;
+            };
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_season(&self, id: i64) -> Result<(), AppError> {
+        let mut tx = self.db.begin().await?;
+        let ids = sqlx::query!("SELECT videos.id FROM videos JOIN episodes ON episodes.id = videos.episode_id WHERE episodes.season_id = ?", id)
+            .fetch_all(&mut *tx)
+            .await?;
+        for video in ids {
+            tx.remove_video(video.id).await?;
+            if let Some(video) = {
+                let mut library = self.library.lock().unwrap();
+                library.remove_video(video.id)
+            } {
+                video.source.video.delete().await?;
+                let _ = video.source.delete_all_resources().await;
+            };
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_show(&self, id: i64) -> Result<(), AppError> {
+        let mut tx = self.db.begin().await?;
+        let ids = sqlx::query!(
+            "SELECT videos.id FROM videos
+JOIN episodes ON episodes.id = videos.episode_id
+JOIN seasons ON seasons.id = episodes.season_id
+WHERE seasons.show_id = ?",
+            id
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+        for video in ids {
+            tx.remove_video(video.id).await?;
+            if let Some(video) = {
+                let mut library = self.library.lock().unwrap();
+                library.remove_video(video.id)
+            } {
+                video.source.video.delete().await?;
+                let _ = video.source.delete_all_resources().await;
+            };
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
+    pub async fn delete_episode(&self, id: i64) -> Result<(), AppError> {
+        let mut tx = self.db.begin().await?;
+        let ids = sqlx::query!("SELECT id FROM videos WHERE episode_id = ?", id)
+            .fetch_all(&mut *tx)
+            .await?;
+        for video in ids {
+            tx.remove_video(video.id).await?;
+            if let Some(video) = {
+                let mut library = self.library.lock().unwrap();
+                library.remove_video(video.id)
+            } {
+                video.source.video.delete().await?;
+                let _ = video.source.delete_all_resources().await;
+            };
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> Result<(), AppError> {
         let asset = VariantAsset::new(video_id, variant_id.to_string());
         asset.delete_file().await?;
@@ -746,7 +828,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             }
 
             for absent_id in &to_remove {
-                library.remove_video(*absent_id)
+                library.remove_video(*absent_id);
             }
         }
         for absent_id in to_remove {

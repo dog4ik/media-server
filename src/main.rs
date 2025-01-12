@@ -120,6 +120,7 @@ async fn main() {
     let server_api = Router::new()
         .route("/local_shows", get(server_api::all_local_shows))
         .route("/local_episode/{id}", get(server_api::local_episode))
+        .route("/local_episode/{id}", delete(server_api::delete_episode))
         .route(
             "/local_episode/by_video",
             get(server_api::local_episode_by_video_id),
@@ -132,11 +133,14 @@ async fn main() {
             "/local_movie/by_video",
             get(server_api::local_movie_by_video_id),
         )
+        .route("/local_movie/{id}", delete(server_api::delete_movie))
         .route(
             "/local_movie/{movie_id}/watch",
             get(server_api::watch_movie),
         )
         .route("/local_movies", get(server_api::all_local_movies))
+        .route("/local_season/{id}", delete(server_api::delete_season))
+        .route("/local_show/{id}", delete(server_api::delete_show))
         .route(
             "/external_to_local/{id}",
             get(server_api::external_to_local_id),
@@ -257,7 +261,10 @@ async fn main() {
         )
         .route("/torrent/updates", get(torrent_api::updates))
         .route("/torrent/{info_hash}", delete(torrent_api::delete_torrent))
-        .route("/torrent/output_location", get(torrent_api::output_location))
+        .route(
+            "/torrent/output_location",
+            get(torrent_api::output_location),
+        )
         .route("/search/content", get(server_api::search_content))
         .route(
             "/search/trending_shows",

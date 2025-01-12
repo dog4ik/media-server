@@ -1221,7 +1221,7 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.video_id AS video_id, episodes.number AS episode_number, seasons.show_id AS show_id,
-        seasons.number AS season_number FROM history 
+        seasons.number AS season_number FROM history
     JOIN videos ON videos.id = history.video_id
     JOIN episodes ON episodes.id = videos.episode_id
     JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
@@ -1383,6 +1383,82 @@ pub async fn remove_video(
     state.remove_video(id).await
 }
 
+/// Delete episode from library. WARN: It will actually delete video files
+#[utoipa::path(
+    delete,
+    path = "/api/local_episode/{id}",
+    params(
+        ("id", description = "Episode id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "Shows",
+)]
+pub async fn delete_episode(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    state.delete_episode(id).await
+}
+
+/// Delete season from library. WARN: It will actually delete video files
+#[utoipa::path(
+    delete,
+    path = "/api/local_season/{id}",
+    params(
+        ("id", description = "Season id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "Shows",
+)]
+pub async fn delete_season(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    state.delete_season(id).await
+}
+
+/// Delete show from library. WARN: It will actually delete video files
+#[utoipa::path(
+    delete,
+    path = "/api/local_show/{id}",
+    params(
+        ("id", description = "Show id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "Shows",
+)]
+pub async fn delete_show(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    state.delete_show(id).await
+}
+
+/// Delete movie from library. WARN: It will actually delete video files
+#[utoipa::path(
+    delete,
+    path = "/api/local_movie/{id}",
+    params(
+        ("id", description = "Movie id"),
+    ),
+    responses(
+        (status = 200),
+    ),
+    tag = "Movies",
+)]
+pub async fn delete_movie(
+    State(state): State<AppState>,
+    Path(id): Path<i64>,
+) -> Result<(), AppError> {
+    state.delete_movie(id).await
+}
+
 /// Remove variant from the library. WARN: It will actually delete video file
 #[utoipa::path(
     delete,
@@ -1523,58 +1599,6 @@ pub async fn alter_movie_metadata(
     )
     .execute(&db.pool)
     .await?;
-    Ok(())
-}
-
-/// Delete movie
-#[utoipa::path(
-    delete,
-    path = "/api/movie/{id}",
-    params(
-        ("id", description = "Movie id"),
-    ),
-    responses(
-        (status = 200),
-    ),
-    tag = "Movies",
-)]
-pub async fn delete_movie(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
-    // We can just remove video and refresh the library for cleanup instead of doing it manually
-    // for every content type in the library!
-    let AppState { db, library, .. } = state;
-    let video_id = sqlx::query!(
-        r#"SELECT videos.id FROM movies
-        JOIN videos ON movies.id = videos.movie_id
-        WHERE movies.id = ?;"#,
-        id
-    )
-    .fetch_one(&db.pool)
-    .await?
-    .id;
-
-    // TODO: Fix not found errors when video assets do not exist
-
-    let library_file = {
-        let mut library = library.lock().unwrap();
-        library.videos.remove(&video_id)
-    };
-    if let Some(movie) = library_file {
-        let (resources_removal, video_removal) = tokio::join!(
-            movie.source.delete_all_resources(),
-            movie.source.video.delete(),
-        );
-        if let Err(err) = resources_removal {
-            tracing::warn!("Failed to cleanup video resources dir: {err}");
-        };
-
-        if let Err(err) = video_removal {
-            tracing::error!("Failed to delete video: {err}");
-        };
-    }
-    db.pool.remove_movie(id).await?;
     Ok(())
 }
 

@@ -355,8 +355,8 @@ impl Library {
         };
     }
 
-    pub fn remove_video(&mut self, id: i64) {
-        self.videos.remove(&id);
+    pub fn remove_video(&mut self, id: i64) -> Option<LibraryFile> {
+        self.videos.remove(&id)
     }
 
     pub fn find_video_by_path(&self, path: impl AsRef<Path>) -> Option<&Video> {
@@ -602,6 +602,7 @@ impl Video {
 
     /// Delete self
     pub async fn delete(&self) -> Result<(), std::io::Error> {
+        tracing::debug!("Removing video file {}", self.path.display());
         tokio::fs::remove_file(&self.path).await
     }
 

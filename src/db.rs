@@ -341,12 +341,28 @@ where
             let remove_result = remove_query.fetch_one(&mut *conn).await?;
 
             if let Some(episode_id) = remove_result.episode_id {
-                let _ = conn.remove_episode(episode_id).await;
+                let sibling_videos = sqlx::query!(
+                    "SELECT COUNT(*) AS count FROM videos WHERE episode_id = ?",
+                    episode_id
+                )
+                .fetch_one(&mut *conn)
+                .await?;
+                if sibling_videos.count == 0 {
+                    let _ = conn.remove_episode(episode_id).await;
+                }
                 return Ok(());
             }
 
             if let Some(movie_id) = remove_result.movie_id {
-                let _ = conn.remove_movie(movie_id).await;
+                let sibling_videos = sqlx::query!(
+                    "SELECT COUNT(*) AS count FROM videos WHERE movie_id = ?",
+                    movie_id
+                )
+                .fetch_one(&mut *conn)
+                .await?;
+                if sibling_videos.count == 0 {
+                    let _ = conn.remove_movie(movie_id).await;
+                }
                 return Ok(());
             }
 
