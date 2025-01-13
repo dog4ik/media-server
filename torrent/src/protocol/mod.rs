@@ -18,8 +18,23 @@ pub mod ut_metadata;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {
-    pub path: Vec<String>,
     pub length: u64,
+    pub path: Vec<String>,
+}
+
+impl bendy::encoding::ToBencode for File {
+    const MAX_DEPTH: usize = 2;
+
+    fn encode(
+        &self,
+        encoder: bendy::encoding::SingleItemEncoder,
+    ) -> Result<(), bendy::encoding::Error> {
+        encoder.emit_dict(|mut e| {
+            e.emit_pair(b"length", self.length)?;
+            e.emit_pair(b"path", &self.path)
+        })?;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -59,15 +74,30 @@ impl OutputFile {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Info {
-    /// In the single file case is the name of a file, in the multiple file case, it's the name of a directory.
-    pub name: String,
-    pub pieces: Hashes,
-    #[serde(rename = "piece length")]
-    pub piece_length: u32,
+    #[serde(skip)]
+    pub raw: bytes::Bytes,
     #[serde(flatten)]
     pub file_descriptor: SizeDescriptor,
+    /// In the single file case is the name of a file, in the multiple file case, it's the name of a directory.
+    pub name: String,
+    #[serde(rename = "piece length")]
+    pub piece_length: u32,
+    pub pieces: Hashes,
+}
+
+impl bendy::decoding::FromBencode for Info {
+    fn decode_bencode_object(
+        object: bendy::decoding::Object,
+    ) -> Result<Self, bendy::decoding::Error> {
+        let dict_dec = object.try_into_dictionary()?;
+        let raw = bytes::Bytes::copy_from_slice(dict_dec.into_raw()?);
+
+        let mut info: Info = serde_bencode::from_bytes(&raw)?;
+        info.raw = raw;
+        Ok(info)
+    }
 }
 
 impl Display for Info {
@@ -124,7 +154,7 @@ impl Info {
 
     pub fn hash(&self) -> [u8; 20] {
         let mut hasher = <Sha1 as sha1::Digest>::new();
-        let bytes = serde_bencode::to_bytes(self).unwrap();
+        let bytes = self.as_bytes();
         hasher.update(&bytes);
         hasher.finalize().into()
     }
@@ -138,13 +168,12 @@ impl Info {
         self.pieces.0.iter().map(hex::encode).collect()
     }
 
-    pub fn as_bytes(&self) -> Vec<u8> {
-        serde_bencode::to_bytes(&self).unwrap()
+    pub fn as_bytes(&self) -> bytes::Bytes {
+        self.raw.clone()
     }
 
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        let info = serde_bencode::from_bytes(bytes)?;
-        Ok(info)
+        bendy::decoding::FromBencode::from_bencode(bytes).map_err(|e| anyhow::anyhow!("{e}"))
     }
 }
 

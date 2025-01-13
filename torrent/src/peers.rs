@@ -325,7 +325,7 @@ impl Peer {
             }
         }
 
-        Ok(serde_bencode::from_bytes(&ut_metadata.as_bytes())?)
+        Ok(Info::from_bytes(&ut_metadata.as_bytes())?)
     }
 
     pub async fn download(

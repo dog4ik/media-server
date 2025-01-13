@@ -1344,7 +1344,8 @@ impl From<DownloadParams> for DbTorrent {
         let trackers = trackers.join(",");
         Self {
             id: None,
-            bencoded_info: params.info.as_bytes(),
+            // TODO: avoid copy
+            bencoded_info: params.info.as_bytes().to_vec(),
             trackers,
             save_location: params
                 .save_location

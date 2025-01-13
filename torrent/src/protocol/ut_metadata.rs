@@ -133,7 +133,7 @@ impl UtMetadata {
 
     /// Create metadata from existing Info
     pub fn full_from_info(info: &Info) -> Self {
-        let bytes = Bytes::copy_from_slice(&serde_bencode::to_bytes(info).unwrap());
+        let bytes = info.as_bytes();
         let metadata_id = CLIENT_EXTENSIONS[0].1;
         let size = bytes.len();
         let total_pieces = size.div_ceil(Self::BLOCK_SIZE);

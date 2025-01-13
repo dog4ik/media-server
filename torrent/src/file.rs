@@ -2,27 +2,102 @@ use std::{fmt::Display, path::Path, str::FromStr};
 
 use anyhow::{ensure, Context};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 
 use crate::protocol::Info;
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub struct TorrentFile {
     pub info: Info,
     pub announce: String,
     pub encoding: Option<String>,
-    #[serde(rename = "announce-list")]
     pub announce_list: Option<Vec<Vec<String>>>,
-    #[serde(rename = "creation date")]
     pub creation_date: Option<u64>,
     pub comment: Option<String>,
-    #[serde(rename = "created by")]
     pub created_by: Option<String>,
 }
 
+impl bendy::decoding::FromBencode for TorrentFile {
+    fn decode_bencode_object(
+        object: bendy::decoding::Object,
+    ) -> Result<Self, bendy::decoding::Error> {
+        use bendy::decoding::Error;
+        use bendy::decoding::ResultExt;
+
+        let mut announce = None;
+        let mut announce_list = None;
+        let mut encoding = None;
+        let mut comment = None;
+        let mut creation_date = None;
+        let mut created_by = None;
+        // let mut http_seeds = None;
+        let mut info = None;
+
+        let mut dict_dec = object.try_into_dictionary()?;
+        while let Some((tag, value)) = dict_dec.next_pair()? {
+            match tag {
+                b"announce" => {
+                    announce = String::decode_bencode_object(value)
+                        .context("announce")
+                        .map(Some)?;
+                }
+                b"announce-list" => {
+                    announce_list = Vec::decode_bencode_object(value)
+                        .context("announce-list")
+                        .map(Some)?;
+                }
+                b"comment" => {
+                    comment = String::decode_bencode_object(value)
+                        .context("comment")
+                        .map(Some)?;
+                }
+                b"creation date" => {
+                    creation_date = u64::decode_bencode_object(value)
+                        .context("creation_date")
+                        .map(Some)?;
+                }
+                b"created by" => {
+                    created_by = String::decode_bencode_object(value)
+                        .context("created_by")
+                        .map(Some)?;
+                }
+                b"encoding" => {
+                    encoding = String::decode_bencode_object(value)
+                        .context("encoding")
+                        .map(Some)?;
+                }
+                b"info" => {
+                    info = Info::decode_bencode_object(value)
+                        .context("info")
+                        .map(Some)?;
+                }
+                _ => {
+                    tracing::warn!(
+                        "Unexpected field in .torrent file: {}",
+                        String::from_utf8_lossy(tag)
+                    );
+                }
+            }
+        }
+
+        let announce = announce.ok_or_else(|| Error::missing_field("announce"))?;
+        let info = info.ok_or_else(|| Error::missing_field("info"))?;
+
+        Ok(Self {
+            announce,
+            announce_list,
+            info,
+            encoding,
+            comment,
+            creation_date,
+            created_by,
+        })
+    }
+}
+
 impl TorrentFile {
-    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> Result<Self, serde_bencode::Error> {
-        serde_bencode::from_bytes(bytes.as_ref())
+    pub fn from_bytes(bytes: impl AsRef<[u8]>) -> anyhow::Result<Self> {
+        bendy::decoding::FromBencode::from_bencode(bytes.as_ref())
+            .map_err(|e| anyhow::anyhow!("{e}"))
     }
 
     pub fn from_path(path: impl AsRef<Path>) -> anyhow::Result<Self> {
