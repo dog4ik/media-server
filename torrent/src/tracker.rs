@@ -562,10 +562,10 @@ impl UdpTrackerWorker {
     async fn udp_tracker_worker(self, mut data_rx: mpsc::Receiver<UdpTrackerRequest>) {
         let mut pending_transactions: HashMap<u32, oneshot::Sender<UdpTrackerMessage>> =
             HashMap::new();
+        let mut buffer = BytesMut::zeroed(1024 * 10);
         loop {
-            let mut buffer = BytesMut::with_capacity(1024 * 10);
             tokio::select! {
-                Ok((read, addr)) = self.socket.recv_buf_from(&mut buffer) => {
+                Ok((read, addr)) = self.socket.recv_from(&mut buffer) => {
                     tracing::debug!("Received {read} bytes from UDP worker from {:?} address", addr);
                     let message = match UdpTrackerMessage::from_bytes(&buffer[..read]) {
                         Ok(msg) => msg,
