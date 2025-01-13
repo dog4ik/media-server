@@ -297,27 +297,22 @@ impl Peer {
             loop {
                 let response = self.stream.next().await.context("stream to be open")??;
                 let PeerMessage::Extension {
-                    extension_id,
+                    extension_id: UtMessage::CLIENT_ID,
                     payload,
                 } = response
                 else {
                     continue;
                 };
-                if extension_id != UtMessage::CLIENT_ID {
-                    continue;
-                }
                 let message: UtMessage = serde_bencode::from_bytes(&payload)?;
                 match message {
                     UtMessage::Request { piece } => {
                         tracing::warn!("Ignoring ut metadata request piece: {piece}");
-                        // reject it baby
+                        // reject it
                     }
                     UtMessage::Data { piece, total_size } => {
                         ensure!(total_size == ut_metadata.size);
-                        // ISSUE: This is really stupid way to figure out the length of the message
-                        // part. Simplicity comes with consequences
-                        let message_length = serde_bencode::to_bytes(&message).unwrap().len();
-                        let data_slice = payload.slice(message_length..);
+                        let piece_len = ut_metadata.piece_len(piece);
+                        let data_slice = payload.slice(payload.len() - piece_len..);
                         ut_metadata
                             .save_block(piece, data_slice)
                             .context("peer send block that does not exist")?;

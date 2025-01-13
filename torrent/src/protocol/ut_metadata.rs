@@ -122,7 +122,7 @@ impl UtMetadata {
     pub fn empty_from_handshake(handshake: &ExtensionHandshake) -> Option<Self> {
         let metadata_id = handshake.ut_metadata_id()?;
         let size = handshake.ut_metadata_size()?;
-        let total_pieces = (size + Self::BLOCK_SIZE - 1) / Self::BLOCK_SIZE;
+        let total_pieces = size.div_ceil(Self::BLOCK_SIZE);
         Some(Self {
             size,
             metadata_id,
@@ -136,7 +136,7 @@ impl UtMetadata {
         let bytes = Bytes::copy_from_slice(&serde_bencode::to_bytes(info).unwrap());
         let metadata_id = CLIENT_EXTENSIONS[0].1;
         let size = bytes.len();
-        let total_pieces = (size + Self::BLOCK_SIZE - 1) / Self::BLOCK_SIZE;
+        let total_pieces = size.div_ceil(Self::BLOCK_SIZE);
         let mut blocks = Vec::with_capacity(total_pieces);
         for i in 0..total_pieces - 1 {
             let start = i * Self::BLOCK_SIZE;
@@ -144,16 +144,30 @@ impl UtMetadata {
             blocks.push(Some(bytes.slice(start..end)));
         }
         let last_start = (total_pieces - 1) * Self::BLOCK_SIZE;
-        let last_length =
-            crate::utils::piece_size(total_pieces - 1, Self::BLOCK_SIZE as u32, size as u64);
-        let last_end = last_start + last_length as usize;
-        blocks.push(Some(bytes.slice(last_start..last_end)));
+        blocks.push(Some(bytes.slice(last_start..size)));
+
+        debug_assert_eq!(
+            &bytes[..],
+            &blocks.iter().fold(Vec::<u8>::new(), |mut acc, n| {
+                let n = n.as_ref().expect("ut metadata is full");
+                acc.extend(n);
+                acc
+            })[..]
+        );
 
         Self {
             size,
             metadata_id,
             downloaded: blocks.len(),
             blocks,
+        }
+    }
+
+    pub fn piece_len(&self, piece_i: usize) -> usize {
+        if piece_i == self.blocks.len() - 1 {
+            self.size - piece_i * Self::BLOCK_SIZE
+        } else {
+            Self::BLOCK_SIZE
         }
     }
 
