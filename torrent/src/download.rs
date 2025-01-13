@@ -977,7 +977,7 @@ impl Download {
                     // logic error
                     self.scheduler.peers[peer_idx].cancel_peer();
                 }
-                PeerMessage::HeatBeat => {}
+                PeerMessage::HeartBeat => {}
             }
         }
 

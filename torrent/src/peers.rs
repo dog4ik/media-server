@@ -16,6 +16,8 @@ use crate::protocol::{
     Info,
 };
 
+const HEARTBEAT: Duration = Duration::from_secs(10);
+
 #[derive(Debug)]
 pub struct PeerIPC {
     pub message_tx: flume::Sender<PeerMessage>,
@@ -335,20 +337,31 @@ impl Peer {
     ) -> (Uuid, Result<(), PeerError>) {
         let peer_result = loop {
             tokio::select! {
+                _ = tokio::time::sleep(HEARTBEAT) => {
+                    if let Err(e) = self.send_peer_msg(PeerMessage::HeartBeat).await {
+                        break Err(e);
+                    }
+                },
                 Ok(command_msg) = ipc.message_rx.recv_async() => {
-                    match self.send_peer_msg(command_msg).await {
-                        Ok(_) => {},
-                        Err(e) => break Err(e),
+                    if let Err(e) = self.send_peer_msg(command_msg).await {
+                        break Err(e);
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
-                    if let Err(_) = ipc.message_tx.try_send(peer_msg) {
-                        tracing::error!("Peer channel is closed or overflowed");
+                    if peer_msg == PeerMessage::HeartBeat {
+                        continue;
+                    }
+                    if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
+                        tracing::error!(ip = %self.ip(), "Peer -> scheduler channel is closed");
                         break Err(PeerError::timeout("Channel is closed or overflowed"));
                     };
                 },
                 _ = cancellation_token.cancelled() => {
-                    tracing::debug!(ip = self.ip().to_string(), "Peer quit using cancellation token");
+                    tracing::debug!(ip = %self.ip(), "Peer quit using cancellation token");
+                    break Ok(());
+                }
+                else => {
+                    tracing::debug!(ip = %self.ip(), "Peer tcp stream closed");
                     break Ok(());
                 }
             };

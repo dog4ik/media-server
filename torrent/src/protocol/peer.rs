@@ -390,7 +390,7 @@ impl ExtensionHandshake {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PeerMessage {
-    HeatBeat,
+    HeartBeat,
     Choke,
     Unchoke,
     Interested,
@@ -428,7 +428,7 @@ pub enum PeerMessage {
 impl Display for PeerMessage {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PeerMessage::HeatBeat => write!(f, "HeatBeat"),
+            PeerMessage::HeartBeat => write!(f, "HeatBeat"),
             PeerMessage::Choke => write!(f, "Choke"),
             PeerMessage::Unchoke => write!(f, "Unchoke"),
             PeerMessage::Interested => write!(f, "Interested"),
@@ -480,7 +480,7 @@ impl Display for PeerMessage {
 impl PeerMessage {
     pub fn from_frame(frame: Bytes) -> anyhow::Result<Self> {
         if frame.is_empty() {
-            return Ok(Self::HeatBeat);
+            return Ok(Self::HeartBeat);
         }
         let request_payload = |b: &[u8]| -> anyhow::Result<_> {
             let mut index_buffer = [0; 4];
@@ -571,7 +571,7 @@ impl PeerMessage {
             reader.write_u32(len).await
         }
         match self {
-            PeerMessage::HeatBeat => write_len(&mut reader, 0).await,
+            PeerMessage::HeartBeat => write_len(&mut reader, 0).await,
             PeerMessage::Choke => {
                 write_len(&mut reader, 1).await?;
                 reader.write_u8(0).await
