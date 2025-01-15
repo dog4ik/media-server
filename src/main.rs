@@ -226,7 +226,7 @@ async fn main() {
         )
         .route("/video/{id}/watch", get(server_api::watch))
         .route(
-            "/video/{id}/{variant}/{variant_id}",
+            "/video/{id}/variant/{variant_id}",
             delete(server_api::remove_variant),
         )
         .route("/history", get(server_api::all_history))
