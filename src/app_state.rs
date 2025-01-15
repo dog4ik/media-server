@@ -1166,7 +1166,9 @@ async fn handle_episode(
                 let db_episode = episode.into_db_episode(local_season_id, duration);
                 let mut tx = db.begin().await?;
                 let local_id = tx.insert_episode(db_episode).await?;
-                tx.update_video_episode_id(item.source.id, local_id).await?;
+                for item in &items {
+                    tx.update_video_episode_id(item.source.id, local_id).await?;
+                }
                 tx.commit().await?;
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);
