@@ -3,4 +3,5 @@ extend-exclude = ["tests_data/*"]
 [default]
 extend-ignore-identifiers-re = [
     "UPnP",
+    "OT",
 ]
