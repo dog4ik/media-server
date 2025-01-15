@@ -68,7 +68,7 @@ torrent = { path = "./torrent" }
 upnp = { path = "./upnp" }
 
 # Windows dependencies
-tray-icon = { version = "0.17.0", optional = true }
-open = { version = "5.3.0", optional = true }
-image = { version = "0.25.2", optional = true }
-winit = { version = "0.30.5", optional = true }
+tray-icon = { version = "0.19.2", optional = true }
+open = { version = "5.3.2", optional = true }
+image = { version = "0.25.5", optional = true }
+winit = { version = "0.30.8", optional = true }
