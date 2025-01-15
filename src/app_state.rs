@@ -364,20 +364,23 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
 
     pub async fn reset_movie_metadata(&self, movie_id: i64) -> Result<(), AppError> {
         self.partial_refresh().await;
-        let video = sqlx::query!(
+        let videos = sqlx::query!(
             "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
             movie_id
         )
-            .fetch_one(&self.db.pool).await?;
+            .fetch_all(&self.db.pool).await?;
         self.db.remove_movie(movie_id).await?;
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
-        let movie = {
+        let movies = {
             let library = self.library.lock().unwrap();
-            library.get_movie(video.id).unwrap()
+            videos
+                .into_iter()
+                .map(|v| library.get_movie(v.id).unwrap())
+                .collect()
         };
         let discover_providers = self.providers_stack.discover_providers();
-        handle_movie(movie, self.db, fetch_params, discover_providers).await?;
+        handle_movie(movies, self.db, fetch_params, discover_providers).await?;
         Ok(())
     }
 
@@ -472,15 +475,18 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         new_metadata: MovieMetadata,
     ) -> Result<(), AppError> {
         self.partial_refresh().await;
-        let video = sqlx::query!(
+        let videos = sqlx::query!(
             "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
             target_movie_id
         )
-            .fetch_one(&self.db.pool).await?;
+            .fetch_all(&self.db.pool).await?;
         self.db.remove_movie(target_movie_id).await?;
-        let movie = {
+        let movies: Vec<_> = {
             let library = self.library.lock().unwrap();
-            library.get_movie(video.id).unwrap()
+            videos
+                .into_iter()
+                .map(|v| library.get_movie(v.id).unwrap())
+                .collect()
         };
         let external_ids = self
             .providers_stack
@@ -490,8 +496,9 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 new_metadata.metadata_provider,
             )
             .await?;
-        let duration = movie.source.video.fetch_duration().await?;
-        handle_movie_metadata(self.db, new_metadata, movie, external_ids, duration).await?;
+        let item = movies.first().expect("movies are chunked");
+        let duration = item.source.video.fetch_duration().await?;
+        handle_movie_metadata(self.db, new_metadata, movies, external_ids, duration).await?;
 
         Ok(())
     }
@@ -685,13 +692,24 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             };
         }
 
-        let new_movies = local_movies
+        let mut new_movies: Vec<_> = local_movies
             .into_iter()
-            .filter(|l| !db_movies_videos.iter().any(|d| d.video_id == l.source.id));
+            .filter(|l| !db_movies_videos.iter().any(|d| d.video_id == l.source.id))
+            .collect();
+
+        new_movies.sort_unstable_by(|a, b| {
+            a.identifier
+                .title
+                .to_lowercase()
+                .cmp(&b.identifier.title.to_lowercase())
+        });
 
         let mut movie_scan_handles = JoinSet::new();
         let discover_providers = self.providers_stack.discover_providers();
-        for movie in new_movies {
+        for movie in new_movies
+            .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
+            .map(Vec::from)
+        {
             let discover_providers = discover_providers.clone();
             let db = self.db;
             movie_scan_handles.spawn(async move {
@@ -951,10 +969,11 @@ async fn handle_show_metadata(
 async fn handle_movie_metadata(
     db: &Db,
     metadata: MovieMetadata,
-    movie: LibraryItem<MovieIdentifier>,
+    movies: Vec<LibraryItem<MovieIdentifier>>,
     external_ids: Vec<ExternalIdMetadata>,
     duration: Duration,
 ) -> anyhow::Result<i64> {
+    let movie = movies.first().expect("movies are chunked");
     let metadata_id = metadata.metadata_id.clone();
     let metadata_provider = metadata.metadata_provider;
     let poster_url = metadata.poster.clone();
@@ -962,9 +981,11 @@ async fn handle_movie_metadata(
     let db_movie = metadata.into_db_movie(duration);
     let mut tx = db.begin().await.unwrap();
     let local_id = tx.insert_movie(db_movie).await.unwrap();
-    tx.update_video_movie_id(movie.source.id, local_id)
-        .await
-        .unwrap();
+    for movie in &movies {
+        tx.update_video_movie_id(movie.source.id, local_id)
+            .await
+            .unwrap();
+    }
     for external_id in external_ids {
         println!(
             "Inserting external id for the movie: {}",
@@ -1191,11 +1212,12 @@ async fn handle_episode(
 }
 
 async fn handle_movie(
-    item: LibraryItem<MovieIdentifier>,
+    items: Vec<LibraryItem<MovieIdentifier>>,
     db: &Db,
     fetch_params: FetchParams,
     providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
 ) -> Result<i64, AppError> {
+    let item = items.first().expect("movies are chunked");
     let db_movies = db.search_movie(&item.identifier.title).await?;
     let duration = item.source.video.fetch_duration().await?;
     if db_movies.is_empty()
@@ -1217,7 +1239,7 @@ async fn handle_movie(
                     .await
                     .unwrap_or_default();
                 let local_id =
-                    handle_movie_metadata(db, first_result, item, external_ids, duration).await?;
+                    handle_movie_metadata(db, first_result, items, external_ids, duration).await?;
                 return Ok(local_id);
             }
         }
