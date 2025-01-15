@@ -304,6 +304,7 @@ async fn main() {
             "/tasks/previews/{id}",
             delete(server_api::cancel_previews_task),
         )
+        .route("/tasks/intro_detection", get(server_api::intro_detection_tasks))
         .route("/tasks/progress", get(server_api::progress))
         .route("/scan", post(server_api::reconciliate_lib))
         .route("/fix_metadata/{content_id}", post(server_api::fix_metadata))

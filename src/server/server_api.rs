@@ -31,11 +31,12 @@ use crate::app_state::AppError;
 use crate::config::{
     self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
 };
-use crate::db::{DbActions, DbEpisodeIntro};
+use crate::db::DbActions;
 use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
+use crate::intro_detection::IntroJob;
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::assets::{
     BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
@@ -2456,49 +2457,36 @@ pub async fn detect_intros(
     Path((show_id, season)): Path<(i64, i64)>,
     State(app_state): State<AppState>,
 ) -> Result<(), AppError> {
-    let AppState { db, library, .. } = app_state;
-    let video_ids = sqlx::query!(
-        r#"SELECT videos.id FROM episodes
-        JOIN seasons ON seasons.id = episodes.season_id
-        JOIN videos ON videos.episode_id = episodes.id
-        WHERE seasons.show_id = ? AND seasons.number = ?;"#,
+    let tasks = app_state.tasks;
+    let job = IntroJob {
         show_id,
-        season,
-    )
-    .fetch_all(&db.pool)
-    .await?;
-    let paths: Vec<PathBuf> = {
-        let library = library.lock().unwrap();
-        let mut paths = Vec::with_capacity(video_ids.len());
-        for id in &video_ids {
-            paths.push(
-                library
-                    .videos
-                    .get(&id.id)
-                    .map(|s| s.source.video.path().to_path_buf())
-                    .ok_or(AppError::internal_error("One of the episodes is not found"))?,
-            );
-        }
-        paths
+        season: season as usize,
     };
-    let intros = crate::intro_detection::intro_detection(paths).await?;
-    for (i, intro) in intros.into_iter().enumerate() {
-        let id = video_ids[i].id;
-        if let Some(intro) = intro {
-            let db_intro = DbEpisodeIntro {
-                id: None,
-                video_id: id,
-                start_sec: intro.start.as_secs() as i64,
-                end_sec: intro.end.as_secs() as i64,
-            };
-            if let Err(e) = db.pool.insert_intro(db_intro).await {
-                tracing::warn!("Failed to insert intro for video id({id}): {e}");
-            };
-        } else {
-            tracing::warn!("Could not detect intro for video with id {id}");
-        }
-    }
+    let id = tasks.intro_detection_tasks.start_task(job, None)?;
+    tokio::spawn(async move {
+        match app_state.detect_intros(show_id, season).await {
+            Ok(_) => tasks.intro_detection_tasks.finish_task(id),
+            Err(_) => tasks
+                .intro_detection_tasks
+                .error_task(id, TaskError::Failure),
+        };
+    });
     Ok(())
+}
+
+/// Get all running tasks
+#[utoipa::path(
+    get,
+    path = "/api/tasks/intro_detection",
+    responses(
+        (status = 200, body = inline(Vec<Task<IntroJob>>))
+    ),
+    tag = "Tasks",
+)]
+pub async fn intro_detection_tasks(
+    State(tasks): State<&'static TaskResource>,
+) -> Json<serde_json::Value> {
+    Json(tasks.intro_detection_tasks.tasks())
 }
 
 #[cfg(test)]

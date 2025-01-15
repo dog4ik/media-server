@@ -3,7 +3,7 @@ members = [".", "torrent", "upnp"]
 
 [package]
 name = "media-server"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 
 [features]
@@ -66,6 +66,7 @@ bitvec = "1.0.1"
 test-log = "0.2.16"
 torrent = { path = "./torrent" }
 upnp = { path = "./upnp" }
+media-intro = { path = "./media-intro" }
 
 # Windows dependencies
 tray-icon = { version = "0.19.2", optional = true }

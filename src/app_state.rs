@@ -659,6 +659,48 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         Ok(())
     }
 
+    pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
+        let AppState { db, library, .. } = self;
+        let video_ids = sqlx::query!(
+            r#"SELECT videos.id FROM episodes
+        JOIN seasons ON seasons.id = episodes.season_id
+        JOIN videos ON videos.episode_id = episodes.id
+        WHERE seasons.show_id = ? AND seasons.number = ?;"#,
+            show_id,
+            season_number,
+        )
+        .fetch_all(&db.pool)
+        .await?;
+        let paths: Vec<_> = {
+            let library = library.lock().unwrap();
+            let mut paths = Vec::with_capacity(video_ids.len());
+            for id in &video_ids {
+                paths.push(
+                    library
+                        .videos
+                        .get(&id.id)
+                        .map(|s| s.source.video.path().to_path_buf())
+                        .ok_or(AppError::internal_error("One of the episodes is not found"))?,
+                );
+            }
+            paths
+        };
+        let intros = crate::intro_detection::intro_detection(paths).await?;
+        let mut tx = db.begin().await?;
+        for (i, intro) in intros.into_iter().enumerate() {
+            let id = video_ids[i].id;
+            if let Some(intro) = intro {
+                if let Err(e) = tx.insert_intro(intro.into_db_intro(id)).await {
+                    tracing::warn!("Failed to insert intro for video id({id}): {e}");
+                };
+            } else {
+                tracing::warn!("Could not detect intro for video with id {id}");
+            }
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
         let start = Instant::now();
         let language: config::MetadataLanguage = config::CONFIG.get_value();

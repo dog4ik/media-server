@@ -238,6 +238,7 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
+            tracing::trace!("Inserting intro for video {}", intro.video_id);
             let subtitles_query = sqlx::query!(
                 "INSERT INTO episode_intro
             (video_id, start_sec, end_sec)

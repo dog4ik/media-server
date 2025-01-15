@@ -9,6 +9,7 @@ use uuid::Uuid;
 use crate::{
     app_state::AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
+    intro_detection::IntroJob,
     stream::transcode_stream::TranscodeStream,
     torrent::PendingTorrent,
 };
@@ -21,6 +22,7 @@ pub enum TaskProgress {
     Previews(ProgressChunk<PreviewsJob>),
     Torrent(ProgressChunk<PendingTorrent>),
     LibraryScan(ProgressChunk<LibraryScanTask>),
+    IntroDetection(ProgressChunk<IntroJob>),
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -368,6 +370,7 @@ pub struct TaskResource {
     pub previews_tasks: TaskStorage<PreviewsJob>,
     pub library_scan_tasks: TaskStorage<LibraryScanTask>,
     pub torrent_tasks: TaskStorage<PendingTorrent>,
+    pub intro_detection_tasks: TaskStorage<IntroJob>,
     pub active_streams: Mutex<Vec<TranscodeStream>>,
 }
 
@@ -427,6 +430,7 @@ impl TaskResource {
             library_scan_tasks: TaskStorage::new(progress_channel.clone()),
             torrent_tasks: TaskStorage::new(progress_channel.clone()),
             previews_tasks: TaskStorage::new(progress_channel.clone()),
+            intro_detection_tasks: TaskStorage::new(progress_channel.clone()),
             active_streams: Mutex::new(Vec::new()),
             tracker: TaskTracker::new(),
             progress_channel,

@@ -1,43 +1,85 @@
-use std::{ops::RangeBounds, path::Path, time::Duration};
+use std::{collections::HashMap, ops::RangeBounds, path::Path, time::Duration};
+
+use media_intro::Segment;
 
 use crate::{
     config::{self},
     ffmpeg,
+    progress::TaskTrait,
 };
 
-const TAKE_TIME: Duration = Duration::from_secs(5 * 60);
-
-/// each byte is ~ 10 ms
-/// Higher value means less precision. Represents bytes
-const WINDOW_SIZE: usize = 15;
-/// How many byte errors are allowed in window
-const ALLOWED_WINDOW_ERRORS: usize = 3;
-/// Higher value means less precision. Represents percent
-const ACCEPT_ERROR_RATE: usize = 15;
-/// Higher value means less precision
-/// One skip is `WINDOW_SIZE * 10` ms of audio
-const ALLOWED_SKIPS: usize = 3;
-
-/// Canculate duration of the single byte in fingerprint
-const fn byte_duration(fingerprint_len: usize) -> Duration {
-    Duration::from_millis(TAKE_TIME.as_millis() as u64 / fingerprint_len as u64)
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq, Eq, utoipa::ToSchema)]
+pub struct IntroJob {
+    pub show_id: i64,
+    pub season: usize,
 }
 
-fn chunk_duration(total_bytes: usize, chunk_len: usize) -> Duration {
-    let byte_duration = byte_duration(total_bytes);
-    byte_duration * chunk_len as u32
+impl TaskTrait for IntroJob {
+    type Identifier = Self;
+
+    type Progress = ();
+
+    fn identifier(&self) -> Self::Identifier {
+        *self
+    }
+
+    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    where
+        Self: Sized,
+    {
+        crate::progress::TaskProgress::IntroDetection(chunk)
+    }
 }
+
+const TAKE_TIME: Duration = Duration::from_secs(10 * 60);
 
 #[derive(Debug, Clone, Copy, Default)]
-struct Intro<'a> {
-    start: usize,
-    data: &'a [u8],
+pub struct IntroPair(IntroRange, IntroRange);
+
+impl IntroPair {
+    pub fn from_segments(segments: &[Segment], min_duration: Duration) -> Option<Self> {
+        let mut shortest_segment: Option<&Segment> = None;
+        for seg in segments {
+            let duration = seg.duration();
+            if duration < min_duration {
+                continue;
+            }
+            match shortest_segment {
+                Some(shortest) if shortest.duration() > duration => {
+                    shortest_segment = Some(seg);
+                }
+                Some(_) => {}
+                None => shortest_segment = Some(seg),
+            };
+        }
+        shortest_segment.map(|s| {
+            IntroPair(
+                IntroRange {
+                    start: s.start1(),
+                    end: s.end1(),
+                },
+                IntroRange {
+                    start: s.start2(),
+                    end: s.end2(),
+                },
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IntroRange {
     pub start: Duration,
     pub end: Duration,
+}
+
+impl From<&Segment> for IntroRange {
+    fn from(seg: &Segment) -> Self {
+        IntroRange {
+            start: seg.start1(),
+            end: seg.end1(),
+        }
+    }
 }
 
 impl IntroRange {
@@ -54,132 +96,85 @@ impl IntroRange {
         };
         Self { start, end }
     }
-}
 
-impl Intro<'_> {
-    pub fn range(&self, total_bytes: usize) -> IntroRange {
-        let total_bytes = byte_duration(total_bytes);
-        let range =
-            total_bytes * self.start as u32..=(self.start + self.data.len()) as u32 * total_bytes;
-        IntroRange {
-            start: *range.start(),
-            end: *range.end(),
+    pub fn from_segments(segments: &[Segment], min_duration: Duration) -> Option<Self> {
+        let mut best_section: Option<IntroRange> = None;
+        for seg in segments {
+            let duration = seg.duration();
+            if duration < min_duration {
+                continue;
+            }
+            match best_section {
+                Some(best) if best.end - best.start > duration => {
+                    best_section = Some(IntroRange::from(seg))
+                }
+                Some(_) => {}
+                None => best_section = Some(IntroRange::from(seg)),
+            };
+        }
+        best_section
+    }
+
+    pub fn into_db_intro(self, video_id: i64) -> crate::db::DbEpisodeIntro {
+        crate::db::DbEpisodeIntro {
+            id: None,
+            video_id,
+            start_sec: self.start.as_secs() as i64,
+            end_sec: self.end.as_secs() as i64,
         }
     }
-
-    pub fn len(&self) -> usize {
-        self.data.len()
-    }
 }
 
-/// 5 minutes audio fingerprint is 9608 bytes
 #[derive(Debug)]
 struct Chromaprint {
-    fingerprint: Vec<u8>,
+    fingerprint: Vec<u32>,
 }
 
 impl Chromaprint {
     pub fn new(fingerprint: Vec<u8>) -> Self {
+        assert!(
+            fingerprint.len() % 4 == 0,
+            "vector length must be a multiple of 4"
+        );
+
+        let fingerprint = fingerprint
+            .windows(4)
+            .map(|w| w.try_into().expect("window size is 4"))
+            .map(|w| u32::from_be_bytes(w))
+            .collect();
         Self { fingerprint }
-    }
-
-    /// Length of fingerprint in bytes
-    pub fn len(&self) -> usize {
-        self.fingerprint.len()
-    }
-
-    /// Get best position for the given chunk.
-    pub fn fit_chunk(&self, chunk: &[u8]) -> Option<usize> {
-        let mut min_errors_amount = u32::MAX;
-        let mut start_idx = None;
-        let window_size = chunk.len();
-        assert!(window_size < self.len());
-        for (window_start, window) in self.fingerprint.windows(window_size).enumerate() {
-            if let Some(errors) = check_window_errors(window, chunk) {
-                if errors < min_errors_amount {
-                    start_idx = Some(window_start);
-                    min_errors_amount = errors;
-                }
-            }
-        }
-        start_idx
-    }
-
-    /// Iterator over chunks of fingerprint
-    pub fn chunks(&self) -> impl Iterator<Item = &[u8; WINDOW_SIZE]> + '_ {
-        self.fingerprint.array_chunks()
-    }
-
-    /// Walks intro side by side. Returns the stop byte offset
-    fn walk_intro<'a>(
-        &'a self,
-        byte_offset: usize,
-        other_fp: &Chromaprint,
-        other_byte_offset: usize,
-    ) -> usize {
-        let mut end = byte_offset;
-        for (self_chunk, other_chunk) in self.fingerprint[byte_offset..]
-            .array_chunks::<WINDOW_SIZE>()
-            .zip(other_fp.fingerprint[other_byte_offset..].array_chunks::<WINDOW_SIZE>())
-        {
-            if check_window_errors(self_chunk, other_chunk).is_some() {
-                end += WINDOW_SIZE;
-            }
-        }
-        end
-    }
-
-    /// Get longest intersection with other fingerprint
-    fn intersection_of(&self, other_fp: &Chromaprint, min_duration: Duration) -> Option<Intro<'_>> {
-        let longest_intro = None;
-        for (i, other_start) in self
-            .chunks()
-            .enumerate()
-            .filter_map(|(i, c)| Some((i, other_fp.fit_chunk(c)?)))
-        {
-            let start = i * WINDOW_SIZE;
-            // walk side by side until we find the end
-            // we can skip current chunk because fit_chunk guarantees that chunk is similar
-            let end = self.walk_intro(start, other_fp, other_start);
-        }
-        longest_intro
     }
 }
 
 #[derive(Debug)]
-struct EpisodesIntersections<'a> {
-    chromaprint: &'a Chromaprint,
-    intersections: Vec<Option<Intro<'a>>>,
+struct EpisodesIntersections {
+    intersections: Vec<Option<IntroRange>>,
 }
 
-impl<'a> EpisodesIntersections<'a> {
-    pub fn new(chromaprint: &'a Chromaprint) -> Self {
+impl<'a> EpisodesIntersections {
+    pub fn new() -> Self {
         Self {
-            chromaprint,
             intersections: Vec::new(),
         }
     }
 
-    pub fn add(&mut self, intersection: Option<Intro<'a>>) {
+    pub fn add(&mut self, intersection: Option<IntroRange>) {
         self.intersections.push(intersection)
     }
-}
 
-/// early return with None if encountered critical amount of errors
-/// Returns the amount of errors if not in clitical amount
-fn check_window_errors(left: &[u8], right: &[u8]) -> Option<u32> {
-    assert_eq!(left.len(), right.len());
-    let mut errors = 0;
-    for (left, right) in left.iter().zip(right) {
-        let diff: u8 = left ^ right;
-        if diff.count_ones() > 4 {
-            errors += 1;
+    pub fn finalize(self) -> Option<IntroRange> {
+        let mut iter = self.intersections.into_iter().flatten();
+        let mut current_intro = iter.next()?;
+        for intro in iter {
+            if intro.start > current_intro.start {
+                current_intro.start = intro.start;
+            }
+            if intro.end > current_intro.end {
+                current_intro.end = intro.end;
+            }
         }
-        if errors > ALLOWED_WINDOW_ERRORS as u32 {
-            return None;
-        }
+        Some(current_intro)
     }
-    Some(errors)
 }
 
 fn detect_intros(
@@ -191,24 +186,33 @@ fn detect_intros(
         return vec![None; fingerprints.len()];
     }
 
-    let fingerprint_length = fingerprints[0].len();
     let mut ranges = vec![None; fingerprints.len()];
-    let mut episodes = Vec::new();
+    let mut intro_cache = HashMap::new();
 
-    // idea is that we can finish fingerprinting in once loop cycle.
+    // Optimization: if intro = ranges[compared intro] then we can reuse compared intro calculations instead of calculating them again
     for (i, current_fp) in fingerprints.iter().enumerate() {
-        let mut intersections = EpisodesIntersections::new(current_fp);
+        let mut intersections = EpisodesIntersections::new();
         for (j, fp) in fingerprints.iter().enumerate() {
-            // we don't analyze self with self
+            // don't analyze self
             if j == i {
+                intersections.add(None);
                 continue;
             }
-            let intersection = current_fp.intersection_of(fp, min_duration);
-            intersections.add(intersection);
+            let (ni, nj) = (i.min(j), i.max(j));
+            let range = intro_cache.entry((ni, nj)).or_insert_with(|| {
+                let intersection =
+                    media_intro::match_fingerprints(&current_fp.fingerprint, &fp.fingerprint)
+                        .unwrap();
+                IntroPair::from_segments(&intersection, min_duration)
+            });
+            if i == ni {
+                intersections.add(range.map(|v| v.0));
+            } else {
+                intersections.add(range.map(|v| v.1));
+            }
         }
-        episodes.push(intersections);
+        ranges[i] = intersections.finalize();
     }
-
     ranges
 }
 
@@ -229,11 +233,10 @@ pub async fn intro_detection(
         if output.status.success() {
             fingerprints.push(Chromaprint::new(output.stdout))
         } else {
-            let stderr = String::from_utf8(output.stderr).unwrap();
-            eprintln!("Fingerprint collector failed: {stderr}");
-            tracing::warn!(
-                error = stderr,
-                "Fingerprint collector failed, make sure ffmpeg have chromaprint muxer setup"
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(
+                error = %stderr,
+                "Fingerprint collector failed, make sure ffmpeg supports chromaprint"
             );
         }
     }
@@ -253,6 +256,7 @@ mod tests {
     use super::{Chromaprint, IntroRange};
 
     const TEST_MIN_INTRO_DURATION: Duration = Duration::from_secs(20);
+    const ALLOWED_THRESHOLD: Duration = Duration::from_secs(5);
 
     fn test_range(range: IntroRange, expected: IntroRange, threshold: Duration, ep: usize) {
         assert!(
@@ -272,7 +276,7 @@ mod tests {
     }
 
     #[test]
-    fn test_intros() {
+    fn test_friends_intro_detection() {
         let expected_intros = [
             (
                 include_bytes!("../../tests_data/fp/friends.s10/1.chromaprint"),
@@ -352,12 +356,12 @@ mod tests {
         for (i, (range, (_, expected_range))) in intros.into_iter().zip(expected_intros).enumerate()
         {
             let range = range.unwrap();
-            test_range(range, expected_range, Duration::from_secs(1), i + 1);
+            test_range(range, expected_range, ALLOWED_THRESHOLD, i + 1);
         }
     }
 
     #[test_log::test]
-    fn test_edgerunners() {
+    fn test_edgerunners_intro_detection() {
         // First episode does not have intro
         // these intros have common netflix logo at the start.
         // also they have common silence at the end
@@ -416,7 +420,7 @@ mod tests {
                 continue;
             }
             let range = range.unwrap();
-            test_range(range, expected_range, Duration::from_secs(1), i + 1);
+            test_range(range, expected_range, ALLOWED_THRESHOLD, i + 1);
         }
     }
 }

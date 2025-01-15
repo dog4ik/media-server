@@ -101,6 +101,7 @@ pub struct SerdeDuration {
         server_api::parent_directory,
         server_api::root_dirs,
         server_api::detect_intros,
+        server_api::intro_detection_tasks,
         server_api::video_content_metadata,
         server_api::delete_episode,
         server_api::delete_season,
