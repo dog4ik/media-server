@@ -51,7 +51,10 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
         }
     }
 
-    pub fn register_service<S: Service + Send + Sync + Clone + 'static>(mut self, service: S) -> Self {
+    pub fn register_service<S: Service + Send + Sync + Clone + 'static>(
+        mut self,
+        service: S,
+    ) -> Self {
         let base_path = format!("/{}", S::NAME);
         let control_path = format!("{base_path}/control.xml");
         let event_path = format!("{base_path}/event.xml");

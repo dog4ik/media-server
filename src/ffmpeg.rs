@@ -429,7 +429,7 @@ impl TaskTrait for TranscodeJob {
         Self: Sized,
     {
         TaskProgress::Transcode(ProgressChunk {
-            identificator: chunk.identificator,
+            identifier: chunk.identifier,
             status: chunk.status,
         })
     }
@@ -528,7 +528,7 @@ impl TaskTrait for PreviewsJob {
         Self: Sized,
     {
         TaskProgress::Previews(ProgressChunk {
-            identificator: chunk.identificator,
+            identifier: chunk.identifier,
             status: chunk.status,
         })
     }

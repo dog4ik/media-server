@@ -622,7 +622,7 @@ async fn handle_progress(
         let ident = pending_torrent.identifier();
         let progress = CompactTorrentProgress::new(&progress);
         let progress_chunk = ProgressChunk {
-            identificator: ident,
+            identifier: ident,
             status: ProgressStatus::Pending { progress },
         };
         tasks

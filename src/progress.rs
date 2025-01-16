@@ -136,7 +136,7 @@ impl<T: TaskTrait> TaskStorage<T> {
         let task = self.remove_task(id)?;
         let ident = task.kind.identifier();
         let chunk = ProgressChunk {
-            identificator: ident,
+            identifier: ident,
             status: ProgressStatus::Finish,
         };
         self.send_progress(id, chunk);
@@ -147,7 +147,7 @@ impl<T: TaskTrait> TaskStorage<T> {
         let task = self.remove_task(id)?;
         let ident = task.kind.identifier();
         let chunk = ProgressChunk {
-            identificator: ident,
+            identifier: ident,
             status: ProgressStatus::Error {
                 message: Some(error.to_string()),
             },
@@ -161,7 +161,7 @@ impl<T: TaskTrait> TaskStorage<T> {
         let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
         cancel.cancel();
         let chunk = ProgressChunk {
-            identificator: task.kind.identifier(),
+            identifier: task.kind.identifier(),
             status: ProgressStatus::Cancel,
         };
         self.send_progress(id, chunk);
@@ -247,7 +247,7 @@ where
                                 }
                                 ProgressStatus::Pending { .. } => {
                                     let task_progress = ProgressChunk {
-                                        identificator: identifier.clone(),
+                                        identifier: identifier.clone(),
                                         status: progress,
                                     };
                                     self.send_progress(id, task_progress);
@@ -278,14 +278,14 @@ where
 #[derive(Debug, Serialize, utoipa::ToSchema, PartialEq)]
 pub struct ProgressChunk<T: TaskTrait> {
     #[serde(flatten)]
-    pub identificator: T::Identifier,
+    pub identifier: T::Identifier,
     pub status: ProgressStatus<T::Progress>,
 }
 
 impl<T: TaskTrait> Clone for ProgressChunk<T> {
     fn clone(&self) -> Self {
         Self {
-            identificator: self.identificator.clone(),
+            identifier: self.identifier.clone(),
             status: self.status.clone(),
         }
     }
@@ -328,7 +328,7 @@ impl<T: TaskTrait> Task<T> {
             created: now,
             id,
             latest_progress: ProgressChunk {
-                identificator: kind.identifier(),
+                identifier: kind.identifier(),
                 status: ProgressStatus::Start,
             },
             kind,

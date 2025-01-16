@@ -628,7 +628,7 @@ mod test {
     }
 
     #[test]
-    fn bitfiled_validate() {
+    fn bitfield_validate() {
         let data = [0b01110101, 0b01110001, 0b00100000];
         let bitfield = BitField::new(&data);
         assert!(bitfield.validate(16).is_err());

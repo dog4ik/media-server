@@ -10,7 +10,7 @@ pub struct ExtrasIdent {
 }
 
 #[derive(Debug)]
-pub struct ExtrasIdentificator {
+pub struct ExtrasIdentifier {
     name: String,
     parent_title: String,
     extra_type: ContentType,

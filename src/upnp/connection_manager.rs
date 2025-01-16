@@ -6,9 +6,8 @@ pub struct MediaServerConnectionManager;
 impl ConnectionManagerHandler for MediaServerConnectionManager {
     fn get_protocol_info(
         &self,
-    ) -> impl std::future::Future<
-        Output = Result<(String, String), upnp::action::ActionError>,
-    > + Send {
+    ) -> impl std::future::Future<Output = Result<(String, String), upnp::action::ActionError>> + Send
+    {
         async { todo!() }
     }
 

@@ -1158,7 +1158,7 @@ impl Download {
         }
         let total_pieces = self.scheduler.piece_table.len();
         if let Err(e) = peer.bitfield.validate(total_pieces) {
-            tracing::warn!("Failed to validate peer's bitfiled: {e}");
+            tracing::warn!("Failed to validate peer's bitfield: {e}");
             return;
         }
         let (message_tx, message_rx) = flume::bounded(PEER_CHANNEL_CAPACITY);
