@@ -27,8 +27,7 @@ async fn main() {
         println!("Progress: {}", progress.percent);
         if progress
             .changes
-            .iter()
-            .any(|p| *p == StateChange::DownloadStateChange(DownloadState::Seeding))
+            .contains(&StateChange::DownloadStateChange(DownloadState::Seeding))
         {
             break;
         }
