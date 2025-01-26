@@ -207,7 +207,7 @@ impl ObjectProperty for Date {
     const NAME: &str = "dc:date";
 }
 impl IntoXml for Date {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let formatted = self.date.format(&Self::FORMAT).expect("infallible");
         w.create_element("dc:date")
             .write_text_content(BytesText::new(&formatted))?;
@@ -246,7 +246,7 @@ impl ObjectProperty for RecordedDuration {
     const NAME: &str = "upnp:recordedDuration";
 }
 impl IntoXml for RecordedDuration {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let upnp_duration = super::UpnpDuration::new(self.0);
         w.create_element("upnp:recordedDuration")
             .write_text_content(BytesText::new(&upnp_duration.to_string()))?;
@@ -274,7 +274,7 @@ pub struct SearchClass {
 }
 
 impl IntoXml for SearchClass {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let mut attributes = Vec::new();
         attributes.push((
             "includeDerived",
@@ -528,7 +528,7 @@ pub mod res {
     }
 
     impl IntoXml for Resource {
-        fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
             let mut attributes = Vec::new();
             attributes.push(("protocolInfo", self.protocol_info.to_string()));
             if let Some(import_uri) = &self.import_uri {

@@ -126,7 +126,7 @@ pub struct Range {
 }
 
 impl IntoXml for Range {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let parent = BytesStart::new("allowedValueRange");
         w.write_event(Event::Start(parent.clone()))?;
         w.create_element("minimum")
@@ -158,7 +158,7 @@ impl IntoUpnpValue for u8 {
 }
 
 impl IntoXml for u8 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -171,7 +171,7 @@ impl IntoUpnpValue for u16 {
 }
 
 impl IntoXml for u16 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -185,7 +185,7 @@ impl IntoUpnpValue for u32 {
 }
 
 impl IntoXml for u32 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -199,7 +199,7 @@ impl IntoUpnpValue for u64 {
 }
 
 impl IntoXml for u64 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -213,7 +213,7 @@ impl IntoUpnpValue for i8 {
 }
 
 impl IntoXml for i8 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -226,7 +226,7 @@ impl IntoUpnpValue for i16 {
 }
 
 impl IntoXml for i16 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -239,7 +239,7 @@ impl IntoUpnpValue for i32 {
 }
 
 impl IntoXml for i32 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -252,7 +252,7 @@ impl IntoUpnpValue for i64 {
 }
 
 impl IntoXml for i64 {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -265,7 +265,7 @@ impl IntoUpnpValue for bool {
 }
 
 impl IntoXml for bool {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let val = if *self { "1" } else { "0" };
         w.write_event(Event::Text(BytesText::new(val)))
     }
@@ -279,7 +279,7 @@ impl IntoUpnpValue for uuid::Uuid {
 }
 
 impl IntoXml for uuid::Uuid {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -292,7 +292,7 @@ impl IntoUpnpValue for String {
 }
 
 impl IntoXml for String {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::new(&self)))
     }
 }
@@ -305,7 +305,7 @@ impl IntoUpnpValue for reqwest::Url {
 }
 
 impl IntoXml for reqwest::Url {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let url = self.to_string();
         w.write_event(Event::Text(BytesText::new(&url)))
     }
@@ -319,14 +319,14 @@ impl IntoUpnpValue for std::net::Ipv4Addr {
 }
 
 impl IntoXml for std::net::Ipv4Addr {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let url = self.to_string();
         w.write_event(Event::Text(BytesText::new(&url)))
     }
 }
 
 impl<'a> IntoXml for &'a str {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::new(self)))
     }
 }
@@ -345,7 +345,7 @@ impl<T: IntoUpnpValue> IntoUpnpValue for Option<T> {
 }
 
 impl<T: IntoXml> IntoXml for Option<T> {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         match self {
             Some(v) => v.write_xml(w),
             None => Ok(()),
@@ -378,7 +378,7 @@ impl std::fmt::Debug for StateVariableDescriptor {
 }
 
 impl IntoXml for StateVariableDescriptor {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let send_events = match self.send_events {
             true => "yes",
             false => "no",
@@ -392,7 +392,7 @@ impl IntoXml for StateVariableDescriptor {
             .write_text_content(BytesText::new(&self.kind.to_string()))?;
         if let Some(allowed_list) = self.allowed_list {
             w.create_element("allowedValueList")
-                .write_inner_content::<_, quick_xml::Error>(|w| {
+                .write_inner_content(|w| {
                     for val in allowed_list {
                         w.create_element("allowedValue")
                             .write_text_content(BytesText::new(val))?;

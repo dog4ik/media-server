@@ -128,7 +128,7 @@ impl FromStr for BrowseFlag {
 }
 
 impl IntoXml for BrowseFlag {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::from_escaped(self.to_string())))
     }
 }
@@ -283,7 +283,7 @@ mod property_name {
     }
 
     impl IntoXml for ValueType {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             match self {
                 Self::Value(v) => v.write_xml(w),
                 Self::NestedProperties(properties) => {
@@ -297,7 +297,7 @@ mod property_name {
     }
 
     impl IntoXml for PropertyValue {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             if !self.is_allowed {
                 return Ok(());
             }
@@ -453,7 +453,7 @@ mod filter {
     }
 
     impl IntoXml for Filter {
-        fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
             match self {
                 Filter::Wildcard => w.write_event(Event::Text(BytesText::from_escaped("*"))),
                 Filter::Allowed(properties) => {
@@ -515,7 +515,7 @@ mod feature_list {
     }
 
     impl IntoXml for Feature {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             let version = self.version.to_string();
             let start = BytesStart::new("Feature")
                 .with_attributes([("name", self.name.as_str()), ("version", version.as_str())]);
@@ -529,7 +529,7 @@ mod feature_list {
     pub struct FeatureList(Vec<Feature>);
 
     impl IntoXml for FeatureList {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             let start = BytesStart::new("FeatureList");
             let end = start.to_end().into_owned();
             w.write_event(Event::Start(start))?;
@@ -759,7 +759,7 @@ impl Item {
 }
 
 impl IntoXml for Item {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let mut item_tag = BytesStart::new("item").with_attributes([
             ("id", self.base.id.as_str()),
             ("parentID", self.base.parent_id.as_str()),
@@ -880,7 +880,7 @@ impl Container {
 }
 
 impl IntoXml for Container {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let mut container_tag = BytesStart::new("container").with_attributes([
             ("id", self.base.id.as_str()),
             ("parentID", self.base.parent_id.as_str()),

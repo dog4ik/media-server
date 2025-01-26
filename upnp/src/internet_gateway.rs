@@ -41,7 +41,7 @@ impl IntoUpnpValue for ConnectionType {
 }
 
 impl IntoXml for ConnectionType {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let val = match self {
             Self::Unconfigured => "Unconfigured",
             Self::IpRouted => "IP_Routed",
@@ -107,7 +107,7 @@ impl IntoUpnpValue for ConnectionStatus {
 }
 
 impl IntoXml for ConnectionStatus {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let val = match self {
             Self::Unconfigured => "Unconfigured",
             Self::Connecting => "Connecting",
@@ -185,7 +185,7 @@ impl IntoUpnpValue for LastConnectionError {
 }
 
 impl IntoXml for LastConnectionError {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let val = match self {
             Self::None => "ERROR_NONE",
             Self::CommandAborted => "ERROR_COMMAND_ABORTED",
@@ -343,7 +343,7 @@ impl IntoUpnpValue for PortMappingProtocol {
 }
 
 impl IntoXml for PortMappingProtocol {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let val = match self {
             Self::TCP => "TCP",
             Self::UDP => "UDP",
@@ -417,7 +417,7 @@ mod port_listing {
     }
 
     impl IntoXml for PortMappingEntry {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             let parent = BytesStart::new("p:PortMappingEntry");
             w.write_event(Event::Start(parent.clone()))?;
             w.create_element("p:NewRemoteHost")
@@ -562,7 +562,7 @@ mod port_listing {
     }
 
     impl IntoXml for ArgPortListing {
-        fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
             let parent = BytesStart::new("p:PortMappingList").with_attributes([
                 ("xmlns:p", "urn:schemas-upnp-org:gw:WANIPConnection"),
                 ("xmlsn:xsi", "http://www.w3.org/2001/XMLSchema-instance"),

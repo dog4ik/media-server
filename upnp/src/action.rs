@@ -68,7 +68,7 @@ impl Argument {
         &self,
         w: &mut quick_xml::Writer<T>,
         direction: ArgumentDirection,
-    ) -> quick_xml::Result<()> {
+    ) -> std::io::Result<()> {
         let parent = BytesStart::new("argument");
         w.write_event(Event::Start(parent.clone()))?;
         w.create_element("name")
@@ -189,7 +189,7 @@ impl Action {
 }
 
 impl IntoXml for Action {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let parent = BytesStart::new("action");
         w.write_event(Event::Start(parent.clone()))?;
 
@@ -335,7 +335,7 @@ impl<'a> FromXml<'a> for ActionPayload<InArgumentPayload<'a>> {
 }
 
 impl<'a> IntoXml for ActionPayload<InArgumentPayload<'a>> {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let action = BytesStart::new(self.name());
         let action_end = action.to_end().into_owned();
         w.write_event(Event::Start(action))?;
@@ -350,7 +350,7 @@ impl<'a> IntoXml for ActionPayload<InArgumentPayload<'a>> {
 }
 
 impl IntoXml for ActionPayload<OutArgumentsPayload> {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let action_name = format!("u:{}", self.name());
         let action = BytesStart::new(&action_name);
         let action_end = action.to_end().into_owned();
@@ -443,7 +443,7 @@ impl WritableAction {
     }
 
     // Appends provided argument in the message
-    pub fn write_argument<T: IntoXml>(&mut self, name: &str, argument: T) -> quick_xml::Result<()> {
+    pub fn write_argument<T: IntoXml>(&mut self, name: &str, argument: T) -> std::io::Result<()> {
         self.w
             .create_element(name)
             .write_inner_content(|w| argument.write_xml(w))?;
@@ -451,7 +451,7 @@ impl WritableAction {
     }
 
     /// Writes the end of the message and returns Soap raw message of the request
-    pub fn finish(mut self) -> quick_xml::Result<String> {
+    pub fn finish(mut self) -> anyhow::Result<String> {
         self.w
             .write_event(Event::End(BytesEnd::new(self.action_name)))?;
         self.w.write_event(Event::End(BytesEnd::new("s:Body")))?;
@@ -469,7 +469,7 @@ pub struct ActionResponse<T> {
 }
 
 impl IntoXml for ActionResponse<OutArgumentsPayload> {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let action = BytesStart::new(format!("u:{}Response", self.action_name))
             .with_attributes([("xmlns:u", self.service_urn.to_string().as_str())]);
         let action_end = action.to_end().into_owned();
@@ -818,7 +818,7 @@ impl std::fmt::Display for ActionError {
 impl std::error::Error for ActionError {}
 
 impl IntoXml for ActionError {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let parent = BytesStart::new("s:Fault");
         let parent_end = parent.to_end().into_owned();
         w.write_event(Event::Start(parent.clone()))?;
@@ -833,7 +833,7 @@ impl IntoXml for ActionError {
 
         w.create_element("UPnPError")
             .with_attribute(("xmlns", "schemas-upnp-org:control-1-0"))
-            .write_inner_content::<_, quick_xml::Error>(|w| {
+            .write_inner_content(|w| {
                 w.create_element("errorCode")
                     .write_text_content(BytesText::new(&self.code.code().to_string()))?;
                 if let Some(description) = &self.description {

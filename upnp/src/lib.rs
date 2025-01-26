@@ -60,9 +60,9 @@ pub type XmlWriter = quick_xml::Writer<Vec<u8>>;
 
 /// Allows structs to serialize themselves into xml fragments
 pub trait IntoXml {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()>;
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()>;
 
-    fn into_string(&self) -> quick_xml::Result<String> {
+    fn into_string(&self) -> std::io::Result<String> {
         let mut w = quick_xml::Writer::new(Vec::new());
         self.write_xml(&mut w)?;
         Ok(String::from_utf8(w.into_inner()).expect("produced value to be utf-8"))
@@ -83,7 +83,7 @@ pub trait FromXml<'a> {
 }
 
 impl<T: IntoXml> IntoXml for Vec<T> {
-    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         for el in self {
             el.write_xml(w)?;
         }

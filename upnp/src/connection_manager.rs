@@ -411,7 +411,7 @@ impl IntoUpnpValue for ConnectionStatus {
 }
 
 impl IntoXml for ConnectionStatus {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let val = match self {
             ConnectionStatus::Ok => "OK",
             ConnectionStatus::ContentFormatMismatch => "ContentFormatMismatch",
@@ -465,7 +465,7 @@ impl IntoUpnpValue for Direction {
 }
 
 impl IntoXml for Direction {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let msg = match self {
             Direction::Output => "Output",
             Direction::Input => "Input",

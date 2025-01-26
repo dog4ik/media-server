@@ -147,7 +147,7 @@ impl<'a> Device<'a> {
 }
 
 impl IntoXml for Device<'_> {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         let device = BytesStart::new("device");
         let device_end = device.to_end().into_owned();
         w.write_event(Event::Start(device))?;
@@ -184,22 +184,20 @@ impl IntoXml for Device<'_> {
             .write_text_content(BytesText::new(&udn))?;
         w.create_element("dlna:X_DLNADOC")
             .write_text_content(BytesText::new("DMS-1.50"))?;
-        w.create_element("iconList")
-            .write_inner_content::<_, quick_xml::Error>(|w| {
-                for icon in &self.icon_list {
-                    w.write_serializable("icon", icon)
-                        .expect("serialization not fail");
-                }
-                Ok(())
-            })?;
-        w.create_element("serviceList")
-            .write_inner_content::<_, quick_xml::Error>(|w| {
-                for service in &self.service_list {
-                    w.write_serializable("service", service)
-                        .expect("serialization not fail");
-                }
-                Ok(())
-            })?;
+        w.create_element("iconList").write_inner_content(|w| {
+            for icon in &self.icon_list {
+                w.write_serializable("icon", icon)
+                    .expect("serialization not fail");
+            }
+            Ok(())
+        })?;
+        w.create_element("serviceList").write_inner_content(|w| {
+            for service in &self.service_list {
+                w.write_serializable("service", service)
+                    .expect("serialization not fail");
+            }
+            Ok(())
+        })?;
 
         if let Some(presentation_url) = &self.presentation_url {
             w.create_element("presentationURL")
@@ -424,7 +422,7 @@ pub struct Icon<'a> {
 }
 
 impl IntoXml for Icon<'_> {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         w.write_serializable("icon", self)
             .expect("serialization not fail");
         Ok(())
@@ -510,7 +508,7 @@ pub struct Service<'a> {
 }
 
 impl IntoXml for Service<'_> {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         w.write_serializable("service", self)
             .expect("serialization not fail");
         Ok(())

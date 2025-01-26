@@ -27,7 +27,7 @@ impl SpecVersion {
 }
 
 impl IntoXml for SpecVersion {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
         w.write_serializable("specVersion", self)
             .expect("serialization is infallible");
         Ok(())
