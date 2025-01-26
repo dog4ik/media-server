@@ -8,6 +8,7 @@ pub enum DeviceType {
     MediaServer,
     MediaRenderer,
     Printer,
+    InternetGateway,
     Other(String),
 }
 
@@ -28,6 +29,7 @@ impl Display for DeviceType {
             DeviceType::MediaServer => "MediaServer",
             DeviceType::MediaRenderer => "MediaRenderer",
             DeviceType::Printer => "Printer",
+            DeviceType::InternetGateway => "InternetGatewayDevice",
             DeviceType::Other(other) => other,
         };
         write!(f, "{name}")
@@ -38,6 +40,7 @@ impl Display for DeviceType {
 pub enum ServiceType {
     ContentDirectory,
     AVTransport,
+    WANIPConnection,
     RenderingControl,
     ConnectionManager,
     Printer,
@@ -49,6 +52,7 @@ impl Display for ServiceType {
         let name = match self {
             ServiceType::ContentDirectory => "ContentDirectory",
             ServiceType::AVTransport => "AVTransport",
+            ServiceType::WANIPConnection => "WANIPConnection",
             ServiceType::RenderingControl => "RenderingControl",
             ServiceType::ConnectionManager => "ConnectionManager",
             ServiceType::Printer => "Printer",
@@ -63,6 +67,7 @@ impl From<&str> for ServiceType {
         match value {
             "ContentDirectory" => ServiceType::ContentDirectory,
             "AVTransport" => ServiceType::AVTransport,
+            "WANIPConnection" => ServiceType::WANIPConnection,
             "RenderingControl" => ServiceType::RenderingControl,
             "ConnectionManager" => ServiceType::ConnectionManager,
             "Printer" => ServiceType::Printer,

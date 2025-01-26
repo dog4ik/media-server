@@ -1,11 +1,13 @@
 use std::{fmt::Display, str::FromStr};
 
 use anyhow::Context;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+use crate::{FromXml, IntoXml, XmlReaderExt};
 
 pub mod service_description;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct SpecVersion {
     pub major: usize,
     pub minor: usize,
@@ -21,6 +23,32 @@ impl SpecVersion {
     }
     pub const fn upnp_v1() -> Self {
         Self { major: 1, minor: 0 }
+    }
+}
+
+impl IntoXml for SpecVersion {
+    fn write_xml(&self, w: &mut crate::XmlWriter) -> quick_xml::Result<()> {
+        w.write_serializable("specVersion", self)
+            .expect("serialization is infallible");
+        Ok(())
+    }
+}
+
+impl<'a> FromXml<'a> for SpecVersion {
+    fn read_xml(r: &mut quick_xml::Reader<&'a [u8]>) -> anyhow::Result<Self> {
+        let parent = r.read_to_start()?;
+        anyhow::ensure!(parent.local_name().as_ref() == b"specVersion");
+        let major_start = r.read_to_start()?;
+        anyhow::ensure!(major_start.local_name().as_ref() == b"major");
+        let major = r.read_text(major_start.name())?.parse()?;
+
+        let minor_start = r.read_to_start()?;
+
+        let minor = r.read_text(minor_start.name())?.parse()?;
+
+        r.read_to_end(parent.to_end().name())?;
+
+        Ok(Self { major, minor })
     }
 }
 

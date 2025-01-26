@@ -311,9 +311,45 @@ impl IntoXml for reqwest::Url {
     }
 }
 
-impl IntoXml for &'static str {
+impl IntoUpnpValue for std::net::Ipv4Addr {
+    const TYPE_NAME: DataType = DataType::String;
+    fn from_xml_value(value: &str) -> anyhow::Result<Self> {
+        value.parse().context("parse url")
+    }
+}
+
+impl IntoXml for std::net::Ipv4Addr {
+    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+        let url = self.to_string();
+        w.write_event(Event::Text(BytesText::new(&url)))
+    }
+}
+
+impl<'a> IntoXml for &'a str {
     fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
         w.write_event(Event::Text(BytesText::new(self)))
+    }
+}
+
+impl<T: IntoUpnpValue> IntoUpnpValue for Option<T> {
+    fn from_xml_value(value: &str) -> anyhow::Result<Self>
+    where
+        Self: Sized,
+    {
+        if value.is_empty() {
+            Ok(Self::None)
+        } else {
+            T::from_xml_value(value).map(Some)
+        }
+    }
+}
+
+impl<T: IntoXml> IntoXml for Option<T> {
+    fn write_xml(&self, w: &mut XmlWriter) -> quick_xml::Result<()> {
+        match self {
+            Some(v) => v.write_xml(w),
+            None => Ok(()),
+        }
     }
 }
 

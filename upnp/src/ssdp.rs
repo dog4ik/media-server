@@ -23,8 +23,8 @@ use super::{
     router, urn,
 };
 
-const SSDP_IP_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
-const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 1900));
+pub(crate) const SSDP_IP_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
+pub(crate) const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 1900));
 const NOTIFY_INTERVAL_DURATION: Duration = Duration::from_secs(90);
 
 const CACHE_CONTROL: usize = 1800;
@@ -204,9 +204,15 @@ impl SsdpListener {
                     Ok::<_, anyhow::Error>(())
                 });
             }
-            BroadcastMessage::NotifyAlive(_) => {}
-            BroadcastMessage::NotifyByeBye(_) => {}
-            BroadcastMessage::NotifyUpdate(_) => {}
+            BroadcastMessage::NotifyAlive(alive) => {
+                tracing::trace!(nt = %alive.nt, "Received alive message");
+            }
+            BroadcastMessage::NotifyByeBye(byebye) => {
+                tracing::trace!(nt = %byebye.nt, "Received byebye message");
+            }
+            BroadcastMessage::NotifyUpdate(update) => {
+                tracing::trace!(nt = %update.nt, "Received update message");
+            }
         }
         Ok(())
     }
@@ -390,7 +396,6 @@ pub struct SearchMessage<'a> {
     /// For unicast requests, the field value shall be the domain name or IP address of the target device
     /// and either port 1900 or the SEARCHPORT provided by the target device.
     pub host: SocketAddr,
-    pub man: &'a str,
     pub st: NotificationType,
     /// Field value contains maximum wait time in seconds. shall be greater than or equal to 1 and should
     /// be less than 5 inclusive. Device responses should be delayed a random duration between 0 and this many
@@ -445,10 +450,12 @@ ST: {search_target}\r\n",
     }
 }
 
-trait AnnounceHandler {
+pub trait AnnounceHandler {
     fn handle_announce(announce: &Announce, f: impl Write) -> anyhow::Result<()>;
+    fn parse_announce(announce: &str) -> anyhow::Result<Announce>;
 }
 
+/// Multicast announce aka notify with nts: ssdp:alive or advertisement
 pub struct MulticastAnnounce;
 
 impl AnnounceHandler for MulticastAnnounce {
@@ -479,7 +486,61 @@ CONFIGID.UPNP.ORG: {config_id}\r\n",
         write!(f, "\r\n")?;
         Ok(())
     }
+
+    fn parse_announce(announce: &str) -> anyhow::Result<Announce> {
+        let mut cache_control = None;
+        let mut location = None;
+        let mut server = None;
+        let mut notification_type = None;
+        let mut usn = None;
+        let mut boot_id = None;
+        let mut config_id = None;
+        let search_port = None;
+        let mut lines = announce.lines();
+        anyhow::ensure!(lines.next() == Some("NOTIFY * HTTP/1.1"));
+        let headers = lines.filter_map(|l| l.split_once(':'));
+
+        for (name, value) in headers {
+            let value = value.trim();
+            match name.to_ascii_lowercase().as_str() {
+                "cache-control" => {
+                    let (prefix, cache_duration) =
+                        value.split_once('=').context("split cache control")?;
+                    anyhow::ensure!(prefix.trim() == "max-age");
+                    cache_control = Some(cache_duration.parse().context("parse duration seconds")?)
+                }
+                "location" => location = Some(value.to_owned()),
+                "server" => server = Some(value.to_owned()),
+                "nt" => notification_type = NotificationType::from_str(value).map(Some)?,
+                "nts" => anyhow::ensure!(value == "ssdp:alive"),
+                "usn" => usn = USN::from_str(value).map(Some)?,
+                "configid.upnp.org" => config_id = Some(value.parse().context("parse configid")?),
+                "bootid.upnp.org" => boot_id = Some(value.parse().context("parse boot_id")?),
+                _ => (),
+            }
+        }
+
+        let cache_control = cache_control.context("parse cache_control")?;
+        let location = location.context("parse location")?;
+        let server = server.context("parse server")?;
+        let notification_type = notification_type.context("parse notification_type")?;
+        let usn = usn.context("parse usn")?;
+        let boot_id = boot_id.unwrap_or_default();
+        let config_id = config_id.unwrap_or_default();
+
+        Ok(Announce {
+            cache_control,
+            location,
+            server,
+            notification_type,
+            usn,
+            boot_id,
+            config_id,
+            search_port,
+        })
+    }
 }
+/// Uniscast announce aka search response.
 pub struct UnicastAnnounce;
 
 impl AnnounceHandler for UnicastAnnounce {
@@ -514,18 +575,76 @@ CONFIGID.UPNP.ORG: {config_id}\r\n",
         write!(f, "\r\n")?;
         Ok(())
     }
+
+    fn parse_announce(announce: &str) -> anyhow::Result<Announce> {
+        let mut cache_control = None;
+        let mut location = None;
+        let mut server = None;
+        let mut notification_type = None;
+        let mut usn = None;
+        let mut boot_id = None;
+        let mut config_id = None;
+        let mut search_port = None;
+        let mut lines = announce.lines();
+        anyhow::ensure!(lines.next() == Some("HTTP/1.1 200 OK"));
+        let headers = lines.filter_map(|l| l.split_once(':'));
+
+        for (name, value) in headers {
+            let value = value.trim();
+            match name.to_ascii_lowercase().as_str() {
+                "cache-control" => {
+                    let (prefix, cache_duration) =
+                        value.split_once('=').context("split cache control")?;
+                    anyhow::ensure!(prefix.trim() == "max-age");
+                    cache_control = Some(cache_duration.parse().context("parse duration seconds")?)
+                }
+                "location" => location = Some(value.to_owned()),
+                "server" => server = Some(value.to_owned()),
+                "st" => notification_type = NotificationType::from_str(value).map(Some)?,
+                "usn" => usn = USN::from_str(value).map(Some)?,
+                "searchport.upnp.org" => {
+                    search_port = Some(value.parse().context("parse searchport")?)
+                }
+                "configid.upnp.org" => config_id = Some(value.parse().context("parse configid")?),
+                "bootid.upnp.org" => boot_id = Some(value.parse().context("parse boot_id")?),
+                _ => (),
+            }
+        }
+
+        let cache_control = cache_control.context("parse cache_control")?;
+        let location = location.context("parse location")?;
+        let server = server.context("parse server")?;
+        let notification_type = notification_type.context("parse notification_type")?;
+        let usn = usn.context("parse usn")?;
+        let boot_id = boot_id.unwrap_or_default();
+        let config_id = config_id.unwrap_or_default();
+
+        Ok(Announce {
+            cache_control,
+            location,
+            server,
+            notification_type,
+            usn,
+            boot_id,
+            config_id,
+            search_port,
+        })
+    }
 }
 
+/// Responses to search requests are intentionally parallel to advertisements, and as such,
+/// follow the same pattern as listed for NOTIFY with ssdp:alive (above) except that instead of the NT
+/// header field in response is an ST header field in advertisement (notification_type).
 #[derive(Debug, Clone)]
 pub struct Announce {
-    cache_control: usize,
-    location: String,
-    server: String,
-    notification_type: NotificationType,
-    usn: USN,
-    boot_id: usize,
-    config_id: usize,
-    search_port: Option<usize>,
+    pub cache_control: usize,
+    pub location: String,
+    pub server: String,
+    pub notification_type: NotificationType,
+    pub usn: USN,
+    pub boot_id: usize,
+    pub config_id: usize,
+    pub search_port: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -756,7 +875,6 @@ impl BroadcastMessage<'_> {
         match method {
             "M-SEARCH" => {
                 let mut host = None;
-                let mut man = None;
                 let mut st = None;
                 let mut mx = None;
                 let mut user_agent = None;
@@ -771,7 +889,6 @@ impl BroadcastMessage<'_> {
                                 SocketAddrV4::from_str(value).context("parse host address")?,
                             ));
                         }
-                        "man" => man = Some(value),
                         "st" => st = Some(NotificationType::from_str(value)?),
                         "mx" => mx = Some(value.parse()?),
                         "user-agent" => user_agent = Some(value),
@@ -784,12 +901,10 @@ impl BroadcastMessage<'_> {
                     }
                 }
                 let host = host.context("missing host")?;
-                let man = man.context("missing man")?;
                 let st = st.context("missing st")?;
                 // Compatibility with upnp 1.0
                 let search_message = SearchMessage {
                     host,
-                    man,
                     st,
                     mx,
                     user_agent,

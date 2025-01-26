@@ -6,29 +6,32 @@ pub mod content_directory;
 mod device_description;
 #[allow(unused)]
 mod eventing;
+pub mod internet_gateway;
 pub mod router;
+pub mod search_client;
 mod service;
+pub mod service_client;
 mod service_variables;
 pub mod ssdp;
 pub mod templates;
-mod urn;
+pub mod urn;
 
-pub trait XmlReaderExt {
-    fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event>;
-    fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart>;
-    fn read_end(&mut self) -> anyhow::Result<quick_xml::events::BytesEnd>;
-    fn read_text(&mut self) -> anyhow::Result<quick_xml::events::BytesText>;
+pub trait XmlReaderExt<'a> {
+    fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event<'a>>;
+    fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart<'a>>;
+    fn read_end(&mut self) -> anyhow::Result<quick_xml::events::BytesEnd<'a>>;
+    fn read_text(&mut self) -> anyhow::Result<quick_xml::events::BytesText<'a>>;
 }
 
-impl XmlReaderExt for quick_xml::Reader<&[u8]> {
-    fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event> {
+impl<'a> XmlReaderExt<'a> for quick_xml::Reader<&'a [u8]> {
+    fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event<'a>> {
         let event = self.read_event()?;
         match event {
             quick_xml::events::Event::Eof => Err(anyhow::anyhow!("early eof")),
             _ => Ok(event),
         }
     }
-    fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart> {
+    fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart<'a>> {
         loop {
             let event = self.read_event_err_eof()?.into_owned();
             match event {
@@ -37,14 +40,14 @@ impl XmlReaderExt for quick_xml::Reader<&[u8]> {
             }
         }
     }
-    fn read_end(&mut self) -> anyhow::Result<quick_xml::events::BytesEnd> {
+    fn read_end(&mut self) -> anyhow::Result<quick_xml::events::BytesEnd<'a>> {
         let event = self.read_event()?;
         match event {
             quick_xml::events::Event::End(e) => Ok(e),
             e => anyhow::bail!("expected end, got {:?}", e),
         }
     }
-    fn read_text(&mut self) -> anyhow::Result<quick_xml::events::BytesText> {
+    fn read_text(&mut self) -> anyhow::Result<quick_xml::events::BytesText<'a>> {
         let event = self.read_event()?;
         match event {
             quick_xml::events::Event::Text(e) => Ok(e),

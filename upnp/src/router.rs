@@ -22,7 +22,7 @@ where
 }
 
 use crate::{
-    action::{ActionError, ActionPayload, IntoValueList},
+    action::{ActionError, ActionPayload, InArgumentPayload, IntoValueList},
     service::UpnpService,
 };
 
@@ -72,7 +72,8 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
             }
             let (_urn, action_name) = header.split_once('#').context("split soapaction header")?;
             tracing::info!("Action {action_name} invoked");
-            let action: SoapMessage<ActionPayload> = SoapMessage::from_xml(body.as_bytes())?;
+            let action: SoapMessage<ActionPayload<InArgumentPayload>> =
+                SoapMessage::from_xml(body.as_bytes())?;
             let action = action.into_inner();
 
             if action.name() != action_name {
