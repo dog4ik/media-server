@@ -353,6 +353,7 @@ impl IntoXml for PortMappingProtocol {
 }
 impl SVariable for PortMappingProtocol {
     type VarType = Self;
+    const ALLOWED_VALUE_LIST: Option<&[&str]> = Some(&["TCP", "UDP"]);
 
     const VAR_NAME: &str = "PortMappingProtocol";
 }
