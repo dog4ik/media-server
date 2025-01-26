@@ -691,7 +691,7 @@ impl_tuples_scannable_argument! {
 
 impl<'a> FromXml<'a> for Result<ActionResponse<InArgumentPayload<'a>>, ActionError> {
     fn read_xml(r: &mut quick_xml::Reader<&'a [u8]>) -> anyhow::Result<Self> {
-        let start = r.read_to_start()?;
+        let (is_empty, start) = r.read_to_start_or_empty()?;
         match start.local_name().as_ref() {
             b"Fault" => Ok(Err(ActionError::read_xml(r, start.name())?)),
             other if other.ends_with(b"Response") => {
@@ -702,7 +702,21 @@ impl<'a> FromXml<'a> for Result<ActionResponse<InArgumentPayload<'a>>, ActionErr
                     .find_map(|attr| attr.starts_with("urn").then(|| URN::from_str(&attr)));
                 let urn = urn.context("urn attribute is not found")?;
                 let urn = urn.context("failed to parse urn attribute")?;
-                ActionResponse::read_xml(r, urn, start.name()).map(Ok)
+                if !is_empty {
+                    ActionResponse::read_xml(r, urn, start.name()).map(Ok)
+                } else {
+                    let action_name = std::str::from_utf8(start.name().into_inner())
+                        .context("convert action tag name to string")?;
+                    let action_name = action_name
+                        .strip_suffix("Response")
+                        .context("strip Response suffix")?
+                        .to_owned();
+                    Ok(Ok(ActionResponse {
+                        action_name,
+                        service_urn: urn,
+                        args: Vec::new(),
+                    }))
+                }
             }
             r => Err(anyhow::anyhow!("expected fault or response, got {:?}", r)),
         }

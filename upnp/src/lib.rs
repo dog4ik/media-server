@@ -19,6 +19,9 @@ pub mod urn;
 pub trait XmlReaderExt<'a> {
     fn read_event_err_eof(&mut self) -> anyhow::Result<quick_xml::events::Event<'a>>;
     fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart<'a>>;
+    fn read_to_start_or_empty(
+        &mut self,
+    ) -> anyhow::Result<(bool, quick_xml::events::BytesStart<'a>)>;
     fn read_end(&mut self) -> anyhow::Result<quick_xml::events::BytesEnd<'a>>;
     fn read_text(&mut self) -> anyhow::Result<quick_xml::events::BytesText<'a>>;
 }
@@ -36,6 +39,18 @@ impl<'a> XmlReaderExt<'a> for quick_xml::Reader<&'a [u8]> {
             let event = self.read_event_err_eof()?.into_owned();
             match event {
                 quick_xml::events::Event::Start(e) => break Ok(e),
+                _ => (),
+            }
+        }
+    }
+    fn read_to_start_or_empty(
+        &mut self,
+    ) -> anyhow::Result<(bool, quick_xml::events::BytesStart<'a>)> {
+        loop {
+            let event = self.read_event_err_eof()?.into_owned();
+            match event {
+                quick_xml::events::Event::Start(e) => break Ok((false, e)),
+                quick_xml::events::Event::Empty(e) => break Ok((true, e)),
                 _ => (),
             }
         }
