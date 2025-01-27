@@ -930,6 +930,18 @@ impl From<std::time::Duration> for UpnpDuration {
     }
 }
 
+impl Into<std::time::Duration> for UpnpDuration {
+    fn into(self) -> std::time::Duration {
+        self.0
+    }
+}
+
+impl AsRef<std::time::Duration> for UpnpDuration {
+    fn as_ref(&self) -> &std::time::Duration {
+        &self.0
+    }
+}
+
 impl FromStr for UpnpDuration {
     type Err = anyhow::Error;
 
@@ -991,6 +1003,18 @@ impl Display for UpnpDuration {
             }
         };
         write!(f, "{}", format_time(self.0))
+    }
+}
+
+impl IntoUpnpValue for UpnpDuration {
+    fn from_xml_value(value: &str) -> anyhow::Result<Self> {
+        Self::from_str(value)
+    }
+}
+
+impl IntoXml for UpnpDuration {
+    fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
+        self.to_string().write_xml(w)
     }
 }
 

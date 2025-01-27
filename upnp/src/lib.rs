@@ -1,5 +1,6 @@
 pub mod action;
 
+pub mod av_transport;
 #[allow(unused, unused_variables)]
 pub mod connection_manager;
 pub mod content_directory;

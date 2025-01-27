@@ -5,6 +5,7 @@ use crate::{
         ActionError, ActionResponse, ArgumentDirection, InArgumentPayload, ScannableArguments,
         SoapMessage, WritableAction,
     },
+    av_transport::{ArgInstanceID, ArgSeekMode, ArgSeekTarget},
     internet_gateway::{
         ArgManage, ExternalPort, InternalClient, InternalPort, PortMappingDescription,
         PortMappingEnabled, PortMappingLeaseDuration, PortMappingNumberOfEntries,
@@ -29,6 +30,76 @@ impl Action {
         version: 1,
         urn_type: UrnType::Service(ServiceType::WANIPConnection),
     };
+    const AVTRANSPORT_URN: URN = URN {
+        version: 1,
+        urn_type: UrnType::Service(ServiceType::AVTransport),
+    };
+
+    pub fn av_play(
+        &self,
+        instance_id: <ArgInstanceID as SVariable>::VarType,
+        speed: &str,
+    ) -> anyhow::Result<String> {
+        let mut action = WritableAction::new("Play", Self::AVTRANSPORT_URN)?;
+        for argument in &self.in_args {
+            match argument.as_str() {
+                "InstanceID" => action.write_argument(argument, instance_id.as_str()),
+                "Speed" => action.write_argument(argument, speed),
+                _ => anyhow::bail!("Unexpected argument encountered: {}", argument),
+            }?
+        }
+
+        Ok(action.finish()?)
+    }
+
+    pub fn av_pause(
+        &self,
+        instance_id: <ArgInstanceID as SVariable>::VarType,
+    ) -> anyhow::Result<String> {
+        let mut action = WritableAction::new("Pause", Self::AVTRANSPORT_URN)?;
+        for argument in &self.in_args {
+            match argument.as_str() {
+                "InstanceID" => action.write_argument(argument, instance_id.as_str()),
+                _ => anyhow::bail!("Unexpected argument encountered: {}", argument),
+            }?
+        }
+
+        Ok(action.finish()?)
+    }
+
+    pub fn av_seek(
+        &self,
+        instance_id: <ArgInstanceID as SVariable>::VarType,
+        unit: <ArgSeekMode as SVariable>::VarType,
+        target: <ArgSeekTarget as SVariable>::VarType,
+    ) -> anyhow::Result<String> {
+        let mut action = WritableAction::new("Seek", Self::AVTRANSPORT_URN)?;
+        for argument in &self.in_args {
+            match argument.as_str() {
+                "InstanceID" => action.write_argument(argument, instance_id.as_str()),
+                "Unit" => action.write_argument(argument, unit),
+                "Target" => action.write_argument(argument, target.as_str()),
+                _ => anyhow::bail!("Unexpected argument encountered: {}", argument),
+            }?
+        }
+
+        Ok(action.finish()?)
+    }
+
+    pub fn av_position_info(
+        &self,
+        instance_id: <ArgInstanceID as SVariable>::VarType,
+    ) -> anyhow::Result<String> {
+        let mut action = WritableAction::new("GetPositionInfo", Self::AVTRANSPORT_URN)?;
+        for argument in &self.in_args {
+            match argument.as_str() {
+                "InstanceID" => action.write_argument(argument, instance_id.as_str()),
+                _ => anyhow::bail!("Unexpected argument encountered: {}", argument),
+            }?
+        }
+
+        Ok(action.finish()?)
+    }
 
     pub fn add_port_mapping(
         &self,
@@ -314,6 +385,7 @@ impl<T: ScpdService> ScpdClient<T> {
             .body(payload)
             .build()?;
         let res = self.fetch_client.execute(request).await?;
+        tracing::trace!("{} action response status: {}", action.name, res.status());
         let text = res.text().await?;
         let mut reader = quick_xml::Reader::from_str(&text);
         let res = SoapMessage::<Result<ActionResponse<InArgumentPayload>, ActionError>>::read_xml(
