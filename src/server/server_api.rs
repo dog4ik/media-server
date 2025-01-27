@@ -374,7 +374,7 @@ pub async fn previews(
         NumberQuery,
     ),
     responses(
-        (status = 200, description = "Subtitle", body = String),
+        (status = 200, description = "Subtitles", body = String),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
@@ -398,7 +398,7 @@ pub async fn pull_video_subtitle(
         VariantQuery,
     ),
     responses(
-        (status = 206, description = "Video progressive download stream", body = [u8], content_type = "video/x-matroska"),
+        (status = 206, description = "Video progressive download stream", body = [u8], content_type = "video/*"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
@@ -438,7 +438,7 @@ pub async fn watch(
         VariantQuery,
     ),
     responses(
-        (status = 206, description = "Video progressive download stream", content_type = "video/x-matroska"),
+        (status = 206, description = "Video progressive download stream", content_type = "video/*"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Shows",
@@ -466,7 +466,7 @@ pub async fn watch_episode(
         VariantQuery,
     ),
     responses(
-        (status = 206, description = "Movie video progressive download stream", content_type = "video/x-matroska"),
+        (status = 206, description = "Movie video progressive download stream", content_type = "video/*"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Movies",
@@ -505,6 +505,7 @@ pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetada
     ),
     responses(
         (status = 200, description = "Local episode", body = EpisodeMetadata),
+        (status = 404, description = "Episode is not found"),
     ),
     tag = "Shows",
 )]
@@ -1289,12 +1290,12 @@ pub async fn library_state(
     post,
     path = "/api/scan",
     responses(
-        (status = 200),
-        (status = 400, body = AppError),
+        (status = 202, description = "Scan is successfully started"),
+        (status = 400, body = AppError, description = "Scan is already in progress"),
     ),
     tag = "Videos",
 )]
-pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), AppError> {
+pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<StatusCode, AppError> {
     let tasks = app_state.tasks;
     let task_id = tasks.library_scan_tasks.start_task(LibraryScanTask, None)?;
     tokio::spawn(async move {
@@ -1310,7 +1311,7 @@ pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<(), A
             }
         };
     });
-    Ok(())
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Clear the database. For debug purposes only.
@@ -1374,6 +1375,7 @@ where
     ),
     responses(
         (status = 200),
+        (status = 404, description = "Video is not found"),
     ),
     tag = "Videos",
 )]
@@ -1393,6 +1395,7 @@ pub async fn remove_video(
     ),
     responses(
         (status = 200),
+        (status = 404, description = "Episode is not found"),
     ),
     tag = "Shows",
 )]
@@ -1770,7 +1773,7 @@ pub async fn reset_metadata(
     ),
     request_body = TranscodePayload,
     responses(
-        (status = 200),
+        (status = 202, description = "Transcode task is started"),
     ),
     tag = "Videos",
 )]
@@ -1778,9 +1781,9 @@ pub async fn transcode_video(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<TranscodePayload>,
-) -> Result<(), AppError> {
+) -> Result<StatusCode, AppError> {
     app_state.transcode_video(id, payload).await?;
-    Ok(())
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Start previews generation job on video
@@ -1791,15 +1794,16 @@ pub async fn transcode_video(
         ("id", description = "Video id"),
     ),
     responses(
-        (status = 200),
+        (status = 202, description = "Previews task is started"),
     ),
     tag = "Videos",
 )]
 pub async fn generate_previews(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<(), AppError> {
-    app_state.generate_previews(id).await
+) -> Result<StatusCode, AppError> {
+    app_state.generate_previews(id).await?;
+    Ok(StatusCode::ACCEPTED)
 }
 
 /// Delete previews on video
@@ -1872,18 +1876,17 @@ pub async fn transcode_tasks(
     ),
     responses(
         (status = 200),
-        (status = 400, description = "Task can't be canceled or it is not found"),
+        (status = 400, description = "Task can't be canceled", body = AppError),
+        (status = 400, description = "Task can't be found", body = AppError),
     ),
     tag = "Tasks",
 )]
 pub async fn cancel_previews_task(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
-) -> Result<(), StatusCode> {
-    tasks
-        .previews_tasks
-        .cancel_task(task_id)
-        .map_err(|_| StatusCode::BAD_REQUEST)
+) -> Result<(), AppError> {
+    tasks.previews_tasks.cancel_task(task_id)?;
+    Ok(())
 }
 
 /// Get all running tasks
@@ -2240,7 +2243,7 @@ pub async fn remove_history_item(
     ),
     request_body = UpdateHistoryPayload,
     responses(
-        (status = 200),
+        (status = 200, description = "History entry is updated"),
         (status = 201, description = "History is created"),
     ),
     tag = "Videos",
@@ -2448,7 +2451,7 @@ pub async fn transcode_stream_manifest(
         ("season", description = "Season number"),
     ),
     responses(
-        (status = 200),
+        (status = 202, description = "Intro detection task is started"),
         (status = 404, description = "Show or season are not found"),
     ),
     tag = "Shows",

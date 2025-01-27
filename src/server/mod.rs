@@ -199,7 +199,7 @@ pub struct SerdeDuration {
         (name = "Search", description = "Endopoints for searching content"),
         (name = "Torrent", description = "Torrent client operations"),
         (name = "Transcoding", description = "Live transcoding operations"),
-        (name = "Videos", description = ""),
+        (name = "Videos", description = "Video files operations"),
     )
 )]
 pub struct OpenApiDoc;
