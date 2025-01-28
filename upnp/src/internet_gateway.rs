@@ -652,7 +652,7 @@ impl ScpdClient<InternetGatewayClient> {
     ) -> Result<u16, ActionCallError> {
         let action = self.action("AddAnyPortMapping")?;
 
-        let payload = action.add_port_mapping(
+        let payload = action.add_any_port_mapping(
             external_addr,
             external_port,
             proto,
@@ -665,6 +665,32 @@ impl ScpdClient<InternetGatewayClient> {
 
         let port: u16 = self.run_action(action, payload).await?;
         Ok(port)
+    }
+
+    pub async fn add_port_mapping(
+        &self,
+        local_addr: Ipv4Addr,
+        external_addr: Option<Ipv4Addr>,
+        proto: PortMappingProtocol,
+        description: String,
+        external_port: u16,
+        lease: u32,
+    ) -> Result<(), ActionCallError> {
+        let action = self.action("AddPortMapping")?;
+
+        let payload = action.add_port_mapping(
+            external_addr,
+            external_port,
+            proto,
+            external_port,
+            local_addr,
+            true,
+            description,
+            lease,
+        )?;
+
+        () = self.run_action(action, payload).await?;
+        Ok(())
     }
 
     pub async fn delete_port_mapping(

@@ -112,6 +112,38 @@ impl Action {
         description: <PortMappingDescription as SVariable>::VarType,
         lease_duration: <PortMappingLeaseDuration as SVariable>::VarType,
     ) -> anyhow::Result<String> {
+        let mut action = WritableAction::new("AddPortMapping", Self::WANIPCONNECTION_URN)?;
+        for argument in &self.in_args {
+            match argument.as_str() {
+                "NewRemoteHost" => action.write_argument(argument, remote_host),
+                "NewExternalPort" => action.write_argument(argument, external_port),
+                "NewProtocol" => action.write_argument(argument, new_protocol),
+                "NewInternalPort" => action.write_argument(argument, internal_port),
+                "NewInternalClient" => action.write_argument(argument, internal_client),
+                "NewEnabled" => action.write_argument(argument, enabled),
+                "NewPortMappingDescription" => {
+                    action.write_argument(argument, description.as_str())
+                }
+                "NewLeaseDuration" => action.write_argument(argument, lease_duration),
+                _ => anyhow::bail!("Unexpected argument encountered: {}", argument),
+            }?
+        }
+
+        Ok(action.finish()?)
+    }
+
+
+    pub fn add_any_port_mapping(
+        &self,
+        remote_host: <RemoteHost as SVariable>::VarType,
+        external_port: <ExternalPort as SVariable>::VarType,
+        new_protocol: <PortMappingProtocol as SVariable>::VarType,
+        internal_port: <InternalPort as SVariable>::VarType,
+        internal_client: <InternalClient as SVariable>::VarType,
+        enabled: <PortMappingEnabled as SVariable>::VarType,
+        description: <PortMappingDescription as SVariable>::VarType,
+        lease_duration: <PortMappingLeaseDuration as SVariable>::VarType,
+    ) -> anyhow::Result<String> {
         let mut action = WritableAction::new("AddAnyPortMapping", Self::WANIPCONNECTION_URN)?;
         for argument in &self.in_args {
             match argument.as_str() {
@@ -132,7 +164,7 @@ impl Action {
         Ok(action.finish()?)
     }
 
-    pub fn add_port_mapping_strict(
+    pub fn add_any_port_mapping_strict(
         &self,
         remote_host: <RemoteHost as SVariable>::VarType,
         external_port: <ExternalPort as SVariable>::VarType,

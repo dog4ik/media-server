@@ -40,6 +40,9 @@ enum Command {
         #[clap(long, default_value = "1800")]
         /// Lease duration in seconds
         lease: u32,
+        /// Use AddAnyPortMapping instead of AddPortMapping
+        #[clap(long, short)]
+        any: bool,
     },
     /// Close a port
     Close {
@@ -126,18 +129,35 @@ async fn main() {
             description,
             protocol,
             lease,
+            any,
         } => {
-            let new_port = client
-                .add_any_port_mapping(
-                    local_host.unwrap_or_else(resolve_local_addr),
-                    external_host,
-                    protocol.into(),
-                    description,
-                    port,
-                    lease,
-                )
-                .await
-                .unwrap();
+            let new_port = match any {
+                true => client
+                    .add_any_port_mapping(
+                        local_host.unwrap_or_else(resolve_local_addr),
+                        external_host,
+                        protocol.into(),
+                        description,
+                        port,
+                        lease,
+                    )
+                    .await
+                    .unwrap(),
+                false => {
+                    client
+                        .add_port_mapping(
+                            local_host.unwrap_or_else(resolve_local_addr),
+                            external_host,
+                            protocol.into(),
+                            description,
+                            port,
+                            lease,
+                        )
+                        .await
+                        .unwrap();
+                    port
+                }
+            };
             println!("Added port {new_port}");
         }
         Command::Close { port, protocol } => {
