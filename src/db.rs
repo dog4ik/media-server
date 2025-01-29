@@ -2,7 +2,7 @@ use std::{ops::Deref, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
-    migrate::Migrator,
+    migrate::{MigrateError, Migrator},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Acquire, Error, FromRow, Pool, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
@@ -10,6 +10,7 @@ use torrent::DownloadParams;
 
 use crate::{
     app_state::AppError,
+    config,
     library::assets::{self, AssetDir},
     metadata::{
         ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
@@ -1076,9 +1077,25 @@ impl Db {
             .busy_timeout(Duration::from_secs(10));
         let pool = SqlitePoolOptions::new()
             .max_connections(30)
-            .connect_with(options)
+            .connect_with(options.clone())
             .await?;
-        MIGRATOR.run(&pool).await?;
+        match MIGRATOR.run(&pool).await {
+            Ok(_) => (),
+            Err(MigrateError::VersionMismatch(_)) => {
+                // I hope this code will never run
+                let path = &config::APP_RESOURCES.database_path;
+                tokio::fs::remove_file(path).await?;
+                tracing::error!("Failed to validate some of the migrations, doing database reset!");
+                config::AppResources::initiate()?;
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(30)
+                    .connect_with(options)
+                    .await?;
+                MIGRATOR.run(&pool).await?;
+                return Ok(Self { pool });
+            }
+            Err(e) => return Err(e.into()),
+        };
 
         Ok(Self { pool })
     }
