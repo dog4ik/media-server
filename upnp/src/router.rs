@@ -36,7 +36,7 @@ pub const DESC_PATH: &str = "/devicedesc.xml";
 
 impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
     pub fn new(path: &str, name: &'static str, uuid: uuid::Uuid) -> Self {
-        let desc = device_description::DeviceDescription::new(name.to_owned(), uuid);
+        let desc = device_description::DeviceDescription::new(name, uuid);
         let desc = std::sync::Arc::new(desc);
         let serve_description = move || async move {
             tracing::debug!("Serving device description");
