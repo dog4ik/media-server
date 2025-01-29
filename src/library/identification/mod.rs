@@ -159,25 +159,23 @@ impl<T: Parseable> Parser<T> {
         loop {
             match path.next() {
                 Some(Component::Normal(comp)) => {
-                    let last_part = path
+                    let final_part = path
                         .peek()
                         .is_none()
                         .then(|| Path::new(comp).file_stem())
                         .flatten();
 
-                    match last_part {
-                        Some(last_part) => {
-                            if let Some(comp) = last_part.to_str() {
-                                let tokens = tokenize_path(comp);
-                                parsable.parse_name(tokens);
-                                return parsable;
-                            }
+                    match final_part {
+                        Some(final_part) => {
+                            let final_part = final_part.to_string_lossy();
+                            let tokens = tokenize_path(&final_part);
+                            parsable.parse_name(tokens);
+                            return parsable;
                         }
                         None => {
-                            if let Some(comp) = comp.to_str() {
-                                let tokens = tokenize_path(comp);
-                                parsable.parse_parent(tokens);
-                            }
+                            let comp = comp.to_string_lossy();
+                            let tokens = tokenize_path(&comp);
+                            parsable.parse_parent(tokens);
                         }
                     }
                 }
