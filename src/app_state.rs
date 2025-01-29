@@ -1029,10 +1029,6 @@ async fn handle_movie_metadata(
             .unwrap();
     }
     for external_id in external_ids {
-        println!(
-            "Inserting external id for the movie: {}",
-            external_id.provider
-        );
         let db_external_id = DbExternalId {
             metadata_provider: external_id.provider.to_string(),
             metadata_id: external_id.id,
