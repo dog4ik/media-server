@@ -9,7 +9,7 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt},
     sync::mpsc,
 };
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::task::TaskTracker;
 
 use crate::{
     peers::BitField,
@@ -133,8 +133,6 @@ pub struct TorrentStorage {
 #[derive(Debug, Clone)]
 pub struct StorageHandle {
     pub message_tx: mpsc::Sender<StorageMessage>,
-    #[allow(unused)]
-    pub cancellation_token: CancellationToken,
 }
 
 impl StorageHandle {
@@ -229,7 +227,7 @@ impl TorrentStorage {
         mut self,
         tracker: &TaskTracker,
         cancellation_token: CancellationToken,
-    ) -> anyhow::Result<StorageHandle> {
+    pub async fn spawn(mut self, tracker: &TaskTracker) -> anyhow::Result<StorageHandle> {
         let save_location_metadata = fs::metadata(&self.output_dir)
             .await
             .context("save directory metadata")?;
@@ -239,23 +237,22 @@ impl TorrentStorage {
                 save_location_metadata.file_type()
             ));
         }
-        let token = cancellation_token.clone();
         let (message_tx, mut message_rx) = mpsc::channel(200);
         tracker.spawn(async move {
             loop {
                 tokio::select! {
-                    Some(message) = message_rx.recv() => self.handle_message(message).await,
+                    message = message_rx.recv() => match message {
+                        Some(message) => self.handle_message(message).await,
+                        None => {
+                            tracing::debug!("Stopping storage worker (download channel closed)");
+                            break;
+                        }
+                    },
                     work_result = self.hasher.recv() => self.handle_hasher_result(work_result).await,
-                    _ = token.cancelled() => {
-                        break;
-                    }
                 }
             }
         });
-        Ok(StorageHandle {
-            message_tx,
-            cancellation_token,
-        })
+        Ok(StorageHandle { message_tx })
     }
 
     async fn handle_hasher_result(&mut self, result: WorkResult) {

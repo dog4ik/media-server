@@ -97,9 +97,16 @@ impl Client {
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
         let task_tracker = TaskTracker::new();
         let peer_listener = match config.upnp_nat_traversal_enabled {
-            true => PeerListener::spawn_with_upnp(config.port, &task_tracker).await?,
-            false => PeerListener::spawn(config.port, &task_tracker).await?,
-        };
+            true => {
+                PeerListener::spawn_with_upnp(
+                    config.port,
+                    &task_tracker,
+                    cancellation_token.clone(),
+                )
+                .await
+            }
+            false => PeerListener::spawn(config.port).await,
+        }?;
         let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
         let udp_worker = UdpTrackerWorker::bind(udp_listener_addr).await?;
         let udp_tracker_channel = udp_worker.spawn().await?;
@@ -141,12 +148,10 @@ impl Client {
         )
         .await;
 
-        self.peer_listener.subscribe(hash, peers_tx.clone()).await;
+        self.peer_listener.subscribe(hash, peers_tx).await;
         let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
         let storage = TorrentStorage::new(feedback_tx, parts_file, params.clone());
-        let storage_handle = storage
-            .spawn(&self.task_tracker, child_token.clone())
-            .await?;
+        let storage_handle = storage.spawn(&self.task_tracker).await?;
 
         let download = Download::new(
             feedback_rx,
@@ -181,7 +186,6 @@ impl Client {
             let tracker_type = TrackerType::from_url(&tracker_url, &self.udp_tracker_tx)?;
             {
                 let response_tx = response_tx.clone();
-                let cancellation_token = self.cancellation_token.clone();
                 tracker_set.spawn(async move {
                     let (_, mut tracker) = Tracker::new(
                         info_hash,
@@ -189,7 +193,6 @@ impl Client {
                         tracker_url,
                         downloaded,
                         response_tx,
-                        cancellation_token,
                     );
                     tracker.announce().await?;
                     Ok(())
@@ -249,18 +252,13 @@ async fn spawn_trackers(
             continue;
         };
         {
+            let (handle, mut tracker) =
+                DownloadTracker::new(info_hash, tracker_type, url, initial_progress);
+            tracing::debug!("Started tracker: {}", tracker.url);
             let cancellation_token = cancellation_token.clone();
-            let (handle, mut tracker) = DownloadTracker::new(
-                info_hash,
-                tracker_type,
-                url,
-                initial_progress,
-                cancellation_token,
-            );
-            tracing::info!("Started tracker: {}", tracker.url);
             task_tracker.spawn(async move {
-                match tracker.work().await {
-                    Ok(_) => tracing::info!(url = %tracker.url, "Gracefully stopped tracker"),
+                match tracker.work(cancellation_token).await {
+                    Ok(_) => tracing::debug!(url = %tracker.url, "Gracefully stopped tracker"),
                     Err(e) => tracing::warn!(url = %tracker.url, "Tracker errored: {e}"),
                 };
             });

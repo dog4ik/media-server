@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::Context;
 use tokio::{sync::mpsc, time::timeout};
-use tokio_util::task::TaskTracker;
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use upnp::{
     internet_gateway::{InternetGatewayClient, PortMappingProtocol},
     search_client,
@@ -29,11 +29,11 @@ pub struct PeerListener {
 }
 
 impl PeerListener {
-    pub async fn spawn(port: u16, tracker: &TaskTracker) -> anyhow::Result<Self> {
+    pub async fn spawn(port: u16) -> anyhow::Result<Self> {
         let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
         let listener = utils::bind_tcp_listener(addr).await?;
         let (tx, mut rx) = mpsc::channel(100);
-        tracker.spawn(async move {
+        tokio::spawn(async move {
             let mut map: HashMap<[u8; 20], mpsc::Sender<NewPeer>> = HashMap::new();
             loop {
                 tokio::select! {
@@ -61,13 +61,10 @@ impl PeerListener {
                         }
 
                     },
-                    sub = rx.recv() => {
-                        if let Some((info_hash, sender)) = sub {
-                            map.insert(info_hash, sender);
-                        } else {
-                            break;
-                        }
+                    Some((info_hash, sender)) = rx.recv() => {
+                        map.insert(info_hash, sender);
                     },
+                    else => { break; }
                 };
             }
             tracing::debug!("Closed peer listener");
@@ -77,7 +74,11 @@ impl PeerListener {
         })
     }
 
-    pub async fn spawn_with_upnp(port: u16, tracker: &TaskTracker) -> anyhow::Result<Self> {
+    pub async fn spawn_with_upnp(
+        port: u16,
+        tracker: &TaskTracker,
+        cancellation_token: CancellationToken,
+    ) -> anyhow::Result<Self> {
         let addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port);
         let listener = utils::bind_tcp_listener(addr).await?;
         let mut renew_interval =
@@ -116,18 +117,17 @@ impl PeerListener {
                         }
 
                     },
-                    sub = rx.recv() => {
-                        if let Some((info_hash, sender)) = sub {
-                            map.insert(info_hash, sender);
-                        } else {
-                            if let Ok(port_manager) = &mut port_manager {
-                                if let Err(e) = port_manager.delete_mapping().await {
-                                    tracing::error!("Failed to cleanup port mapping: {e}");
-                                };
-                            }
-                            break;
-                        }
+                    Some((info_hash, sender)) = rx.recv() => {
+                        map.insert(info_hash, sender);
                     },
+                    _ = cancellation_token.cancelled() => {
+                        if let Ok(port_manager) = &mut port_manager {
+                            if let Err(e) = port_manager.delete_mapping().await {
+                                tracing::error!("Failed to cleanup port mapping: {e}");
+                            };
+                        }
+                        break;
+                    }
                     _ = renew_interval.tick() => {
                             if let Ok(port_manager) = &mut port_manager {
                                 match port_manager.renew().await {
@@ -240,6 +240,7 @@ impl UpnpPortManager {
         self.client
             .delete_port_mapping(PortMappingProtocol::TCP, self.local_addr.port())
             .await?;
+        tracing::info!("Succsessfully cleaned up port mapping");
         Ok(())
     }
 }

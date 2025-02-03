@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::{
     net::UdpSocket,
     sync::{mpsc, oneshot},
+    time::timeout,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -286,10 +287,9 @@ impl TrackerType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TrackerHandle {
     command_tx: mpsc::Sender<TrackerCommand>,
-    cancellation_token: CancellationToken,
     url: Url,
 }
 
@@ -300,9 +300,7 @@ impl TrackerHandle {
             .unwrap();
     }
     #[allow(unused)]
-    pub fn close(&self) {
-        self.cancellation_token.cancel();
-    }
+    pub fn close(self) {}
 
     pub fn url(&self) -> &str {
         self.url.as_ref()
@@ -335,7 +333,7 @@ pub struct Tracker {
     pub rensponse_tx: mpsc::Sender<TrackerResponse>,
     pub announce_payload: AnnouncePayload,
     pub udp_connection_id: Option<u64>,
-    pub cancellation_token: CancellationToken,
+    pub status: TrackerStatus,
 }
 
 impl Tracker {
@@ -345,7 +343,6 @@ impl Tracker {
         url: Url,
         initial_stats: DownloadStat,
         rensponse_tx: mpsc::Sender<TrackerResponse>,
-        cancellation_token: CancellationToken,
     ) -> (TrackerHandle, Self) {
         let (command_tx, command_rx) = mpsc::channel(10);
         let announce_payload = AnnouncePayload {
@@ -366,59 +363,60 @@ impl Tracker {
             rensponse_tx,
             announce_payload,
             udp_connection_id: None,
-            cancellation_token: cancellation_token.clone(),
+            status: TrackerStatus::NotContacted,
         };
 
-        let handle = TrackerHandle {
-            cancellation_token,
-            command_tx,
-            url,
-        };
+        let handle = TrackerHandle { command_tx, url };
 
         (handle, tracker)
     }
 
-    pub async fn work(&mut self) -> anyhow::Result<()> {
-        loop {
-            tokio::select! {
-                Some(command) = self.commands.recv() => {
-                    match command {
-                        TrackerCommand::Reannounce(stat) => {
-                            if stat.downloaded == 0 {
-                                self.announce_payload.event = TrackerEvent::Started;
-                            } else {
-                                self.announce_payload.event = TrackerEvent::Empty;
-                            }
-                            self.announce_payload.downloaded = stat.downloaded;
-                            self.announce_payload.uploaded = stat.uploaded;
-                            self.announce_payload.left = stat.left;
-                            if stat.left == 0 {
-                                self.announce_payload.event = TrackerEvent::Completed;
-                            }
-                            match tokio::time::timeout(ANNOUNCE_TIMEOUT, self.announce()).await {
-                                Ok(Ok(_)) => {},
-                                Ok(Err(e)) => {
-                                    tracing::warn!(url = %self.url, "Announce request failed: {e}");
-                                    self.send_response(TrackerResponse::Failure{ reason: e.to_string() }).await?;
-                                },
-                                Err(_) => {
-                                    tracing::warn!(url = %self.url, "Announce request timed out");
-                                    self.send_response(
-                                        TrackerResponse::Failure {
-                                            reason: format!("Tracker announce timed out") }
-                                    )
-                                    .await?;
-                                }
-                            };
-                        },
+    pub async fn work(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
+        while let Some(command) = self.commands.recv().await {
+            match command {
+                TrackerCommand::Reannounce(stat) => {
+                    if stat.downloaded == 0 {
+                        self.announce_payload.event = TrackerEvent::Started;
+                    } else {
+                        self.announce_payload.event = TrackerEvent::Empty;
                     }
-                },
-                _ = self.cancellation_token.cancelled() => {
-                    break;
-                },
+                    self.announce_payload.downloaded = stat.downloaded;
+                    self.announce_payload.uploaded = stat.uploaded;
+                    self.announce_payload.left = stat.left;
+                    if stat.left == 0 {
+                        self.announce_payload.event = TrackerEvent::Completed;
+                    }
+                    match cancellation_token
+                        .run_until_cancelled(timeout(ANNOUNCE_TIMEOUT, self.announce()))
+                        .await
+                    {
+                        Some(Ok(Ok(_))) => {
+                            self.status = TrackerStatus::Working;
+                        }
+                        Some(Ok(Err(e))) => {
+                            tracing::warn!(url = %self.url, "Announce request failed: {e}");
+                            self.status = TrackerStatus::Error(e.to_string());
+                            self.send_response(TrackerResponse::Failure {
+                                reason: e.to_string(),
+                            })
+                            .await?;
+                        }
+                        Some(Err(_)) => {
+                            tracing::warn!(url = %self.url, "Announce request timed out");
+                            self.status = TrackerStatus::Error("Time out".to_owned());
+                            self.send_response(TrackerResponse::Failure {
+                                reason: format!("Tracker announce timed out"),
+                            })
+                            .await?;
+                        }
+                        None => {
+                            break;
+                        }
+                    };
+                }
             }
         }
-        Ok(())
+        self.quit().await
     }
 
     pub async fn announce(&mut self) -> anyhow::Result<()> {
@@ -446,6 +444,40 @@ impl Tracker {
         self.handle_announce(announce_result?).await
     }
 
+    pub async fn quit(&mut self) -> anyhow::Result<()> {
+        self.announce_payload.event = TrackerEvent::Stopped;
+        self.announce_payload.left = 0;
+        if self.status == TrackerStatus::Working {
+            let quit_timeout = Duration::from_millis(500);
+            tokio::time::timeout(quit_timeout, async move {
+                let _ = match &self.tracker_type {
+                    TrackerType::Http => self.announce_payload.announce_http().await?,
+                    TrackerType::Udp(chan) => {
+                        let conn_id = match self.udp_connection_id {
+                            Some(id) => id,
+                            None => {
+                                tracing::debug!(
+                                    "Trying to get connection id from udp tracker {}",
+                                    self.url
+                                );
+                                let addrs = self.url.socket_addrs(|| None)?;
+                                let addr =
+                                    addrs.first().context("could not resove url hostname")?;
+                                let id = chan.connect(*addr).await?;
+                                self.udp_connection_id = Some(id);
+                                id
+                            }
+                        };
+                        self.announce_payload.announce_udp(chan, conn_id).await?
+                    }
+                };
+                Ok::<(), anyhow::Error>(())
+            })
+            .await??;
+        }
+        Ok(())
+    }
+
     async fn handle_announce(&self, announce_result: AnnounceResult) -> anyhow::Result<()> {
         self.send_response(TrackerResponse::AnnounceResponse {
             interval: Duration::from_secs(announce_result.interval as u64)
@@ -462,7 +494,7 @@ impl Tracker {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum TrackerStatus {
     Working,
     #[default]
@@ -486,17 +518,10 @@ impl DownloadTracker {
         tracker_type: TrackerType,
         url: Url,
         initial_stats: DownloadStat,
-        cancellation_token: CancellationToken,
     ) -> (Self, Tracker) {
         let (response_tx, response_rx) = mpsc::channel(10);
-        let (handle, tracker) = Tracker::new(
-            info_hash,
-            tracker_type,
-            url,
-            initial_stats,
-            response_tx,
-            cancellation_token,
-        );
+        let (handle, tracker) =
+            Tracker::new(info_hash, tracker_type, url, initial_stats, response_tx);
         let download_tracker = Self {
             response_rx,
             status: TrackerStatus::default(),
@@ -537,19 +562,12 @@ impl DownloadTracker {
 /// Entity that owns udp socket and handles all udp tracker messages
 pub struct UdpTrackerWorker {
     socket: UdpSocket,
-    cancellation_token: CancellationToken,
 }
 
 impl UdpTrackerWorker {
-    pub async fn bind(
-        local_addr: SocketAddrV4,
-        cancellation_token: CancellationToken,
-    ) -> anyhow::Result<Self> {
+    pub async fn bind(local_addr: SocketAddrV4) -> anyhow::Result<Self> {
         let socket = utils::bind_udp_socket(local_addr).await?;
-        Ok(Self {
-            socket,
-            cancellation_token,
-        })
+        Ok(Self { socket })
     }
 
     pub async fn spawn(self) -> anyhow::Result<UdpTrackerChannel> {
@@ -588,7 +606,8 @@ impl UdpTrackerWorker {
                     let _ = self.socket.send_to(&request.as_bytes(), request.tracker_addr).await;
                     pending_transactions.insert(request.transaction_id, request.response);
                 }
-                _ = self.cancellation_token.cancelled() => {
+                else => {
+                    tracing::info!("Closed udp trackers worker");
                     break;
                 }
             }
