@@ -568,6 +568,39 @@ impl Block {
     }
 }
 
+#[derive(Debug, Default)]
+/// Spawns tasks to connect peers ensuring no duplicate concurrent connects
+struct PeerConnector {
+    join_set: JoinSet<Result<Peer, SocketAddr>>,
+    pending_ips: HashSet<SocketAddr>,
+}
+
+impl PeerConnector {
+    pub fn connect(&mut self, ip: SocketAddr, info_hash: [u8; 20]) {
+        if self.pending_ips.insert(ip) {
+            self.join_set.spawn(async move {
+                match timeout(PEER_CONNECT_TIMEOUT, Peer::new_from_ip(ip, info_hash)).await {
+                    Ok(Ok(peer)) => Ok(peer),
+                    _ => Err(ip),
+                }
+            });
+        }
+    }
+
+    pub fn try_join_next(&mut self) -> Option<Peer> {
+        while let Some(Ok(joined_peer)) = self.join_set.try_join_next() {
+            match joined_peer {
+                Ok(peer) => {
+                    self.pending_ips.remove(&peer.ip());
+                    return Some(peer);
+                }
+                Err(ip) => self.pending_ips.remove(&ip),
+            };
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize, PartialEq)]
 pub enum PeerStateChange {
     Connect,
@@ -755,8 +788,7 @@ pub struct Download {
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     storage_rx: mpsc::Receiver<StorageFeedback>,
     new_peers: mpsc::Receiver<NewPeer>,
-    new_peers_join_set: JoinSet<Result<Peer, SocketAddr>>,
-    pending_new_peers_ips: HashSet<SocketAddr>,
+    peer_connector: PeerConnector,
     trackers: Vec<DownloadTracker>,
     scheduler: Scheduler,
     storage: StorageHandle,
@@ -801,8 +833,7 @@ impl Download {
 
         Self {
             new_peers,
-            new_peers_join_set: JoinSet::new(),
-            pending_new_peers_ips: HashSet::new(),
+            peer_connector: PeerConnector::default(),
             trackers,
             info_hash,
             peers_handles: active_peers,
@@ -903,62 +934,17 @@ impl Download {
                     extension_id,
                     payload,
                 } => {
-                    let peer = &mut self.scheduler.peers[peer_idx];
                     tracing::debug!("Received extension message with id {extension_id}");
                     match extension_id {
                         PexMessage::CLIENT_ID => {
-                            let info_hash = self.info_hash;
-                            let pex_message = PexMessage::from_bytes(&payload)
-                                .context("parse pex message")
-                                .unwrap();
-                            tracing::debug!(
-                                "Received {} new peers from pex message",
-                                pex_message.added.len()
-                            );
-                            for addr in pex_message.added.into_iter().filter_map(|a| {
-                                if self
-                                    .scheduler
-                                    .peers
-                                    .iter()
-                                    .find(|p| p.ip == a.addr)
-                                    .is_none()
-                                {
-                                    Some(a.addr)
-                                } else {
-                                    None
-                                }
-                            }) {
-                                self.pending_new_peers_ips.insert(addr);
-                                self.new_peers_join_set.spawn(async move {
-                                    crate::peers::Peer::new_from_ip(addr, info_hash)
-                                        .await
-                                        .map_err(|_| addr)
-                                });
+                            if let Err(e) = self.handle_pex_message(payload) {
+                                tracing::warn!(%ip, "Failed to process pex message: {e}");
                             }
                         }
                         UtMessage::CLIENT_ID => {
-                            let ut_message = UtMessage::from_bytes(&payload)
-                                .context("parse ut_metadata message")
-                                .unwrap();
-                            match ut_message {
-                                UtMessage::Request { piece } => {
-                                    if let Some(block) = self.scheduler.ut_metadata.get_piece(piece)
-                                    {
-                                        peer.send_ut_metadata_block(
-                                            UtMessage::Data {
-                                                piece,
-                                                total_size: self.scheduler.ut_metadata.size,
-                                            },
-                                            block,
-                                        )
-                                        .unwrap()
-                                    } else {
-                                        peer.send_extension_message(UtMessage::Reject { piece })
-                                            .unwrap();
-                                    };
-                                }
-                                _ => {}
-                            }
+                            if let Err(e) = self.handle_ut_message(peer_idx, payload) {
+                                tracing::warn!(%ip, "Failed to process ut message: {e}");
+                            };
                         }
                         _ => {
                             // unknown extension
@@ -985,6 +971,54 @@ impl Download {
         if !peer.in_status.is_choked() && peer.out_status.is_interested() {
             self.scheduler.schedule(peer_idx, &self.tick_duration);
         }
+    }
+
+    fn handle_pex_message(&mut self, payload: Bytes) -> anyhow::Result<()> {
+        let info_hash = self.info_hash;
+        let pex_message = PexMessage::from_bytes(&payload).context("parse pex message")?;
+        tracing::debug!(
+            "Received {} new peers from pex message",
+            pex_message.added.len()
+        );
+        // put failed ips in set
+        for addr in pex_message
+            .added
+            .into_iter()
+            .filter_map(|a| {
+                self.scheduler
+                    .peers
+                    .iter()
+                    .find(|p| p.ip == a.addr)
+                    .is_none()
+                    .then_some(a.addr)
+            })
+            .take(MAX_PEER_CONNECTIONS - self.scheduler.peers.len())
+        {
+            self.peer_connector.connect(addr, info_hash);
+        }
+        Ok(())
+    }
+
+    fn handle_ut_message(&mut self, peer_idx: usize, payload: Bytes) -> anyhow::Result<()> {
+        let ut_message = UtMessage::from_bytes(&payload).context("parse ut_metadata message")?;
+        match ut_message {
+            UtMessage::Request { piece } => {
+                let peer = &self.scheduler.peers[peer_idx];
+                if let Some(block) = self.scheduler.ut_metadata.get_piece(piece) {
+                    peer.send_ut_metadata_block(
+                        UtMessage::Data {
+                            piece,
+                            total_size: self.scheduler.ut_metadata.size,
+                        },
+                        block,
+                    )?
+                } else {
+                    peer.send_extension_message(UtMessage::Reject { piece })?;
+                };
+            }
+            _ => {}
+        }
+        Ok(())
     }
 
     async fn work(
@@ -1075,17 +1109,18 @@ impl Download {
                 };
             }
 
-            while let Some(Ok(joined_peer)) = self.new_peers_join_set.try_join_next() {
-                let ip = match joined_peer {
-                    Ok(peer) => {
-                        let ip = peer.ip();
-                        self.handle_new_peer(peer);
-                        ip
-                    }
-                    Err(ip) => ip,
-                };
-                self.pending_new_peers_ips.remove(&ip);
+            while let Some(peer) = self.peer_connector.try_join_next() {
+                self.handle_new_peer(peer);
             }
+
+            while let Ok(storage_update) = self.storage_rx.try_recv() {
+                self.handle_storage_feedback(storage_update);
+            }
+
+            while let Ok(command) = commands_rx.try_recv() {
+                self.handle_command(command).await;
+            }
+
 
             while let Ok(storage_update) = self.storage_rx.try_recv() {
                 self.handle_storage_feedback(storage_update);
@@ -1127,24 +1162,9 @@ impl Download {
                     // TODO: store new peers somewhere for later use
                     continue;
                 }
-                if !self.scheduler.peers.iter().any(|p| p.ip == ip)
-                    && self.pending_new_peers_ips.insert(ip)
-                {
+                if !self.scheduler.peers.iter().any(|p| p.ip == ip) {
                     let info_hash = self.info_hash;
-                    self.new_peers_join_set.spawn(async move {
-                        let timeout_duration = Duration::from_secs(3);
-                        match timeout(timeout_duration, Peer::new_from_ip(ip, info_hash)).await {
-                            Ok(Ok(peer)) => Ok(peer),
-                            Ok(Err(e)) => {
-                                tracing::trace!("Failed to connect peer {ip}: {e}");
-                                Err(ip)
-                            }
-                            Err(_) => {
-                                tracing::trace!("Failed to connect peer {ip}: time out");
-                                Err(ip)
-                            }
-                        }
-                    });
+                    self.peer_connector.connect(ip, info_hash);
                 } else {
                     tracing::trace!("Received duplicate peer {ip}");
                 }
