@@ -70,14 +70,16 @@ pub struct ClientConfig {
     pub port: u16,
     pub udp_listener_port: u16,
     pub cancellation_token: Option<CancellationToken>,
+    pub upnp_nat_traversal_enabled: bool,
 }
 
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
-            port: 6881,
+            port: tracker::PORT,
             udp_listener_port: 7897,
             cancellation_token: Some(CancellationToken::new()),
+            upnp_nat_traversal_enabled: true,
         }
     }
 }
@@ -94,11 +96,12 @@ impl Client {
     pub async fn new(config: ClientConfig) -> anyhow::Result<Self> {
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
         let task_tracker = TaskTracker::new();
-        let peer_listener =
-            PeerListener::spawn(config.port, &task_tracker, cancellation_token.clone()).await?;
+        let peer_listener = match config.upnp_nat_traversal_enabled {
+            true => PeerListener::spawn_with_upnp(config.port, &task_tracker).await?,
+            false => PeerListener::spawn(config.port, &task_tracker).await?,
+        };
         let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
-        let udp_worker =
-            UdpTrackerWorker::bind(udp_listener_addr, cancellation_token.clone()).await?;
+        let udp_worker = UdpTrackerWorker::bind(udp_listener_addr).await?;
         let udp_tracker_channel = udp_worker.spawn().await?;
 
         Ok(Self {

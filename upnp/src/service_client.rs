@@ -132,7 +132,6 @@ impl Action {
         Ok(action.finish()?)
     }
 
-
     pub fn add_any_port_mapping(
         &self,
         remote_host: <RemoteHost as SVariable>::VarType,
@@ -409,14 +408,14 @@ impl<T: ScpdService> ScpdClient<T> {
         payload: String,
     ) -> Result<A, ActionCallError> {
         let header = format!("\"{}#{}\"", T::URN, action.name);
-        let request = self
+        let res = self
             .fetch_client
             .request(reqwest::Method::POST, self.control_url())
             .header("SOAPAction", header)
             .header(reqwest::header::CONTENT_TYPE, "text/xml")
             .body(payload)
-            .build()?;
-        let res = self.fetch_client.execute(request).await?;
+            .send()
+            .await?;
         tracing::trace!("{} action response status: {}", action.name, res.status());
         let text = res.text().await?;
         let mut reader = quick_xml::Reader::from_str(&text);
@@ -434,5 +433,10 @@ impl<T: ScpdService> ScpdClient<T> {
 
     pub fn control_url(&self) -> &str {
         &self.control_url
+    }
+
+    /// Check if action with provided name is supported by this service
+    pub fn is_supported(&self, action_name: &str) -> bool {
+        self.actions.iter().any(|a| a.name == action_name)
     }
 }

@@ -285,6 +285,9 @@ impl SVariable for PortMappingEnabled {
 
 #[derive(Debug)]
 pub struct PortMappingLeaseDuration;
+impl PortMappingLeaseDuration {
+    pub const MAX: std::time::Duration = std::time::Duration::from_secs(604800);
+}
 impl SVariable for PortMappingLeaseDuration {
     type VarType = u32;
     const RANGE: Option<crate::service_variables::Range> = Some(crate::service_variables::Range {
@@ -643,11 +646,12 @@ impl ScpdService for InternetGatewayClient {
 impl ScpdClient<InternetGatewayClient> {
     pub async fn add_any_port_mapping(
         &self,
-        local_addr: Ipv4Addr,
         external_addr: Option<Ipv4Addr>,
-        proto: PortMappingProtocol,
-        description: String,
         external_port: u16,
+        proto: PortMappingProtocol,
+        internal_port: u16,
+        local_addr: Ipv4Addr,
+        description: String,
         lease: u32,
     ) -> Result<u16, ActionCallError> {
         let action = self.action("AddAnyPortMapping")?;
@@ -656,7 +660,7 @@ impl ScpdClient<InternetGatewayClient> {
             external_addr,
             external_port,
             proto,
-            external_port,
+            internal_port,
             local_addr,
             true,
             description,
@@ -669,11 +673,12 @@ impl ScpdClient<InternetGatewayClient> {
 
     pub async fn add_port_mapping(
         &self,
-        local_addr: Ipv4Addr,
         external_addr: Option<Ipv4Addr>,
-        proto: PortMappingProtocol,
-        description: String,
         external_port: u16,
+        proto: PortMappingProtocol,
+        internal_port: u16,
+        local_addr: Ipv4Addr,
+        description: String,
         lease: u32,
     ) -> Result<(), ActionCallError> {
         let action = self.action("AddPortMapping")?;
@@ -682,7 +687,7 @@ impl ScpdClient<InternetGatewayClient> {
             external_addr,
             external_port,
             proto,
-            external_port,
+            internal_port,
             local_addr,
             true,
             description,

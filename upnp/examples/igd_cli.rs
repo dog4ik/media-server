@@ -32,8 +32,11 @@ enum Command {
         #[clap(long, short)]
         external_host: Option<Ipv4Addr>,
         #[clap(long, short)]
-        /// Port to open
+        /// External port to open
         port: u16,
+        /// Internal port
+        #[clap(long, short)]
+        internal_port: Option<u16>,
         #[clap(long, short)]
         /// Description of the service
         description: String,
@@ -126,6 +129,7 @@ async fn main() {
             local_host,
             external_host,
             port,
+            internal_port,
             description,
             protocol,
             lease,
@@ -134,11 +138,12 @@ async fn main() {
             let new_port = match any {
                 true => client
                     .add_any_port_mapping(
-                        local_host.unwrap_or_else(resolve_local_addr),
                         external_host,
-                        protocol.into(),
-                        description,
                         port,
+                        protocol.into(),
+                        internal_port.unwrap_or(port),
+                        local_host.unwrap_or_else(resolve_local_addr),
+                        description,
                         lease,
                     )
                     .await
@@ -146,11 +151,12 @@ async fn main() {
                 false => {
                     client
                         .add_port_mapping(
-                            local_host.unwrap_or_else(resolve_local_addr),
                             external_host,
-                            protocol.into(),
-                            description,
                             port,
+                            protocol.into(),
+                            internal_port.unwrap_or(port),
+                            local_host.unwrap_or_else(resolve_local_addr),
+                            description,
                             lease,
                         )
                         .await
