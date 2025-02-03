@@ -1117,19 +1117,6 @@ impl Download {
                 self.handle_storage_feedback(storage_update);
             }
 
-            while let Ok(command) = commands_rx.try_recv() {
-                self.handle_command(command).await;
-            }
-
-
-            while let Ok(storage_update) = self.storage_rx.try_recv() {
-                self.handle_storage_feedback(storage_update);
-            }
-
-            while let Ok(command) = commands_rx.try_recv() {
-                self.handle_command(command).await;
-            }
-
             self.scheduler.register_performance();
             self.handle_tracker_updates(loop_start);
 
@@ -1138,12 +1125,17 @@ impl Download {
             tracing::debug!(took = ?loop_start.elapsed(), "Download tick finished");
             self.tick_num += 1;
 
-            // 4. We sleep until the next tick
-            tokio::select! {
-                _ = tick_interval.tick() => {}
-                _ = self.cancellation_token.cancelled() => {
-                    self.handle_shutdown().await;
-                    break Ok(());
+            loop {
+                // 4. We sleep until the next tick
+                tokio::select! {
+                    _ = tick_interval.tick() => {
+                        break;
+                    }
+                    Some(command) = commands_rx.recv() => self.handle_command(command).await,
+                    _ = self.cancellation_token.cancelled() => {
+                        self.handle_shutdown().await;
+                        return Ok(());
+                    }
                 }
             }
         }
