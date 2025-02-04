@@ -1,7 +1,9 @@
 use std::{
     collections::HashMap,
     fmt::Display,
+    hash::Hasher,
     io::{BufRead, Read, Write},
+    net::SocketAddr,
 };
 
 use anyhow::{anyhow, ensure, Context};
@@ -720,12 +722,71 @@ impl Decoder for MessageFramer {
     }
 }
 
+pub fn canonical_peer_priority(mut e1: SocketAddr, mut e2: SocketAddr) -> u32 {
+    let mut hasher = crc32c::Crc32cHasher::new(Default::default());
+    if e1.ip() == e2.ip() {
+        if e1.port() > e2.port() {
+            std::mem::swap(&mut e1, &mut e2);
+        }
+        hasher.write_u16(e1.port());
+        hasher.write_u16(e2.port());
+        return hasher.finish() as u32;
+    }
+    if let (SocketAddr::V6(mut e1), SocketAddr::V6(mut e2)) = (e1, e2) {
+        if e1 > e2 {
+            std::mem::swap(&mut e1, &mut e2);
+        }
+        let mut offset = 0xff;
+        let mut b1 = e1.ip().octets();
+        let mut b2 = e2.ip().octets();
+        for i in 0..b1.len() {
+            if offset == 0xff && b1[i] != b2[i] {
+                offset = (i + 1).max(5);
+            } else if i > offset {
+                b1[i] &= 0x55;
+                b2[i] &= 0x55;
+            }
+        }
+
+        hasher.write(&b1);
+        hasher.write(&b2);
+        return hasher.finish() as u32;
+    }
+
+    if let (SocketAddr::V4(mut e1), SocketAddr::V4(mut e2)) = (e1, e2) {
+        if e1 > e2 {
+            std::mem::swap(&mut e1, &mut e2);
+        }
+        let mut b1 = e1.ip().octets();
+        let mut b2 = e2.ip().octets();
+        let mask = if b1[..2] != b2[..2] {
+            [0xff, 0xff, 0x55, 0x55]
+        } else if b1[..3] != b2[..3] {
+            [0xff, 0xff, 0xff, 0x55]
+        } else {
+            [0xff, 0xff, 0xff, 0xff]
+        };
+        for ((b1, b2), mask) in b1.iter_mut().zip(&mut b2).zip(mask) {
+            *b1 &= mask;
+            *b2 &= mask;
+        }
+
+        hasher.write(&b1);
+        hasher.write(&b2);
+        return hasher.finish() as u32;
+    }
+    tracing::error!("Peer priority cannot be made of ipv4 and ipv6");
+    0
+}
+
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+
     use bytes::{Bytes, BytesMut};
     use tokio_util::codec::Decoder;
 
-    use crate::peers::BitField;
+    use crate::{peers::BitField, protocol::peer::canonical_peer_priority};
 
     use super::{ExtensionHandshake, MessageFramer, PeerMessage};
 
@@ -775,5 +836,14 @@ mod tests {
             payload: Bytes::from_static(&[22, 222, 32]),
         })
         .await;
+    }
+
+    #[test]
+    fn peer_priority() {
+        let client = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(123, 213, 32, 10)), 0);
+        let peer1 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(98, 76, 54, 32)), 0);
+        let peer2 = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(123, 213, 32, 234)), 0);
+        assert_eq!(canonical_peer_priority(client, peer1), 0xec2d7224);
+        assert_eq!(canonical_peer_priority(client, peer2), 0x99568189);
     }
 }

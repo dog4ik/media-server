@@ -385,6 +385,10 @@ impl ActivePeer {
     pub fn client_name(&self) -> &'static str {
         self.handshake.peer_id.client_name()
     }
+    /// Canonical priority (BEP 40)
+    pub fn canonical_priority(&self, my_ip: SocketAddr) -> u32 {
+        crate::protocol::peer::canonical_peer_priority(my_ip, self.ip)
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
