@@ -94,8 +94,20 @@ impl MediaServerContentDirectory {
         let show = self.app_state.db.get_show(show_id).await?;
         let seasons = show.seasons.unwrap_or_default();
         let mut containers = Vec::with_capacity(seasons.len());
-        for season in seasons {
-            let container = Container::new(
+        let mut seasons_ids = Vec::new();
+        for season in &seasons {
+            let season = *season as i64;
+            let season = sqlx::query!(
+                "SELECT id, plot FROM seasons WHERE show_id = ? AND number = ?",
+                show_id,
+                season,
+            )
+            .fetch_one(&self.app_state.db.pool)
+            .await?;
+            seasons_ids.push((season.id, season.plot));
+        }
+        for (season, (season_id, plot)) in seasons.into_iter().zip(seasons_ids) {
+            let mut container = Container::new(
                 ContentId::Season {
                     show_id,
                     season: season as i64,
@@ -104,6 +116,15 @@ impl MediaServerContentDirectory {
                 ContentId::Show(show_id).to_string(),
                 format!("Season {}", season),
             );
+            let poster_url = format!(
+                "{server_url}/api/season/{season_id}/poster",
+                server_url = self.server_location,
+                season_id = season_id,
+            );
+            container.set_property(properties::AlbumArtUri(poster_url));
+            if let Some(description) = plot {
+                container.set_property(properties::Description(description));
+            }
             containers.push(container);
         }
         Ok(DidlResponse {

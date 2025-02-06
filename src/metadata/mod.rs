@@ -82,6 +82,12 @@ impl AsRef<Url> for MetadataImage {
     }
 }
 
+impl Into<Url> for MetadataImage {
+    fn into(self) -> Url {
+        self.0
+    }
+}
+
 impl Serialize for MetadataImage {
     fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where

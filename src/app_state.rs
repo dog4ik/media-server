@@ -965,11 +965,11 @@ async fn handle_show_metadata(
     let local_id = db.insert_show(metadata.into_db_show()).await.unwrap();
     let poster_job = poster_url.map(|url| {
         let poster_asset = PosterAsset::new(local_id, PosterContentType::Show);
-        save_asset_from_url(url.to_string(), poster_asset)
+        save_asset_from_url(url.into(), poster_asset)
     });
     let backdrop_job = backdrop_url.map(|url| {
         let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Show);
-        save_asset_from_url(url.to_string(), backdrop_asset)
+        save_asset_from_url(url.into(), backdrop_asset)
     });
     let insert_job = db.insert_external_id(DbExternalId {
         metadata_provider: metadata_provider.to_string(),
@@ -1051,11 +1051,11 @@ async fn handle_movie_metadata(
 
     let poster_job = poster_url.map(|url| {
         let poster_asset = PosterAsset::new(local_id, PosterContentType::Movie);
-        save_asset_from_url_with_frame_fallback(url.to_string(), poster_asset, &movie.source)
+        save_asset_from_url_with_frame_fallback(url.into(), poster_asset, &movie.source)
     });
     let backdrop_job = backdrop_url.map(|url| {
         let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Movie);
-        save_asset_from_url(url.to_string(), backdrop_asset)
+        save_asset_from_url(url.into(), backdrop_asset)
     });
     match (poster_job, backdrop_job) {
         (Some(poster_job), Some(backdrop_job)) => {
@@ -1174,10 +1174,15 @@ async fn handle_season(
                 let Ok(season) = provider.season(&id.id, season, fetch_params).await else {
                     continue;
                 };
+                let poster = season.poster.clone();
                 let id = db
                     .insert_season(season.into_db_season(local_show_id))
                     .await
                     .unwrap();
+                if let Some(poster) = poster {
+                    let poster_asset = PosterAsset::new(id, PosterContentType::Season);
+                    let _ = save_asset_from_url(poster.into(), poster_asset).await;
+                }
                 return Ok(id);
             }
         }
@@ -1232,7 +1237,7 @@ async fn handle_episode(
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);
                     let _ = save_asset_from_url_with_frame_fallback(
-                        poster.to_string(),
+                        poster.into(),
                         poster_asset,
                         &item.source,
                     )
@@ -1405,7 +1410,7 @@ pub async fn movie_metadata_fallback(
 }
 
 pub(crate) async fn save_asset_from_url(
-    url: impl reqwest::IntoUrl,
+    url: reqwest::Url,
     asset: impl FileAsset,
 ) -> anyhow::Result<()> {
     use std::io::{Error, ErrorKind};
@@ -1422,7 +1427,7 @@ pub(crate) async fn save_asset_from_url(
 }
 
 async fn save_asset_from_url_with_frame_fallback(
-    url: impl reqwest::IntoUrl,
+    url: reqwest::Url,
     asset: impl FileAsset,
     source: &Source,
 ) -> anyhow::Result<()> {
