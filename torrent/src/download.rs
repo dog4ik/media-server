@@ -39,6 +39,7 @@ pub enum DownloadMessage {
     PostFullState {
         tx: tokio::sync::oneshot::Sender<FullState>,
     },
+    Validate,
     Abort,
     Pause,
     Resume,
@@ -66,6 +67,12 @@ impl DownloadHandle {
     /// Resume download
     pub async fn resume(&self) -> anyhow::Result<()> {
         self.download_tx.send(DownloadMessage::Resume).await?;
+        Ok(())
+    }
+
+    /// Validate files
+    pub async fn validate(&self) -> anyhow::Result<()> {
+        self.download_tx.send(DownloadMessage::Validate).await?;
         Ok(())
     }
 
@@ -279,6 +286,8 @@ impl ActivePeer {
     }
 
     pub fn set_out_choke(&mut self, force: bool) -> anyhow::Result<()> {
+        debug_assert!(self.out_status.is_choked() != force);
+        tracing::debug!(ip = %self.ip, "Setting out peer choke status to {force:?}");
         match force {
             true => self.message_tx.try_send(PeerMessage::Choke)?,
             false => self.message_tx.try_send(PeerMessage::Unchoke)?,
@@ -288,6 +297,8 @@ impl ActivePeer {
     }
 
     pub fn set_out_interest(&mut self, force: bool) -> anyhow::Result<()> {
+        debug_assert!(self.out_status.is_interested() != force);
+        tracing::debug!(ip = %self.ip, "Setting out peer interested status to {force:?}");
         match force {
             true => self.message_tx.try_send(PeerMessage::Interested)?,
             false => self.message_tx.try_send(PeerMessage::NotInterested)?,
@@ -360,14 +371,14 @@ impl ActivePeer {
     pub fn add_interested(&mut self, piece: usize) {
         self.interested_pieces.add_piece(piece);
         if self.interested_pieces.amount() > 1 && !self.out_status.is_interested() {
-            self.set_out_interest(true).unwrap();
+            let _ = self.set_out_interest(true);
         }
     }
 
     pub fn remove_interested(&mut self, piece: usize) {
         self.interested_pieces.remove_piece(piece);
         if self.interested_pieces.amount() == 0 && self.out_status.is_interested() {
-            self.set_out_interest(false).unwrap();
+            let _ = self.set_out_interest(false);
         }
     }
 
@@ -375,16 +386,27 @@ impl ActivePeer {
         self.interested_pieces.recalculate(table, &self.bitfield);
         let amount = self.interested_pieces.amount();
         if amount == 0 && self.out_status.is_interested() {
-            self.set_out_interest(false).unwrap();
+            let _ = self.set_out_interest(false);
         }
         if amount > 0 && !self.out_status.is_interested() {
-            self.set_out_interest(true).unwrap();
+            let _ = self.set_out_interest(true);
         }
     }
 
     pub fn client_name(&self) -> &'static str {
         self.handshake.peer_id.client_name()
     }
+
+    /// Is other peer better to choke?
+    pub fn cmp_to_choke(&self, other: &Self) -> bool {
+        other.performance_history.avg_down_speed() < self.performance_history.avg_down_speed()
+    }
+
+    /// Is other peer better to unchoke?
+    pub fn cmp_to_unchoke(&self, other: &Self) -> bool {
+        other.performance_history.avg_down_speed() > self.performance_history.avg_down_speed()
+    }
+
     /// Canonical priority (BEP 40)
     pub fn canonical_priority(&self, my_ip: SocketAddr) -> u32 {
         crate::protocol::peer::canonical_peer_priority(my_ip, self.ip)
@@ -410,9 +432,7 @@ impl Default for Status {
 
 impl Status {
     pub fn set_choke(&mut self, force: bool) {
-        if force {
-            self.choked_time = Instant::now();
-        }
+        self.choked_time = Instant::now();
         self.choked = force;
     }
 
@@ -428,13 +448,9 @@ impl Status {
         self.interested
     }
 
-    /// Get duration of being choked returning 0 Duration if currently choked
+    /// Duration since the last choke state change
     pub fn choke_duration(&self) -> Duration {
-        if self.is_choked() {
-            Duration::ZERO
-        } else {
-            self.choked_time.elapsed()
-        }
+        self.choked_time.elapsed()
     }
 }
 
@@ -628,6 +644,9 @@ pub enum StateChange {
         ip: SocketAddr,
         change: PeerStateChange,
     },
+    ValidationResult {
+        bitfield: Vec<u8>,
+    },
 }
 
 #[derive(Debug)]
@@ -760,17 +779,36 @@ impl ProgressConsumer for () {
     }
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq)]
+pub enum DownloadError {
+    MissingFile,
+}
+
+impl Display for DownloadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DownloadError::MissingFile => write!(f, "Missing file"),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, serde::Serialize, Default, PartialEq)]
 pub enum DownloadState {
+    Error(DownloadError),
+    Validation,
     Paused,
     #[default]
     Pending,
     Seeding,
 }
 
+impl std::error::Error for DownloadState {}
+
 impl Display for DownloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            DownloadState::Error(e) => write!(f, "Error: {e}"),
+            DownloadState::Validation => write!(f, "Validation"),
             DownloadState::Paused => write!(f, "Paused"),
             DownloadState::Pending => write!(f, "Pending"),
             DownloadState::Seeding => write!(f, "Seeding"),
@@ -782,8 +820,9 @@ const MAX_PEER_CONNECTIONS: usize = 75;
 /// Keep it not super low to prevent event loop congestion
 const DEFAULT_TICK_DURATION: Duration = Duration::from_millis(500);
 const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
-const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
+pub const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
 const PEER_CHANNEL_CAPACITY: usize = 1000;
+const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
@@ -803,7 +842,6 @@ pub struct Download {
     last_optimistic_unchoke: Instant,
     last_choke: Instant,
     stat: DownloadStat,
-    #[allow(unused)]
     seeder: Seeder,
     changes: Vec<StateChange>,
     info: crate::Info,
@@ -918,11 +956,6 @@ impl Download {
                         peer.uploaded += block.length as u64;
                         tracing::info!("Peer {} requested piece: {index}", peer.ip);
                         self.seeder.request_block(block, peer.message_tx.clone());
-                    } else {
-                        tracing::warn!(
-                            "Peer {} requests piece while choked or not interested",
-                            peer.ip
-                        );
                     }
                 }
                 PeerMessage::Piece {
@@ -1061,7 +1094,7 @@ impl Download {
                     min_pex_tip = pex_idx
                 }
             }
-            tracing::debug!(
+            tracing::trace!(
                 "Handled peer's messages in {:?}",
                 handle_peer_messages.elapsed()
             );
@@ -1126,7 +1159,7 @@ impl Download {
 
             self.handle_progress_dispatch(&mut progress);
 
-            tracing::debug!(took = ?loop_start.elapsed(), "Download tick finished");
+            tracing::trace!(took = ?loop_start.elapsed(), "Download tick finished");
             self.tick_num += 1;
 
             loop {
@@ -1227,7 +1260,7 @@ impl Download {
         join_res: Result<(Uuid, Result<(), PeerError>), tokio::task::JoinError>,
     ) {
         if let Ok((uuid, Err(peer_err))) = &join_res {
-            tracing::warn!(
+            tracing::trace!(
                 "Peer with id: {} joined with error: {:?} {}",
                 uuid,
                 peer_err.error_type,
@@ -1340,6 +1373,9 @@ impl Download {
                     }
                 };
             }
+            DownloadMessage::Validate => self
+                .changes
+                .push(StateChange::DownloadStateChange(DownloadState::Validation)),
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
                 self.cancellation_token.cancel();

@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::{
-    download::{ActivePeer, Block, BlockPosition, DataBlock, Performance},
+    download::{self, ActivePeer, Block, BlockPosition, DataBlock, Performance},
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{peer::PeerMessage, ut_metadata::UtMetadata, Info, OutputFile},
     utils, DownloadState,
@@ -305,7 +305,7 @@ pub const BLOCK_LENGTH: u32 = 16 * 1024;
 //const MAX_SCHEDULED_TO: usize = 4;
 
 /// Max amount of peers that allowed to be unchoked
-const UNCHOKE_SLOTS: usize = 5;
+pub const UNCHOKE_SLOTS: usize = 5;
 
 impl Scheduler {
     pub fn new(t: &Info, pending_files: PendingFiles, initial_bf: &crate::BitField) -> Self {
@@ -646,13 +646,46 @@ impl Scheduler {
     }
 
     pub fn handle_peer_interest(&mut self, peer_idx: usize) {
+        let unchoked_amount = self
+            .peers
+            .iter()
+            .filter(|p| !p.out_status.is_choked())
+            .count();
+
         let peer = &mut self.peers[peer_idx];
         peer.in_status.set_interest(true);
+
+        if unchoked_amount < UNCHOKE_SLOTS && peer.out_status.is_choked() {
+            let _ = peer.set_out_choke(false);
+        }
     }
 
     pub fn handle_peer_uninterest(&mut self, peer_idx: usize) {
         let peer = &mut self.peers[peer_idx];
         peer.in_status.set_interest(false);
+
+        if !peer.out_status.is_choked() {
+            let _ = peer.set_out_choke(true);
+
+            // unchoke someone else instead
+            let mut to_unchoke: Option<&mut ActivePeer> = None;
+            for peer in self
+                .peers
+                .iter_mut()
+                .filter(|p| p.in_status.is_interested() && p.out_status.is_choked())
+            {
+                if let Some(unchoked) = &to_unchoke {
+                    if unchoked.cmp_to_unchoke(peer) {
+                        to_unchoke = Some(peer);
+                    }
+                } else {
+                    to_unchoke = Some(peer);
+                }
+            }
+            if let Some(to_unchoke) = to_unchoke {
+                let _ = to_unchoke.set_out_choke(false);
+            }
+        }
     }
 
     pub fn remove_peer(&mut self, peer_idx: usize) -> Option<std::net::SocketAddr> {
@@ -668,9 +701,6 @@ impl Scheduler {
     pub fn add_peer(&mut self, mut peer: ActivePeer) {
         if peer.interested_pieces.amount() > 0 {
             peer.set_out_interest(true).expect("channel is empty");
-        }
-        if self.peers.len() < UNCHOKE_SLOTS {
-            peer.set_out_choke(false).expect("channel is empty");
         }
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity += 1;
@@ -812,82 +842,37 @@ impl Scheduler {
     }
 
     pub fn rechoke_peer(&mut self) {
-        if self.peers.is_empty() {
-            return;
-        }
-        let mut unchoked_amount = self
-            .peers
-            .iter()
-            .filter(|p| !p.out_status.is_choked())
-            .count();
-        if let Some(to_choke) = self
-            .peers
-            .iter_mut()
-            .filter(|p| p.out_status.is_choked())
-            .min_by(|a, b| {
-                match a
-                    .performance_history
-                    .avg_up_speed()
-                    .cmp(&b.performance_history.avg_up_speed())
-                {
-                    Ordering::Equal => a.downloaded.cmp(&b.downloaded),
-                    Ordering::Less => Ordering::Less,
-                    Ordering::Greater => Ordering::Greater,
-                }
-            })
-        {
-            if to_choke.set_out_choke(true).is_ok() {
-                unchoked_amount -= 1;
-                tracing::debug!("Choking peer {}", to_choke.ip);
-            };
-        };
-
-        if let Some(to_unchoke) = self
-            .peers
-            .iter_mut()
-            .filter(|p| !p.out_status.is_choked() && p.in_status.is_interested())
-            .max_by(|a, b| {
-                match a
-                    .performance_history
-                    .avg_down_speed()
-                    .cmp(&b.performance_history.avg_down_speed())
-                {
-                    Ordering::Equal => a.downloaded.cmp(&b.downloaded),
-                    Ordering::Less => Ordering::Less,
-                    Ordering::Greater => Ordering::Greater,
-                }
-            })
-        {
-            if to_unchoke.set_out_choke(false).is_ok() {
-                unchoked_amount += 1;
-                tracing::debug!("Unchoking peer {}", to_unchoke.ip);
-            };
-        };
-
-        while unchoked_amount < UNCHOKE_SLOTS {
-            if let Some(to_unchoke) = self
-                .peers
-                .iter_mut()
-                .filter(|p| !p.out_status.is_choked() && p.in_status.is_interested())
-                .max_by(|a, b| {
-                    match a
-                        .performance_history
-                        .avg_down_speed()
-                        .cmp(&b.performance_history.avg_down_speed())
-                    {
-                        Ordering::Equal => a.downloaded.cmp(&b.downloaded),
-                        Ordering::Less => Ordering::Less,
-                        Ordering::Greater => Ordering::Greater,
+        let mut to_choke: Option<&mut ActivePeer> = None;
+        let mut to_unchoke: Option<&mut ActivePeer> = None;
+        for peer in &mut self.peers {
+            match peer.out_status.is_choked() {
+                true if peer.in_status.is_interested() => {
+                    if let Some(unchoked) = &to_unchoke {
+                        if unchoked.cmp_to_unchoke(peer) {
+                            to_unchoke = Some(peer);
+                        }
+                    } else {
+                        to_unchoke = Some(peer);
                     }
-                })
-            {
-                if to_unchoke.set_out_choke(false).is_ok() {
-                    unchoked_amount += 1;
-                    tracing::debug!("Unchoking peer {}", to_unchoke.ip);
-                };
-            } else {
-                break;
-            };
+                }
+                // skip choked and not interested peers
+                true => {}
+                // Consider choking
+                false if peer.out_status.choke_duration() > download::CHOKE_INTERVAL => {
+                    if let Some(choked) = &to_choke {
+                        if choked.cmp_to_choke(peer) {
+                            to_choke = Some(peer);
+                        }
+                    } else {
+                        to_choke = Some(peer);
+                    }
+                }
+                false => {}
+            }
+        }
+        if let Some((to_choke, to_unchoke)) = to_choke.zip(to_unchoke) {
+            let _ = to_choke.set_out_choke(true);
+            let _ = to_unchoke.set_out_choke(false);
         }
     }
 }

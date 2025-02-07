@@ -109,9 +109,25 @@ impl From<torrent::FullStateFile> for StateFile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum DownloadError {
+    MissingFile,
+}
+
+impl From<torrent::DownloadError> for DownloadError {
+    fn from(value: torrent::DownloadError) -> Self {
+        match value {
+            torrent::DownloadError::MissingFile => Self::MissingFile,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Clone, Copy, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadState {
+    Error(DownloadError),
+    Validation,
     Paused,
     Pending,
     Seeding,
@@ -120,6 +136,8 @@ pub enum DownloadState {
 impl From<torrent::DownloadState> for DownloadState {
     fn from(value: torrent::DownloadState) -> Self {
         match value {
+            torrent::DownloadState::Error(e) => Self::Error(e.into()),
+            torrent::DownloadState::Validation => Self::Validation,
             torrent::DownloadState::Paused => Self::Paused,
             torrent::DownloadState::Pending => Self::Pending,
             torrent::DownloadState::Seeding => Self::Seeding,
@@ -274,6 +292,9 @@ pub enum StateChange {
         file_idx: usize,
         priority: Priority,
     },
+    ValidationResult {
+        bitfield: Vec<u8>,
+    },
 }
 
 impl From<torrent::StateChange> for StateChange {
@@ -291,6 +312,9 @@ impl From<torrent::StateChange> for StateChange {
                     file_idx,
                     priority: priority.into(),
                 }
+            }
+            torrent::StateChange::ValidationResult { bitfield } => {
+                Self::ValidationResult { bitfield }
             }
         }
     }
@@ -429,6 +453,7 @@ pub trait TorrentManager {
     async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()>;
     async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>>;
     async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()>;
+    async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()>;
     async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()>;
     async fn update_file_priority(
         &self,
@@ -486,6 +511,7 @@ impl TorrentManager for Db {
 
     async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()> {
         // BUG: This code introduces race condition.
+        // ensure that it is called not in parallel
         let torrent = self.get_torrent_by_info_hash(hash).await?;
         let mut bf = torrent::BitField(torrent.bitfield);
         for piece in new_pieces {
@@ -493,6 +519,12 @@ impl TorrentManager for Db {
         }
         tracing::debug!("Applying {} pieces to bitfield", new_pieces.len());
         self.update_torrent_by_info_hash(hash, &bf.0).await?;
+        Ok(())
+    }
+
+    async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()> {
+        tracing::debug!("Saving torrent bitfield");
+        self.update_torrent_by_info_hash(hash, bitfield).await?;
         Ok(())
     }
 
@@ -599,10 +631,18 @@ async fn handle_progress(
             continue;
         };
         let mut new_pieces = Vec::new();
-        new_pieces.extend(progress.changes.iter().filter_map(|v| match v {
-            StateChange::FinishedPiece(p) => Some(*p),
-            _ => None,
-        }));
+        for change in &progress.changes {
+            match change {
+                StateChange::FinishedPiece(piece) => new_pieces.push(*piece),
+                StateChange::ValidationResult { bitfield } => {
+                    if let Err(e) = manager.update_pieces(&torrent_hash, bitfield).await {
+                        tracing::error!("Failed to save torrent validation result: {e}");
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
 
         if !new_pieces.is_empty() {
             if let Err(e) = manager.update_torrent(&torrent_hash, &new_pieces).await {

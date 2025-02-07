@@ -45,6 +45,7 @@ mod storage;
 mod tracker;
 mod utils;
 
+pub use download::DownloadError;
 pub use download::DownloadHandle;
 pub use download::DownloadMessage;
 pub use download::DownloadState;
@@ -169,7 +170,8 @@ impl Client {
         let (feedback_tx, _) = mpsc::channel(100);
         let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
         let mut storage = TorrentStorage::new(feedback_tx, parts_file, params);
-        storage.revalidate().await
+        storage.revalidate().await;
+        Ok(storage.bitfield().to_owned())
     }
 
     pub async fn resolve_magnet_link(&self, link: &MagnetLink) -> anyhow::Result<Info> {

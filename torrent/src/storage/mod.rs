@@ -223,10 +223,10 @@ impl TorrentStorage {
         }
     }
 
-    pub async fn spawn(
-        mut self,
-        tracker: &TaskTracker,
-        cancellation_token: CancellationToken,
+    pub fn bitfield(&self) -> &BitField {
+        &self.bitfield
+    }
+
     pub async fn spawn(mut self, tracker: &TaskTracker) -> anyhow::Result<StorageHandle> {
         let save_location_metadata = fs::metadata(&self.output_dir)
             .await
@@ -457,8 +457,8 @@ impl TorrentStorage {
         Ok(bytes)
     }
 
-    pub async fn revalidate(&mut self) -> anyhow::Result<BitField> {
-        let mut bitfield = BitField::empty(self.pieces.len());
+    /// Validate torrent contents to make piece bitfield accurate
+    pub async fn revalidate(&mut self) {
         let mut current_piece = 0;
         let mut verified_pieces = 0;
         let total_pieces = self.pieces.len();
@@ -467,13 +467,17 @@ impl TorrentStorage {
         let mut hasher = Hasher::new(workers);
         const CONCURRENCY: usize = 50;
         for _ in 0..CONCURRENCY {
-            let bytes = self.retrieve_piece(current_piece).await?;
-            let payload = Payload {
-                hash: self.pieces[current_piece],
-                piece_i: current_piece,
-                data: vec![bytes],
+            if let Ok(bytes) = self.retrieve_piece(current_piece).await {
+                let payload = Payload {
+                    hash: self.pieces[current_piece],
+                    piece_i: current_piece,
+                    data: vec![bytes],
+                };
+                hasher.pend_job(payload).await;
+            } else {
+                self.bitfield.remove(current_piece).unwrap();
+                verified_pieces += 1;
             };
-            hasher.pend_job(payload).await;
             current_piece += 1;
             if current_piece >= total_pieces {
                 break;
@@ -483,7 +487,7 @@ impl TorrentStorage {
             let res = hasher.recv().await;
             verified_pieces += 1;
             if res.is_verified {
-                bitfield.add(res.piece_i).unwrap();
+                self.bitfield.add(res.piece_i).unwrap();
             }
 
             if verified_pieces >= total_pieces {
@@ -491,17 +495,20 @@ impl TorrentStorage {
             }
 
             if current_piece < total_pieces {
-                let bytes = self.retrieve_piece(current_piece).await?;
-                let payload = Payload {
-                    hash: self.pieces[current_piece],
-                    piece_i: current_piece,
-                    data: vec![bytes],
-                };
+                if let Ok(bytes) = self.retrieve_piece(current_piece).await {
+                    let payload = Payload {
+                        hash: self.pieces[current_piece],
+                        piece_i: current_piece,
+                        data: vec![bytes],
+                    };
+                    hasher.pend_job(payload).await;
+                } else {
+                    self.bitfield.remove(current_piece).unwrap();
+                    verified_pieces += 1;
+                }
                 current_piece += 1;
-                hasher.pend_job(payload).await;
             }
         }
-        Ok(bitfield)
     }
 
     async fn pend_hash_validation(&mut self, piece_i: usize, data: ReadyPiece) {
