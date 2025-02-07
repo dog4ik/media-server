@@ -636,7 +636,7 @@ pub async fn external_ids(
     Ok(Json(res))
 }
 
-/// Get video by content local id
+/// Videos for local content
 #[utoipa::path(
     get,
     path = "/api/video/by_content",
@@ -645,8 +645,8 @@ pub async fn external_ids(
         IdQuery,
     ),
     responses(
-        (status = 200, description = "Desired video", body = DetailedVideo),
-        (status = 404, description = "Video is not found"),
+        (status = 200, description = "Videos for the content", body = Vec<DetailedVideo>),
+        (status = 404, description = "Content is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -654,22 +654,36 @@ pub async fn contents_video(
     Query(IdQuery { id }): Query<IdQuery>,
     Query(content_type): Query<ContentTypeQuery>,
     State(state): State<AppState>,
-) -> Result<Json<DetailedVideo>, AppError> {
-    let video_id = match content_type.content_type {
+) -> Result<Json<Vec<DetailedVideo>>, AppError> {
+    #[derive(FromRow)]
+    struct VideoId {
+        id: i64,
+    }
+
+    let video_ids = match content_type.content_type {
         crate::metadata::ContentType::Movie => {
-            sqlx::query!("SELECT id FROM videos WHERE movie_id = ?", id)
-                .fetch_one(&state.db.pool)
+            sqlx::query_as!(VideoId, "SELECT id FROM videos WHERE movie_id = ?", id)
+                .fetch_all(&state.db.pool)
                 .await
-                .map(|x| x.id)
         }
         crate::metadata::ContentType::Show => {
-            sqlx::query!("SELECT id FROM videos WHERE episode_id = ?", id)
-                .fetch_one(&state.db.pool)
+            sqlx::query_as!(VideoId, "SELECT id FROM videos WHERE episode_id = ?", id)
+                .fetch_all(&state.db.pool)
                 .await
-                .map(|x| x.id)
         }
     }?;
-    get_video_by_id(Path(video_id), State(state)).await
+
+    let mut out = Vec::with_capacity(video_ids.len());
+
+    for VideoId { id } in video_ids {
+        match get_video_by_id(Path(id), State(state.clone())).await {
+            Ok(v) => out.push(v.0),
+            Err(e) => {
+                tracing::warn!("Failed to construct detailed video: {e}");
+            },
+        };
+    }
+    Ok(Json(out))
 }
 
 /// Get all videos that have transcoded variants

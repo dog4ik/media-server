@@ -776,9 +776,7 @@ where
             .await?;
 
             let episodes: Vec<_> = sqlx::query!(
-                "SELECT episodes.* FROM episodes 
-JOIN videos ON videos.episode_id = episodes.id
-WHERE season_id = ? ORDER BY number ASC",
+                "SELECT * FROM episodes WHERE season_id = ? ORDER BY number ASC",
                 season.id
             )
             .fetch_all(&mut *conn)
