@@ -505,7 +505,7 @@ pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetada
     ),
     responses(
         (status = 200, description = "Local episode", body = EpisodeMetadata),
-        (status = 404, description = "Episode is not found"),
+        (status = 404, description = "Episode is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -680,7 +680,7 @@ pub async fn contents_video(
             Ok(v) => out.push(v.0),
             Err(e) => {
                 tracing::warn!("Failed to construct detailed video: {e}");
-            },
+            }
         };
     }
     Ok(Json(out))
@@ -1389,7 +1389,7 @@ where
     ),
     responses(
         (status = 200),
-        (status = 404, description = "Video is not found"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -1409,7 +1409,7 @@ pub async fn remove_video(
     ),
     responses(
         (status = 200),
-        (status = 404, description = "Episode is not found"),
+        (status = 404, description = "Episode is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1428,7 +1428,8 @@ pub async fn delete_episode(
         ("id", description = "Season id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Successfully deleted season"),
+        (status = 404, description = "Season is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1447,7 +1448,8 @@ pub async fn delete_season(
         ("id", description = "Show id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Successfully deleted show"),
+        (status = 404, description = "Show is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1466,7 +1468,8 @@ pub async fn delete_show(
         ("id", description = "Movie id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Successfully deleted movie"),
+        (status = 404, description = "Movie is not found", body = AppError),
     ),
     tag = "Movies",
 )]
@@ -1486,7 +1489,8 @@ pub async fn delete_movie(
         ("variant_id", description = "Variant id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Successfully deleted variant"),
+        (status = 404, description = "Variant is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -1507,7 +1511,8 @@ pub async fn remove_variant(
     ),
     request_body = ShowMetadata,
     responses(
-        (status = 200),
+        (status = 200, description = "Updated show metadata"),
+        (status = 404, description = "Show is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1537,7 +1542,8 @@ pub async fn alter_show_metadata(
     ),
     request_body = SeasonMetadata,
     responses(
-        (status = 200),
+        (status = 200, description = "Updated season metadata"),
+        (status = 404, description = "Season is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1568,7 +1574,8 @@ pub async fn alter_season_metadata(
     ),
     request_body = EpisodeMetadata,
     responses(
-        (status = 200),
+        (status = 200, description = "Updated episode metadata"),
+        (status = 404, description = "Episode is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1600,7 +1607,8 @@ pub async fn alter_episode_metadata(
     ),
     request_body = MovieMetadata,
     responses(
-        (status = 200),
+        (status = 200, description = "Updated movie metadata"),
+        (status = 404, description = "Movie is not found", body = AppError),
     ),
     tag = "Movies",
 )]
@@ -1630,7 +1638,8 @@ pub async fn alter_movie_metadata(
         StringIdQuery,
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Fixed show metadata"),
+        (status = 404, description = "Show is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1658,7 +1667,8 @@ pub async fn fix_show_metadata(
         StringIdQuery,
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Fixed movie metadata"),
+        (status = 404, description = "Movie is not found", body = AppError),
     ),
     tag = "Movies",
 )]
@@ -1686,7 +1696,8 @@ pub async fn fix_movie_metadata(
         ContentTypeQuery,
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Fixed metadata match"),
+        (status = 404, description = "Content is not found", body = AppError),
     ),
     tag = "Metadata",
 )]
@@ -1724,7 +1735,8 @@ pub async fn fix_metadata(
         ("show_id", description = "Id of the show that needs to be fixed"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Succsessfully reset show metadata"),
+        (status = 404, description = "Show is not found", body = AppError),
     ),
     tag = "Shows",
 )]
@@ -1764,6 +1776,7 @@ pub async fn reset_movie_metadata(
     ),
     responses(
         (status = 200),
+        (status = 404, description = "Content is not found", body = AppError),
     ),
     tag = "Metadata",
 )]
@@ -1788,6 +1801,7 @@ pub async fn reset_metadata(
     request_body = TranscodePayload,
     responses(
         (status = 202, description = "Transcode task is started"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -1809,6 +1823,7 @@ pub async fn transcode_video(
     ),
     responses(
         (status = 202, description = "Previews task is started"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -1829,6 +1844,7 @@ pub async fn generate_previews(
     ),
     responses(
         (status = 200),
+        (status = 404, description = "Previews directory is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -2056,7 +2072,7 @@ pub async fn update_server_configuration(
     post,
     path = "/api/configuration/reset",
     responses(
-        (status = 200),
+        (status = 200, description = "Server configuration is reset"),
     ),
     tag = "Configuration",
 )]
@@ -2182,7 +2198,7 @@ pub struct UpdateHistoryPayload {
     is_finished: bool,
 }
 
-/// Update history
+/// Update history entry
 #[utoipa::path(
     put,
     path = "/api/history/{id}",
@@ -2191,7 +2207,8 @@ pub struct UpdateHistoryPayload {
     ),
     request_body = UpdateHistoryPayload,
     responses(
-        (status = 200),
+        (status = 200, description = "History update is successful"),
+        (status = 404, description = "History entry is not found", body = AppError),
     ),
     tag = "History",
 )]
@@ -2199,18 +2216,20 @@ pub async fn update_history(
     State(db): State<Db>,
     Path(id): Path<i64>,
     Json(payload): Json<UpdateHistoryPayload>,
-) -> Result<StatusCode, AppError> {
-    let query = sqlx::query!(
+) -> Result<(), AppError> {
+    sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ? WHERE id = ? RETURNING time;",
         payload.time,
         payload.is_finished,
         id,
-    );
-    query.fetch_one(&db.pool).await?;
-    Ok(StatusCode::OK)
+    )
+    .fetch_one(&db.pool)
+    .await?;
+
+    Ok(())
 }
 
-/// Delete all history for default user
+/// Delete all history for the default user
 #[utoipa::path(
     delete,
     path = "/api/history",
@@ -2234,7 +2253,8 @@ pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
         ("id", description = "History id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "Successfully removed history item"),
+        (status = 404, description = "History entry is not found", body = AppError),
     ),
     tag = "History",
 )]
@@ -2259,6 +2279,7 @@ pub async fn remove_history_item(
     responses(
         (status = 200, description = "History entry is updated"),
         (status = 201, description = "History is created"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -2301,7 +2322,8 @@ pub async fn update_video_history(
         ("id", description = "Video id"),
     ),
     responses(
-        (status = 200),
+        (status = 200, description = "History entry is deleted"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",
 )]
@@ -2436,8 +2458,8 @@ pub async fn create_transcode_stream(
     ),
     responses(
         (status = 200, body = String),
-        (status = 400, description = "Task uuid is incorrect"),
-        (status = 404, description = "Task is not found"),
+        (status = 400, description = "Task uuid is incorrect", body = AppError),
+        (status = 404, description = "Task is not found", body = AppError),
     ),
     tag = "Transcoding",
 )]
@@ -2466,7 +2488,7 @@ pub async fn transcode_stream_manifest(
     ),
     responses(
         (status = 202, description = "Intro detection task is started"),
-        (status = 404, description = "Show or season are not found"),
+        (status = 404, description = "Season is not found", body = AppError),
     ),
     tag = "Shows",
 )]
