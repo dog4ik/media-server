@@ -185,10 +185,7 @@ impl<T: ConfigValue> AnySettingValue for SettingValue<T> {
     }
 
     fn serialize_response(&self) -> SerializedSetting {
-        let serialize = |t: Option<&T>| {
-            let value = serde_json::to_value(t).unwrap();
-            value
-        };
+        let serialize = |t: Option<&T>| serde_json::to_value(t).unwrap();
         SerializedSetting {
             key: self.key(),
             require_restart: T::REQUIRE_RESTART,
@@ -481,7 +478,7 @@ impl<T: ConfigValue> utoipa::PartialSchema for UtoipaConfigValue<T> {
             .schema_type(schema::SchemaType::Type(schema::Type::String))
             .enum_values(Some([key]));
 
-        let out = schema::ObjectBuilder::new()
+        schema::ObjectBuilder::new()
             .schema_type(schema::SchemaType::Type(schema::Type::Object))
             .property("require_restart", bool::schema())
             .required("require_restart")
@@ -495,8 +492,7 @@ impl<T: ConfigValue> utoipa::PartialSchema for UtoipaConfigValue<T> {
             .required("cli_value")
             .property("env_value", optional)
             .required("env_value")
-            .into();
-        out
+            .into()
     }
 }
 
@@ -756,14 +752,9 @@ impl Default for WebUiPath {
 }
 
 /// Enabled upnp
-#[derive(Deserialize, Serialize, Clone, Eq, PartialEq, Debug, utoipa::ToSchema)]
+#[derive(Deserialize, Serialize, Clone, Eq, PartialEq, Debug, utoipa::ToSchema, Default)]
 pub struct UpnpEnabled(pub bool);
 impl ConfigValue for UpnpEnabled {}
-impl Default for UpnpEnabled {
-    fn default() -> Self {
-        Self(false)
-    }
-}
 
 /// Ssdp packet ttl
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq, utoipa::ToSchema)]
@@ -828,14 +819,9 @@ impl Default for TorrentIndexesOrder {
 }
 
 /// Metadata language
-#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
+#[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema, Default)]
 pub struct MetadataLanguage(pub metadata::Language);
 impl ConfigValue for MetadataLanguage {}
-impl Default for MetadataLanguage {
-    fn default() -> Self {
-        Self(metadata::Language::default())
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -871,7 +857,7 @@ hw_accel = true
         let port: Port = store.get_value();
         let hw_accel: HwAccel = store.get_value();
         assert_eq!(port.0, 8000);
-        assert_eq!(hw_accel.0, true);
+        assert!(hw_accel.0);
     }
 }
 
@@ -1014,7 +1000,7 @@ impl Capabilities {
 
         // skip description header
         let mut lines =
-            lines.skip_while(|line| !line.as_ref().map_or(false, |l| l.starts_with(" ---")));
+            lines.skip_while(|line| !line.as_ref().is_ok_and(|l| l.starts_with(" ---")));
         lines.next();
 
         let mut codecs = Vec::new();

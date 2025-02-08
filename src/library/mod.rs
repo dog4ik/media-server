@@ -79,7 +79,7 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
         .any(|c| EXTRAS_FOLDERS.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_ref()));
     let supports_extension = path
         .extension()
-        .map_or(false, |ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()));
+        .is_some_and(|ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()));
     !is_extra && supports_extension
 }
 
@@ -312,7 +312,7 @@ impl<T: Media> LibraryItem<T> {
                     .tags
                     .title
                     .as_ref()
-                    .and_then(|metadata_title| T::identify(&metadata_title).ok())
+                    .and_then(|metadata_title| T::identify(metadata_title).ok())
                     .context("Try to identify content from container metadata")?
             }
         };
@@ -760,7 +760,7 @@ impl<'de> Deserialize<'de> for AudioCodec {
     {
         struct AudioCodecVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for AudioCodecVisitor {
+        impl serde::de::Visitor<'_> for AudioCodecVisitor {
             type Value = AudioCodec;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -817,7 +817,7 @@ impl<'de> Deserialize<'de> for VideoCodec {
     {
         struct VideoCodecVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for VideoCodecVisitor {
+        impl serde::de::Visitor<'_> for VideoCodecVisitor {
             type Value = VideoCodec;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

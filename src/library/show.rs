@@ -66,11 +66,11 @@ pub struct ShowIdent {
 }
 
 impl Parseable for ShowIdent {
-    fn parse_parent<'a>(&mut self, directory_tokens: Vec<Token<'a>>) {
+    fn parse_parent(&mut self, directory_tokens: Vec<Token<'_>>) {
         self.apply_parent_tokens(&directory_tokens);
     }
 
-    fn parse_name<'a>(&mut self, name_tokens: Vec<Token<'a>>) {
+    fn parse_name(&mut self, name_tokens: Vec<Token<'_>>) {
         self.apply_name_tokens(&name_tokens);
     }
 }
@@ -79,16 +79,15 @@ const SEASON_IDENTS: [&str; 2] = ["Season", "season"];
 
 impl ShowIdent {
     pub fn apply_parent_tokens(&mut self, tokens: &[Token<'_>]) {
-        match (tokens.get(0), tokens.get(1)) {
-            (Some(Token::Unknown(season_ident)), Some(Token::Unknown(season_num))) => {
-                if SEASON_IDENTS.contains(season_ident) {
-                    if let Ok(season_num) = season_num.parse() {
-                        self.season = Some(season_num);
-                        return;
-                    }
+        if let (Some(Token::Unknown(season_ident)), Some(Token::Unknown(season_num))) =
+            (tokens.first(), tokens.get(1))
+        {
+            if SEASON_IDENTS.contains(season_ident) {
+                if let Ok(season_num) = season_num.parse() {
+                    self.season = Some(season_num);
+                    return;
                 }
             }
-            _ => {}
         }
         self.apply_name(tokens);
     }

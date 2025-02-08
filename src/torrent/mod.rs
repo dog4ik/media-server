@@ -75,13 +75,13 @@ impl From<torrent::Priority> for Priority {
     }
 }
 
-impl Into<torrent::Priority> for Priority {
-    fn into(self) -> torrent::Priority {
-        match self {
-            Self::Disabled => torrent::Priority::Disabled,
-            Self::Low => torrent::Priority::Low,
-            Self::Medium => torrent::Priority::Medium,
-            Self::High => torrent::Priority::High,
+impl From<Priority> for torrent::Priority {
+    fn from(val: Priority) -> Self {
+        match val {
+            Priority::Disabled => torrent::Priority::Disabled,
+            Priority::Low => torrent::Priority::Low,
+            Priority::Medium => torrent::Priority::Medium,
+            Priority::High => torrent::Priority::High,
         }
     }
 }
@@ -405,7 +405,7 @@ pub struct CompactTorrentProgress {
 impl CompactTorrentProgress {
     pub fn new(progress: &DownloadProgress) -> Self {
         Self {
-            percent: progress.percent as f32,
+            percent: progress.percent,
             peers_amount: progress.peers.len(),
             download_speed: progress.download_speed(),
         }
@@ -576,6 +576,12 @@ pub enum Progress {
 #[derive(Debug, Clone)]
 pub struct TorrentProgressChannel(broadcast::Sender<Arc<TorrentProgress>>);
 
+impl Default for TorrentProgressChannel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TorrentProgressChannel {
     pub fn new() -> Self {
         let (tx, _) = broadcast::channel(20);
@@ -635,7 +641,7 @@ async fn handle_progress(
             match change {
                 StateChange::FinishedPiece(piece) => new_pieces.push(*piece),
                 StateChange::ValidationResult { bitfield } => {
-                    if let Err(e) = manager.update_pieces(&torrent_hash, bitfield).await {
+                    if let Err(e) = manager.update_pieces(torrent_hash, bitfield).await {
                         tracing::error!("Failed to save torrent validation result: {e}");
                         continue;
                     }
@@ -645,7 +651,7 @@ async fn handle_progress(
         }
 
         if !new_pieces.is_empty() {
-            if let Err(e) = manager.update_torrent(&torrent_hash, &new_pieces).await {
+            if let Err(e) = manager.update_torrent(torrent_hash, &new_pieces).await {
                 tracing::error!("Failed to update torrent state: {e}");
                 continue;
             };
@@ -655,12 +661,12 @@ async fn handle_progress(
         else {
             tracing::error!(
                 "Torrent with info_hash {} is not found",
-                utils::stringify_info_hash(&torrent_hash)
+                utils::stringify_info_hash(torrent_hash)
             );
             continue;
         };
         let ident = pending_torrent.identifier();
-        let progress = CompactTorrentProgress::new(&progress);
+        let progress = CompactTorrentProgress::new(progress);
         let progress_chunk = ProgressChunk {
             identifier: ident,
             status: ProgressStatus::Pending { progress },
@@ -711,7 +717,7 @@ impl TorrentClient {
                 .iter()
                 .enumerate()
             {
-                let mut resolved_file = ResolvedTorrentFile::from_output_file(&file, file_offset);
+                let mut resolved_file = ResolvedTorrentFile::from_output_file(file, file_offset);
                 resolved_file.priority = torrent.files[i].into();
                 files.push(resolved_file);
                 file_offset += file.length();

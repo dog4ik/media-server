@@ -1248,7 +1248,7 @@ async fn handle_episode(
         }
         // fallback
         tracing::warn!("Using episode metadata fallback");
-        let id = episode_metadata_fallback(db, &item, local_season_id, duration).await?;
+        let id = episode_metadata_fallback(db, item, local_season_id, duration).await?;
         return Ok(id);
     };
     Ok(local_episode.metadata_id.parse().unwrap())
@@ -1286,7 +1286,7 @@ async fn handle_movie(
                 return Ok(local_id);
             }
         }
-        let id = movie_metadata_fallback(db, &item, duration).await?;
+        let id = movie_metadata_fallback(db, item, duration).await?;
         return Ok(id);
     };
     Ok(db_movies.first().unwrap().metadata_id.parse().unwrap())

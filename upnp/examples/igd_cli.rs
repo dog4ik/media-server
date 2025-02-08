@@ -12,9 +12,9 @@ enum Proto {
     UDP,
 }
 
-impl Into<PortMappingProtocol> for Proto {
-    fn into(self) -> PortMappingProtocol {
-        match self {
+impl From<Proto> for PortMappingProtocol {
+    fn from(val: Proto) -> Self {
+        match val {
             Proto::TCP => PortMappingProtocol::TCP,
             Proto::UDP => PortMappingProtocol::UDP,
         }

@@ -20,6 +20,12 @@ pub struct SearchOptions {
     take: Option<usize>,
 }
 
+impl Default for SearchOptions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl SearchOptions {
     pub fn new() -> Self {
         Self {
@@ -93,7 +99,7 @@ impl SearchClient {
 
         let service_scpd = Scpd::read_xml(&mut quick_xml::Reader::from_str(&service_scpd))?;
 
-        return Ok(ScpdClient::new(service_scpd, control_url));
+        Ok(ScpdClient::new(service_scpd, control_url))
     }
 
     pub async fn search_for<T: ScpdService>(

@@ -49,7 +49,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn av_pause(
@@ -64,7 +64,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn av_seek(
@@ -83,7 +83,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn av_position_info(
@@ -98,7 +98,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn add_port_mapping(
@@ -129,7 +129,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn add_any_port_mapping(
@@ -160,7 +160,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn add_any_port_mapping_strict(
@@ -203,7 +203,7 @@ impl Action {
         anyhow::ensure!(expected.next() == Some("NewLeaseDuration"));
         action.write_argument("NewLeaseDuration", lease_duration)?;
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn remove_port_mapping(
@@ -222,7 +222,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn remove_port_mapping_strict(
@@ -245,12 +245,12 @@ impl Action {
         anyhow::ensure!(expected.next() == Some("NewProtocol"));
         action.write_argument("NewProtocol", new_protocol)?;
 
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn get_external_ip(&self) -> anyhow::Result<String> {
         let action = WritableAction::new("GetExternalIPAddress", Self::WANIPCONNECTION_URN)?;
-        Ok(action.finish()?)
+        action.finish()
     }
 
     pub fn get_list_of_port_mappings(
@@ -274,7 +274,7 @@ impl Action {
             }?
         }
 
-        Ok(action.finish()?)
+        action.finish()
     }
     pub fn get_list_of_port_mappings_strict(
         &self,
@@ -304,7 +304,7 @@ impl Action {
         anyhow::ensure!(expected.next() == Some("NewNumberOfPorts"));
         action.write_argument("NewNumberOfPorts", take)?;
 
-        Ok(action.finish()?)
+        action.finish()
     }
 }
 

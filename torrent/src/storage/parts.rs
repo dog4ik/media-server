@@ -326,7 +326,7 @@ impl PartsFile {
         file.seek(SeekFrom::End(0)).await?;
         file.write_u32(piece_i as u32).await?;
         for block in piece {
-            file.write_all(&block).await?;
+            file.write_all(block).await?;
         }
         file.flush().await?;
         self.pieces.push(piece_i);

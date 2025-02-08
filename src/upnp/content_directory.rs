@@ -161,7 +161,7 @@ impl MediaServerContentDirectory {
             let item_id = ContentId::Episode {
                 show_id,
                 season,
-                episode: episode.number as i64,
+                episode: episode.number,
             };
             let mut item = Item::new(
                 item_id.to_string(),

@@ -140,7 +140,7 @@ impl Chromaprint {
         let fingerprint = fingerprint
             .windows(4)
             .map(|w| w.try_into().expect("window size is 4"))
-            .map(|w| u32::from_be_bytes(w))
+            .map(u32::from_be_bytes)
             .collect();
         Self { fingerprint }
     }

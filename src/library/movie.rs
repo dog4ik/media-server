@@ -14,22 +14,22 @@ pub struct MovieIdent {
 }
 
 impl Parsable for MovieIdent {
-    fn parse_parent<'a>(&mut self, folder_tokens: Vec<Token<'a>>) {
+    fn parse_parent(&mut self, folder_tokens: Vec<Token<'_>>) {
         self.parse_tokens(folder_tokens);
     }
 
-    fn parse_name<'a>(&mut self, name_tokens: Vec<Token<'a>>) {
+    fn parse_name(&mut self, name_tokens: Vec<Token<'_>>) {
         self.parse_tokens(name_tokens);
     }
 }
 
 impl MovieIdent {
-    pub fn parse_tokens<'a>(&mut self, tokens: Vec<Token<'a>>) {
+    pub fn parse_tokens(&mut self, tokens: Vec<Token<'_>>) {
         let mut past_name = false;
         let mut title = String::new();
         let mut in_group = false;
         let mut year = None;
-        for (_, token) in tokens.into_iter().enumerate() {
+        for token in tokens.into_iter() {
             match token {
                 Token::Unknown(t) => {
                     if !past_name && !in_group {

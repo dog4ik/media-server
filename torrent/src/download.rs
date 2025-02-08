@@ -774,9 +774,7 @@ impl ProgressConsumer for flume::Sender<DownloadProgress> {
 }
 
 impl ProgressConsumer for () {
-    fn consume_progress(&mut self, _progress: DownloadProgress) {
-        ()
-    }
+    fn consume_progress(&mut self, _progress: DownloadProgress) {}
 }
 
 #[derive(Debug, Clone, Copy, serde::Serialize, PartialEq)]
@@ -1022,12 +1020,7 @@ impl Download {
             .added
             .into_iter()
             .filter_map(|a| {
-                self.scheduler
-                    .peers
-                    .iter()
-                    .find(|p| p.ip == a.addr)
-                    .is_none()
-                    .then_some(a.addr)
+                (!self.scheduler.peers.iter().any(|p| p.ip == a.addr)).then_some(a.addr)
             })
             .take(MAX_PEER_CONNECTIONS - self.scheduler.peers.len())
         {
@@ -1038,22 +1031,19 @@ impl Download {
 
     fn handle_ut_message(&mut self, peer_idx: usize, payload: Bytes) -> anyhow::Result<()> {
         let ut_message = UtMessage::from_bytes(&payload).context("parse ut_metadata message")?;
-        match ut_message {
-            UtMessage::Request { piece } => {
-                let peer = &self.scheduler.peers[peer_idx];
-                if let Some(block) = self.scheduler.ut_metadata.get_piece(piece) {
-                    peer.send_ut_metadata_block(
-                        UtMessage::Data {
-                            piece,
-                            total_size: self.scheduler.ut_metadata.size,
-                        },
-                        block,
-                    )?
-                } else {
-                    peer.send_extension_message(UtMessage::Reject { piece })?;
-                };
-            }
-            _ => {}
+        if let UtMessage::Request { piece } = ut_message {
+            let peer = &self.scheduler.peers[peer_idx];
+            if let Some(block) = self.scheduler.ut_metadata.get_piece(piece) {
+                peer.send_ut_metadata_block(
+                    UtMessage::Data {
+                        piece,
+                        total_size: self.scheduler.ut_metadata.size,
+                    },
+                    block,
+                )?
+            } else {
+                peer.send_extension_message(UtMessage::Reject { piece })?;
+            };
         }
         Ok(())
     }

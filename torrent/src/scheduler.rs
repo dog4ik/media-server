@@ -118,7 +118,6 @@ impl PendingPiece {
         let blocks_amount = piece_size.div_ceil(BLOCK_LENGTH);
         let piece = vec![PendingBlock::default(); blocks_amount as usize];
         let blocks: Vec<_> = (0..blocks_amount)
-            .into_iter()
             .map(|i| {
                 let offset = BLOCK_LENGTH * i;
                 let length = if i == blocks_amount - 1 {
@@ -513,13 +512,10 @@ impl Scheduler {
         };
 
         peer.downloaded += data_block.len() as u64;
-        match pending_blocks.save_block(data_block, peer.id) {
-            Err(e) => {
-                // peer logic error
-                peer.cancel_peer();
-                tracing::error!("{e}");
-            }
-            Ok(_) => {}
+        if let Err(e) = pending_blocks.save_block(data_block, peer.id) {
+            // peer logic error
+            peer.cancel_peer();
+            tracing::error!("{e}");
         }
     }
 

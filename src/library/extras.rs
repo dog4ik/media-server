@@ -17,14 +17,14 @@ pub struct ExtrasIdentifier {
 }
 
 impl ExtrasIdent {
-    pub fn parse_parent<'a>(&mut self, parent_tokens: Vec<Token<'a>>, content_type: ContentType) {
+    pub fn parse_parent(&mut self, parent_tokens: Vec<Token<'_>>, content_type: ContentType) {
         match content_type {
             ContentType::Movie => {}
             ContentType::Show => todo!(),
         }
     }
 
-    pub fn parse_name<'a>(&mut self, name_tokens: Vec<Token<'a>>) {
+    pub fn parse_name(&mut self, name_tokens: Vec<Token<'_>>) {
         todo!()
     }
 }

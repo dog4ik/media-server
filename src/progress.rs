@@ -85,9 +85,7 @@ impl TaskTrait for LibraryScanTask {
 
     type Progress = Vec<String>;
 
-    fn identifier(&self) -> Self::Identifier {
-        ()
-    }
+    fn identifier(&self) -> Self::Identifier {}
 
     fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
         TaskProgress::LibraryScan(chunk)
@@ -103,9 +101,7 @@ impl TaskTrait for WatchTask {
 
     type Progress = ();
 
-    fn identifier(&self) -> Self::Identifier {
-        ()
-    }
+    fn identifier(&self) -> Self::Identifier {}
 
     fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
         TaskProgress::WatchSession(chunk)
@@ -188,7 +184,7 @@ impl<T: TaskTrait> TaskStorage<T> {
 impl<T: TaskTrait + PartialEq> TaskStorage<T> {
     fn add_task(&self, task: Task<T>) -> Result<Uuid, TaskError> {
         let mut tasks = self.tasks.lock().unwrap();
-        if tasks.iter().find(|t| t.kind == task.kind).is_some() {
+        if tasks.iter().any(|t| t.kind == task.kind) {
             return Err(TaskError::Duplicate);
         }
         let id = task.id;

@@ -72,19 +72,19 @@ impl Argument {
         let parent = BytesStart::new("argument");
         w.write_event(Event::Start(parent.clone()))?;
         w.create_element("name")
-            .write_text_content(BytesText::new(&self.name))?;
+            .write_text_content(BytesText::new(self.name))?;
 
         w.create_element("direction")
             .write_text_content(BytesText::new(direction.into()))?;
 
         w.create_element("relatedStateVariable")
-            .write_text_content(BytesText::new(&self.related_variable.name))?;
+            .write_text_content(BytesText::new(self.related_variable.name))?;
         w.write_event(Event::End(parent.to_end()))?;
         Ok(())
     }
 
     pub fn name(&self) -> &str {
-        &self.name
+        self.name
     }
 }
 
@@ -334,7 +334,7 @@ impl<'a> FromXml<'a> for ActionPayload<InArgumentPayload<'a>> {
     }
 }
 
-impl<'a> IntoXml for ActionPayload<InArgumentPayload<'a>> {
+impl IntoXml for ActionPayload<InArgumentPayload<'_>> {
     fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         let action = BytesStart::new(self.name());
         let action_end = action.to_end().into_owned();
@@ -364,7 +364,7 @@ impl IntoXml for ActionPayload<OutArgumentsPayload> {
         w.write_event(Event::End(action_end))
     }
 }
-impl<'a> ActionPayload<InArgumentPayload<'a>> {
+impl ActionPayload<InArgumentPayload<'_>> {
     pub fn arguments_map(&self) -> HashMap<String, &str> {
         self.arguments
             .iter()
@@ -484,11 +484,11 @@ impl IntoXml for ActionResponse<OutArgumentsPayload> {
     }
 }
 
-impl<'a, 'b> ActionResponse<InArgumentPayload<'a>> {
+impl<'a> ActionResponse<InArgumentPayload<'a>> {
     pub fn read_xml(
         r: &mut quick_xml::Reader<&'a [u8]>,
         urn: URN,
-        action_tag_name: quick_xml::name::QName<'b>,
+        action_tag_name: quick_xml::name::QName<'_>,
     ) -> anyhow::Result<Self> {
         let mut arguments = Vec::new();
 
@@ -863,9 +863,9 @@ impl IntoXml for ActionError {
 }
 
 impl ActionError {
-    fn read_xml<'a, 'b>(
-        r: &mut quick_xml::Reader<&'a [u8]>,
-        end_tag: quick_xml::name::QName<'b>,
+    fn read_xml(
+        r: &mut quick_xml::Reader<&[u8]>,
+        end_tag: quick_xml::name::QName<'_>,
     ) -> anyhow::Result<Self> {
         let fault_code = r.read_to_start()?;
         anyhow::ensure!(fault_code.local_name().as_ref() == b"faultcode");

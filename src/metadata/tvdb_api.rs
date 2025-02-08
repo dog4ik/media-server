@@ -401,7 +401,7 @@ impl From<TvdbSearchResult> for MovieMetadata {
         let poster = val
             .image_url
             .and_then(|url| url.parse().ok())
-            .map(|url| MetadataImage::new(url));
+            .map(MetadataImage::new);
 
         MovieMetadata {
             metadata_id: val.tvdb_id,
@@ -421,7 +421,7 @@ impl From<TvdbSearchResult> for ShowMetadata {
         let poster = val
             .image_url
             .and_then(|url| url.parse().ok())
-            .map(|url| MetadataImage::new(url));
+            .map(MetadataImage::new);
 
         ShowMetadata {
             metadata_id: val.tvdb_id,
@@ -463,7 +463,7 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
         let poster = val
             .image_url
             .and_then(|url| url.parse().ok())
-            .map(|url| MetadataImage::new(url));
+            .map(MetadataImage::new);
 
         Ok(MetadataSearchResult {
             title: val.name,

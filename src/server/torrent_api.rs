@@ -37,7 +37,7 @@ impl<'de> Deserialize<'de> for InfoHash {
     {
         struct HexVisitor;
 
-        impl<'de> serde::de::Visitor<'de> for HexVisitor {
+        impl serde::de::Visitor<'_> for HexVisitor {
             type Value = InfoHash;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -275,7 +275,7 @@ pub async fn parse_torrent_file(
     MultipartTorrent { torrent_file, .. }: MultipartTorrent,
 ) -> Result<Json<TorrentInfo>, AppError> {
     let torrent_info = TorrentInfo::new(&torrent_file.info, hint, providers_stack).await;
-    return Ok(Json(torrent_info));
+    Ok(Json(torrent_info))
 }
 
 /// Open .torrent file

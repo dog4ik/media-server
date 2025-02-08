@@ -86,7 +86,7 @@ impl<'a> DeviceDescription<'a> {
                 model_name: "Media server".into(),
                 model_number: Some("1.0".into()),
                 model_url: Some("https://github.com/dog4ik/media-server".into()),
-                udn: UDN::new(uuid),
+                udn: Udn::new(uuid),
                 icon_list: vec![
                     Icon {
                         mimetype: "image/webp".into(),
@@ -131,7 +131,7 @@ pub struct Device<'a> {
     pub model_number: Option<Cow<'a, str>>,
     pub model_url: Option<Cow<'a, str>>,
     pub serial_number: Option<Cow<'a, str>>,
-    pub udn: UDN,
+    pub udn: Udn,
     pub icon_list: Vec<Icon<'a>>,
     pub service_list: Vec<Service<'a>>,
     pub device_list: Vec<Device<'a>>,
@@ -268,7 +268,7 @@ impl<'a> FromXml<'a> for Device<'a> {
                         }
                         b"UDN" => {
                             let text = r.read_text(end_name)?;
-                            udn = Some(UDN::from_str(&text)?);
+                            udn = Some(Udn::from_str(&text)?);
                         }
                         b"UPC" => {
                             r.read_to_end(end_name)?;
@@ -382,9 +382,9 @@ impl<'a> FromXml<'a> for Device<'a> {
 /// embedded. shall be the same over time for a specific device instance (i.e., shall survive
 /// reboots).
 #[derive(Debug, Clone, Serialize)]
-pub struct UDN(String);
+pub struct Udn(String);
 
-impl UDN {
+impl Udn {
     pub fn new(uuid: uuid::Uuid) -> Self {
         Self(format!("uuid:{uuid}"))
     }
@@ -393,13 +393,13 @@ impl UDN {
     }
 }
 
-impl Display for UDN {
+impl Display for Udn {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
-impl FromStr for UDN {
+impl FromStr for Udn {
     type Err = anyhow::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {

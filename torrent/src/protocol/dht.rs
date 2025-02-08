@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn dht_parse_error_message() {
         let raw_err_response = r#"d1:eli201e23:A Generic Error Ocurrede1:t2:aa1:y1:ee"#;
-        let err_response: KRPCMessage = serde_bencode::from_str(&raw_err_response).unwrap();
+        let err_response: KRPCMessage = serde_bencode::from_str(raw_err_response).unwrap();
         assert_matches!(
             err_response.payload,
             KRPCPayload::Error {
@@ -160,7 +160,7 @@ mod tests {
     #[test]
     fn dht_parse_ping_message() {
         let raw_request = r#"d1:ad2:id20:abcdefghij0123456789e1:q4:ping1:t2:aa1:y1:qe"#;
-        let request: KRPCMessage = serde_bencode::from_str(&raw_request).unwrap();
+        let request: KRPCMessage = serde_bencode::from_str(raw_request).unwrap();
         assert_matches!(
             request.payload,
             KRPCPayload::Query {
@@ -170,7 +170,7 @@ mod tests {
         );
 
         let raw_response = r#"d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re"#;
-        let rensponse: KRPCMessage = serde_bencode::from_str(&raw_response).unwrap();
+        let rensponse: KRPCMessage = serde_bencode::from_str(raw_response).unwrap();
         assert_matches!(
             rensponse.payload,
             KRPCPayload::Response {
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn dht_parse_find_node_message() {
         let raw_request = r#"d1:ad2:id20:abcdefghij01234567896:target20:mnopqrstuvwxyz123456e1:q9:find_node1:t2:aa1:y1:qe"#;
-        let request: KRPCMessage = serde_bencode::from_str(&raw_request).unwrap();
+        let request: KRPCMessage = serde_bencode::from_str(raw_request).unwrap();
         assert_matches!(
             request.payload,
             KRPCPayload::Query {
@@ -192,7 +192,7 @@ mod tests {
         );
 
         let raw_response = r#"d1:rd2:id20:0123456789abcdefghij5:nodes9:def456...e1:t2:aa1:y1:re"#;
-        let rensponse: KRPCMessage = serde_bencode::from_str(&raw_response).unwrap();
+        let rensponse: KRPCMessage = serde_bencode::from_str(raw_response).unwrap();
         assert_matches!(
             rensponse.payload,
             KRPCPayload::Response {
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn dht_parse_get_peers_message() {
         let raw_request = r#"d1:ad2:id20:abcdefghij01234567899:info_hash20:mnopqrstuvwxyz123456e1:q9:get_peers1:t2:aa1:y1:qe"#;
-        let request: KRPCMessage = serde_bencode::from_str(&raw_request).unwrap();
+        let request: KRPCMessage = serde_bencode::from_str(raw_request).unwrap();
         assert_matches!(
             request.payload,
             KRPCPayload::Query {
@@ -215,7 +215,7 @@ mod tests {
 
         let raw_response_with_peers = r#"d1:rd2:id20:abcdefghij01234567895:token8:aoeusnth6:valuesl6:axje.u6:idhtnmee1:t2:aa1:y1:re"#;
         let rensponse_with_peers: KRPCMessage =
-            serde_bencode::from_str(&raw_response_with_peers).unwrap();
+            serde_bencode::from_str(raw_response_with_peers).unwrap();
         assert_matches!(
             rensponse_with_peers.payload,
             KRPCPayload::Response {
@@ -226,7 +226,7 @@ mod tests {
         let raw_response_with_nodes =
             r#"d1:rd2:id20:abcdefghij01234567895:nodes9:def456...5:token8:aoeusnthe1:t2:aa1:y1:re"#;
         let rensponse_with_nodes: KRPCMessage =
-            serde_bencode::from_str(&raw_response_with_nodes).unwrap();
+            serde_bencode::from_str(raw_response_with_nodes).unwrap();
         assert_matches!(
             rensponse_with_nodes.payload,
             KRPCPayload::Response {
@@ -238,7 +238,7 @@ mod tests {
     #[test]
     fn dht_parse_announce_peer_message() {
         let raw_request = r#"d1:ad2:id20:abcdefghij012345678912:implied_porti1e9:info_hash20:mnopqrstuvwxyz1234564:porti6881e5:token8:aoeusnthe1:q13:announce_peer1:t2:aa1:y1:qe"#;
-        let request: KRPCMessage = serde_bencode::from_str(&raw_request).unwrap();
+        let request: KRPCMessage = serde_bencode::from_str(raw_request).unwrap();
         assert_matches!(
             request.payload,
             KRPCPayload::Query {
@@ -254,7 +254,7 @@ mod tests {
         );
 
         let raw_response = r#"d1:rd2:id20:mnopqrstuvwxyz123456e1:t2:aa1:y1:re"#;
-        let rensponse: KRPCMessage = serde_bencode::from_str(&raw_response).unwrap();
+        let rensponse: KRPCMessage = serde_bencode::from_str(raw_response).unwrap();
         assert_matches!(
             rensponse.payload,
             KRPCPayload::Response {

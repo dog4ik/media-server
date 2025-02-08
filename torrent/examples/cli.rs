@@ -80,15 +80,15 @@ fn parse_torrent_file(path: impl AsRef<Path>) -> anyhow::Result<TorrentFile> {
 }
 
 fn show_progress(p: DownloadProgress) {
-    println!("");
-    println!("");
+    println!();
+    println!();
     let mut total_download_speed = 0;
     let mut total_upload_speed = 0;
     for peer in &p.peers {
         total_download_speed += peer.download_speed;
         total_upload_speed += peer.upload_speed;
     }
-    println!("");
+    println!();
     println!("Progress: {}", p.percent);
     println!("Total Peers: {}", p.peers.len());
     println!(

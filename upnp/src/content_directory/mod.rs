@@ -338,7 +338,7 @@ mod property_name {
                         ValueType::NestedProperties(nested_properties) => {
                             if path_idx + 1 != filter.property_path.len() {
                                 for nested_property in nested_properties {
-                                    nested_property.apply_filter(&filter, path_idx + 1);
+                                    nested_property.apply_filter(filter, path_idx + 1);
                                 }
                             }
                         }
@@ -444,7 +444,7 @@ mod filter {
                 _ => {
                     let properties = raw_filter
                         .split(',')
-                        .map(|p| PropertyFilter::from_filter_part(p))
+                        .map(PropertyFilter::from_filter_part)
                         .collect();
                     Filter::Allowed(properties)
                 }
@@ -776,7 +776,7 @@ impl IntoXml for Item {
             .write_text_content(BytesText::new(&self.base.dc_title))?;
         w.create_element("upnp:class")
             .write_text_content(BytesText::new(
-                &class::UpnpClass::Item(self.base.class).as_str(),
+                class::UpnpClass::Item(self.base.class).as_str(),
             ))?;
         for property in self.properties.values() {
             property.write_xml(w)?;
@@ -901,7 +901,7 @@ impl IntoXml for Container {
             .write_text_content(BytesText::new(&self.base.dc_title))?;
         w.create_element("upnp:class")
             .write_text_content(BytesText::new(
-                &class::UpnpClass::Container(self.base.class).as_str(),
+                class::UpnpClass::Container(self.base.class).as_str(),
             ))?;
         for property in self.properties.values() {
             property.write_xml(w)?;
@@ -930,9 +930,9 @@ impl From<std::time::Duration> for UpnpDuration {
     }
 }
 
-impl Into<std::time::Duration> for UpnpDuration {
-    fn into(self) -> std::time::Duration {
-        self.0
+impl From<UpnpDuration> for std::time::Duration {
+    fn from(val: UpnpDuration) -> Self {
+        val.0
     }
 }
 

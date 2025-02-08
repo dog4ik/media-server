@@ -647,7 +647,7 @@ impl PeerMessage {
                 write_len(&mut reader, 1 + 1 + payload.len() as u32).await?;
                 reader.write_u8(20).await?;
                 reader.write_u8(*extension_id).await?;
-                reader.write_all(&payload).await
+                reader.write_all(payload).await
             }
         }
     }

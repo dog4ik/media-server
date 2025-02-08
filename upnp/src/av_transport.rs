@@ -2,7 +2,7 @@ use std::str::FromStr;
 
 use crate::{
     content_directory::UpnpDuration,
-    device_description::UDN,
+    device_description::Udn,
     service_client::{ActionCallError, ScpdClient, ScpdService},
     service_variables::{IntoUpnpValue, SVariable},
     urn::{UrnType, URN},
@@ -931,11 +931,11 @@ impl SVariable for ArgInstanceID {
 }
 
 #[derive(Debug)]
-pub struct DeviceUDN(pub UDN);
+pub struct DeviceUDN(pub Udn);
 
 impl IntoUpnpValue for DeviceUDN {
     fn from_xml_value(value: &str) -> anyhow::Result<Self> {
-        UDN::from_str(value).map(Self)
+        Udn::from_str(value).map(Self)
     }
 }
 

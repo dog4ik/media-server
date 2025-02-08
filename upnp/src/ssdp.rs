@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::templates::UpnpAgent;
 
 use super::{
-    device_description::{self, UDN},
+    device_description::{self, Udn},
     router, urn,
 };
 
@@ -110,9 +110,9 @@ impl SsdpListener {
             location: self.location.clone(),
             server: self.user_agent.to_string(),
             notification_type: NotificationType::RootDevice,
-            usn: USN::root_device(UDN::new(self.uuid)),
+            usn: USN::root_device(Udn::new(self.uuid)),
             boot_id: self.boot_id,
-            config_id: self.config_id.into(),
+            config_id: self.config_id,
             search_port: None,
         };
         let mut announcer = Announcer::<MulticastAnnounce>::new(
@@ -156,9 +156,9 @@ impl SsdpListener {
                     location: self.location.clone(),
                     server: self.user_agent.to_string(),
                     notification_type: NotificationType::RootDevice,
-                    usn: USN::root_device(UDN::new(self.uuid)),
+                    usn: USN::root_device(Udn::new(self.uuid)),
                     boot_id: self.boot_id,
-                    config_id: self.config_id.into(),
+                    config_id: self.config_id,
                     search_port: None,
                 };
                 let socket = self.socket.clone();
@@ -265,7 +265,7 @@ impl<T: AnnounceHandler> Announcer<T> {
     }
 
     pub async fn urn_announce(&mut self, urn: urn::URN) -> anyhow::Result<()> {
-        let udn = UDN::new(self.server_uuid);
+        let udn = Udn::new(self.server_uuid);
         self.default_announce.notification_type = NotificationType::Urn(urn.clone());
         self.default_announce.usn = USN::urn(udn, urn);
         self.send_announce().await?;
@@ -275,13 +275,13 @@ impl<T: AnnounceHandler> Announcer<T> {
 
     pub async fn root_announce(&mut self) -> anyhow::Result<()> {
         self.default_announce.notification_type = NotificationType::RootDevice;
-        self.default_announce.usn = USN::root_device(UDN::new(self.server_uuid));
+        self.default_announce.usn = USN::root_device(Udn::new(self.server_uuid));
         self.send_announce().await?;
         Ok(())
     }
 
     pub async fn announce_all(&mut self) -> anyhow::Result<()> {
-        let udn = UDN::new(self.server_uuid);
+        let udn = Udn::new(self.server_uuid);
         self.default_announce.notification_type = NotificationType::RootDevice;
         self.default_announce.usn = USN::root_device(udn.clone());
         self.send_announce().await?;
@@ -318,7 +318,7 @@ impl<T: AnnounceHandler> Announcer<T> {
 ///  Unique Service Name. Identifies a unique instance of a device or service.
 #[derive(Debug, Clone)]
 pub struct USN {
-    udn: device_description::UDN,
+    udn: device_description::Udn,
     kind: USNkind,
 }
 
@@ -330,19 +330,19 @@ pub enum USNkind {
 }
 
 impl USN {
-    pub const fn root_device(udn: device_description::UDN) -> Self {
+    pub const fn root_device(udn: device_description::Udn) -> Self {
         Self {
             udn,
             kind: USNkind::RootDevice,
         }
     }
-    pub const fn device_uuid(udn: device_description::UDN) -> Self {
+    pub const fn device_uuid(udn: device_description::Udn) -> Self {
         Self {
             udn,
             kind: USNkind::DeviceUuid,
         }
     }
-    pub const fn urn(udn: device_description::UDN, urn: urn::URN) -> Self {
+    pub const fn urn(udn: device_description::Udn, urn: urn::URN) -> Self {
         Self {
             udn,
             kind: USNkind::URN(urn),
@@ -366,10 +366,10 @@ impl FromStr for USN {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let Some((start, rest)) = s.split_once("::") else {
-            let udn = device_description::UDN::from_str(s)?;
+            let udn = device_description::Udn::from_str(s)?;
             return Ok(Self::device_uuid(udn));
         };
-        let udn = device_description::UDN::from_str(start)?;
+        let udn = device_description::Udn::from_str(start)?;
 
         if rest == "upnp:rootdevice" {
             return Ok(Self::root_device(udn));
@@ -740,7 +740,7 @@ impl NotifyByeByeMessage {
     fn media_server(boot_id: usize, uuid: uuid::Uuid) -> Self {
         NotifyByeByeMessage {
             host: SSDP_ADDR,
-            usn: USN::device_uuid(UDN::new(uuid)),
+            usn: USN::device_uuid(Udn::new(uuid)),
             nt: NotificationType::RootDevice,
             nts: NotificationSubType::ByeBye,
             boot_id,

@@ -249,7 +249,7 @@ mod tests {
         ];
         let expected_info_hash = "BE2D7CD9F6B0FDFC035EDFEE4EBD567003EBC254";
         let expected_name = "Rick.and.Morty.S07E01.1080p.WEB.H264-NHTFS[TGx]";
-        let magnet_link = MagnetLink::from_str(&contents).unwrap();
+        let magnet_link = MagnetLink::from_str(contents).unwrap();
         let magnet_link_copy = magnet_link.clone();
         assert_eq!(magnet_link.info_hash, expected_info_hash);
         assert_eq!(magnet_link.name.unwrap(), expected_name);

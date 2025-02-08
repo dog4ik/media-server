@@ -215,13 +215,13 @@ impl IntoXml for Date {
     }
 }
 
-impl Into<PropertyValue> for Date {
-    fn into(self) -> PropertyValue {
+impl From<Date> for PropertyValue {
+    fn from(val: Date) -> Self {
         PropertyValue {
             ns: Some("dc"),
             name: "date",
             is_allowed: false,
-            value: ValueType::Value(Box::new(self)),
+            value: ValueType::Value(Box::new(val)),
             dependant_properties: vec![],
         }
     }
@@ -254,13 +254,13 @@ impl IntoXml for RecordedDuration {
     }
 }
 
-impl Into<PropertyValue> for RecordedDuration {
-    fn into(self) -> PropertyValue {
+impl From<RecordedDuration> for PropertyValue {
+    fn from(val: RecordedDuration) -> Self {
         PropertyValue {
             ns: Some("upnp"),
             name: "recordedDuration",
             is_allowed: false,
-            value: ValueType::Value(Box::new(self)),
+            value: ValueType::Value(Box::new(val)),
             dependant_properties: vec![],
         }
     }
@@ -441,79 +441,79 @@ pub mod res {
         }
     }
 
-    impl Into<PropertyValue> for Resource {
-        fn into(self) -> PropertyValue {
+    impl From<Resource> for PropertyValue {
+        fn from(val: Resource) -> Self {
             let mut attributes = Vec::new();
             attributes.push(DependantProperty::new_required(
                 "protocolInfo",
-                self.protocol_info.to_string(),
+                val.protocol_info.to_string(),
             ));
 
             let mut add = |name: &'static str, value: String| {
                 attributes.push(DependantProperty::new_optional(name, value));
             };
 
-            if let Some(import_uri) = &self.import_uri {
+            if let Some(import_uri) = &val.import_uri {
                 add("importUri", import_uri.to_owned());
             }
-            if let Some(size) = self.size.map(|s| s.to_string()) {
+            if let Some(size) = val.size.map(|s| s.to_string()) {
                 add("size", size);
             }
-            if let Some(duration) = &self.duration {
+            if let Some(duration) = &val.duration {
                 add("duration", duration.to_string());
             }
-            if let Some(protection) = &self.protection {
+            if let Some(protection) = &val.protection {
                 add("protection", protection.to_owned());
             }
-            if let Some(bitrate) = self.bitrate {
+            if let Some(bitrate) = val.bitrate {
                 add("bitrate", bitrate.to_string());
             }
-            if let Some(bits_per_sample) = self.bits_per_sample {
+            if let Some(bits_per_sample) = val.bits_per_sample {
                 add("bitsPerSample", bits_per_sample.to_string());
             }
-            if let Some(sample_frequency) = self.sample_frequency {
+            if let Some(sample_frequency) = val.sample_frequency {
                 add("sampleFrequency", sample_frequency.to_string());
             }
-            if let Some(nr_audio_channels) = self.nr_audio_channels {
+            if let Some(nr_audio_channels) = val.nr_audio_channels {
                 add("nrAudioChannels", nr_audio_channels.to_string());
             }
-            if let Some(resolution) = &self.resolution {
+            if let Some(resolution) = &val.resolution {
                 add("resolution", resolution.to_string());
             }
-            if let Some(color_depth) = self.color_depth {
+            if let Some(color_depth) = val.color_depth {
                 add("colorDepth", color_depth.to_string());
             }
-            if let Some(tspec) = &self.tspec {
+            if let Some(tspec) = &val.tspec {
                 add("tspec", tspec.to_owned());
             }
-            if let Some(allowed_use) = &self.allowed_use {
+            if let Some(allowed_use) = &val.allowed_use {
                 add("allowedUse", allowed_use.to_owned());
             }
-            if let Some(validity_start) = &self.validity_start {
+            if let Some(validity_start) = &val.validity_start {
                 add("validityStart", validity_start.to_owned());
             }
-            if let Some(validity_end) = &self.validity_end {
+            if let Some(validity_end) = &val.validity_end {
                 add("validityEnd", validity_end.to_owned());
             }
-            if let Some(remaining_time) = &self.remaining_time {
+            if let Some(remaining_time) = &val.remaining_time {
                 add("remainingTime", remaining_time.to_owned());
             }
-            if let Some(usage_info) = &self.usage_info {
+            if let Some(usage_info) = &val.usage_info {
                 add("usageInfo", usage_info.to_owned());
             }
-            if let Some(rights_info_uri) = &self.rights_info_uri {
+            if let Some(rights_info_uri) = &val.rights_info_uri {
                 add("rightsInfoUri", rights_info_uri.to_owned());
             }
-            if let Some(content_info_uri) = &self.content_info_uri {
+            if let Some(content_info_uri) = &val.content_info_uri {
                 add("contentInfoUri", content_info_uri.to_owned());
             }
-            if let Some(record_quality) = &self.record_quality {
+            if let Some(record_quality) = &val.record_quality {
                 add("recordQuality", record_quality.to_owned());
             }
-            if let Some(daylight_saving) = &self.daylight_saving {
+            if let Some(daylight_saving) = &val.daylight_saving {
                 add("daylightSaving", daylight_saving.to_owned());
             }
-            if let Some(framerate) = &self.framerate {
+            if let Some(framerate) = &val.framerate {
                 add("framerate", framerate.to_string());
             }
 
@@ -521,7 +521,7 @@ pub mod res {
                 ns: None,
                 name: "res",
                 is_allowed: false,
-                value: ValueType::Value(Box::new(self.uri)),
+                value: ValueType::Value(Box::new(val.uri)),
                 dependant_properties: attributes,
             }
         }

@@ -38,9 +38,8 @@ impl<'a> XmlReaderExt<'a> for quick_xml::Reader<&'a [u8]> {
     fn read_to_start(&mut self) -> anyhow::Result<quick_xml::events::BytesStart<'a>> {
         loop {
             let event = self.read_event_err_eof()?.into_owned();
-            match event {
-                quick_xml::events::Event::Start(e) => break Ok(e),
-                _ => (),
+            if let quick_xml::events::Event::Start(e) = event {
+                break Ok(e);
             }
         }
     }

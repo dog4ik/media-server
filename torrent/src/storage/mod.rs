@@ -398,7 +398,7 @@ impl TorrentStorage {
 
             let end = if relative_end < 0 {
                 // end is beyond file
-                piece_length - relative_end.abs() as u64
+                piece_length - relative_end.unsigned_abs() as u64
             } else {
                 // end is behind file
                 piece_length
@@ -420,7 +420,7 @@ impl TorrentStorage {
         let piece_length = self.piece_length(piece_i);
         let mut bytes = BytesMut::zeroed(piece_length as usize);
 
-        let piece_start = piece_i as u64 * self.piece_length as u64;
+        let piece_start = piece_i as u64 * self.piece_length;
         let piece_end = piece_start + piece_length;
 
         for (file_idx, file) in self.files.iter().enumerate() {
@@ -447,7 +447,7 @@ impl TorrentStorage {
                 0
             };
             let range_end = if file_end < piece_end {
-                (piece_length as u64 - (piece_end - file_end)) as usize
+                (piece_length - (piece_end - file_end)) as usize
             } else {
                 piece_length as usize
             };

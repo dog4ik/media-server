@@ -82,9 +82,9 @@ impl AsRef<Url> for MetadataImage {
     }
 }
 
-impl Into<Url> for MetadataImage {
-    fn into(self) -> Url {
-        self.0
+impl From<MetadataImage> for Url {
+    fn from(val: MetadataImage) -> Self {
+        val.0
     }
 }
 
@@ -104,7 +104,7 @@ impl<'de> Deserialize<'de> for MetadataImage {
     {
         struct MetadataImageVisitor;
 
-        impl<'de> de::Visitor<'de> for MetadataImageVisitor {
+        impl de::Visitor<'_> for MetadataImageVisitor {
             type Value = MetadataImage;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {

@@ -17,7 +17,7 @@ impl<'de> Deserialize<'de> for FileKey {
     {
         struct KeyVisitor;
 
-        impl<'de> Visitor<'de> for KeyVisitor {
+        impl Visitor<'_> for KeyVisitor {
             type Value = FileKey;
 
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -111,6 +111,12 @@ pub struct BrowseRootDirs {
     root: BrowseFile,
     videos: Option<BrowseFile>,
     disks: Vec<BrowseFile>,
+}
+
+impl Default for BrowseRootDirs {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl BrowseRootDirs {

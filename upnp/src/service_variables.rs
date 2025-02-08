@@ -293,7 +293,7 @@ impl IntoUpnpValue for String {
 
 impl IntoXml for String {
     fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
-        w.write_event(Event::Text(BytesText::new(&self)))
+        w.write_event(Event::Text(BytesText::new(self)))
     }
 }
 
@@ -325,7 +325,7 @@ impl IntoXml for std::net::Ipv4Addr {
     }
 }
 
-impl<'a> IntoXml for &'a str {
+impl IntoXml for &str {
     fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()> {
         w.write_event(Event::Text(BytesText::new(self)))
     }

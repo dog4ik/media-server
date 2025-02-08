@@ -40,7 +40,6 @@ impl Hasher {
         tracing::info!("Spawning {} hasher workers", workers_amount);
         let (result_tx, result_rx) = mpsc::channel(100);
         let workers = (0..workers_amount)
-            .into_iter()
             .map(|i| Worker::new(i, result_tx.clone()))
             .collect();
         Self { workers, result_rx }

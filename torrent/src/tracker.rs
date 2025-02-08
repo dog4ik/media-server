@@ -405,7 +405,7 @@ impl Tracker {
                             tracing::warn!(url = %self.url, "Announce request timed out");
                             self.status = TrackerStatus::Error("Time out".to_owned());
                             self.send_response(TrackerResponse::Failure {
-                                reason: format!("Tracker announce timed out"),
+                                reason: "Tracker announce timed out".to_string(),
                             })
                             .await?;
                         }

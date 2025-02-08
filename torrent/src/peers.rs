@@ -327,7 +327,7 @@ impl Peer {
             }
         }
 
-        Ok(Info::from_bytes(&ut_metadata.as_bytes())?)
+        Info::from_bytes(&ut_metadata.as_bytes())
     }
 
     pub async fn download(

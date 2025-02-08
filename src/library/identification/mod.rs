@@ -221,7 +221,7 @@ pub enum Token<'a> {
 fn visit_year(value: &str, current_year: i32) -> Option<u16> {
     if value.len() == 4 {
         let year = value.parse().ok()?;
-        if year >= current_year as u16 + 1 {
+        if year > current_year as u16 {
             return None;
         }
         return Some(year);
@@ -229,7 +229,7 @@ fn visit_year(value: &str, current_year: i32) -> Option<u16> {
     None
 }
 
-fn tokenize_path<'a>(file_name: &'a str) -> Vec<Token<'a>> {
+fn tokenize_path(file_name: &str) -> Vec<Token<'_>> {
     let mut group_tag = None;
     let mut tokens = Vec::new();
     let mut current_token_start = 0;
@@ -481,7 +481,7 @@ mod tests {
 
     fn tokenize_test<'a>(tests: impl IntoIterator<Item = (&'a str, Vec<Token<'a>>)>) {
         for (test, expected) in tests {
-            assert_eq!(expected, tokenize_path(&test));
+            assert_eq!(expected, tokenize_path(test));
         }
     }
 
