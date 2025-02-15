@@ -2,7 +2,7 @@ use reqwest::Url;
 use serde::{Serialize, Serializer};
 use time::OffsetDateTime;
 
-use crate::app_state::AppError;
+use crate::{app_state::AppError, metadata::FetchParams};
 
 pub mod tpb;
 
@@ -25,6 +25,20 @@ pub struct Torrent {
 
 #[async_trait::async_trait]
 pub trait TorrentIndex {
-    async fn search_torrent(&self, query: &str) -> Result<Vec<Torrent>, AppError>;
+    async fn search_show_torrent(
+        &self,
+        query: &str,
+        fetch_params: &FetchParams,
+    ) -> Result<Vec<Torrent>, AppError>;
+    async fn search_movie_torrent(
+        &self,
+        query: &str,
+        fetch_params: &FetchParams,
+    ) -> Result<Vec<Torrent>, AppError>;
+    async fn search_any_torrent(
+        &self,
+        query: &str,
+        fetch_params: &FetchParams,
+    ) -> Result<Vec<Torrent>, AppError>;
     fn provider_identifier(&self) -> &'static str;
 }

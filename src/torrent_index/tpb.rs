@@ -2,7 +2,10 @@ use reqwest::{Client, Method, Request, Url};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-use crate::{app_state::AppError, metadata::request_client::LimitedRequestClient};
+use crate::{
+    app_state::AppError,
+    metadata::{request_client::LimitedRequestClient, FetchParams},
+};
 
 use super::{Torrent, TorrentIndex};
 
@@ -17,6 +20,25 @@ const TRACKERS: [&str; 9] = [
     "udp://exodus.desync.com:6969",
     "udp://opentracker.i2p.rocks:6969/announce",
 ];
+
+#[derive(Debug, Clone, Copy)]
+pub enum Category {
+    Show,
+    Movie,
+    Any,
+}
+
+impl Category {
+    pub fn as_str(&self) -> &str {
+        match self {
+            // movies,hd-movies,4k-movies
+            Category::Movie => "201,207,211",
+            // shows,hd-shows,4k-shows
+            Category::Show => "205,208,212",
+            Category::Any => "",
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct TpbApi {
@@ -42,9 +64,10 @@ impl TpbApi {
         }
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<TpbTorrent>, AppError> {
+    pub async fn search(&self, query: &str, cat: Category) -> Result<Vec<TpbTorrent>, AppError> {
         let mut url = self.base_url.clone();
         url.query_pairs_mut().append_pair("q", query);
+        url.query_pairs_mut().append_pair("cat", cat.as_str());
         let request = Request::new(Method::GET, url);
         self.client.request(request).await
     }
@@ -52,9 +75,37 @@ impl TpbApi {
 
 #[async_trait::async_trait]
 impl TorrentIndex for TpbApi {
-    async fn search_torrent(&self, query: &str) -> Result<Vec<super::Torrent>, AppError> {
+    async fn search_movie_torrent(
+        &self,
+        query: &str,
+        _: &FetchParams,
+    ) -> Result<Vec<super::Torrent>, AppError> {
         Ok(self
-            .search(query)
+            .search(query, Category::Movie)
+            .await?
+            .into_iter()
+            .map(|x| x.into())
+            .collect())
+    }
+    async fn search_show_torrent(
+        &self,
+        query: &str,
+        _: &FetchParams,
+    ) -> Result<Vec<super::Torrent>, AppError> {
+        Ok(self
+            .search(query, Category::Show)
+            .await?
+            .into_iter()
+            .map(|x| x.into())
+            .collect())
+    }
+    async fn search_any_torrent(
+        &self,
+        query: &str,
+        _: &FetchParams,
+    ) -> Result<Vec<super::Torrent>, AppError> {
+        Ok(self
+            .search(query, Category::Any)
             .await?
             .into_iter()
             .map(|x| x.into())

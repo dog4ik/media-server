@@ -3,7 +3,7 @@ members = [".", "torrent", "upnp"]
 
 [package]
 name = "media-server"
-version = "0.2.1"
+version = "0.3.1"
 edition = "2021"
 
 [features]

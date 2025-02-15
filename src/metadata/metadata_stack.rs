@@ -261,15 +261,31 @@ impl MetadataProvidersStack {
         provider.external_ids(id, content_type).await
     }
 
-    pub async fn get_torrents(&self, query: &str) -> Vec<Torrent> {
+    pub async fn get_torrents(
+        &self,
+        query: &str,
+        content_type: Option<ContentType>,
+    ) -> Vec<Torrent> {
         let torrent_indexes = { self.torrent_indexes_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
+        let lang: config::MetadataLanguage = config::CONFIG.get_value();
+        let fetch_params = FetchParams { lang: lang.0 };
         let handles: Vec<_> = torrent_indexes
             .into_iter()
             .map(|p| {
                 let query = query.to_owned();
                 tokio::spawn(async move {
-                    tokio::time::timeout(Duration::from_secs(5), p.search_torrent(&query)).await
+                    tokio::time::timeout(
+                        Duration::from_secs(5),
+                        match content_type {
+                            Some(ContentType::Show) => p.search_show_torrent(&query, &fetch_params),
+                            Some(ContentType::Movie) => {
+                                p.search_movie_torrent(&query, &fetch_params)
+                            }
+                            None => p.search_any_torrent(&query, &fetch_params),
+                        },
+                    )
+                    .await
                 })
             })
             .collect();

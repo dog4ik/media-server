@@ -25,7 +25,7 @@ use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
 use uuid::Uuid;
 
-use super::{ContentTypeQuery, ProviderQuery, StringIdQuery};
+use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use super::{CursorQuery, IdQuery, NumberQuery, SearchQuery, TakeParam, VariantQuery};
 use crate::app_state::AppError;
 use crate::config::{
@@ -999,6 +999,7 @@ pub async fn get_episode(
     path = "/api/torrent/search",
     params(
         SearchQuery,
+        OptionalContentTypeQuery,
     ),
     responses(
         (status = 200, description = "Torrent search results", body = Vec<Torrent>),
@@ -1007,13 +1008,17 @@ pub async fn get_episode(
 )]
 pub async fn search_torrent(
     Query(query): Query<SearchQuery>,
+    Query(content_type): Query<OptionalContentTypeQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<Torrent>>, AppError> {
     if query.search.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    let out = providers.get_torrents(&query.search).await;
-    Ok(Json(out))
+    Ok(Json(
+        providers
+            .get_torrents(&query.search, content_type.content_type)
+            .await,
+    ))
 }
 
 /// Get trending shows
