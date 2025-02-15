@@ -18,7 +18,7 @@ use media_server::upnp::Upnp;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
-use tower_http::cors::{Any, CorsLayer};
+use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
@@ -45,10 +45,7 @@ async fn main() {
 
     let cancellation_token = CancellationToken::new();
 
-    let cors = CorsLayer::new()
-        .allow_methods(Any)
-        .allow_origin(Any)
-        .allow_headers(Any);
+    let cors = CorsLayer::permissive();
 
     let db = Db::connect(&APP_RESOURCES.database_path)
         .await
