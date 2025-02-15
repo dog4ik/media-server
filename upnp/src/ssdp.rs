@@ -31,8 +31,8 @@ const CACHE_CONTROL: usize = 1800;
 
 async fn sleep_rand_millis_duration(range: &Range<u64>) {
     let range = {
-        let mut rng = rand::thread_rng();
-        rng.gen_range(range.clone())
+        let mut rng = rand::rng();
+        rng.random_range(range.clone())
     };
     tokio::time::sleep(Duration::from_millis(range)).await;
 }

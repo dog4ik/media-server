@@ -12,21 +12,21 @@ windows-tray = ["dep:tray-icon", "dep:open", "dep:image", "dep:winit"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [workspace.dependencies]
-tokio = { version = "1.42.0", features = ["full", "tracing"] }
+tokio = { version = "1.43.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.13", features = ["full"] }
-anyhow = "1.0.93"
+anyhow = "1.0.95"
 axum = { version = "0.8.1", features = ["macros", "tracing", "multipart"] }
 axum-extra = { version = "0.10.0", features = ["typed-header"] }
 time = { version = "0.3.37", features = ["serde", "parsing"] }
 tracing = "0.1.41"
-uuid = { version = "1.11.0", features = ["v4", "serde"] }
+uuid = { version = "1.13.1", features = ["v4", "serde"] }
 reqwest = { version = "0.12.12", features = ["json", "stream"] }
 serde = { version = "1.0.217", features = ["serde_derive"] }
-rand = "0.8.5"
-lru = "0.12.5"
+rand = "0.9.0"
+lru = "0.13.0"
 sysinfo = "0.33.1"
-async-trait = "0.1.84"
-clap = { version = "4.5.23", features = ["derive"] }
+async-trait = "0.1.86"
+clap = { version = "4.5.29", features = ["derive"] }
 
 [dependencies]
 tokio = { workspace = true, features = ["full", "tracing"] }
@@ -45,25 +45,25 @@ sysinfo = { workspace = true }
 async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 base64 = "0.22.1"
-bytes = "1.8.0"
+bytes = "1.10.0"
 crc32fast = { version = "1.4.2", features = ["nightly"] }
 dirs = "6.0.0"
 dotenvy = "0.15.7"
 notify = { version = "8.0.0", default-features = false, features = ["macos_kqueue"] }
-serde_json = "1.0.134"
+serde_json = "1.0.138"
 sha2 = "0.10.8"
-sqlx = { version = "0.8.2", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
+sqlx = { version = "0.8.3", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
 tokio-stream = { version = "0.1.17", features = ["full"] }
-toml = "0.8.19"
+toml = "0.8.20"
 tower-http = { version = "0.6.2", features = ["cors", "fs"] }
 tracing-subscriber = { version = "0.3.19", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 utoipa = { version = "5.3.1", features = ["axum_extras", "time", "url", "uuid"] }
 utoipa-swagger-ui = { version = "9.0.0", features = ["axum"] }
 serde_plain = "1.0.2"
-toml_edit = { version = "0.22.22", features = ["serde"] }
+toml_edit = { version = "0.22.24", features = ["serde"] }
 symphonia = { version = "0.5.4", features = ["all"] }
 mp4 = "0.14.0"
-test-log = "0.2.16"
+test-log = "0.2.17"
 torrent = { path = "./torrent" }
 upnp = { path = "./upnp" }
 media-intro = { path = "./media-intro" }
@@ -72,4 +72,4 @@ media-intro = { path = "./media-intro" }
 tray-icon = { version = "0.19.2", optional = true }
 open = { version = "5.3.2", optional = true }
 image = { version = "0.25.5", optional = true }
-winit = { version = "0.30.8", optional = true }
+winit = { version = "0.30.9", optional = true }

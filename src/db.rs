@@ -1163,7 +1163,7 @@ impl DiscoverMetadataProvider for Db {
         let mut out = Vec::with_capacity(movies.len() + shows.len());
         out.extend(movies.into_iter().map(|m| m.into()));
         out.extend(shows.into_iter().map(|m| m.into()));
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         out.shuffle(&mut rng);
         Ok(out)
     }

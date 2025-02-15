@@ -455,7 +455,7 @@ impl Scheduler {
                 }
                 // Endgame mode
                 None => {
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     // shuffle pending pieces so pick distribution is even
                     self.pending_pieces.shuffle(&mut rng);
                     for piece_idx in self
