@@ -64,6 +64,8 @@ pub use piece_picker::Priority;
 pub use piece_picker::ScheduleStrategy;
 pub use protocol::Info;
 pub use protocol::OutputFile;
+pub use storage::StorageError;
+pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
 
 #[derive(Debug)]

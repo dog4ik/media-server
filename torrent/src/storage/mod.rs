@@ -1,6 +1,6 @@
-use std::{io::SeekFrom, ops::Range, path::PathBuf, time::Instant};
+use std::{fmt::Display, io::SeekFrom, ops::Range, path::PathBuf, time::Instant};
 
-use anyhow::{bail, ensure, Context};
+use anyhow::Context;
 use bytes::{Bytes, BytesMut};
 use hash_verification::{Hasher, Payload, WorkResult};
 use parts::PartsFile;
@@ -22,6 +22,50 @@ mod hash_verification;
 pub mod parts;
 
 const HASHER_WORKERS: usize = 6;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum StorageErrorKind {
+    Fs(std::io::ErrorKind),
+    Hash,
+    Bounds,
+    MissingPiece,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StorageError {
+    pub kind: StorageErrorKind,
+    pub piece: usize,
+}
+
+impl std::error::Error for StorageError {}
+
+impl Display for StorageError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "failed to save piece {}: ", self.piece)?;
+        match &self.kind {
+            StorageErrorKind::Fs(e) => {
+                write!(f, "fs error ({e})")
+            }
+            StorageErrorKind::Hash => {
+                write!(f, "hash validation error")
+            }
+            StorageErrorKind::Bounds => {
+                write!(f, "piece bounds error")
+            }
+            StorageErrorKind::MissingPiece => {
+                write!(f, "missing pieces error")
+            }
+        }
+    }
+}
+
+impl From<std::io::Error> for StorageErrorKind {
+    fn from(value: std::io::Error) -> Self {
+        Self::Fs(value.kind())
+    }
+}
+
+pub type StorageResult<T> = Result<T, StorageError>;
 
 pub struct ReadyPiece(Vec<Bytes>);
 
@@ -125,7 +169,7 @@ pub struct TorrentStorage {
     bitfield: BitField,
     // Cache of opened file handles
     file_handles: FileHandles,
-    feedback_tx: mpsc::Sender<StorageFeedback>,
+    feedback_tx: mpsc::Sender<StorageResult<StorageFeedback>>,
     hasher: hash_verification::Hasher,
     parts_file: PartsFile,
 }
@@ -179,21 +223,13 @@ pub enum StorageMessage {
 
 #[derive(Debug)]
 pub enum StorageFeedback {
-    Saved {
-        piece_i: usize,
-    },
-    Failed {
-        piece_i: usize,
-    },
-    Data {
-        piece_i: usize,
-        bytes: Option<Bytes>,
-    },
+    Saved { piece_i: usize },
+    Data { piece_i: usize, bytes: Bytes },
 }
 
 impl TorrentStorage {
     pub fn new(
-        feedback_tx: mpsc::Sender<StorageFeedback>,
+        feedback_tx: mpsc::Sender<StorageResult<StorageFeedback>>,
         parts_file: PartsFile,
         torrent_params: DownloadParams,
     ) -> Self {
@@ -266,20 +302,25 @@ impl TorrentStorage {
                 Ok(_) => {
                     let _ = self
                         .feedback_tx
-                        .send(StorageFeedback::Saved { piece_i })
+                        .send(Ok(StorageFeedback::Saved { piece_i }))
                         .await;
                 }
-                Err(_) => {
-                    let _ = self
-                        .feedback_tx
-                        .send(StorageFeedback::Failed { piece_i })
-                        .await;
+                Err(kind) => {
+                    let e = StorageError {
+                        kind,
+                        piece: piece_i,
+                    };
+                    tracing::warn!("Failed to save piece {piece_i}: {e}");
+                    let _ = self.feedback_tx.send(Err(e)).await;
                 }
             }
         } else {
             let _ = self
                 .feedback_tx
-                .send(StorageFeedback::Failed { piece_i })
+                .send(Err(StorageError {
+                    kind: StorageErrorKind::Hash,
+                    piece: piece_i,
+                }))
                 .await;
         }
     }
@@ -290,10 +331,16 @@ impl TorrentStorage {
                 self.pend_hash_validation(piece_i, ReadyPiece(blocks)).await;
             }
             StorageMessage::RetrievePiece { piece_i } => {
-                let bytes = self.retrieve_piece(piece_i).await.ok();
+                let bytes = self
+                    .retrieve_piece(piece_i)
+                    .await
+                    .map_err(|kind| StorageError {
+                        piece: piece_i,
+                        kind,
+                    });
                 let _ = self
                     .feedback_tx
-                    .send(StorageFeedback::Data { piece_i, bytes })
+                    .send(bytes.map(|bytes| StorageFeedback::Data { piece_i, bytes }))
                     .await;
             }
             StorageMessage::EnableFile { file_idx } => self.enable_file(file_idx).await,
@@ -328,9 +375,13 @@ impl TorrentStorage {
 
     /// saves piece filling file with null bytes
     /// WARN: this will not validate piece hash
-    pub async fn save_piece(&mut self, piece_i: usize, blocks: ReadyPiece) -> anyhow::Result<()> {
+    pub async fn save_piece(
+        &mut self,
+        piece_i: usize,
+        blocks: ReadyPiece,
+    ) -> Result<(), StorageErrorKind> {
         let piece_length = blocks.len() as u64;
-        ensure!(piece_length == self.piece_length(piece_i));
+        debug_assert_eq!(piece_length, self.piece_length(piece_i));
 
         let piece_start = piece_i as u64 * self.piece_length;
         let piece_end = piece_start + piece_length;
@@ -409,9 +460,9 @@ impl TorrentStorage {
     }
 
     /// retrieve piece from preallocated file
-    pub async fn retrieve_piece(&mut self, piece_i: usize) -> anyhow::Result<Bytes> {
+    pub async fn retrieve_piece(&mut self, piece_i: usize) -> Result<Bytes, StorageErrorKind> {
         if !self.bitfield.has(piece_i) {
-            bail!("Piece {piece_i} is not available");
+            return Err(StorageErrorKind::MissingPiece);
         };
         if let Ok(piece) = self.parts_file.read_piece(piece_i).await {
             return Ok(piece);

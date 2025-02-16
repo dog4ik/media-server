@@ -109,24 +109,45 @@ impl From<torrent::FullStateFile> for StateFile {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum StorageError {
+    Fs(String),
+    Hash,
+    Bounds,
+}
+
+impl From<torrent::StorageError> for StorageError {
+    fn from(value: torrent::StorageError) -> Self {
+        match value.kind {
+            torrent::StorageErrorKind::Fs(e) => Self::Fs(e.to_string()),
+            torrent::StorageErrorKind::Hash => Self::Hash,
+            torrent::StorageErrorKind::Bounds => Self::Bounds,
+            torrent::StorageErrorKind::MissingPiece => {
+                unreachable!("missing piece can't be the reason why storage failed")
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadError {
-    MissingFile,
+    Storage(StorageError),
 }
 
 impl From<torrent::DownloadError> for DownloadError {
     fn from(value: torrent::DownloadError) -> Self {
         match value {
-            torrent::DownloadError::MissingFile => Self::MissingFile,
+            torrent::DownloadError::Storage(e) => Self::Storage(e.into()),
         }
     }
 }
 
-#[derive(Debug, Serialize, Clone, Copy, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "type")]
 pub enum DownloadState {
-    Error(DownloadError),
+    Error { error: DownloadError },
     Validation,
     Paused,
     Pending,
@@ -136,7 +157,7 @@ pub enum DownloadState {
 impl From<torrent::DownloadState> for DownloadState {
     fn from(value: torrent::DownloadState) -> Self {
         match value {
-            torrent::DownloadState::Error(e) => Self::Error(e.into()),
+            torrent::DownloadState::Error(e) => Self::Error { error: e.into() },
             torrent::DownloadState::Validation => Self::Validation,
             torrent::DownloadState::Paused => Self::Paused,
             torrent::DownloadState::Pending => Self::Pending,
@@ -926,6 +947,8 @@ pub struct DownloadContentHint {
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct TorrentDownloadPayload {
+    // TODO: look up how other clients handle paths
+    // They must be cross platform
     pub save_location: Option<String>,
     pub content_hint: Option<DownloadContentHint>,
     pub enabled_files: Option<Vec<usize>>,

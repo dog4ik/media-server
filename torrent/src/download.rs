@@ -24,7 +24,7 @@ use crate::{
     },
     scheduler::{self, PendingFiles, Scheduler},
     seeder::Seeder,
-    storage::{StorageFeedback, StorageHandle},
+    storage::{StorageError, StorageFeedback, StorageHandle, StorageResult},
     tracker::{DownloadStat, DownloadTracker, TrackerStatus},
     DownloadParams, NewPeer,
 };
@@ -631,7 +631,7 @@ pub enum PeerStateChange {
     OutInterested(bool),
 }
 
-#[derive(Debug, Clone, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StateChange {
     FinishedPiece(usize),
     DownloadStateChange(DownloadState),
@@ -708,7 +708,7 @@ pub struct PeerDownloadStats {
     pub pending_blocks_amount: usize,
 }
 
-#[derive(Debug, Clone, serde::Serialize, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct DownloadProgress {
     pub peers: Vec<PeerDownloadStats>,
     pub percent: f32,
@@ -777,20 +777,22 @@ impl ProgressConsumer for () {
     fn consume_progress(&mut self, _progress: DownloadProgress) {}
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DownloadError {
-    MissingFile,
+    Storage(StorageError),
 }
+
+impl std::error::Error for DownloadState {}
 
 impl Display for DownloadError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            DownloadError::MissingFile => write!(f, "Missing file"),
+            DownloadError::Storage(e) => write!(f, "storage error: {e}"),
         }
     }
 }
 
-#[derive(Debug, Clone, Copy, serde::Serialize, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum DownloadState {
     Error(DownloadError),
     Validation,
@@ -799,8 +801,6 @@ pub enum DownloadState {
     Pending,
     Seeding,
 }
-
-impl std::error::Error for DownloadState {}
 
 impl Display for DownloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -827,7 +827,7 @@ const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub struct Download {
     info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
-    storage_rx: mpsc::Receiver<StorageFeedback>,
+    storage_rx: mpsc::Receiver<Result<StorageFeedback, StorageError>>,
     new_peers: mpsc::Receiver<NewPeer>,
     peer_connector: PeerConnector,
     trackers: Vec<DownloadTracker>,
@@ -848,7 +848,7 @@ pub struct Download {
 
 impl Download {
     pub fn new(
-        storage_feedback: mpsc::Receiver<StorageFeedback>,
+        storage_feedback: mpsc::Receiver<StorageResult<StorageFeedback>>,
         storage: StorageHandle,
         download_params: DownloadParams,
         new_peers: mpsc::Receiver<NewPeer>,
@@ -1068,6 +1068,24 @@ impl Download {
                 self.handle_peer_join(peer);
             }
 
+            match self.state {
+                DownloadState::Validation | DownloadState::Paused | DownloadState::Error(_) => {
+                    tokio::select! {
+                        _ = tick_interval.tick() => {}
+                        Some(command) = commands_rx.recv() => self.handle_command(command).await,
+                        _ = self.cancellation_token.cancelled() => {
+                            self.handle_shutdown().await;
+                            return Ok(());
+                        }
+                    }
+                    if !self.changes.is_empty() {
+                        self.handle_progress_dispatch(&mut progress);
+                    }
+                    continue;
+                }
+                DownloadState::Pending | DownloadState::Seeding => {}
+            };
+
             // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
             //    blocks, handle their messages
 
@@ -1191,6 +1209,23 @@ impl Download {
         }
     }
 
+    fn set_download_state(&mut self, new_state: DownloadState) {
+        match new_state {
+            DownloadState::Error(e) => {
+                tracing::error!("Setting download state to error: {e}")
+            }
+            DownloadState::Validation => tracing::info!("Setting download state to validation"),
+            DownloadState::Paused => tracing::info!("Setting download state to paused"),
+            DownloadState::Pending => tracing::info!("Setting download state to pending"),
+            DownloadState::Seeding => tracing::info!("Setting download state to seeding"),
+        }
+        if new_state != self.state {
+            self.changes
+                .push(StateChange::DownloadStateChange(new_state));
+        }
+        self.state = new_state;
+    }
+
     fn handle_new_peer(&mut self, peer: Peer) {
         if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
             return;
@@ -1309,30 +1344,35 @@ impl Download {
         progress_consumer.consume_progress(progress);
     }
 
-    fn handle_storage_feedback(&mut self, storage_update: StorageFeedback) {
+    fn handle_storage_feedback(&mut self, storage_update: Result<StorageFeedback, StorageError>) {
         match storage_update {
-            StorageFeedback::Saved { piece_i } => {
+            Ok(StorageFeedback::Saved { piece_i }) => {
                 // NOTE: this is wrong. last piece might be less than piece size
                 self.stat.downloaded += self.scheduler.piece_size as u64;
                 self.scheduler.add_piece(piece_i);
                 self.changes.push(StateChange::FinishedPiece(piece_i));
                 if self.scheduler.is_torrent_finished() {
-                    tracing::info!("Finished downloading torrent");
-                    self.state = DownloadState::Seeding;
+                    self.set_download_state(DownloadState::Seeding);
                     for peer in &mut self.scheduler.peers {
                         peer.pending_blocks = 0;
                     }
-                    self.changes
-                        .push(StateChange::DownloadStateChange(self.state));
                 };
             }
-            StorageFeedback::Failed { piece_i } => {
-                self.scheduler.fail_piece(piece_i);
-            }
-            StorageFeedback::Data { piece_i, bytes } => {
-                if let Some(bytes) = bytes {
-                    self.seeder.handle_retrieve(piece_i, bytes.clone());
+            Err(StorageError { piece, kind }) => {
+                self.scheduler.fail_piece(piece);
+                match kind {
+                    crate::storage::StorageErrorKind::Fs(_) => self.set_download_state(
+                        DownloadState::Error(DownloadError::Storage(StorageError { kind, piece })),
+                    ),
+                    crate::storage::StorageErrorKind::Hash => {}
+                    crate::storage::StorageErrorKind::Bounds => unreachable!(),
+                    crate::storage::StorageErrorKind::MissingPiece => {
+                        self.seeder.handle_retrieve_error(piece)
+                    }
                 }
+            }
+            Ok(StorageFeedback::Data { piece_i, bytes }) => {
+                self.seeder.handle_retrieve(piece_i, bytes);
             }
         }
     }
@@ -1363,9 +1403,7 @@ impl Download {
                     }
                 };
             }
-            DownloadMessage::Validate => self
-                .changes
-                .push(StateChange::DownloadStateChange(DownloadState::Validation)),
+            DownloadMessage::Validate => self.set_download_state(DownloadState::Validation),
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
                 self.cancellation_token.cancel();
