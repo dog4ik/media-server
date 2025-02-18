@@ -784,14 +784,36 @@ impl<'de> Deserialize<'de> for AudioCodec {
 pub enum VideoCodec {
     Hevc,
     H264,
+    Av1,
     Other(String),
+}
+
+impl VideoCodec {
+    pub fn nvidia_hw_accel(&self) -> &str {
+        match self {
+            VideoCodec::Hevc => "hevc_nvenc",
+            VideoCodec::H264 => "h264_nvenc",
+            VideoCodec::Av1 => "av1",
+            VideoCodec::Other(o) => o.as_str(),
+        }
+    }
+
+    pub fn amd_hw_accel(&self) -> &str {
+        match self {
+            VideoCodec::Hevc => "hevc_amf",
+            VideoCodec::H264 => "h264_amf",
+            VideoCodec::Av1 => "av1",
+            VideoCodec::Other(o) => o.as_str(),
+        }
+    }
 }
 
 impl Display for VideoCodec {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Hevc => write!(f, "hevc"),
-            Self::H264 => write!(f, "h264"),
+            Self::Hevc => f.write_str("hevc"),
+            Self::H264 => f.write_str("h264"),
+            Self::Av1 => f.write_str("av1"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -801,12 +823,12 @@ impl FromStr for VideoCodec {
     type Err = Infallible;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let parsed = match s {
+        Ok(match s {
             "hevc" => VideoCodec::Hevc,
             "h264" => VideoCodec::H264,
-            rest => VideoCodec::Other(rest.to_string()),
-        };
-        Ok(parsed)
+            "av1" => VideoCodec::Av1,
+            _ => VideoCodec::Other(s.to_string()),
+        })
     }
 }
 
