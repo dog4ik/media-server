@@ -138,9 +138,12 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let payload = ExtensionHandshake::my_handshake();
-            let message = PeerMessage::ExtensionHandshake { payload };
             let socket = messages_stream.get_mut();
+            let mut payload = ExtensionHandshake::my_handshake();
+            if let Ok(peer_addr) = socket.peer_addr() {
+                payload.set_your_ip(peer_addr.ip());
+            }
+            let message = PeerMessage::ExtensionHandshake { payload };
             message
                 .write_to(socket)
                 .await
@@ -216,9 +219,12 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let payload = ExtensionHandshake::my_handshake();
-            let message = PeerMessage::ExtensionHandshake { payload };
+            let mut payload = ExtensionHandshake::my_handshake();
             let socket = messages_stream.get_mut();
+            if let Ok(peer_ip) = socket.peer_addr() {
+                payload.set_your_ip(peer_ip.ip());
+            }
+            let message = PeerMessage::ExtensionHandshake { payload };
             message
                 .write_to(socket)
                 .await
@@ -279,7 +285,11 @@ impl Peer {
             .extension_handshake
             .as_ref()
             .and_then(|h| h.client_name());
-        tracing::trace!(%ip, ?client_name, "Connected peer");
+        let reqq = peer
+            .extension_handshake
+            .as_ref()
+            .and_then(|h| h.request_queue_size());
+        tracing::trace!(%ip, ?reqq, ?client_name, "Connected peer");
         Ok(peer)
     }
 

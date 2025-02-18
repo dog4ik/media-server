@@ -12,7 +12,11 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::Decoder;
 
-use crate::{download::Block, peers::BitField};
+use crate::{
+    download::{Block, PEER_IN_CHANNEL_CAPACITY},
+    peers::BitField,
+    CLIENT_NAME,
+};
 
 use super::{extension::Extension, pex, ut_metadata};
 
@@ -354,15 +358,32 @@ impl ExtensionHandshake {
 
     pub fn my_handshake() -> Self {
         let mut dict = HashMap::with_capacity(CLIENT_EXTENSIONS.len());
-        let fields = HashMap::new();
+        let mut fields = HashMap::new();
         for (name, id) in CLIENT_EXTENSIONS {
             dict.insert(name.into(), id);
         }
 
+        fields.insert(
+            "reqq".to_string(),
+            serde_bencode::value::Value::Int(PEER_IN_CHANNEL_CAPACITY as i64),
+        );
+
+        //fields.insert(
+        //    "p".to_string(),
+        //    serde_bencode::value::Value::Int(tcp_listener_port as i64),
+        //);
+
+        fields.insert(
+            "v".to_string(),
+            serde_bencode::value::Value::Bytes(CLIENT_NAME.as_bytes().to_vec()),
+        );
+
+        // TODO: add client's `v` (client name), and `p` (tcp listener port) fields
+
         Self { dict, fields }
     }
 
-    /// Returns metadata size if it supports ut_metadata
+    /// Metadata size if it supports ut_metadata
     pub fn ut_metadata_size(&self) -> Option<usize> {
         self.fields
             .get("metadata_size")
@@ -372,21 +393,64 @@ impl ExtensionHandshake {
             })
     }
 
-    /// returns pex's extenison id if handshake supports it
+    /// Pex's extenison id if handshake supports it
     pub fn pex_id(&self) -> Option<u8> {
         self.dict.get("ut_pex").copied()
     }
 
-    /// returns ut_metadata's extenison id if handshake supports it
+    /// Ut_metadata's extenison id if handshake supports it
     pub fn ut_metadata_id(&self) -> Option<u8> {
         self.dict.get("ut_metadata").copied()
     }
 
-    pub fn client_name(&self) -> Option<String> {
+    /// A string containing the compact representation of the ip address this peer sees you as.
+    /// i.e. this is the receiver's external ip address (no port is included).
+    /// This may be either an IPv4 (4 bytes) or an IPv6 (16 bytes) address.
+    pub fn your_ip(&self) -> Option<std::net::IpAddr> {
+        let serde_bencode::value::Value::Bytes(bytes) = self.fields.get("yourip")? else {
+            return None;
+        };
+        bytes
+            .get(..4)
+            .map(|v| TryInto::<[u8; 4]>::try_into(v).unwrap())
+            .map(std::net::IpAddr::from)
+            .or_else(|| {
+                bytes
+                    .get(..16)
+                    .map(|v| TryInto::<[u8; 16]>::try_into(v).unwrap())
+                    .map(std::net::IpAddr::from)
+            })
+    }
+
+    pub fn set_your_ip(&mut self, peer_ip: std::net::IpAddr) {
+        let ip_bytes = match peer_ip {
+            std::net::IpAddr::V4(ipv4_addr) => &ipv4_addr.octets()[..],
+            std::net::IpAddr::V6(ipv6_addr) => &ipv6_addr.octets()[..],
+        };
+        self.fields.insert(
+            "yourip".to_owned(),
+            serde_bencode::value::Value::Bytes(ip_bytes.to_vec()),
+        );
+    }
+
+    /// The maximum number of outstanding request messages this client supports without dropping any.  
+    /// The default in libtorrent was 250.  
+    /// However, as of 2025, 250 is outdated, and the new standard is 2000.
+    /// TODO: verify the above
+    pub fn request_queue_size(&self) -> Option<i64> {
+        let serde_bencode::value::Value::Int(size) = self.fields.get("reqq")? else {
+            return None;
+        };
+        Some(*size)
+    }
+
+    /// Client name and version (as a utf-8 string).
+    /// This is a much more reliable way of identifying the client than relying on the peer id encoding.
+    pub fn client_name(&self) -> Option<&str> {
         let serde_bencode::value::Value::Bytes(bytes) = self.fields.get("v")? else {
             return None;
         };
-        String::from_utf8(bytes.to_vec()).ok()
+        std::str::from_utf8(bytes).ok()
     }
 }
 

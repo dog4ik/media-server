@@ -177,7 +177,7 @@ pub struct StatePeer {
     pub out_status: Status,
     pub interested_amount: usize,
     pub pending_blocks_amount: usize,
-    pub client_name: &'static str,
+    pub client_name: String,
 }
 
 impl From<torrent::FullStatePeer> for StatePeer {

@@ -393,8 +393,11 @@ impl ActivePeer {
         }
     }
 
-    pub fn client_name(&self) -> &'static str {
-        self.handshake.peer_id.client_name()
+    pub fn client_name(&self) -> &str {
+        self.extension_handshake
+            .as_ref()
+            .and_then(|h| h.client_name())
+            .unwrap_or_else(|| self.handshake.peer_id.client_name())
     }
 
     /// Is other peer better to choke?
@@ -670,7 +673,7 @@ pub struct FullStatePeer {
     pub out_status: Status,
     pub interested_amount: usize,
     pub pending_blocks_amount: usize,
-    pub client_name: &'static str,
+    pub client_name: String,
 }
 
 #[derive(Debug)]
@@ -819,7 +822,8 @@ const MAX_PEER_CONNECTIONS: usize = 75;
 const DEFAULT_TICK_DURATION: Duration = Duration::from_millis(500);
 const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
 pub const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
-const PEER_CHANNEL_CAPACITY: usize = 1000;
+pub const PEER_IN_CHANNEL_CAPACITY: usize = 1000;
+pub const PEER_OUT_CHANNEL_CAPACITY: usize = 2000;
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Glue between active peers, scheduler, storage, udp listener
@@ -1235,8 +1239,8 @@ impl Download {
             tracing::warn!("Failed to validate peer's bitfield: {e}");
             return;
         }
-        let (message_tx, message_rx) = flume::bounded(PEER_CHANNEL_CAPACITY);
-        let (peer_message_tx, peer_message_rx) = flume::bounded(PEER_CHANNEL_CAPACITY);
+        let (message_tx, message_rx) = flume::bounded(PEER_OUT_CHANNEL_CAPACITY);
+        let (peer_message_tx, peer_message_rx) = flume::bounded(PEER_IN_CHANNEL_CAPACITY);
         let child_token = self.cancellation_token.child_token();
         let ipc = PeerIPC {
             message_tx: peer_message_tx.clone(),
@@ -1448,7 +1452,7 @@ impl Download {
                 out_status: p.out_status,
                 interested_amount: p.interested_pieces.amount(),
                 pending_blocks_amount: p.pending_blocks,
-                client_name: p.client_name(),
+                client_name: p.client_name().to_string(),
             })
             .collect();
         let output_files = self.info.output_files("");
