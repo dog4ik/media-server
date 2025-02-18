@@ -426,6 +426,7 @@ impl TorrentStorage {
                     tracing::debug!("Creating file handle: {}", file.path.display());
                     let file_handle = fs::OpenOptions::new()
                         .create(true)
+                        .read(true)
                         .write(true)
                         .open(&file.path)
                         .await?;
@@ -486,7 +487,11 @@ impl TorrentStorage {
                 Some(f) => f,
                 None => {
                     tracing::debug!("Creating file handle: {}", file.path.display());
-                    let file_handle = fs::OpenOptions::new().read(true).open(&file.path).await?;
+                    let file_handle = fs::OpenOptions::new()
+                        .read(true)
+                        .write(true)
+                        .open(&file.path)
+                        .await?;
                     self.file_handles.opened_files.put(file_idx, file_handle);
                     self.file_handles.opened_files.get_mut(&file_idx).unwrap()
                 }
