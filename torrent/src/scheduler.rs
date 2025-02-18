@@ -285,7 +285,6 @@ pub struct Scheduler {
     pub piece_size: u32,
     /// Full ut_metadata used to share it
     pub ut_metadata: UtMetadata,
-    pub max_pending_pieces: usize,
     total_length: u64,
     pub peers: Vec<ActivePeer>,
     pub picker: PiecePicker,
@@ -325,7 +324,6 @@ impl Scheduler {
             piece_size: t.piece_length,
             ut_metadata,
             total_length: t.total_size(),
-            max_pending_pieces: 40,
             peers: Vec::new(),
             picker,
             pending_files,
@@ -833,6 +831,11 @@ impl Scheduler {
     }
 
     pub fn set_strategy(&mut self, strategy: ScheduleStrategy) {
+        tracing::debug!(
+            "Switching schedule strategy from {} to {}",
+            self.strategy(),
+            strategy,
+        );
         self.picker.set_strategy(strategy);
         self.picker.rebuild_queue(&self.piece_table);
     }

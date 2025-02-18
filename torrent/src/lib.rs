@@ -92,36 +92,46 @@ impl Default for ClientConfig {
 
 #[derive(Debug)]
 pub struct Client {
+    ip: Arc<Ipv4Addr>,
     peer_listener: PeerListener,
     udp_tracker_tx: UdpTrackerChannel,
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
+    config: ClientConfig,
 }
 
 impl Client {
     pub async fn new(config: ClientConfig) -> anyhow::Result<Self> {
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
         let task_tracker = TaskTracker::new();
-        let peer_listener = match config.upnp_nat_traversal_enabled {
-            true => {
-                PeerListener::spawn_with_upnp(
-                    config.port,
-                    &task_tracker,
-                    cancellation_token.clone(),
-                )
-                .await
-            }
-            false => PeerListener::spawn(config.port).await,
+        let upnp_client = match config.upnp_nat_traversal_enabled {
+            true => utils::search_upnp_gateway().await.ok(),
+            false => None,
+        };
+        // WARN: handle case where we can't resolve client's external ip
+        let external_ip = utils::external_ip(upnp_client.as_ref()).await.unwrap();
+        let peer_listener = if let Some(upnp_client) = upnp_client {
+            PeerListener::spawn_with_upnp(
+                config.port,
+                upnp_client,
+                &task_tracker,
+                cancellation_token.clone(),
+            )
+            .await
+        } else {
+            PeerListener::spawn(config.port).await
         }?;
         let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
         let udp_worker = UdpTrackerWorker::bind(udp_listener_addr).await?;
         let udp_tracker_channel = udp_worker.spawn().await?;
 
         Ok(Self {
+            ip: Arc::new(external_ip),
             peer_listener,
             udp_tracker_tx: udp_tracker_channel,
             cancellation_token,
             task_tracker,
+            config,
         })
     }
 
@@ -166,6 +176,10 @@ impl Client {
             peers_rx,
             trackers,
             child_token,
+            Some(std::net::SocketAddr::V4(SocketAddrV4::new(
+                *self.ip,
+                self.config.port,
+            ))),
         );
         let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)

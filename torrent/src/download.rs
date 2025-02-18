@@ -14,7 +14,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::{
-    peers::{BitField, Peer, PeerError, PeerIPC},
+    peers::{BitField, Peer, PeerError, PeerIPC, PeerStorage},
     piece_picker::{Priority, ScheduleStrategy},
     protocol::{
         extension::Extension,
@@ -457,7 +457,7 @@ impl Status {
     }
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
+#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
 pub struct Performance {
     pub downloaded: u64,
     pub uploaded: u64,
@@ -805,6 +805,17 @@ pub enum DownloadState {
     Seeding,
 }
 
+impl DownloadState {
+    /// When torrent is paused event loop will not accept incoming connections.
+    /// All peer connections should be dropped and no messages should be received / send.
+    pub fn is_paused(&self) -> bool {
+        match self {
+            DownloadState::Error(_) | DownloadState::Validation | DownloadState::Paused => true,
+            DownloadState::Pending | DownloadState::Seeding => false,
+        }
+    }
+}
+
 impl Display for DownloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -848,6 +859,7 @@ pub struct Download {
     changes: Vec<StateChange>,
     info: crate::Info,
     tick_num: usize,
+    peer_storage: PeerStorage,
 }
 
 impl Download {
@@ -858,6 +870,7 @@ impl Download {
         new_peers: mpsc::Receiver<NewPeer>,
         trackers: Vec<DownloadTracker>,
         cancellation_token: CancellationToken,
+        client_external_ip: Option<SocketAddr>,
     ) -> Self {
         let info = download_params.info;
         let info_hash = info.hash();
@@ -874,6 +887,9 @@ impl Download {
         let scheduler = Scheduler::new(&info, pending_files, &download_params.bitfield);
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
+        // TODO: Known external ip is not guaranteed!
+        let peer_storage =
+            PeerStorage::new(client_external_ip.expect("known external ip is not guaranteed!"));
 
         Self {
             new_peers,
@@ -895,6 +911,7 @@ impl Download {
             changes: Vec::new(),
             info,
             tick_num: 0,
+            peer_storage,
         }
     }
 
@@ -1072,23 +1089,21 @@ impl Download {
                 self.handle_peer_join(peer);
             }
 
-            match self.state {
-                DownloadState::Validation | DownloadState::Paused | DownloadState::Error(_) => {
-                    tokio::select! {
-                        _ = tick_interval.tick() => {}
-                        Some(command) = commands_rx.recv() => self.handle_command(command).await,
-                        _ = self.cancellation_token.cancelled() => {
-                            self.handle_shutdown().await;
-                            return Ok(());
-                        }
+            if self.state.is_paused() {
+                tokio::select! {
+                    // we must tick here
+                    _ = tick_interval.tick() => {}
+                    Some(command) = commands_rx.recv() => self.handle_command(command).await,
+                    _ = self.cancellation_token.cancelled() => {
+                        self.handle_shutdown().await;
+                        return Ok(());
                     }
-                    if !self.changes.is_empty() {
-                        self.handle_progress_dispatch(&mut progress);
-                    }
-                    continue;
                 }
-                DownloadState::Pending | DownloadState::Seeding => {}
-            };
+                if !self.changes.is_empty() {
+                    self.handle_progress_dispatch(&mut progress);
+                }
+                continue;
+            }
 
             // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
             //    blocks, handle their messages
@@ -1226,9 +1241,15 @@ impl Download {
         if new_state != self.state {
             self.changes
                 .push(StateChange::DownloadStateChange(new_state));
+            if new_state.is_paused() {
+                self.stop_peers();
+            } else {
+            }
         }
         self.state = new_state;
     }
+
+    fn stop_peers(&mut self) {}
 
     fn handle_new_peer(&mut self, peer: Peer) {
         if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
@@ -1383,19 +1404,7 @@ impl Download {
 
     pub async fn handle_command(&mut self, command: DownloadMessage) {
         match command {
-            DownloadMessage::SetStrategy(strategy) => {
-                if let ScheduleStrategy::Request(_) = strategy {
-                    self.scheduler.max_pending_pieces = 2;
-                } else {
-                    self.scheduler.max_pending_pieces = 40;
-                };
-                tracing::debug!(
-                    "Switching schedule strategy from {} to {}",
-                    self.scheduler.strategy(),
-                    strategy,
-                );
-                self.scheduler.set_strategy(strategy);
-            }
+            DownloadMessage::SetStrategy(strategy) => self.scheduler.set_strategy(strategy),
             DownloadMessage::SetFilePriority { file_idx, priority } => {
                 self.changes
                     .push(StateChange::FilePriorityChange { file_idx, priority });
@@ -1407,18 +1416,28 @@ impl Download {
                     }
                 };
             }
-            DownloadMessage::Validate => self.set_download_state(DownloadState::Validation),
+            DownloadMessage::Validate => {
+                tracing::warn!("Validate is not implemented");
+                self.set_download_state(DownloadState::Validation);
+            }
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
                 self.cancellation_token.cancel();
             }
             DownloadMessage::Pause => {
+                self.set_download_state(DownloadState::Paused);
                 tracing::warn!("Pause is not implemented")
             }
             DownloadMessage::Resume => {
+                if self.scheduler.is_torrent_finished() {
+                    self.set_download_state(DownloadState::Seeding);
+                } else {
+                    self.set_download_state(DownloadState::Pending);
+                }
                 tracing::warn!("Resume is not implemented")
             }
             DownloadMessage::PostFullState { tx } => {
+                tracing::debug!("Dispatching full torrent progress");
                 let _ = tx.send(self.full_state());
             }
         };

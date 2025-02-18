@@ -9,7 +9,6 @@ use tokio::{sync::mpsc, time::timeout};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use upnp::{
     internet_gateway::{InternetGatewayClient, PortMappingProtocol},
-    search_client,
     service_client::ScpdClient,
 };
 
@@ -76,6 +75,7 @@ impl PeerListener {
 
     pub async fn spawn_with_upnp(
         port: u16,
+        client: ScpdClient<InternetGatewayClient>,
         tracker: &TaskTracker,
         cancellation_token: CancellationToken,
     ) -> anyhow::Result<Self> {
@@ -83,7 +83,7 @@ impl PeerListener {
         let listener = utils::bind_tcp_listener(addr).await?;
         let mut renew_interval =
             tokio::time::interval(PORT_RENEW_INTERVAL + Duration::from_secs(5));
-        let mut port_manager = UpnpPortManager::new(port).await;
+        let mut port_manager = UpnpPortManager::new(port, client).await;
         match &port_manager {
             Ok(_) => tracing::info!("Initiated UPnP port manager"),
             Err(e) => tracing::warn!("Failed to initiate UPnP port manager: {e}"),
@@ -180,15 +180,7 @@ struct UpnpPortManager {
 
 // NOTE: add UDP mapping after implementing utp
 impl UpnpPortManager {
-    pub async fn new(port: u16) -> anyhow::Result<Self> {
-        let search_client = search_client::SearchClient::bind().await?;
-        let service = search_client
-            .search_for::<InternetGatewayClient>(search_client::SearchOptions::new())
-            .await?;
-        let client = service
-            .into_iter()
-            .next()
-            .context("find at least one internet gateway client")?;
+    pub async fn new(port: u16, client: ScpdClient<InternetGatewayClient>) -> anyhow::Result<Self> {
         let any_port_supported = client.is_supported("AddAnyPortMapping");
         if !any_port_supported && !client.is_supported("AddPortMapping") {
             return Err(anyhow::anyhow!("port mapping actions are not supported"));

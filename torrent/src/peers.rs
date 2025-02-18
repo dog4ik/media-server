@@ -1,4 +1,9 @@
-use std::{fmt::Display, net::SocketAddr, time::Duration};
+use std::{
+    collections::{BinaryHeap, HashSet},
+    fmt::Display,
+    net::SocketAddr,
+    time::Duration,
+};
 
 use anyhow::{anyhow, ensure, Context};
 use tokio::{
@@ -530,6 +535,75 @@ impl BitField {
 impl From<Vec<u8>> for BitField {
     fn from(value: Vec<u8>) -> Self {
         BitField(value)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StoredPeer {
+    ip: SocketAddr,
+    priority: u32,
+}
+
+impl StoredPeer {
+    pub fn new(ip: SocketAddr, my_ip: SocketAddr) -> Self {
+        let priority = crate::protocol::peer::canonical_peer_priority(ip, my_ip);
+        Self { ip, priority }
+    }
+
+    pub fn priority(&self) -> u32 {
+        self.priority
+    }
+}
+
+impl PartialEq for StoredPeer {
+    fn eq(&self, other: &Self) -> bool {
+        self.priority == other.priority
+    }
+}
+
+impl Eq for StoredPeer {}
+
+impl Ord for StoredPeer {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.priority.cmp(&other.priority)
+    }
+}
+
+impl PartialOrd for StoredPeer {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Holds peers that didn't fit in connection slots
+#[derive(Debug)]
+pub struct PeerStorage {
+    my_ip: SocketAddr,
+    stored_peers: HashSet<SocketAddr>,
+    best_peers: BinaryHeap<StoredPeer>,
+}
+
+impl PeerStorage {
+    pub fn new(my_ip: SocketAddr) -> Self {
+        Self {
+            my_ip,
+            stored_peers: HashSet::new(),
+            best_peers: BinaryHeap::new(),
+        }
+    }
+
+    pub fn add(&mut self, ip: SocketAddr) -> bool {
+        let is_new = self.stored_peers.insert(ip);
+        if is_new {
+            self.best_peers.push(StoredPeer::new(ip, self.my_ip));
+        }
+        is_new
+    }
+
+    pub fn pop(&mut self) -> Option<SocketAddr> {
+        let best = self.best_peers.pop()?;
+        self.stored_peers.remove(&best.ip);
+        Some(best.ip)
     }
 }
 
