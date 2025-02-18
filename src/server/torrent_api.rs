@@ -25,8 +25,6 @@ use crate::{
     },
 };
 
-use super::ContentTypeQuery;
-
 #[derive(Debug, Clone)]
 pub struct InfoHash(pub [u8; 20]);
 
@@ -431,33 +429,37 @@ pub async fn delete_torrent(
     Ok(())
 }
 
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct TorrentDefaultLocation {
+    movie_location: Option<String>,
+    show_location: Option<String>,
+}
+
 /// Torrent default output location
 #[utoipa::path(
     get,
     path = "/api/torrent/output_location",
-    params(
-        ContentTypeQuery,
-    ),
     responses(
-        (status = 200, body = Vec<String>),
+        (status = 200, body = TorrentDefaultLocation),
     ),
     tag = "Torrent",
 )]
-pub async fn output_location(
-    Query(ContentTypeQuery { content_type }): Query<ContentTypeQuery>,
-) -> Json<Option<Vec<String>>> {
-    let dirs = match content_type {
-        ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-        ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
-    };
-    for dir in dirs {
-        if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
-            let components = dir
-                .components()
-                .map(|c| c.as_os_str().to_string_lossy().to_string())
-                .collect();
-            return Json(Some(components));
+pub async fn output_location() -> Json<TorrentDefaultLocation> {
+    let movie_dirs = config::CONFIG.get_value::<config::MovieFolders>().0;
+    let show_dirs = config::CONFIG.get_value::<config::ShowFolders>().0;
+    async fn find_try_exists(dirs: Vec<PathBuf>) -> Option<String> {
+        for dir in dirs {
+            if tokio::fs::try_exists(&dir).await.unwrap_or(false) {
+                return Some(dir.to_string_lossy().to_string());
+            }
         }
+        None
     }
-    Json(None)
+    let movie_location = find_try_exists(movie_dirs).await;
+    let show_location = find_try_exists(show_dirs).await;
+
+    Json(TorrentDefaultLocation {
+        movie_location,
+        show_location,
+    })
 }
