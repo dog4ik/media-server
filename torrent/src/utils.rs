@@ -71,7 +71,7 @@ pub async fn bind_udp_socket(mut addr: SocketAddrV4) -> anyhow::Result<UdpSocket
     }
 }
 
-const RESOLVE_IP_TIMEOUT: Duration = Duration::from_millis(200);
+const RESOLVE_IP_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// Fetch client's external ip
 pub async fn external_ip(
