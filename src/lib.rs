@@ -21,3 +21,4 @@ pub mod upnp;
 pub mod utils;
 #[allow(unused)]
 pub mod watch;
+pub mod ws;

@@ -1,4 +1,4 @@
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
@@ -15,6 +15,7 @@ use media_server::torrent::TorrentClient;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{init_tracer, LogChannel};
 use media_server::upnp::Upnp;
+use media_server::ws;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -306,6 +307,7 @@ async fn main() {
             get(server_api::intro_detection_tasks),
         )
         .route("/tasks/progress", get(server_api::progress))
+        .route("/ws", any(ws::ws))
         .route("/scan", post(server_api::reconciliate_lib))
         .route("/fix_metadata/{content_id}", post(server_api::fix_metadata))
         .route(

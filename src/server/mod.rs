@@ -9,6 +9,7 @@ use crate::progress;
 use crate::torrent;
 use crate::torrent_index;
 use crate::tracing;
+use crate::ws;
 use base64::Engine;
 use serde::de::Visitor;
 use serde::Deserialize;
@@ -117,6 +118,7 @@ pub struct SerdeDuration {
         torrent_api::updates,
         torrent_api::delete_torrent,
         torrent_api::output_location,
+        ws::ws,
     ),
     components(
         schemas(
@@ -185,6 +187,8 @@ pub struct SerdeDuration {
             file_browser::BrowseRootDirs,
             file_browser::BrowseDirectory,
             file_browser::BrowseFile,
+            ws::WsRequest,
+            ws::WsMessage,
             SerdeDuration
         )
     ),
