@@ -3,6 +3,7 @@
 #![feature(array_chunks)]
 pub mod app_state;
 pub mod config;
+pub mod ffmpeg_abi;
 pub mod db;
 pub mod ffmpeg;
 pub mod file_browser;
