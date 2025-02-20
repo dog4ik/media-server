@@ -191,14 +191,14 @@ impl MediaServerContentDirectory {
                     let runtime = std::time::Duration::from_secs(episode.duration as u64);
                     watch_resource.set_duartion(runtime);
                     if let Ok(metadata) = metadata {
-                        if let Some(res) = metadata.resolution() {
+                        if let Some(res) = metadata.default_video().map(|v| v.resolution()) {
                             watch_resource
                                 .set_resoulution(UpnpResolution::new(res.width(), res.height()));
                         };
                         if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
                             watch_resource.set_audio_channels(audio_channels as usize);
                         };
-                        watch_resource.set_bitrate(metadata.bitrate());
+                        watch_resource.set_bitrate(metadata.bitrate() as usize);
                     }
                     item.set_property(watch_resource);
                     item.set_property(properties::RecordedDuration(runtime));

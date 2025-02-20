@@ -68,7 +68,6 @@ pub use storage::StorageError;
 pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
 
-
 pub(crate) const CLIENT_NAME: &str = "SkibidiTorrent";
 
 #[derive(Debug)]

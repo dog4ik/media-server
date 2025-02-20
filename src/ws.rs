@@ -65,9 +65,7 @@ impl Connection {
     pub async fn recv(&mut self) -> anyhow::Result<Option<WsRequest>> {
         match self.socket.recv().await {
             Some(Ok(ws::Message::Text(text))) => Ok(serde_json::from_str(&text)?),
-            Some(Ok(ws::Message::Close(_))) => {
-                Err(anyhow::anyhow!("peer closed the connection"))?
-            }
+            Some(Ok(ws::Message::Close(_))) => Err(anyhow::anyhow!("peer closed the connection"))?,
             Some(Ok(_)) => Ok(None),
             Some(Err(e)) => Err(e)?,
             None => Err(anyhow::anyhow!("stream closed")),

@@ -545,7 +545,7 @@ impl SubtitlesJob {
     pub async fn from_source(
         input: &Video,
         output_dir: impl AsRef<Path>,
-        track: i32,
+        track: usize,
     ) -> anyhow::Result<Self> {
         let video_metadata = input.metadata().await?;
         let output_path = |lang: Option<&str>| {
@@ -561,12 +561,11 @@ impl SubtitlesJob {
 
         video_metadata
             .subtitle_streams()
-            .iter()
-            .find(|s| s.index == track && s.codec().supports_text())
-            .map(|s| Self {
+            .find(|t| t.index == track && t.stream.codec.supports_text())
+            .map(|t| Self {
                 source_path: input.path().to_path_buf(),
-                track: s.index as usize,
-                output_file_path: output_path(s.language),
+                track: t.index as usize,
+                output_file_path: output_path(t.stream.language.as_deref()),
             })
             .context("cant find track in file")
     }
@@ -627,18 +626,20 @@ impl TranscodeJob {
         let source_path = source.video.path().to_path_buf();
         let metadata = source.video.metadata().await?;
 
-        let default_audio = metadata
-            .default_audio()
-            .or(metadata.audio_streams().into_iter().next())
-            .context("missing default audio")?;
-        let default_video = metadata
-            .default_video()
-            .or(metadata.video_streams().into_iter().next())
-            .context("missing default video")?;
+        let default_audio = metadata.default_audio().context("missing default audio")?;
+        let default_video = metadata.default_video().context("missing default video")?;
         let configuration = TranscodeConfiguration {
             resolution: payload.resolution.unwrap_or(default_video.resolution()),
-            audio_codec: payload.audio_codec.clone().unwrap_or(default_audio.codec()),
-            video_codec: payload.video_codec.clone().unwrap_or(default_video.codec()),
+            audio_codec: payload
+                .audio_codec
+                .as_ref()
+                .unwrap_or(&default_audio.codec)
+                .clone(),
+            video_codec: payload
+                .video_codec
+                .as_ref()
+                .unwrap_or(&default_video.codec)
+                .clone(),
         };
 
         Ok(Self {
@@ -909,7 +910,7 @@ pub async fn resize_image_ffmpeg(
 }
 
 /// Extract subtitle track from provided file. Takes in desired track
-pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: i32) -> anyhow::Result<String> {
+pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: usize) -> anyhow::Result<String> {
     let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
     let output = tokio::process::Command::new(ffmpeg.as_ref())
         .args([

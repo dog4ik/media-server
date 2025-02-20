@@ -9,7 +9,10 @@ use crate::{
         assets::PreviewsDirAsset, AudioCodec, Library, Resolution, Source, SubtitlesCodec,
         VideoCodec,
     },
-    server::SerdeDuration,
+    server::{
+        server_api::{DetailedAudioTrack, DetailedSubtitleTrack, DetailedVideoTrack},
+        SerdeDuration,
+    },
 };
 
 use super::EpisodeMetadata;
@@ -51,72 +54,9 @@ pub struct DetailedVideo {
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct DetailedAudioTrack {
-    pub is_default: bool,
-    pub sample_rate: String,
-    pub channels: i32,
-    pub profile: Option<String>,
-    pub codec: AudioCodec,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct DetailedSubtitleTrack {
-    pub is_default: bool,
-    pub language: Option<String>,
-    pub codec: SubtitlesCodec,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct DetailedVideoTrack {
-    pub is_default: bool,
-    pub resolution: Resolution,
-    pub profile: String,
-    pub level: i32,
-    pub bitrate: usize,
-    pub framerate: f64,
-    pub codec: VideoCodec,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Intro {
     start_sec: i64,
     end_sec: i64,
-}
-
-impl DetailedVideoTrack {
-    pub fn from_video_stream(stream: FFprobeVideoStream<'_>, bitrate: usize) -> Self {
-        DetailedVideoTrack {
-            is_default: stream.is_default(),
-            resolution: stream.resolution(),
-            profile: stream.profile.to_string(),
-            level: stream.level,
-            bitrate,
-            framerate: stream.framerate(),
-            codec: stream.codec(),
-        }
-    }
-}
-
-impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
-    fn from(val: FFprobeAudioStream<'_>) -> Self {
-        DetailedAudioTrack {
-            is_default: val.disposition.default == 1,
-            sample_rate: val.sample_rate.to_string(),
-            channels: val.channels,
-            profile: val.profile.map(|x| x.to_string()),
-            codec: val.codec(),
-        }
-    }
-}
-
-impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
-    fn from(val: FFprobeSubtitleStream<'_>) -> Self {
-        DetailedSubtitleTrack {
-            is_default: val.is_default(),
-            language: val.language.map(|x| x.to_string()),
-            codec: val.codec(),
-        }
-    }
 }
 
 impl DetailedVideo {
@@ -135,7 +75,7 @@ impl DetailedVideo {
             video_tracks: metadata
                 .video_streams()
                 .into_iter()
-                .map(|s| DetailedVideoTrack::from_video_stream(s, metadata.bitrate()))
+                .map(Into::into)
                 .collect(),
             audio_tracks: metadata
                 .audio_streams()

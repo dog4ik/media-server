@@ -6,7 +6,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -27,7 +27,8 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
-    ffmpeg::{get_metadata, FFprobeOutput},
+    ffmpeg_abi::get_metadata,
+    ffmpeg_abi::ProbeOutput,
     utils,
 };
 
@@ -308,10 +309,7 @@ impl<T: Media> LibraryItem<T> {
             Err(_) => {
                 let metadata = video.metadata().await?;
                 metadata
-                    .format
-                    .tags
-                    .title
-                    .as_ref()
+                    .tag_title()
                     .and_then(|metadata_title| T::identify(metadata_title).ok())
                     .context("Try to identify content from container metadata")?
             }
@@ -437,7 +435,7 @@ pub struct Video {
 /// Lazily evaluated ffprobe metadata
 #[derive(Debug, Clone)]
 struct LazyFFprobeOutput {
-    metadata: Arc<OnceCell<FFprobeOutput>>,
+    metadata: Arc<OnceCell<ProbeOutput>>,
 }
 
 impl LazyFFprobeOutput {
@@ -447,43 +445,16 @@ impl LazyFFprobeOutput {
         }
     }
 
-    async fn get_or_init(&self, path: impl AsRef<Path>) -> anyhow::Result<&FFprobeOutput> {
+    async fn get_or_init(&self, path: impl AsRef<Path>) -> anyhow::Result<&ProbeOutput> {
         self.metadata
             .get_or_try_init(|| async { get_metadata(path).await })
             .await
     }
 
-    fn try_get(&self) -> Option<&FFprobeOutput> {
+    #[allow(unused)]
+    fn try_get(&self) -> Option<&ProbeOutput> {
         self.metadata.get()
     }
-}
-
-pub async fn symphony_duration(path: impl AsRef<Path>) -> anyhow::Result<Duration> {
-    use symphonia::core::{io::MediaSourceStream, probe::Hint};
-    use tokio::fs::File;
-
-    let src = File::open(&path).await.context("open video file")?;
-    // Create the media source stream.
-    let mss = MediaSourceStream::new(Box::new(src.into_std().await), Default::default());
-
-    let mut hint = Hint::new();
-    if let Some(ext) = path.as_ref().extension().and_then(|e| e.to_str()) {
-        hint.with_extension(ext);
-    }
-
-    // Probe the media source.
-    let probed = symphonia::default::get_probe().format(
-        &hint,
-        mss,
-        &Default::default(),
-        &Default::default(),
-    )?;
-
-    let default_video = probed.format.default_track().context("get default track")?;
-    let time_base = default_video.codec_params.time_base.context("time base")?;
-    let n_frames = default_video.codec_params.n_frames.context("n frames")?;
-    let time = time_base.calc_time(n_frames);
-    Ok(time.into())
 }
 
 impl Video {
@@ -503,23 +474,8 @@ impl Video {
     }
 
     pub async fn fetch_duration(&self) -> anyhow::Result<std::time::Duration> {
-        use tokio::fs::File;
-        if let Some(metadata) = self.metadata.try_get() {
-            return Ok(metadata.duration());
-        }
-        let ext = self.path.extension().and_then(|e| e.to_str());
-        match ext {
-            Some("mkv") => Ok(symphony_duration(&self.path).await?),
-            Some("mp4") => {
-                let file = File::open(&self.path).await?;
-                let mp4 = mp4::read_mp4(file.into_std().await)?;
-                Ok(mp4.duration())
-            }
-            _ => {
-                let metadata = self.metadata().await?;
-                Ok(metadata.duration())
-            }
-        }
+        let metadata = self.metadata().await?;
+        Ok(metadata.duration())
     }
 
     pub async fn get_or_insert_id(&self, tx: &mut crate::db::DbTransaction) -> anyhow::Result<i64> {
@@ -577,7 +533,7 @@ impl Video {
         }
     }
 
-    pub async fn metadata(&self) -> anyhow::Result<&FFprobeOutput> {
+    pub async fn metadata(&self) -> anyhow::Result<&ProbeOutput> {
         self.metadata.get_or_init(self.path()).await
     }
 
@@ -727,6 +683,8 @@ impl TranscodePayloadBuilder {
 pub enum AudioCodec {
     AAC,
     AC3,
+    EAC3,
+    DTS,
     Other(String),
 }
 
@@ -735,6 +693,8 @@ impl Display for AudioCodec {
         match self {
             Self::AAC => write!(f, "aac"),
             Self::AC3 => write!(f, "ac3"),
+            Self::EAC3 => write!(f, "eac3"),
+            Self::DTS => write!(f, "dts"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -747,7 +707,9 @@ impl FromStr for AudioCodec {
         let parsed = match s {
             "aac" => AudioCodec::AAC,
             "ac3" => AudioCodec::AC3,
-            rest => AudioCodec::Other(rest.to_string()),
+            "eac3" => AudioCodec::EAC3,
+            "dts" => AudioCodec::DTS,
+            _ => AudioCodec::Other(s.to_string()),
         };
         Ok(parsed)
     }
@@ -779,12 +741,236 @@ impl<'de> Deserialize<'de> for AudioCodec {
     }
 }
 
+mod profiles {
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum AAC {
+        #[default]
+        Main,
+        Low,
+        SSR,
+        LTP,
+        HE,
+        HEv2,
+        LD,
+        ELD,
+        MPEG2Low,
+        MPEG2HE,
+    }
+
+    impl From<ffmpeg_next::codec::profile::AAC> for AAC {
+        fn from(value: ffmpeg_next::codec::profile::AAC) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::AAC::Main => Self::Main,
+                ffmpeg_next::codec::profile::AAC::Low => Self::Low,
+                ffmpeg_next::codec::profile::AAC::SSR => Self::SSR,
+                ffmpeg_next::codec::profile::AAC::LTP => Self::LTP,
+                ffmpeg_next::codec::profile::AAC::HE => Self::HE,
+                ffmpeg_next::codec::profile::AAC::HEv2 => Self::HEv2,
+                ffmpeg_next::codec::profile::AAC::LD => Self::LD,
+                ffmpeg_next::codec::profile::AAC::ELD => Self::ELD,
+                ffmpeg_next::codec::profile::AAC::MPEG2Low => Self::MPEG2Low,
+                ffmpeg_next::codec::profile::AAC::MPEG2HE => Self::MPEG2HE,
+            }
+        }
+    }
+
+    #[allow(non_camel_case_types)]
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum DTS {
+        #[default]
+        Default,
+        ES,
+        _96_24,
+        HD_HRA,
+        HD_MA,
+        Express,
+    }
+
+    impl From<ffmpeg_next::codec::profile::DTS> for DTS {
+        fn from(value: ffmpeg_next::codec::profile::DTS) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::DTS::Default => Self::Default,
+                ffmpeg_next::codec::profile::DTS::ES => Self::ES,
+                ffmpeg_next::codec::profile::DTS::_96_24 => Self::_96_24,
+                ffmpeg_next::codec::profile::DTS::HD_HRA => Self::HD_HRA,
+                ffmpeg_next::codec::profile::DTS::HD_MA => Self::HD_MA,
+                ffmpeg_next::codec::profile::DTS::Express => Self::Express,
+            }
+        }
+    }
+
+    #[allow(unused)]
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum MPEG2 {
+        _422,
+        High,
+        SS,
+        SNRScalable,
+        #[default]
+        Main,
+        Simple,
+    }
+
+    impl From<ffmpeg_next::codec::profile::MPEG2> for MPEG2 {
+        fn from(value: ffmpeg_next::codec::profile::MPEG2) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::MPEG2::_422 => Self::_422,
+                ffmpeg_next::codec::profile::MPEG2::High => Self::High,
+                ffmpeg_next::codec::profile::MPEG2::SS => Self::SS,
+                ffmpeg_next::codec::profile::MPEG2::SNRScalable => Self::SNRScalable,
+                ffmpeg_next::codec::profile::MPEG2::Main => Self::Main,
+                ffmpeg_next::codec::profile::MPEG2::Simple => Self::Simple,
+            }
+        }
+    }
+
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum H264 {
+        Constrained,
+        Intra,
+        #[default]
+        Baseline,
+        ConstrainedBaseline,
+        Main,
+        Extended,
+        High,
+        High10,
+        High10Intra,
+        High422,
+        High422Intra,
+        High444,
+        High444Predictive,
+        High444Intra,
+        CAVLC444,
+    }
+
+    impl From<ffmpeg_next::codec::profile::H264> for H264 {
+        fn from(value: ffmpeg_next::codec::profile::H264) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::H264::Constrained => Self::Constrained,
+                ffmpeg_next::codec::profile::H264::Intra => Self::Intra,
+                ffmpeg_next::codec::profile::H264::Baseline => Self::Baseline,
+                ffmpeg_next::codec::profile::H264::ConstrainedBaseline => Self::ConstrainedBaseline,
+                ffmpeg_next::codec::profile::H264::Main => Self::Main,
+                ffmpeg_next::codec::profile::H264::Extended => Self::Extended,
+                ffmpeg_next::codec::profile::H264::High => Self::High,
+                ffmpeg_next::codec::profile::H264::High10 => Self::High10,
+                ffmpeg_next::codec::profile::H264::High10Intra => Self::High10Intra,
+                ffmpeg_next::codec::profile::H264::High422 => Self::High422,
+                ffmpeg_next::codec::profile::H264::High422Intra => Self::High422Intra,
+                ffmpeg_next::codec::profile::H264::High444 => Self::High444,
+                ffmpeg_next::codec::profile::H264::High444Predictive => Self::High444Predictive,
+                ffmpeg_next::codec::profile::H264::High444Intra => Self::High444Intra,
+                ffmpeg_next::codec::profile::H264::CAVLC444 => Self::CAVLC444,
+            }
+        }
+    }
+
+    #[allow(unused)]
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum MPEG4 {
+        Simple,
+        SimpleScalable,
+        Core,
+        #[default]
+        Main,
+        NBit,
+        ScalableTexture,
+        SimpleFaceAnimation,
+        BasicAnimatedTexture,
+        Hybrid,
+        AdvancedRealTime,
+        CoreScalable,
+        AdvancedCoding,
+        AdvancedCore,
+        AdvancedScalableTexture,
+        SimpleStudio,
+        AdvancedSimple,
+    }
+
+    #[rustfmt::skip]
+    impl From<ffmpeg_next::codec::profile::MPEG4> for MPEG4 {
+        fn from(value: ffmpeg_next::codec::profile::MPEG4) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::MPEG4::Simple => Self::Simple,
+                ffmpeg_next::codec::profile::MPEG4::SimpleScalable => Self::SimpleScalable,
+                ffmpeg_next::codec::profile::MPEG4::Core => Self::Core,
+                ffmpeg_next::codec::profile::MPEG4::Main => Self::Main,
+                ffmpeg_next::codec::profile::MPEG4::NBit => Self::NBit,
+                ffmpeg_next::codec::profile::MPEG4::ScalableTexture => Self::ScalableTexture,
+                ffmpeg_next::codec::profile::MPEG4::SimpleFaceAnimation => Self::SimpleFaceAnimation,
+                ffmpeg_next::codec::profile::MPEG4::BasicAnimatedTexture => Self::BasicAnimatedTexture,
+                ffmpeg_next::codec::profile::MPEG4::Hybrid => Self::Hybrid,
+                ffmpeg_next::codec::profile::MPEG4::AdvancedRealTime => Self::AdvancedRealTime,
+                ffmpeg_next::codec::profile::MPEG4::CoreScalable => Self::CoreScalable,
+                ffmpeg_next::codec::profile::MPEG4::AdvancedCoding => Self::AdvancedCoding,
+                ffmpeg_next::codec::profile::MPEG4::AdvancedCore => Self::AdvancedCore,
+                ffmpeg_next::codec::profile::MPEG4::AdvancedScalableTexture => Self::AdvancedScalableTexture,
+                ffmpeg_next::codec::profile::MPEG4::SimpleStudio => Self::SimpleStudio,
+                ffmpeg_next::codec::profile::MPEG4::AdvancedSimple => Self::AdvancedSimple,
+            }
+        }
+    }
+
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    #[serde(rename_all = "lowercase")]
+    pub enum HEVC {
+        #[default]
+        Main,
+        Main10,
+        MainStillPicture,
+        Rext,
+    }
+
+    impl From<ffmpeg_next::codec::profile::HEVC> for HEVC {
+        fn from(value: ffmpeg_next::codec::profile::HEVC) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::HEVC::Main => Self::Main,
+                ffmpeg_next::codec::profile::HEVC::Main10 => Self::Main10,
+                ffmpeg_next::codec::profile::HEVC::MainStillPicture => Self::MainStillPicture,
+                ffmpeg_next::codec::profile::HEVC::Rext => Self::Rext,
+            }
+        }
+    }
+
+    #[derive(Eq, PartialEq, Clone, Copy, Debug, Default, serde::Serialize, utoipa::ToSchema)]
+    pub enum VP9 {
+        #[default]
+        #[serde(rename = "0")]
+        _0,
+        #[serde(rename = "1")]
+        _1,
+        #[serde(rename = "2")]
+        _2,
+        #[serde(rename = "3")]
+        _3,
+    }
+
+    impl From<ffmpeg_next::codec::profile::VP9> for VP9 {
+        fn from(value: ffmpeg_next::codec::profile::VP9) -> Self {
+            match value {
+                ffmpeg_next::codec::profile::VP9::_0 => Self::_0,
+                ffmpeg_next::codec::profile::VP9::_1 => Self::_1,
+                ffmpeg_next::codec::profile::VP9::_2 => Self::_2,
+                ffmpeg_next::codec::profile::VP9::_3 => Self::_3,
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoCodec {
     Hevc,
     H264,
     Av1,
+    VP8,
+    VP9,
     Other(String),
 }
 
@@ -794,6 +980,8 @@ impl VideoCodec {
             VideoCodec::Hevc => "hevc_nvenc",
             VideoCodec::H264 => "h264_nvenc",
             VideoCodec::Av1 => "av1",
+            VideoCodec::VP8 => "vp8",
+            VideoCodec::VP9 => "vp9",
             VideoCodec::Other(o) => o.as_str(),
         }
     }
@@ -803,6 +991,8 @@ impl VideoCodec {
             VideoCodec::Hevc => "hevc_amf",
             VideoCodec::H264 => "h264_amf",
             VideoCodec::Av1 => "av1",
+            VideoCodec::VP8 => "vp8",
+            VideoCodec::VP9 => "vp9",
             VideoCodec::Other(o) => o.as_str(),
         }
     }
@@ -814,6 +1004,8 @@ impl Display for VideoCodec {
             Self::Hevc => f.write_str("hevc"),
             Self::H264 => f.write_str("h264"),
             Self::Av1 => f.write_str("av1"),
+            Self::VP8 => f.write_str("vp8"),
+            Self::VP9 => f.write_str("vp9"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -827,6 +1019,8 @@ impl FromStr for VideoCodec {
             "hevc" => VideoCodec::Hevc,
             "h264" => VideoCodec::H264,
             "av1" => VideoCodec::Av1,
+            "vp8" => VideoCodec::VP8,
+            "vp9" => VideoCodec::VP9,
             _ => VideoCodec::Other(s.to_string()),
         })
     }
@@ -1024,6 +1218,7 @@ pub enum SubtitlesCodec {
     SubRip,
     WebVTT,
     DvdSubtitle,
+    MovText,
     Other(String),
 }
 
@@ -1042,6 +1237,7 @@ impl Display for SubtitlesCodec {
             Self::SubRip => write!(f, "subrip"),
             Self::WebVTT => write!(f, "webvtt"),
             Self::DvdSubtitle => write!(f, "dvd_subtitle"),
+            Self::MovText => write!(f, "mov_text"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -1055,6 +1251,7 @@ impl FromStr for SubtitlesCodec {
             "subrip" => SubtitlesCodec::SubRip,
             "webvtt" => SubtitlesCodec::WebVTT,
             "dvd_subtitle" => SubtitlesCodec::DvdSubtitle,
+            "mov_text" => SubtitlesCodec::MovText,
             rest => SubtitlesCodec::Other(rest.to_string()),
         };
         Ok(parsed)
@@ -1067,6 +1264,7 @@ impl SubtitlesCodec {
             SubtitlesCodec::SubRip => true,
             SubtitlesCodec::WebVTT => true,
             SubtitlesCodec::DvdSubtitle => false,
+            SubtitlesCodec::MovText => true,
             SubtitlesCodec::Other(_) => false,
         }
     }

@@ -511,14 +511,14 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         let subtitles_dir = subtitles_asset.path();
         fs::create_dir_all(&subtitles_dir).await?;
         let video_metadata = source.video.metadata().await?;
-        for stream in video_metadata.subtitle_streams() {
-            if stream.codec().supports_text() {
+        for track in video_metadata.subtitle_streams() {
+            if track.stream.codec.supports_text() {
                 let job =
-                    SubtitlesJob::from_source(&source.video, &subtitles_dir, stream.index).await?;
+                    SubtitlesJob::from_source(&source.video, &subtitles_dir, track.index).await?;
                 let output_file = job.output_file_path.clone();
                 let job =
                     FFmpegRunningJob::spawn(&job, video_metadata.duration(), output_file.clone())?;
-                jobs.push((job, stream, output_file));
+                jobs.push((job, &track.stream, output_file));
             }
         }
         for (mut job, stream, output_file) in jobs {
@@ -530,7 +530,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                     let hash = utils::file_hash(&mut file)?;
                     let db_subtitles = DbSubtitles {
                         id: None,
-                        language: stream.language.map(|x| x.to_string()),
+                        language: stream.language.clone(),
                         path: output_file.to_string_lossy().to_string(),
                         hash: hash.to_string(),
                         size: size as i64,
@@ -555,7 +555,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
         let track_number = {
             metadata
                 .subtitle_streams()
-                .get(subs_track)
+                .nth(subs_track)
                 .ok_or(AppError::not_found(
                     "Specified subtitle track does not exists",
                 ))?

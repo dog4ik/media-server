@@ -35,6 +35,7 @@ use crate::db::DbActions;
 use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
+use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::intro_detection::IntroJob;
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
@@ -72,6 +73,7 @@ pub struct DetailedVideo {
     pub scan_date: String,
     pub history: Option<DbHistory>,
     pub intro: Option<Intro>,
+    pub chapters: Vec<DetailedChapter>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -90,8 +92,8 @@ pub struct DetailedVariant {
 pub struct DetailedAudioTrack {
     pub is_default: bool,
     pub sample_rate: String,
-    pub channels: i32,
-    pub profile: Option<String>,
+    pub channels: u16,
+    pub profile_idc: i32,
     pub codec: AudioCodec,
 }
 
@@ -106,8 +108,8 @@ pub struct DetailedSubtitleTrack {
 pub struct DetailedVideoTrack {
     pub is_default: bool,
     pub resolution: Resolution,
-    pub profile: String,
     pub level: i32,
+    pub profile_idc: i32,
     pub bitrate: usize,
     pub framerate: f64,
     pub codec: VideoCodec,
@@ -117,6 +119,13 @@ pub struct DetailedVideoTrack {
 pub struct Intro {
     start_sec: i64,
     end_sec: i64,
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct DetailedChapter {
+    pub start: std::time::Duration,
+    pub end: std::time::Duration,
+    pub title: Option<String>,
 }
 
 impl DetailedVideo {
@@ -183,18 +192,19 @@ impl DetailedVideo {
             video_tracks: video_metadata
                 .video_streams()
                 .into_iter()
-                .map(|s| DetailedVideoTrack::from_video_stream(s, video_metadata.bitrate()))
+                .map(Into::into)
                 .collect(),
             audio_tracks: video_metadata
                 .audio_streams()
                 .into_iter()
-                .map(|s| s.into())
+                .map(Into::into)
                 .collect(),
             subtitle_tracks: video_metadata
                 .subtitle_streams()
                 .into_iter()
-                .map(|s| s.into())
+                .map(Into::into)
                 .collect(),
+            chapters: video_metadata.chapters().iter().map(Into::into).collect(),
             history,
             intro,
         })
@@ -206,11 +216,25 @@ impl DetailedVideoTrack {
         DetailedVideoTrack {
             is_default: stream.is_default(),
             resolution: stream.resolution(),
-            profile: stream.profile.to_string(),
             level: stream.level,
+            profile_idc: stream.profile.parse().unwrap(),
             bitrate,
             framerate: stream.framerate(),
             codec: stream.codec(),
+        }
+    }
+}
+
+impl From<&Track<ffmpeg_abi::Video>> for DetailedVideoTrack {
+    fn from(val: &Track<ffmpeg_abi::Video>) -> Self {
+        Self {
+            is_default: val.is_default(),
+            resolution: val.stream.resolution(),
+            level: val.stream.level,
+            profile_idc: val.stream.profile,
+            bitrate: val.stream.bit_rate,
+            framerate: val.stream.avg_frame_rate as f64,
+            codec: val.stream.codec.clone(),
         }
     }
 }
@@ -220,9 +244,21 @@ impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
         DetailedAudioTrack {
             is_default: val.disposition.default == 1,
             sample_rate: val.sample_rate.to_string(),
-            channels: val.channels,
-            profile: val.profile.map(|x| x.to_string()),
+            channels: val.channels as u16,
+            profile_idc: val.profile.unwrap().parse().unwrap(),
             codec: val.codec(),
+        }
+    }
+}
+
+impl From<&Track<Audio>> for DetailedAudioTrack {
+    fn from(val: &Track<Audio>) -> Self {
+        DetailedAudioTrack {
+            is_default: val.is_default(),
+            sample_rate: val.stream.sample_rate.to_string(),
+            channels: val.stream.channels,
+            profile_idc: val.stream.profile_idc,
+            codec: val.stream.codec.clone(),
         }
     }
 }
@@ -233,6 +269,26 @@ impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
             is_default: val.is_default(),
             language: val.language.map(|x| x.to_string()),
             codec: val.codec(),
+        }
+    }
+}
+
+impl From<&Track<Subtitle>> for DetailedSubtitleTrack {
+    fn from(val: &Track<Subtitle>) -> Self {
+        DetailedSubtitleTrack {
+            is_default: val.is_default(),
+            language: val.stream.language.clone(),
+            codec: val.stream.codec.clone(),
+        }
+    }
+}
+
+impl From<&ffmpeg_abi::Chapter> for DetailedChapter {
+    fn from(val: &ffmpeg_abi::Chapter) -> Self {
+        DetailedChapter {
+            start: val.start,
+            end: val.end,
+            title: val.title.clone(),
         }
     }
 }
@@ -253,12 +309,12 @@ impl DetailedVariant {
             video_tracks: metadata
                 .video_streams()
                 .into_iter()
-                .map(|s| DetailedVideoTrack::from_video_stream(s, metadata.bitrate()))
+                .map(Into::into)
                 .collect(),
             audio_tracks: metadata
                 .audio_streams()
                 .into_iter()
-                .map(|s| s.into())
+                .map(Into::into)
                 .collect(),
             path: video.path().to_path_buf(),
         })
