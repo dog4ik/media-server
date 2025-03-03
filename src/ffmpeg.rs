@@ -679,8 +679,7 @@ impl FFmpegTask for TranscodeJob {
             args.push("-s".into());
             args.push(resolution.to_string());
         }
-        args.push("-c:s".into());
-        args.push("copy".into());
+        args.push("-sn".into());
         args.push(self.output_path.to_string_lossy().to_string());
         args
     }
