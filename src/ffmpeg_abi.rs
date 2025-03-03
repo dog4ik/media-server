@@ -92,6 +92,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Video {
             (codec::Id::VP9, codec::Profile::VP9(_)) => VideoCodec::VP9,
             (codec::Id::VP9, codec::Profile::Unknown) => VideoCodec::VP9,
             (codec::Id::VP8, _) => VideoCodec::VP8,
+            (codec::Id::AV1, _) => VideoCodec::Av1,
             (codec, profile) => {
                 tracing::warn!("Unrecognized video codec: {:?}/{:?}", codec, profile);
                 return Err(anyhow::anyhow!(
@@ -148,7 +149,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
     fn try_from(stream: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
         let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
         let audio = codec.decoder().audio()?;
-        let profile = unsafe {
+        let mut profile = unsafe {
             let p = audio.as_ptr();
             if p.is_null() {
                 anyhow::bail!("codec context is null");
@@ -159,7 +160,12 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
         let channels = audio.channels();
         let sample_rate = audio.rate();
         let codec = match (audio.id(), audio.profile()) {
-            (codec::Id::AAC, codec::Profile::AAC(_)) => AudioCodec::AAC,
+            (codec::Id::AAC, codec::Profile::AAC(_)) => {
+                // adjust profile to follow the standard
+                // ffmpeg aac profiles have 0 based index
+                profile += 1;
+                AudioCodec::AAC
+            }
             (codec::Id::AAC, codec::Profile::Unknown) => AudioCodec::AAC,
             (codec::Id::EAC3, _) => AudioCodec::EAC3,
             (codec::Id::AC3, _) => AudioCodec::AC3,
