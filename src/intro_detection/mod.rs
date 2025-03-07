@@ -360,6 +360,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_dexter_original_sin_intro_detection() {
+        let duration = 88;
+        let expected_intros = [
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/1.chromaprint"),
+                IntroRange::new(Duration::from_secs(170)..Duration::from_secs(170 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/2.chromaprint"),
+                IntroRange::new(Duration::from_secs(205)..Duration::from_secs(205 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/3.chromaprint"),
+                IntroRange::new(Duration::from_secs(87)..Duration::from_secs(87 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/4.chromaprint"),
+                IntroRange::new(Duration::from_secs(74)..Duration::from_secs(74 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/5.chromaprint"),
+                IntroRange::new(Duration::from_secs(60)..Duration::from_secs(60 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/6.chromaprint"),
+                IntroRange::new(Duration::from_secs(107)..Duration::from_secs(107 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/7.chromaprint"),
+                IntroRange::new(Duration::from_secs(141)..Duration::from_secs(141 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/8.chromaprint"),
+                IntroRange::new(Duration::from_secs(80)..Duration::from_secs(80 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/9.chromaprint"),
+                IntroRange::new(Duration::from_secs(111)..Duration::from_secs(111 + duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/dexter.original.sin.s01/10.chromaprint"),
+                IntroRange::new(Duration::from_secs(172)..Duration::from_secs(172 + duration)),
+            ),
+        ];
+
+        let fingerprints = expected_intros
+            .into_iter()
+            .map(|f| Chromaprint::new(f.0.to_vec()))
+            .collect();
+        let intros = detect_intros(fingerprints, TEST_MIN_INTRO_DURATION);
+        for (i, (range, (_, expected_range))) in intros.into_iter().zip(expected_intros).enumerate()
+        {
+            let range = range.unwrap();
+            test_range(range, expected_range, ALLOWED_THRESHOLD, i + 1);
+        }
+    }
+
     #[test_log::test]
     fn test_edgerunners_intro_detection() {
         // First episode does not have intro
