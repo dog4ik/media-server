@@ -184,7 +184,7 @@ pub fn match_fingerprints(fp1: &[u32], fp2: &[u32]) -> Result<Vec<Segment>, Matc
 }
 
 /// Segment of an audio that is similar between two fingerprints.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Segment {
     /// Index of the item in the first fingerprint.
     pub offset1: usize,
