@@ -541,4 +541,66 @@ mod tests {
             test_range(range, expected_range, ALLOWED_THRESHOLD, i + 1);
         }
     }
+
+    #[test_log::test]
+    fn test_house_of_the_dragon_intro_detection() {
+        let duration = 103;
+        let expected_intros = [
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/1.chromaprint"),
+                // No into in first episode
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(0)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/2.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/3.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/4.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/5.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/6.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/7.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/8.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/9.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+            (
+                include_bytes!("../../tests_data/fp/house.of.the.dragon.s01/10.chromaprint"),
+                IntroRange::new(Duration::from_secs(0)..Duration::from_secs(duration)),
+            ),
+        ];
+
+        let fingerprints = expected_intros
+            .into_iter()
+            .map(|f| Chromaprint::new(f.0.to_vec()))
+            .collect();
+        let intros = detect_intros(fingerprints, TEST_MIN_INTRO_DURATION);
+        for (i, (range, (_, expected_range))) in intros.into_iter().zip(expected_intros).enumerate()
+        {
+            if i == 0 {
+                continue;
+            }
+            let range = range.unwrap();
+            test_range(range, expected_range, ALLOWED_THRESHOLD, i + 1);
+        }
+    }
 }
