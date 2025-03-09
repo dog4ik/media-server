@@ -32,68 +32,36 @@ impl TaskTrait for IntroJob {
 }
 
 const TAKE_TIME: Duration = Duration::from_secs(10 * 60);
+/// Amount of items we allowed to skip when merging segments
+const MERGE_THRESHOLD: usize = 800;
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct IntroPair(IntroRange, IntroRange);
 
 impl IntroPair {
-    pub fn from_segments(segments: &[Segment], min_duration: Duration) -> Option<Self> {
-        let mut shortest_segment: Option<&Segment> = None;
-        let mut prev: Option<Segment> = None;
-        for seg in segments {
-            if let Some(prev) = prev {
-                if prev.offset1 + prev.items_count == seg.offset1
-                    && prev.offset2 + prev.items_count == seg.offset2
-                {
-                    println!("both offsets are contingious")
-                }
-            }
-            prev = Some(seg.clone());
-            let duration = seg.duration();
-            if duration < min_duration {
-                continue;
-            }
-            match shortest_segment {
-                Some(shortest) if shortest.duration() > duration => {
-                    shortest_segment = Some(seg);
-                }
-                Some(_) => {}
-                None => shortest_segment = Some(seg),
-            };
-        }
-        shortest_segment.map(|s| {
-            IntroPair(
-                IntroRange {
-                    start: s.start1(),
-                    end: s.end1(),
-                },
-                IntroRange {
-                    start: s.start2(),
-                    end: s.end2(),
-                },
-            )
-        })
-    }
-
     pub fn from_segments_merged(segments: &[Segment], min_duration: Duration) -> Option<Self> {
         let mut merged_segments = Vec::new();
-        let mut current_segment: Option<Segment> = None;
+        let mut prev_segment: Option<Segment> = None;
 
         for seg in segments {
-            if let Some(prev) = &mut current_segment {
-                if prev.offset1 + prev.items_count == seg.offset1
-                    && prev.offset2 + prev.items_count == seg.offset2
+            if let Some(prev) = &mut prev_segment {
+                if prev.offset1 + prev.items_count + MERGE_THRESHOLD >= seg.offset1
+                    && prev.offset2 + prev.items_count + MERGE_THRESHOLD >= seg.offset2
                 {
+                    // NOTE: we do not add merge threshold here. this can cause intro to end
+                    // earlier than expected.
+                    // Issue raises in situation where there are a lot of small matches and merge
+                    // threshold will catch them one by one until the end of the fingerprint.
                     prev.items_count += seg.items_count;
                     continue;
                 } else {
                     merged_segments.push(prev.clone());
                 }
             }
-            current_segment = Some(seg.clone());
+            prev_segment = Some(seg.clone());
         }
 
-        if let Some(seg) = current_segment {
+        if let Some(seg) = prev_segment {
             merged_segments.push(seg);
         }
 
