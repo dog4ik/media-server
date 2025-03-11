@@ -14,7 +14,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::{
-    peers::{BitField, Peer, PeerError, PeerIPC, PeerStorage},
+    bitfield::BitField,
+    peers::{Peer, PeerError, PeerIPC, PeerStorage},
     piece_picker::{Priority, ScheduleStrategy},
     protocol::{
         extension::Extension,

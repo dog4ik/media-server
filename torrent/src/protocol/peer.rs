@@ -13,8 +13,8 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::Decoder;
 
 use crate::{
+    bitfield::BitField,
     download::{Block, PEER_IN_CHANNEL_CAPACITY},
-    peers::BitField,
     CLIENT_NAME,
 };
 
@@ -850,7 +850,7 @@ mod tests {
     use bytes::{Bytes, BytesMut};
     use tokio_util::codec::Decoder;
 
-    use crate::{peers::BitField, protocol::peer::canonical_peer_priority};
+    use crate::{bitfield::BitField, protocol::peer::canonical_peer_priority};
 
     use super::{ExtensionHandshake, MessageFramer, PeerMessage};
 

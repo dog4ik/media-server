@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use reqwest::Url;
 
-use crate::{peers::BitField, Info};
+use crate::{bitfield::BitField, Info};
 
 #[derive(Debug, Clone)]
 pub struct DownloadParams {

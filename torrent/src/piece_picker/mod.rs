@@ -2,7 +2,7 @@ use std::fmt::Display;
 
 use linear::Linear;
 
-use crate::{peers::BitField, scheduler::SchedulerPiece};
+use crate::{bitfield::BitField, scheduler::SchedulerPiece};
 
 #[allow(unused)]
 mod linear;

@@ -12,7 +12,7 @@ use tokio::{
 use tokio_util::task::TaskTracker;
 
 use crate::{
-    peers::BitField,
+    bitfield::BitField,
     protocol::{Hashes, OutputFile},
     scheduler::BLOCK_LENGTH,
     DownloadParams, Priority,

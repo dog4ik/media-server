@@ -31,6 +31,7 @@ use crate::{
     tracker::{DownloadStat, Tracker},
 };
 
+mod bitfield;
 mod download;
 mod file;
 mod peer_listener;
@@ -45,6 +46,7 @@ mod storage;
 mod tracker;
 mod utils;
 
+pub use bitfield::BitField;
 pub use download::DownloadError;
 pub use download::DownloadHandle;
 pub use download::DownloadMessage;
@@ -59,7 +61,6 @@ pub use download::StateChange;
 pub use download::Status;
 pub use file::MagnetLink;
 pub use file::TorrentFile;
-pub use peers::BitField;
 pub use piece_picker::Priority;
 pub use piece_picker::ScheduleStrategy;
 pub use protocol::Info;
