@@ -423,9 +423,8 @@ impl StoredPeer {
         let priority = crate::protocol::peer::canonical_peer_priority(ip, my_ip);
         Self { ip, priority }
     }
-
-    pub fn priority(&self) -> u32 {
-        self.priority
+    pub fn new_with_base_priority(ip: SocketAddr) -> Self {
+        Self { ip, priority: 100 }
     }
 }
 
@@ -452,13 +451,15 @@ impl PartialOrd for StoredPeer {
 /// Holds peers that didn't fit in connection slots
 #[derive(Debug)]
 pub struct PeerStorage {
-    my_ip: SocketAddr,
+    my_ip: Option<SocketAddr>,
     stored_peers: HashSet<SocketAddr>,
     best_peers: BinaryHeap<StoredPeer>,
 }
 
 impl PeerStorage {
-    pub fn new(my_ip: SocketAddr) -> Self {
+    const MAX_SIZE: usize = 1000;
+
+    pub fn new(my_ip: Option<SocketAddr>) -> Self {
         Self {
             my_ip,
             stored_peers: HashSet::new(),
@@ -467,9 +468,20 @@ impl PeerStorage {
     }
 
     pub fn add(&mut self, ip: SocketAddr) -> bool {
+        if self.len() >= Self::MAX_SIZE {
+            tracing::warn!(
+                "Can't save peer for later. Peer storage is full {}/{}",
+                self.len(),
+                Self::MAX_SIZE
+            );
+            return false;
+        }
         let is_new = self.stored_peers.insert(ip);
         if is_new {
-            self.best_peers.push(StoredPeer::new(ip, self.my_ip));
+            match self.my_ip {
+                Some(my_ip) => self.best_peers.push(StoredPeer::new(ip, my_ip)),
+                None => self.best_peers.push(StoredPeer::new_with_base_priority(ip)),
+            }
         }
         is_new
     }
@@ -478,6 +490,25 @@ impl PeerStorage {
         let best = self.best_peers.pop()?;
         self.stored_peers.remove(&best.ip);
         Some(best.ip)
+    }
+
+    pub fn set_my_ip(&mut self, ip: Option<SocketAddr>) {
+        self.my_ip = ip;
+        if let Some(ip) = ip {
+            let mut old_heap = BinaryHeap::with_capacity(self.best_peers.len());
+            std::mem::swap(&mut self.best_peers, &mut old_heap);
+            for peer in old_heap {
+                self.best_peers.push(StoredPeer::new(peer.ip, ip));
+            }
+        }
+    }
+
+    pub fn my_ip(&self) -> Option<SocketAddr> {
+        self.my_ip
+    }
+
+    pub fn len(&self) -> usize {
+        self.best_peers.len()
     }
 }
 

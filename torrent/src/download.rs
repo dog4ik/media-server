@@ -414,6 +414,7 @@ impl ActivePeer {
     }
 
     /// Canonical priority (BEP 40)
+    #[allow(unused)]
     pub fn canonical_priority(&self, my_ip: SocketAddr) -> u32 {
         crate::protocol::peer::canonical_peer_priority(my_ip, self.ip)
     }
@@ -894,8 +895,7 @@ impl Download {
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
         // TODO: Known external ip is not guaranteed!
-        let peer_storage =
-            PeerStorage::new(client_external_ip.expect("known external ip is not guaranteed!"));
+        let peer_storage = PeerStorage::new(client_external_ip);
 
         Self {
             new_peers,
@@ -1232,14 +1232,13 @@ impl Download {
 
             for ip in tracker.handle_messages() {
                 if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
-                    // TODO: store new peers somewhere for later use
+                    self.peer_storage.add(ip);
                     continue;
                 }
                 if !self.scheduler.peers.iter().any(|p| p.ip == ip) {
-                    let info_hash = self.info_hash;
-                    self.peer_connector.connect(ip, info_hash);
+                    self.peer_connector.connect(ip, self.info_hash);
                 } else {
-                    tracing::trace!("Received duplicate peer {ip}");
+                    tracing::trace!(%ip, "Received duplicate peer from tracker");
                 }
             }
         }
@@ -1269,6 +1268,13 @@ impl Download {
     fn stop_peers(&mut self) {}
 
     fn handle_new_peer(&mut self, peer: Peer) {
+        if self.peer_storage.my_ip().is_none() {
+            if let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip()) {
+                tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
+                // TODO: use tcp listener port
+                self.peer_storage.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
+            };
+        }
         if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
             return;
         }
@@ -1351,6 +1357,16 @@ impl Download {
                 panic!("Peer task panicked: {e}");
             }
         };
+
+        debug_assert!(self.scheduler.peers.len() < MAX_PEER_CONNECTIONS);
+
+        if let Some(ip) = self.peer_storage.pop() {
+            if !self.scheduler.peers.iter().any(|p| p.ip == ip) {
+                self.peer_connector.connect(ip, self.info_hash);
+            } else {
+                tracing::trace!(%ip, "Peer popped from storage is already connected");
+            }
+        }
     }
 
     fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
