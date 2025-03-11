@@ -117,6 +117,7 @@ pub struct Peer {
     pub bitfield: BitField,
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
+    pub in_flight: usize,
 }
 
 impl Peer {
@@ -198,6 +199,7 @@ impl Peer {
             stream: messages_stream,
             handshake: his_handshake,
             extension_handshake: his_extension_handshake,
+            in_flight: 0,
         })
     }
 
@@ -281,6 +283,7 @@ impl Peer {
             stream: messages_stream,
             handshake: his_handshake,
             extension_handshake: his_extension_handshake,
+            in_flight: 0,
         })
     }
 
@@ -351,6 +354,13 @@ impl Peer {
         ipc: PeerIPC,
         cancellation_token: CancellationToken,
     ) -> (Uuid, Result<(), PeerError>) {
+        let mut messages_buffer: Vec<PeerMessage> = Vec::new();
+        let queue_size = self
+            .extension_handshake
+            .as_ref()
+            .and_then(|h| h.request_queue_size())
+            .unwrap_or(200) as usize;
+
         let peer_result = loop {
             tokio::select! {
                 _ = tokio::time::sleep(HEARTBEAT) => {
@@ -359,6 +369,13 @@ impl Peer {
                     }
                 },
                 Ok(command_msg) = ipc.message_rx.recv_async() => {
+                    if matches!(command_msg, PeerMessage::Request { .. }) {
+                        if self.in_flight >= queue_size {
+                            tracing::warn!(len = %messages_buffer.len(), "Pushing into message buffer to respect peer's reqq");
+                            messages_buffer.push(command_msg);
+                            continue;
+                        }
+                    }
                     if let Err(e) = self.send_peer_msg(command_msg).await {
                         break Err(e);
                     }
@@ -366,6 +383,19 @@ impl Peer {
                 Some(Ok(peer_msg)) = self.stream.next() => {
                     if peer_msg == PeerMessage::HeartBeat {
                         continue;
+                    }
+                    if let PeerMessage::Piece { index, .. } = peer_msg {
+                        match self.in_flight.checked_sub(1) {
+                            Some(v) => self.in_flight = v,
+                            None => {
+                                tracing::warn!(ip = %self.ip(), piece = %index, "Received unexpected block");
+                            },
+                        };
+                        if let Some(msg) = messages_buffer.pop() {
+                            if let Err(e) = self.send_peer_msg(msg).await {
+                                break Err(e);
+                            }
+                        }
                     }
                     if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
                         tracing::error!(ip = %self.ip(), "Peer -> scheduler channel is closed");
@@ -391,7 +421,10 @@ impl Peer {
         let msg_description = peer_msg.to_string();
         let socket = self.stream.get_mut();
         match tokio::time::timeout(Duration::from_secs(2), peer_msg.write_to(socket)).await {
-            Ok(Ok(_)) => Ok(()),
+            Ok(Ok(_)) => {
+                self.in_flight += 1;
+                Ok(())
+            }
             Err(_) => {
                 tracing::debug!("Peer write timed out");
                 Err(PeerError::timeout(
