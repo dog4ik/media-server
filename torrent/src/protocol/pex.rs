@@ -98,6 +98,9 @@ pub struct PexEntry {
 }
 
 impl PexEntry {
+    pub fn new_without_flags(addr: SocketAddr) -> Self {
+        Self { addr, flags: None }
+    }
     pub fn new(addr: SocketAddr, flags: Option<PexFlags>) -> Self {
         Self { addr, flags }
     }
@@ -339,13 +342,14 @@ impl PexHistory {
         PexMessage {
             added: added_set
                 .into_iter()
-                .map(|ip| PexEntry {
-                    addr: ip,
-                    flags: None,
-                })
+                .map(PexEntry::new_without_flags)
                 .collect(),
             dropped: dropped_set.into_iter().collect(),
         }
+    }
+
+    pub fn shrink(&mut self, min_tip: usize) {
+        self.history.drain(..min_tip);
     }
 }
 

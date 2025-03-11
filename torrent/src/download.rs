@@ -325,11 +325,13 @@ impl ActivePeer {
         Ok(())
     }
 
-    #[allow(unused)]
-    pub fn send_pex_message(&mut self, latest_idx: usize) {
-        // TODO: send the actual message
-        self.last_pex_message_time = Instant::now();
-        self.pex_idx = latest_idx
+    pub fn send_pex_message(&mut self, history: &PexHistory) {
+        tracing::info!("Sending pex message to the peer");
+        let message = history.pex_message(self.pex_idx);
+        if self.send_extension_message(message).is_ok() {
+            self.last_pex_message_time = Instant::now();
+            self.pex_idx = history.tip();
+        };
     }
 
     pub fn send_ut_metadata_block(
@@ -837,6 +839,9 @@ pub const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
 pub const PEER_IN_CHANNEL_CAPACITY: usize = 1000;
 pub const PEER_OUT_CHANNEL_CAPACITY: usize = 2000;
 const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const PEX_MESSAGE_INTERVAL: Duration = Duration::from_secs(90);
+// How many unused pex history entries trigger the cleanup
+const PEX_HISTORY_CLEANUP_THRESHOLD: usize = 500;
 
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
@@ -1117,7 +1122,11 @@ impl Download {
             let handle_peer_messages = Instant::now();
             for i in 0..self.scheduler.peers.len() {
                 self.handle_peer_messages(i);
-                let pex_idx = self.scheduler.peers[i].pex_idx;
+                let peer = &mut self.scheduler.peers[i];
+                let pex_idx = peer.pex_idx;
+                if peer.last_pex_message_time.duration_since(loop_start) > PEX_MESSAGE_INTERVAL {
+                    peer.send_pex_message(&self.pex_history);
+                }
                 if pex_idx < min_pex_tip {
                     min_pex_tip = pex_idx
                 }
@@ -1126,6 +1135,13 @@ impl Download {
                 "Handled peer's messages in {:?}",
                 handle_peer_messages.elapsed()
             );
+
+            if min_pex_tip != usize::MAX
+                && self.pex_history.tip() - min_pex_tip > PEX_HISTORY_CLEANUP_THRESHOLD
+            {
+                tracing::debug!("Shrinking pex history");
+                self.shrink_pex_history(min_pex_tip);
+            }
 
             // iterate over newly added pieces
             //for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
@@ -1526,5 +1542,12 @@ impl Download {
         tracing::info!("Gracefully shutting down download");
         // wait for peers to close
         while let Some(_) = self.peers_handles.join_next().await {}
+    }
+
+    fn shrink_pex_history(&mut self, min_tip: usize) {
+        self.pex_history.shrink(min_tip);
+        for peer in &mut self.scheduler.peers {
+            peer.pex_idx -= min_tip;
+        }
     }
 }
