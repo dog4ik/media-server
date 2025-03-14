@@ -1053,6 +1053,7 @@ impl<'a> DbActions<'a> for &'a mut SqliteConnection {}
 
 pub type DbTransaction = Transaction<'static, Sqlite>;
 
+/// Database connection pool
 #[derive(Debug, Clone)]
 pub struct Db {
     pub pool: SqlitePool,

@@ -14,8 +14,11 @@ use serde::{
 #[allow(unused)]
 pub mod local_provider;
 pub mod metadata_stack;
+/// Rate limited request client
 pub mod request_client;
+/// Tmdb API intergartion
 pub mod tmdb_api;
+/// Tvdb API intergartion
 #[allow(unused)]
 pub mod tvdb_api;
 
@@ -150,6 +153,7 @@ impl Display for MetadataImage {
     }
 }
 
+/// This trait must be implemented by all movie metadata providers
 #[async_trait::async_trait]
 pub trait MovieMetadataProvider {
     /// Query for movie
@@ -164,6 +168,7 @@ pub trait MovieMetadataProvider {
     fn provider_identifier(&self) -> &'static str;
 }
 
+/// This trait must be implemented by all show metadata providers
 #[async_trait::async_trait]
 pub trait ShowMetadataProvider {
     /// Query for show
@@ -197,6 +202,7 @@ pub trait ShowMetadataProvider {
     fn provider_identifier(&self) -> &'static str;
 }
 
+/// This trait must be implemented by all metadata providers with discovery capabilities
 #[async_trait::async_trait]
 pub trait DiscoverMetadataProvider {
     /// Multi search

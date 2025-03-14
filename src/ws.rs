@@ -13,6 +13,7 @@ use crate::{app_state::AppState, progress::Notification, torrent::TorrentProgres
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Websockets connection input message
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "type")]
 pub enum WsRequest {
@@ -20,6 +21,7 @@ pub enum WsRequest {
     TorrentUnsubscribe,
 }
 
+/// Websockets connection output message
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "type")]
 pub enum WsMessage {

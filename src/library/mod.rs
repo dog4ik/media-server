@@ -43,11 +43,16 @@ use self::{
     show::ShowIdentifier,
 };
 
+/// Saved local assets like posters
 pub mod assets;
+/// Identification for extras file names
 #[allow(unused)]
 pub mod extras;
+/// Local files tokenizer
 pub mod identification;
+/// Identification for movie file names
 pub mod movie;
+/// Identification for show file names
 pub mod show;
 
 const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
@@ -68,6 +73,7 @@ const EXTRAS_FOLDERS: [&str; 13] = [
     "trailers",
 ];
 
+/// Mapping between database videos and local files
 #[derive(Debug, Clone)]
 pub struct Library {
     pub videos: HashMap<i64, LibraryFile>,

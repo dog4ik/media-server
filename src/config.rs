@@ -545,6 +545,7 @@ pub struct UtoipaConfigSchema;
 
 // Settings
 
+/// The network port on which the server listens for incoming connections
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Copy, Serialize, utoipa::ToSchema)]
 pub struct Port(pub u16);
 
@@ -564,6 +565,7 @@ impl ConfigValue for Port {
     const REQUIRE_RESTART: bool = true;
 }
 
+/// Enable hardware acceleration to significantly improve transcoding performance, if supported by the system
 #[derive(Deserialize, Clone, Copy, Default, Serialize, Debug, utoipa::ToSchema)]
 pub struct HwAccel(pub bool);
 impl ConfigValue for HwAccel {}
@@ -574,6 +576,7 @@ impl AsRef<bool> for HwAccel {
     }
 }
 
+/// List of directories that contain movie files. All movie files from these directories will show up in the library
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = Vec<String>)]
 pub struct MovieFolders(pub Vec<PathBuf>);
@@ -619,6 +622,7 @@ impl MovieFolders {
     }
 }
 
+/// List of directories that contain show files. All episode files from these directories will show up in the library
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = Vec<String>)]
 pub struct ShowFolders(pub Vec<PathBuf>);
@@ -663,6 +667,7 @@ impl ShowFolders {
     }
 }
 
+/// Path to ffmpeg binary. This ffmpeg binary will be used for media transcoding tasks
 #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct FFmpegPath(PathBuf);
@@ -682,6 +687,7 @@ impl AsRef<Path> for FFmpegPath {
     }
 }
 
+/// Path to ffprobe binary. This setting will be deprecated in favor of ffmpeg abi
 #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct FFprobePath(PathBuf);
@@ -701,6 +707,7 @@ impl AsRef<Path> for FFprobePath {
     }
 }
 
+/// API key for TMDB. Allows server to authenticate with TMDB metadata provider
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 pub struct TmdbKey(pub Option<String>);
 impl ConfigValue for TmdbKey {
@@ -713,6 +720,7 @@ impl AsRef<Option<String>> for TmdbKey {
     }
 }
 
+/// API key for TVDB. Allows server to authenticate with TVDB metadata provider
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 pub struct TvdbKey(pub Option<String>);
 impl ConfigValue for TvdbKey {
@@ -725,8 +733,8 @@ impl AsRef<Option<String>> for TvdbKey {
     }
 }
 
+/// Minimal intro duration in seconds. With very low values things like netflix logo will be considered as intro
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
-/// Minimal intro duration from seconds
 pub struct IntroMinDuration(pub usize);
 impl ConfigValue for IntroMinDuration {}
 impl Default for IntroMinDuration {
@@ -735,7 +743,7 @@ impl Default for IntroMinDuration {
     }
 }
 
-/// Path to FFmpeg build that supports chromparint audio fingerprinting
+/// Path to the FFmpeg build that supports Chromaprint. Required for intro detection feature to work
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct IntroDetectionFfmpegBuild(pub PathBuf);
@@ -746,7 +754,7 @@ impl Default for IntroDetectionFfmpegBuild {
     }
 }
 
-/// Path to Web UI dist directory
+/// Path to Web UI assets, useful when Web UI located in a separate directory
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct WebUiPath(pub PathBuf);
@@ -760,12 +768,12 @@ impl Default for WebUiPath {
     }
 }
 
-/// Enabled upnp
+/// Enable SSDP (Simple Service Discovery Protocol) for UPnP. This allows the server to be discovered on the local network by compatible devices
 #[derive(Deserialize, Serialize, Clone, Eq, PartialEq, Debug, utoipa::ToSchema, Default)]
 pub struct UpnpEnabled(pub bool);
 impl ConfigValue for UpnpEnabled {}
 
-/// Ssdp packet ttl
+/// Time to live duration of SSDP packet on the local network
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq, utoipa::ToSchema)]
 pub struct UpnpTtl(pub u32);
 impl ConfigValue for UpnpTtl {}
@@ -827,7 +835,7 @@ impl Default for TorrentIndexesOrder {
     }
 }
 
-/// Metadata language
+/// Language to fetch metadata in. Selected language will be used in names, plots and posters
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema, Default)]
 pub struct MetadataLanguage(pub metadata::Language);
 impl ConfigValue for MetadataLanguage {}

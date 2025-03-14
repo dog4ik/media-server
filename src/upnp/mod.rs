@@ -15,6 +15,8 @@ use upnp::{
 use crate::{app_state::AppState, config, utils};
 
 pub mod connection_manager;
+/// Service for UI devices to browse the content on the server and to obtain detailed information about
+/// individual content objects
 pub mod content_directory;
 
 #[derive(Debug)]
