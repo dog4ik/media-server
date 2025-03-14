@@ -21,7 +21,7 @@ use tokio::{
 };
 use utoipa::openapi::RefOr;
 
-use crate::metadata;
+use crate::{app_state::AppError, metadata};
 
 fn camel_to_snake_case(input: &str) -> String {
     let mut snake = String::new();
@@ -64,7 +64,7 @@ pub trait ConfigValue:
 }
 
 #[derive(Debug, Default)]
-pub struct SettingValue<T> {
+struct SettingValue<T> {
     default: T,
     config: Option<T>,
     cli: Option<T>,
@@ -174,8 +174,15 @@ impl<T: ConfigValue> AnySettingValue for SettingValue<T> {
     }
 
     fn deserialize_json(&mut self, json: serde_json::Value) -> Result<(), serde_json::Error> {
-        let value = serde_json::from_value(json)?;
-        self.config = Some(value);
+        match json {
+            serde_json::Value::Null => {
+                self.config = None;
+            }
+            _ => {
+                let value = serde_json::from_value(json)?;
+                self.config = Some(value);
+            }
+        }
         Ok(())
     }
 
@@ -325,12 +332,14 @@ impl ConfigStore {
         });
     }
 
-    pub fn apply_json(&self, value: serde_json::Value) -> anyhow::Result<ConfigurationApplyResult> {
+    pub fn apply_json(
+        &self,
+        value: serde_json::Value,
+    ) -> Result<ConfigurationApplyResult, AppError> {
         let mut result = ConfigurationApplyResult::default();
-        let value = serde_json::to_value(&value)?;
         let obj = match value {
             serde_json::Value::Object(obj) => obj,
-            _ => return Err(anyhow::anyhow!("Provided json must be object")),
+            _ => return Err(AppError::bad_request("Provided json must be object")),
         };
 
         self.settings.send_modify(|settings| {
@@ -338,6 +347,7 @@ impl ConfigStore {
                 if let Some(val) = obj.get(&setting.key()).cloned() {
                     match setting.deserialize_json(val) {
                         Ok(_) if setting.require_restart() => result.require_restart = true,
+                        Ok(_) => (),
                         Err(err) => {
                             tracing::warn!(
                                 "Failed to deserialize json value for {}: {err}",
@@ -348,7 +358,6 @@ impl ConfigStore {
                                 message: err.to_string(),
                             });
                         }
-                        _ => (),
                     };
                 }
             }
@@ -823,44 +832,6 @@ impl Default for TorrentIndexesOrder {
 pub struct MetadataLanguage(pub metadata::Language);
 impl ConfigValue for MetadataLanguage {}
 
-#[cfg(test)]
-mod tests {
-
-    use super::{ConfigStore, HwAccel, Port};
-
-    const TEST_TOML_CONFIG: &str = r#"
-port = 8000
-hw_accel = true
-    "#;
-
-    #[test]
-    fn setting_store() {
-        let store = ConfigStore::construct();
-        let mut port = Port::default();
-        let stored_port: Port = store.get_value();
-        assert_eq!(port, stored_port);
-        port = Port(8000);
-        store.update_value(port);
-        let stored_port: Port = store.get_value();
-        assert_eq!(port, stored_port);
-    }
-
-    #[test]
-    fn apply_settings() {
-        let store = ConfigStore::construct();
-        let port: Port = store.get_value();
-        let hw_accel: HwAccel = store.get_value();
-        assert_eq!(port.0, Port::default().0);
-        assert_eq!(hw_accel.0, HwAccel::default().0);
-        let toml = toml::from_str(TEST_TOML_CONFIG).unwrap();
-        store.apply_toml_settings(toml);
-        let port: Port = store.get_value();
-        let hw_accel: HwAccel = store.get_value();
-        assert_eq!(port.0, 8000);
-        assert!(hw_accel.0);
-    }
-}
-
 #[derive(Debug)]
 pub struct ConfigFile(pub fs::File);
 
@@ -1182,5 +1153,58 @@ impl AppResources {
 impl Default for AppResources {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::{ConfigStore, HwAccel, Port};
+
+    const TEST_TOML_CONFIG: &str = r#"
+port = 8000
+hw_accel = true
+    "#;
+
+    #[test]
+    fn setting_store() {
+        let store = ConfigStore::construct();
+        let mut port = Port::default();
+        let stored_port: Port = store.get_value();
+        assert_eq!(port, stored_port);
+        port = Port(8000);
+        store.update_value(port);
+        let stored_port: Port = store.get_value();
+        assert_eq!(port, stored_port);
+    }
+
+    #[test]
+    fn apply_settings() {
+        let store = ConfigStore::construct();
+        let port: Port = store.get_value();
+        let hw_accel: HwAccel = store.get_value();
+        assert_eq!(port.0, Port::default().0);
+        assert_eq!(hw_accel.0, HwAccel::default().0);
+        let toml = toml::from_str(TEST_TOML_CONFIG).unwrap();
+        store.apply_toml_settings(toml);
+        let port: Port = store.get_value();
+        let hw_accel: HwAccel = store.get_value();
+        assert_eq!(port.0, 8000);
+        assert!(hw_accel.0);
+    }
+
+    #[test]
+    fn unset_setting() {
+        let store = ConfigStore::construct();
+        let port: Port = store.get_value();
+        assert_eq!(port.0, Port::default().0);
+        let config_set = serde_json::json!({ "port": 7355 });
+        store.apply_json(config_set).unwrap();
+        let port: Port = store.get_value();
+        assert_eq!(port.0, 7355);
+        let config_unset = serde_json::json!({"port": null });
+        store.apply_json(config_unset).unwrap();
+        let port: Port = store.get_value();
+        assert_eq!(port.0, Port::default().0);
     }
 }
