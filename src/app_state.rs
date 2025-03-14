@@ -662,10 +662,11 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
         let AppState { db, library, .. } = self;
         let video_ids = sqlx::query!(
-            r#"SELECT videos.id FROM episodes
+            r#"SELECT min(videos.id) as id FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
         JOIN videos ON videos.episode_id = episodes.id
-        WHERE seasons.show_id = ? AND seasons.number = ?;"#,
+        WHERE seasons.show_id = ? AND seasons.number = ?
+        GROUP BY episodes.id;"#,
             show_id,
             season_number,
         )
