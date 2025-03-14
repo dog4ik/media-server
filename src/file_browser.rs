@@ -4,6 +4,8 @@ use base64::Engine;
 use serde::{de::Visitor, Deserialize, Serialize};
 use tokio::fs;
 
+use crate::app_state::AppError;
+
 #[derive(Debug)]
 /// Base64 -> Path deserializable path. Used for encoding paths in url
 pub struct FileKey {
@@ -71,7 +73,7 @@ impl From<PathBuf> for BrowseFile {
 const EXPLORE_LIMIT: usize = 500;
 
 impl BrowseDirectory {
-    pub async fn explore(key: FileKey) -> anyhow::Result<Self> {
+    pub async fn explore(key: FileKey) -> Result<Self, AppError> {
         let mut directory = fs::read_dir(key.path).await?;
         let mut size = 0;
         let mut directories = Vec::new();
