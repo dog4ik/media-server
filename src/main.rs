@@ -179,12 +179,20 @@ async fn main() {
         )
         .route("/season/{season_id}/poster", get(server_api::season_poster))
         .route(
+            "/season/{season_id}/intros",
+            delete(server_api::delete_season_intros),
+        )
+        .route(
             "/show/{show_id}/{season}",
             put(server_api::alter_season_metadata),
         )
         .route(
             "/episode/{episode_id}/poster",
             get(server_api::episode_poster),
+        )
+        .route(
+            "/episode/{episode_id}/intros",
+            delete(server_api::delete_episode_intros),
         )
         .route(
             "/show/{show_id}/{season}/{episode}",
@@ -202,6 +210,9 @@ async fn main() {
         .route("/video/by_content", get(server_api::contents_video))
         .route("/video/{id}", get(server_api::get_video_by_id))
         .route("/video/{id}", delete(server_api::remove_video))
+        .route("/video/{id}/intro", put(server_api::update_video_intro))
+        .route("/video/{id}/intro", get(server_api::video_intro))
+        .route("/video/{id}/intro", delete(server_api::delete_video_intro))
         .route(
             "/video/{id}/metadata",
             get(server_api::video_content_metadata),

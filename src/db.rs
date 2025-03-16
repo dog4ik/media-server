@@ -471,6 +471,17 @@ where
         }
     }
 
+    fn remove_intro(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            tracing::debug!(id, "Removing intro");
+            let query = sqlx::query!("DELETE FROM episode_intro WHERE id = ?", id);
+
+            query.execute(&mut *conn).await?;
+            Ok(())
+        }
+    }
+
     fn remove_torrent(
         self,
         info_hash: &[u8],
