@@ -767,9 +767,23 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                 Ok(Ok(_)) => tracing::trace!("Joined movie reconciliation task"),
             }
         }
-        let local_episodes: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            library.episodes().collect()
+        let local_episodes = {
+            let episodes: Vec<_> = {
+                let library = self.library.lock().unwrap();
+                library.episodes().collect()
+            };
+            let mut out = Vec::with_capacity(episodes.len());
+            for episode in episodes {
+                match episode.source.video.metadata().await {
+                    Ok(_) => out.push(episode),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = ?episode.source.video.path().display(), "Skipping invalid video: {e}",
+                        );
+                    }
+                }
+            }
+            out
         };
 
         let db_episodes_videos = sqlx::query!(
@@ -1215,7 +1229,6 @@ async fn handle_episode(
             "Fetching duration for the episode: {}",
             item.source.video.path().display()
         );
-        // We spend seconds here if file is incomplete
         let duration = item.source.video.fetch_duration().await?;
         for provider in providers {
             let p = MetadataProvider::from_str(provider.provider_identifier())
