@@ -32,7 +32,6 @@ use crate::{
     },
     progress::TaskResource,
     torrent::TorrentClient,
-    utils,
 };
 
 #[derive(Debug, Clone)]
@@ -509,26 +508,20 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
                 let output_file = job.output_file_path.clone();
                 let job =
                     FFmpegRunningJob::spawn(&job, video_metadata.duration(), output_file.clone())?;
-                jobs.push((job, &track.stream, output_file));
+                jobs.push((job, &track.stream));
             }
         }
-        for (mut job, stream, output_file) in jobs {
+        for (mut job, stream) in jobs {
             if let Ok(status) = job.wait().await {
                 if status.success() {
-                    let metadata = fs::metadata(&output_file).await?;
-                    let size = metadata.len();
-                    let mut file = std::fs::File::open(&output_file)?;
-                    let hash = utils::file_hash(&mut file)?;
                     let db_subtitles = DbSubtitles {
                         id: None,
                         language: stream.language.clone(),
-                        path: output_file.to_string_lossy().to_string(),
-                        hash: hash.to_string(),
-                        size: size as i64,
+                        external_path: None,
                         video_id,
                     };
 
-                    self.db.insert_subtitles(db_subtitles).await?;
+                    self.db.insert_subtitles(&db_subtitles).await?;
                 }
             }
         }

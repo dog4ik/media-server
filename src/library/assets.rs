@@ -197,7 +197,7 @@ impl FileAsset for SubtitleAsset {
     }
 }
 impl SubtitleAsset {
-    pub fn new(video_id: i64, subtitle_id: String) -> Self {
+    pub fn new(video_id: i64, subtitle_id: i64) -> Self {
         Self(
             video_sharded_path(video_id)
                 .join("subs")

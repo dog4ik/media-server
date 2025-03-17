@@ -237,6 +237,14 @@ async fn main() {
         )
         .route("/video/{id}/watch", get(server_api::watch))
         .route(
+            "/video/{id}/upload_subtitles",
+            post(server_api::upload_subtitles),
+        )
+        .route(
+            "/video/{id}/reference_subtitles",
+            post(server_api::reference_external_subtitles),
+        )
+        .route(
             "/video/{id}/variant/{variant_id}",
             delete(server_api::remove_variant),
         )
@@ -247,6 +255,8 @@ async fn main() {
         .route("/history/{id}", get(server_api::video_history))
         .route("/history/{id}", delete(server_api::remove_history_item))
         .route("/history/{id}", put(server_api::update_history))
+        .route("/subtitles/{id}", delete(server_api::delete_subtitles))
+        .route("/subtitles/{id}", get(server_api::get_subtitles))
         .route("/torrent/search", get(server_api::search_torrent))
         .route(
             "/torrent/resolve_magnet_link",

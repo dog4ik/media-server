@@ -301,7 +301,7 @@ impl Source {
         SubtitlesDirAsset::new(self.id)
     }
 
-    pub fn subtitle(&self, id: String) -> SubtitleAsset {
+    pub fn subtitle(&self, id: i64) -> SubtitleAsset {
         SubtitleAsset::new(self.id, id)
     }
 }
@@ -545,11 +545,11 @@ impl Video {
     }
 
     /// Calculate hash for the video
-    pub fn calculate_video_hash(&self) -> Result<u32, std::io::Error> {
+    pub async fn calculate_video_hash(&self) -> Result<u32, std::io::Error> {
         tracing::trace!("Calculating hash for file: {}", self.path.display());
         let path = &self.path;
-        let mut file = std::fs::File::open(path)?;
-        let hash = utils::file_hash(&mut file)?;
+        let mut file = tokio::fs::File::open(path).await?;
+        let hash = utils::file_hash(&mut file).await?;
         Ok(hash)
     }
 

@@ -175,18 +175,15 @@ where
 
     fn insert_subtitles(
         self,
-        db_subtitles: DbSubtitles,
+        db_subtitles: &DbSubtitles,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let subtitles_query = sqlx::query!(
                 "INSERT INTO subtitles
-            (language, hash, path, size, video_id)
-            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+            (language, video_id)
+            VALUES (?, ?) RETURNING id;",
                 db_subtitles.language,
-                db_subtitles.hash,
-                db_subtitles.path,
-                db_subtitles.size,
                 db_subtitles.video_id
             );
             subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -581,6 +578,26 @@ where
                 id
             );
             q.execute(&mut *conn).await?;
+            Ok(())
+        }
+    }
+
+    fn update_subtitles(
+        self,
+        id: i64,
+        subtitles: DbSubtitles,
+    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "UPDATE subtitles SET language = ?, video_id = ?, external_path = ? WHERE id = ?",
+                subtitles.language,
+                subtitles.video_id,
+                subtitles.external_path,
+                id,
+            )
+            .execute(&mut *conn)
+            .await?;
             Ok(())
         }
     }
@@ -1276,18 +1293,34 @@ impl From<DbExternalId> for ExternalIdMetadata {
     }
 }
 
-//Types
+// Types for each table in the local database
 
+/// `shows` table simply holds information for specific tv show
+///
+/// Note that it will not be deleted ucascade because related assets must be cleaned up
+/// manually.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbShow {
     pub id: Option<i64>,
     pub title: String,
     pub release_date: Option<String>,
+    /// Url that we get from information provider.
+    ///
+    /// Note that it is not local poster url.
     pub poster: Option<String>,
+    /// Url that we get from information provider.
+    ///
+    /// Backdrop is the 16/9 high canvas that can be used as the background
+    ///
+    /// Note that it is not local backdrop url.
     pub backdrop: Option<String>,
     pub plot: Option<String>,
 }
 
+/// `seasons` table simply holds information for specific season.
+///
+/// Note that it will not be deleted using cascade because related assets must be cleaned up
+/// manually.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbSeason {
     pub id: Option<i64>,
@@ -1295,20 +1328,33 @@ pub struct DbSeason {
     pub number: i64,
     pub release_date: Option<String>,
     pub plot: Option<String>,
+    /// Url that we get from information provider.
+    ///
+    /// Note that it is not local url.
     pub poster: Option<String>,
 }
 
+/// `movies` table simply holds information for specific movie
+///
+/// Note that it will not be removed using cascade because related assets must be cleaned up
+/// manually.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbMovie {
     pub id: Option<i64>,
     pub title: String,
     pub plot: Option<String>,
+    /// Url that we get from information provider.
+    /// Note that it is not local poster url.
     pub poster: Option<String>,
     pub release_date: Option<String>,
     pub duration: i64,
     pub backdrop: Option<String>,
 }
 
+/// `episodes` table simply holds information for specific episode
+///
+/// Note that it will not be removed using cascade because related assets must be cleaned up
+/// manually.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbEpisode {
     pub id: Option<i64>,
@@ -1318,9 +1364,18 @@ pub struct DbEpisode {
     pub plot: Option<String>,
     pub release_date: Option<String>,
     pub duration: i64,
+    /// Url that we get from information provider.
+    ///
+    /// Note that it is not local poster url.
     pub poster: Option<String>,
 }
 
+/// `videos` table tracks every local video we have in the library.
+/// Note that it is not guaranteed that the video will be available on the drive.
+/// Videos are the core of the media server. This table is _synced_ during the "library refresh"
+///
+/// Note that it will not be removed using cascade because related assets must be cleaned up
+/// manually.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbVideo {
     pub id: Option<i64>,
@@ -1332,16 +1387,29 @@ pub struct DbVideo {
     pub scan_date: String,
 }
 
+/// `subtitles` table is used for tracking subtitles assets.
+///
+/// If `external_path` is not null, then subtitles are external, meaning they are not managed by the server.
+/// For example user can reference subtitles file from a specific directory without need for server to
+/// save it in assets directory.
+/// Otherwise all subtitles in this table are stored inside assets directory.
+///
+/// Note that subtitles inside the video containers are not tracked by the database
+///
+/// Usually removed with video using delete cascade
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbSubtitles {
     pub id: Option<i64>,
     pub language: Option<String>,
-    pub path: String,
-    pub hash: String,
-    pub size: i64,
+    /// This is a path "reference" on subtitles file specified by user.
+    /// When this field is not null, subtitles are not stored in the assets directory.
+    pub external_path: Option<String>,
     pub video_id: i64,
 }
 
+/// `history` table simply holds history for each video file in the library
+///
+/// Usually removed with video using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema)]
 pub struct DbHistory {
     #[schema(value_type = i64)]
@@ -1352,6 +1420,11 @@ pub struct DbHistory {
     pub video_id: i64,
 }
 
+/// `external_ids` table maps content to external movie/show metadata provider ids.
+/// For example it can connect tmdb ID to specific local tv show.
+/// This is useful to crossmatch local library against different providers.
+///
+/// Usually removed with it's _parent_ using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, Default, utoipa::ToSchema)]
 pub struct DbExternalId {
     #[schema(value_type = i64)]
@@ -1365,6 +1438,9 @@ pub struct DbExternalId {
     pub is_prime: i64,
 }
 
+/// `episode_intros` table simply stores detected intros for a specific video
+///
+/// Usually removed with the video using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbEpisodeIntro {
     pub id: Option<i64>,
@@ -1373,6 +1449,10 @@ pub struct DbEpisodeIntro {
     pub end_sec: i64,
 }
 
+/// `torrents` table holds currently active torrents.
+///
+/// Torrents can be in any state.
+/// This is used to resume torrents after server restart.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbTorrent {
     pub id: Option<i64>,
@@ -1407,6 +1487,9 @@ impl From<DownloadParams> for DbTorrent {
     }
 }
 
+/// `torrent_files` table stores information about every file inside particular torrent download.
+///
+/// Usually removed with parent torrent using cascade deletes
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbTorrentFile {
     pub id: Option<i64>,
@@ -1416,6 +1499,10 @@ pub struct DbTorrentFile {
     pub relative_path: String,
 }
 
+/// `system_id` table stores the single row: global `system_id`.
+/// It is incremented using SQL triggers every time any information in library (movies, shows, seasons,
+/// episodes) changes.
+/// This is only used in UPnP [content_directory service implementation](crate::upnp::content_directory)
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbSystemId {
     pub id: i64,

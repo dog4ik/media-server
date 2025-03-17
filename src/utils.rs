@@ -1,17 +1,19 @@
 use std::{
-    fs::{self, File},
-    io::{self, Read},
+    fs::{self},
+    io::{self},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
 };
 
-pub fn file_hash(file: &mut File) -> Result<u32, std::io::Error> {
+use tokio::io::AsyncReadExt;
+
+pub async fn file_hash(file: &mut tokio::fs::File) -> Result<u32, std::io::Error> {
     use crc32fast::Hasher;
     let mut hasher = Hasher::new();
     let mut buffer = [0; 4096];
 
     loop {
-        let bytes_read = file.read(&mut buffer)?;
+        let bytes_read = file.read(&mut buffer).await?;
         if bytes_read == 0 {
             break;
         }

@@ -63,10 +63,8 @@ CREATE TABLE IF NOT EXISTS videos (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT
                                     FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE SET NULL,
                                     FOREIGN KEY (movie_id) REFERENCES movies (id) ON DELETE SET NULL);
 CREATE TABLE IF NOT EXISTS subtitles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
-                                    language TEXT NOT NULL,
-                                    hash TEXT NOT NULL,
-                                    path TEXT NOT NULL,
-                                    size INTEGER NOT NULL,
+                                    language TEXT,
+                                    external_path TEXT,
                                     video_id INTEGER NOT NULL,
                                     FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS history (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,

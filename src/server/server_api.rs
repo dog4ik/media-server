@@ -3,7 +3,8 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use axum::extract::{Path, Query, State};
+use anyhow::Context;
+use axum::extract::{Multipart, Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{
@@ -31,7 +32,7 @@ use crate::app_state::AppError;
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
 };
-use crate::db::DbActions;
+use crate::db::{self, DbActions};
 use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
@@ -39,11 +40,11 @@ use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::intro_detection::IntroJob;
 use crate::library::TranscodePayload;
-use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::assets::{
-    BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
-    VariantAsset,
+    self, BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType,
+    PreviewAsset, VariantAsset,
 };
+use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::{
     AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
@@ -57,7 +58,17 @@ use crate::server::OptionalTorrentIndexQuery;
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
-#[derive(Debug, Serialize, FromRow, utoipa::ToSchema)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct DetailedSubtitlesAsset {
+    id: i64,
+    language: Option<String>,
+    #[schema(value_type = String)]
+    path: PathBuf,
+    is_external: bool,
+    is_available: bool,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DetailedVideo {
     pub id: i64,
     #[schema(value_type = String)]
@@ -74,6 +85,7 @@ pub struct DetailedVideo {
     pub history: Option<DbHistory>,
     pub intro: Option<Intro>,
     pub chapters: Vec<DetailedChapter>,
+    pub subtitles: Vec<DetailedSubtitlesAsset>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -150,6 +162,39 @@ impl DetailedVideo {
         )
         .fetch_one(&db.pool)
         .await?;
+
+        let db_subtitles = sqlx::query!(
+            "select id, language, external_path from subtitles where video_id = ?",
+            id,
+        )
+        .fetch_all(&db.pool)
+        .await?;
+
+        let mut subtitles = Vec::with_capacity(db_subtitles.len());
+
+        for record in db_subtitles {
+            if let Some(external_path) = record.external_path {
+                let is_available = tokio::fs::try_exists(&external_path).await.unwrap_or(false);
+                subtitles.push(DetailedSubtitlesAsset {
+                    id: record.id,
+                    language: record.language,
+                    path: PathBuf::from(external_path),
+                    is_external: true,
+                    is_available,
+                });
+            } else {
+                let asset = assets::SubtitleAsset::new(id, record.id);
+                let is_available = tokio::fs::try_exists(asset.path()).await.unwrap_or(false);
+                subtitles.push(DetailedSubtitlesAsset {
+                    id: record.id,
+                    language: record.language,
+                    path: asset.path(),
+                    is_external: false,
+                    is_available,
+                });
+            }
+        }
+
         let video_metadata = source.video.metadata().await?;
 
         let mut detailed_variants = Vec::with_capacity(source.variants.len());
@@ -213,6 +258,7 @@ impl DetailedVideo {
             chapters: video_metadata.chapters().iter().map(Into::into).collect(),
             history,
             intro,
+            subtitles,
         })
     }
 }
@@ -439,7 +485,7 @@ pub async fn previews(
     Ok(response)
 }
 
-/// Pull subtitle from video file
+/// Pull subtitle from video file using its track number
 #[utoipa::path(
     get,
     path = "/api/video/{id}/pull_subtitle",
@@ -461,6 +507,192 @@ pub async fn pull_video_subtitle(
     state
         .pull_subtitle_from_video(video_id, number.number)
         .await
+}
+
+#[derive(Debug, utoipa::ToSchema)]
+pub struct MultipartSubtitles {
+    pub language: Option<String>,
+    #[schema(content_media_type = "application/octet-stream", value_type = Vec<u8>)]
+    pub subtitles: bytes::Bytes,
+}
+
+impl MultipartSubtitles {
+    pub async fn from_multipart(multipart: &mut Multipart) -> anyhow::Result<Self> {
+        let mut language = None;
+        let mut subtitles = None;
+        while let Ok(Some(field)) = multipart.next_field().await {
+            if let Some("language") = field.name() {
+                language = field.text().await.ok();
+                continue;
+            }
+            let data = field.bytes().await?;
+            subtitles = Some(data);
+        }
+
+        Ok(Self {
+            subtitles: subtitles.context("get subtitles field")?,
+            language,
+        })
+    }
+}
+
+/// Upload subtitles on the server
+#[utoipa::path(
+    post,
+    path = "/api/video/{id}/upload_subtitles",
+    params(
+        ("id", description = "video id"),
+    ),
+    request_body(content = inline(MultipartSubtitles), content_type = "multipart/form-data"),
+    responses(
+        (status = 200, description = "Subtitles", body = String),
+        (status = 404, description = "Video is not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn upload_subtitles(
+    Path(video_id): Path<i64>,
+    State(db): State<Db>,
+    mut multipart: Multipart,
+) -> Result<(), AppError> {
+    let mut language = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if let Some("language") = field.name() {
+            language = field.text().await.ok();
+            continue;
+        }
+        if let Some("subtitles") = field.name() {
+            let db_subtitles = db::DbSubtitles {
+                id: None,
+                external_path: None,
+                language,
+                video_id,
+            };
+            let mut tx = db.begin().await?;
+            let subtitles_id = tx.insert_subtitles(&db_subtitles).await?;
+            let subtitles_asset = assets::SubtitleAsset::new(video_id, subtitles_id);
+
+            use std::io::{Error, ErrorKind};
+            let mut stream = field.map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
+            let mut reader = tokio_util::io::StreamReader::new(&mut stream);
+            subtitles_asset.save_from_reader(&mut reader).await?;
+
+            if tx.commit().await.is_err() {
+                tracing::error!("Failed to commit subtitles transaction");
+                if let Err(e) = subtitles_asset.delete_file().await {
+                    tracing::error!("Failed to created subtitle: {e}");
+                };
+            };
+            return Ok(());
+        }
+    }
+
+    Err(AppError::bad_request(
+        "multipart does not contain required subtitles field",
+    ))
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct SubtitlesReferencePayload {
+    language: Option<String>,
+    path: String,
+}
+
+/// Create subtitles entry using path reference.
+///
+/// This types of subtitles are just references to user files and not stored in server assets
+/// directory.
+///
+/// TODO:
+/// Read more about subtitles references here
+#[utoipa::path(
+    post,
+    path = "/api/video/{id}/reference_subtitles",
+    params(
+        ("id", description = "video id"),
+    ),
+    request_body(content = SubtitlesReferencePayload),
+    responses(
+        (status = 200, description = "Subtitles are referenced successfully", body = String),
+        (status = 404, description = "Video is not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn reference_external_subtitles(
+    Path(video_id): Path<i64>,
+    State(db): State<Db>,
+    Json(reference): Json<SubtitlesReferencePayload>,
+) -> Result<(), AppError> {
+    let db_subtitles = db::DbSubtitles {
+        id: None,
+        language: reference.language,
+        external_path: Some(reference.path),
+        video_id,
+    };
+    db.insert_subtitles(&db_subtitles).await?;
+    Ok(())
+}
+
+/// Delete subtitles on the server
+///
+/// Note that if subtitles are referenced it will not delete referenced file
+#[utoipa::path(
+    delete,
+    path = "/api/subtitles/{id}",
+    params(
+        ("id", description = "subtitles id"),
+    ),
+    responses(
+        (status = 200, description = "Subtitles are successfully deleted"),
+        (status = 404, description = "Subtitles are not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Result<(), AppError> {
+    let mut tx = db.begin().await?;
+    let removed_subs = sqlx::query!(
+        "DELETE FROM subtitles WHERE id = ? RETURNING video_id, external_path",
+        id
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // if subtitles are not referenced delete the asset
+    if removed_subs.external_path.is_none() {
+        let subtitles_asset = assets::SubtitleAsset::new(removed_subs.video_id, id);
+        subtitles_asset.delete_file().await?;
+    }
+
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Get subtitles in text format
+#[utoipa::path(
+    get,
+    path = "/api/subtitles/{id}",
+    params(
+        ("id", description = "subtitles id"),
+    ),
+    responses(
+        (status = 200, description = "Subtitles stream", body = Vec<u8>),
+        (status = 404, description = "Subtitles are not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn get_subtitles(
+    Path(id): Path<i64>,
+    State(db): State<Db>,
+) -> Result<impl IntoResponse, AppError> {
+    let video_id = sqlx::query!("SELECT video_id FROM subtitles WHERE id = ?", id)
+        .fetch_one(&db.pool)
+        .await?
+        .video_id;
+
+    let response = assets::SubtitleAsset::new(video_id, id)
+        .into_response(headers::ContentType::text(), None)
+        .await?;
+    Ok(response)
 }
 
 /// Video stream
