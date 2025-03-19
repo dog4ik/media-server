@@ -335,6 +335,30 @@ pub enum TrackerResponse {
 }
 
 const MAX_ANNOUNCE_INTERVAL: Duration = Duration::from_secs(5 * 60);
+const CONNECTION_ID_VALID_DURATION: Duration = Duration::from_secs(115);
+
+#[derive(Debug)]
+struct UdpConnectionState {
+    id: u64,
+    assigned_at: Instant,
+}
+
+impl UdpConnectionState {
+    pub fn new(id: u64) -> Self {
+        Self {
+            id,
+            assigned_at: Instant::now(),
+        }
+    }
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    pub fn set_id(&mut self, new_id: u64) {
+        self.id = new_id;
+        self.assigned_at = Instant::now();
+    }
+}
 
 #[derive(Debug)]
 pub struct Tracker {
@@ -343,9 +367,7 @@ pub struct Tracker {
     pub commands: mpsc::Receiver<TrackerCommand>,
     pub rensponse_tx: mpsc::Sender<TrackerResponse>,
     pub announce_payload: AnnouncePayload,
-    // TODO: Trackers should accept the connection ID until two minutes after it has been send.
-    // Cache it for 2 minutes and revalidate when necessary
-    pub udp_connection_id: Option<u64>,
+    udp_connection_state: Option<UdpConnectionState>,
     pub status: TrackerStatus,
 }
 
@@ -375,7 +397,7 @@ impl Tracker {
             commands: command_rx,
             rensponse_tx,
             announce_payload,
-            udp_connection_id: None,
+            udp_connection_state: None,
             status: TrackerStatus::NotContacted,
         };
 
@@ -437,17 +459,23 @@ impl Tracker {
         let announce_result = match &self.tracker_type {
             TrackerType::Http => self.announce_payload.announce_http().await,
             TrackerType::Udp(chan) => {
-                let conn_id = match self.udp_connection_id {
-                    Some(id) => id,
+                let conn_id = match &mut self.udp_connection_state {
+                    Some(state) if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION => {
+                        tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
+                        let addrs = self.url.socket_addrs(|| None)?;
+                        let addr = addrs.first().context("could not resove url hostname")?;
+                        state.set_id(chan.connect(*addr).await?);
+                        state.id()
+                    }
+                    Some(state) => state.id(),
                     None => {
                         tracing::debug!(
-                            "Trying to get connection id from udp tracker {}",
-                            self.url
+                            url = %self.url, "Trying to get connection id from udp tracker",
                         );
                         let addrs = self.url.socket_addrs(|| None)?;
                         let addr = addrs.first().context("could not resove url hostname")?;
                         let id = chan.connect(*addr).await?;
-                        self.udp_connection_id = Some(id);
+                        self.udp_connection_state = Some(UdpConnectionState::new(id));
                         id
                     }
                 };
@@ -466,8 +494,18 @@ impl Tracker {
                 let _ = match &self.tracker_type {
                     TrackerType::Http => self.announce_payload.announce_http().await?,
                     TrackerType::Udp(chan) => {
-                        let conn_id = match self.udp_connection_id {
-                            Some(id) => id,
+                        let conn_id = match &mut self.udp_connection_state {
+                            Some(state)
+                                if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION =>
+                            {
+                                tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
+                                let addrs = self.url.socket_addrs(|| None)?;
+                                let addr =
+                                    addrs.first().context("could not resove url hostname")?;
+                                state.set_id(chan.connect(*addr).await?);
+                                state.id()
+                            }
+                            Some(state) => state.id,
                             None => {
                                 tracing::debug!(
                                     "Trying to get connection id from udp tracker {}",
@@ -477,7 +515,7 @@ impl Tracker {
                                 let addr =
                                     addrs.first().context("could not resove url hostname")?;
                                 let id = chan.connect(*addr).await?;
-                                self.udp_connection_id = Some(id);
+                                self.udp_connection_state = Some(UdpConnectionState::new(id));
                                 id
                             }
                         };
