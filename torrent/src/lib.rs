@@ -92,7 +92,7 @@ impl Default for ClientConfig {
 
 #[derive(Debug)]
 pub struct Client {
-    ip: Arc<Ipv4Addr>,
+    ip: Arc<Option<Ipv4Addr>>,
     peer_listener: PeerListener,
     udp_tracker_tx: UdpTrackerChannel,
     cancellation_token: CancellationToken,
@@ -109,7 +109,7 @@ impl Client {
             false => None,
         };
         // WARN: handle case where we can't resolve client's external ip
-        let external_ip = utils::external_ip(upnp_client.as_ref()).await.unwrap();
+        let external_ip = utils::external_ip(upnp_client.as_ref()).await.ok();
         let peer_listener = if let Some(upnp_client) = upnp_client {
             PeerListener::spawn_with_upnp(
                 config.port,
@@ -176,10 +176,8 @@ impl Client {
             peers_rx,
             trackers,
             child_token,
-            Some(std::net::SocketAddr::V4(SocketAddrV4::new(
-                *self.ip,
-                self.config.port,
-            ))),
+            self.ip
+                .map(|ip| std::net::SocketAddr::V4(SocketAddrV4::new(ip, self.config.port))),
         );
         let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)
