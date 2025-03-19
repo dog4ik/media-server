@@ -11,8 +11,7 @@ use std::{
 };
 
 use anyhow::bail;
-pub use download::{DownloadProgress, ProgressConsumer};
-use peer_listener::{NewPeer, PeerListener};
+use peer_listener::PeerListener;
 use peers::Peer;
 use reqwest::Url;
 pub use resumability::DownloadParams;
@@ -31,36 +30,50 @@ use crate::{
     tracker::{DownloadStat, Tracker},
 };
 
+/// Basic bitfield implementation
 mod bitfield;
+/// Event loop of the download
 mod download;
+/// Torrent file parsing
 mod file;
+/// Magnet link parsing
+mod magnet;
+/// Tcp listener that accepts incoming peers
 mod peer_listener;
+/// Peer connection task
 mod peers;
+/// Strategies for picking next downloaded piece
 mod piece_picker;
+/// BitTorrent protocol types / implementations
 mod protocol;
+/// Data used for download resume
 mod resumability;
+/// State machine that assigns blocks, chokes peers, etc.
 mod scheduler;
-#[allow(unused)]
 mod seeder;
+/// Block saving, files revalidation
 mod storage;
+/// Http / Udp tracker implementations
 mod tracker;
 mod utils;
 
 pub use bitfield::BitField;
+pub use download::peer::Status;
+pub use download::progress_consumer::DownloadProgress;
+pub use download::progress_consumer::FullState;
+pub use download::progress_consumer::FullStateFile;
+pub use download::progress_consumer::FullStatePeer;
+pub use download::progress_consumer::FullStateTracker;
+pub use download::progress_consumer::PeerDownloadStats;
+pub use download::progress_consumer::PeerStateChange;
+pub use download::progress_consumer::ProgressConsumer;
+pub use download::progress_consumer::StateChange;
 pub use download::DownloadError;
 pub use download::DownloadHandle;
 pub use download::DownloadMessage;
 pub use download::DownloadState;
-pub use download::FullState;
-pub use download::FullStateFile;
-pub use download::FullStatePeer;
-pub use download::FullStateTracker;
-pub use download::PeerDownloadStats;
-pub use download::PeerStateChange;
-pub use download::StateChange;
-pub use download::Status;
-pub use file::MagnetLink;
 pub use file::TorrentFile;
+pub use magnet::MagnetLink;
 pub use piece_picker::Priority;
 pub use piece_picker::ScheduleStrategy;
 pub use protocol::Info;
@@ -74,6 +87,7 @@ pub(crate) const CLIENT_NAME: &str = "SkibidiTorrent";
 #[derive(Debug)]
 pub struct ClientConfig {
     pub port: u16,
+    pub external_ip: Option<SocketAddrV4>,
     pub udp_listener_port: u16,
     pub cancellation_token: Option<CancellationToken>,
     pub upnp_nat_traversal_enabled: bool,
@@ -83,6 +97,7 @@ impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             port: tracker::PORT,
+            external_ip: None,
             udp_listener_port: 7897,
             cancellation_token: Some(CancellationToken::new()),
             upnp_nat_traversal_enabled: true,

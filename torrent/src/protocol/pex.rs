@@ -382,11 +382,13 @@ impl Extension<'_> for PexMessage {
 }
 
 #[derive(Debug)]
+#[allow(unused)]
 pub struct PexPeers {
     /// Map from suggested ip to peers that suggested it.
     pub peer_map: BTreeMap<SocketAddr, BTreeSet<IpAddr>>,
 }
 
+#[allow(unused)]
 impl PexPeers {
     pub fn add_peer(&mut self, from: SocketAddr, peer: SocketAddr) {
         let entry = self.peer_map.entry(peer);

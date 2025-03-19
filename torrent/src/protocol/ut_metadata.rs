@@ -7,6 +7,7 @@ use super::{
     Info,
 };
 
+/// Representation of full / partial ut_metadata.
 #[derive(Debug, Clone)]
 pub struct UtMetadata {
     pub size: usize,
@@ -15,10 +16,59 @@ pub struct UtMetadata {
     pub downloaded: usize,
 }
 
+/// The extension messages are bencoded. There are 3 different kinds of messages:
+/// 0 - request
+/// 1 - data
+/// 2 - reject
+///
+/// The bencoded messages have a key "msg_type" which value is an integer corresponding to the type of message.
+/// They also have a key "piece", which indicates which part of the metadata this message refers to.
 #[derive(Debug, Clone, Copy)]
 pub enum UtMessage {
+    /// # Request message
+    ///
+    /// The request message does not have any additional keys in the dictionary.
+    /// The response to this message, from a peer supporting the extension,
+    /// is either a reject or a data message. The response MUST have the same piece as the request did.
+    ///
+    /// A peer MUST verify that any piece it sends passes the info-hash verification.
+    /// i.e. until the peer has the entire metadata, it cannot run SHA-1 to verify that it yields the same hash as the info-hash.
+    /// Peers that do not have the entire metadata MUST respond with a reject message to any metadata request.
+    ///
+    /// ### Example of the request of the first metadata piece:
+    ///
+    /// ```text
+    /// {'msg_type': 0, 'piece': 0}
+    /// d8:msg_typei0e5:piecei0ee
+    /// ```
     Request { piece: usize },
+    /// # Data message
+    ///
+    /// The data message adds another entry to the dictionary, "total_size".
+    /// This key has the same semantics as the "metadata_size" in the extension header. This is an integer.
+    /// The metadata piece is appended to the bencoded dictionary, it is not a part of the dictionary,
+    /// but it is a part of the message (the length prefix MUST include it).
+    /// If the piece is the last piece of the metadata, it may be less than 16kiB.
+    /// If it is not the last piece of the metadata, it MUST be 16kiB.
+    ///
+    /// ### Example:
+    ///
+    /// ```text
+    /// {'msg_type': 1, 'piece': 0, 'total_size': 3425}
+    /// d8:msg_typei1e5:piecei0e10:total_sizei34256eexxxxxxxx...
+    /// ```
+    /// The x represents binary data (the metadata).
     Data { piece: usize, total_size: usize },
+    /// The reject message does not have any additional keys in its message.
+    /// It SHOULD be interpreted as the peer does not have the piece of metadata that was requested.
+    /// Clients MAY implement flood protection by rejecting request messages after a certain number of them have been served.
+    /// Typically the number of pieces of metadata times a factor.
+    ///
+    /// ### Example:
+    /// ```text
+    /// {'msg_type': 2, 'piece': 0}
+    /// d8:msg_typei1e5:piecei0ee
+    /// ```
     Reject { piece: usize },
 }
 

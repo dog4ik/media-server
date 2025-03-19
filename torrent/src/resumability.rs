@@ -4,6 +4,7 @@ use reqwest::Url;
 
 use crate::{bitfield::BitField, Info};
 
+/// All necessary data that is needed to save/resume torrent downloads
 #[derive(Debug, Clone)]
 pub struct DownloadParams {
     pub bitfield: BitField,

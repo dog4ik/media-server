@@ -10,7 +10,11 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::{
-    download::{self, ActivePeer, Block, BlockPosition, DataBlock, Performance},
+    download::{
+        self,
+        peer::{ActivePeer, Performance},
+        Block, BlockPosition, DataBlock,
+    },
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{peer::PeerMessage, ut_metadata::UtMetadata, Info, OutputFile},
     utils, DownloadState,

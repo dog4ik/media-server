@@ -11,11 +11,23 @@ use sha1::{Digest, Sha1};
 pub mod dht;
 pub mod extension;
 pub mod peer;
-#[allow(unused)]
+/// Peer Exchange (PEX) BEP 11
+///
+/// Peer Exchange (PEX) provides an alternative peer discovery mechanism for swarms once peers have bootstrapped via other mechanisms such as DHT or Tracker announces.
+/// It provides a more up-to-date view of the swarm than most other sources and also reduces the need to query other sources frequently.
 pub mod pex;
 pub mod tracker;
+/// Extension for Peers to Send Metadata Files BEP 9
+///
+/// The purpose of this extension is to allow clients to
+/// join a swarm and complete a download without the need of downloading a .torrent file first.
+/// This extension instead allows clients to download the metadata from peers.
+///
+/// It makes it possible to support magnet links,
+/// a link on a web page only containing enough information to join the swarm (the info hash).
 pub mod ut_metadata;
 
+/// Represestation of the single file when [SizeDescriptor] variant is Files
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct File {
     pub length: u64,
@@ -74,6 +86,8 @@ impl OutputFile {
     }
 }
 
+/// Info dictionary is a unique descriptor of the particular torrent.
+/// Sha1 hash of the info directory is a unique identifier for the torrent.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Info {
     #[serde(skip)]
@@ -177,6 +191,7 @@ impl Info {
     }
 }
 
+/// List of piece hashes
 #[derive(Debug, Clone)]
 pub struct Hashes(pub Vec<[u8; 20]>);
 

@@ -74,7 +74,6 @@ impl Seeder {
     }
 
     pub fn handle_retrieve_error(&mut self, piece_i: usize) {
-        let index = piece_i as u32;
         self.pending_retrieves.remove(&piece_i);
     }
 

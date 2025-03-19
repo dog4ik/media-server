@@ -8,6 +8,7 @@ impl BitField {
         Self(data.to_vec())
     }
 
+    /// Check if the bitfield contains piece
     pub fn has(&self, piece: usize) -> bool {
         let bytes = &self.0;
         let Some(block) = bytes.get(piece / 8) else {
@@ -18,6 +19,9 @@ impl BitField {
         block & 1u8.rotate_right(position + 1) != 0
     }
 
+    /// Insert piece to the bitfield
+    ///
+    /// returns Error when piece is out of bounds
     pub fn add(&mut self, piece: usize) -> anyhow::Result<()> {
         let bytes = &mut self.0;
         let Some(block) = bytes.get_mut(piece / 8) else {
@@ -29,6 +33,7 @@ impl BitField {
         Ok(())
     }
 
+    /// Iterator over all 'slots' of the bitfield
     pub fn all_pieces(&self, total_pieces: usize) -> impl IntoIterator<Item = bool> + '_ {
         self.0.iter().enumerate().flat_map(move |(i, byte)| {
             (0..8).filter_map(move |position| {
@@ -59,6 +64,9 @@ impl BitField {
         pieces as usize == max_pieces
     }
 
+    /// Remove piece from the bitfield.
+    ///
+    /// returns Error when piece is out of bounds
     pub fn remove(&mut self, piece: usize) -> anyhow::Result<()> {
         let bytes = &mut self.0;
         let Some(block) = bytes.get_mut(piece / 8) else {
@@ -70,6 +78,7 @@ impl BitField {
         Ok(())
     }
 
+    /// Iterator over indices of all pieces in the bitfield
     pub fn pieces(&self) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(|(i, byte)| {
             (0..8).filter_map(move |position| {
@@ -80,6 +89,9 @@ impl BitField {
         })
     }
 
+    /// Remove piece from the bitfield.
+    ///
+    /// Returns Error when piece is out of bounds
     pub fn missing_pieces(&self, total_pieces: usize) -> impl Iterator<Item = usize> + '_ {
         self.0.iter().enumerate().flat_map(move |(i, byte)| {
             (0..8).filter_map(move |position| {
@@ -93,6 +105,7 @@ impl BitField {
         })
     }
 
+    /// Create new empty bitfield
     pub fn empty(pieces_amount: usize) -> Self {
         Self(vec![0; std::cmp::max(pieces_amount.div_ceil(8), 1)])
     }

@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 use crate::utils;
 
+/// Hash validation worker handle
 #[derive(Debug)]
 pub struct Worker {
     sender: mpsc::Sender<Payload>,
@@ -28,6 +29,9 @@ impl Worker {
     }
 }
 
+/// Hash validation worker group
+///
+/// Its purpose is to distribute hash validation requests between `n` workers
 #[derive(Debug)]
 pub struct Hasher {
     workers: Vec<Worker>,

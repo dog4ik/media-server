@@ -125,10 +125,21 @@ fn urlencode(t: &[u8; 20]) -> String {
 
 #[derive(Serialize, Debug, Clone)]
 struct HttpAnnounceUrlParams {
+    /// A string of length 20 which this downloader uses as its id.
+    /// Each downloader generates its own id at random at the start of a new download.
+    /// This value will also almost certainly have to be escaped.
     peer_id: String,
+    /// The port number this peer is listening on.
+    /// Common behavior is for a downloader to try to listen on port 6881
+    /// and if that port is taken try 6882, then 6883, etc. and give up after 6889.
     port: u16,
+    /// The total amount uploaded so far, encoded in base ten ascii.
     uploaded: u64,
+    /// The total amount downloaded so far, encoded in base ten ascii.
     downloaded: u64,
+    /// The number of bytes this peer still has to download, encoded in base ten ascii.
+    /// Note that this can't be computed from downloaded and the file length since it might be a resume,
+    /// and there's a chance that some of the downloaded data failed an integrity check and had to be re-downloaded.
     left: u64,
 }
 
@@ -145,7 +156,7 @@ impl HttpAnnounceUrlParams {
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
-pub struct HttpAnnounceFullPeer {
+struct HttpAnnounceFullPeer {
     #[serde(rename = "peer id")]
     peer_id: bytes::Bytes,
     ip: String,
@@ -154,7 +165,7 @@ pub struct HttpAnnounceFullPeer {
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum HttpPeerList {
+enum HttpPeerList {
     Full(Vec<HttpAnnounceFullPeer>),
     Compact(bytes::Bytes),
 }
@@ -332,6 +343,8 @@ pub struct Tracker {
     pub commands: mpsc::Receiver<TrackerCommand>,
     pub rensponse_tx: mpsc::Sender<TrackerResponse>,
     pub announce_payload: AnnouncePayload,
+    // TODO: Trackers should accept the connection ID until two minutes after it has been send.
+    // Cache it for 2 minutes and revalidate when necessary
     pub udp_connection_id: Option<u64>,
     pub status: TrackerStatus,
 }
@@ -558,8 +571,8 @@ impl DownloadTracker {
     }
 }
 
-#[derive(Debug)]
 /// Entity that owns udp socket and handles all udp tracker messages
+#[derive(Debug)]
 pub struct UdpTrackerWorker {
     socket: UdpSocket,
 }
