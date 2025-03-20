@@ -12,12 +12,12 @@ use std::{
 use anyhow::Context;
 use axum::{
     body::Body,
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::IntoResponse,
 };
-use axum_extra::{headers::Range, TypedHeader};
+use axum_extra::{TypedHeader, headers::Range};
 use identification::{walk_movie_dirs, walk_show_dirs};
-use serde::{de::Visitor, ser::SerializeStruct, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeStruct};
 use tokio::{
     io::{AsyncReadExt, AsyncSeekExt},
     sync::OnceCell,
@@ -27,8 +27,8 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
-    ffmpeg_abi::get_metadata,
     ffmpeg_abi::ProbeOutput,
+    ffmpeg_abi::get_metadata,
     utils,
 };
 
@@ -385,7 +385,7 @@ impl Library {
             .map(|x| &mut x.source.video)
     }
 
-    pub fn episodes(&self) -> impl Iterator<Item = LibraryItem<ShowIdentifier>> + '_ {
+    pub fn episodes(&self) -> impl Iterator<Item = LibraryItem<ShowIdentifier>> + use<'_> {
         self.videos.values().filter_map(|v| match &v.identifier {
             ContentIdentifier::Show(i) => Some(LibraryItem {
                 identifier: i.clone(),
@@ -395,7 +395,7 @@ impl Library {
         })
     }
 
-    pub fn movies(&self) -> impl Iterator<Item = LibraryItem<MovieIdentifier>> + '_ {
+    pub fn movies(&self) -> impl Iterator<Item = LibraryItem<MovieIdentifier>> + use<'_> {
         self.videos.values().filter_map(|v| match &v.identifier {
             ContentIdentifier::Movie(i) => Some(LibraryItem {
                 identifier: i.clone(),
@@ -568,7 +568,7 @@ impl Video {
         tokio::fs::remove_file(&self.path).await
     }
 
-    pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse {
+    pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse + use<> {
         let file_size = self.file_size();
         let range = range.map(|h| h.0).unwrap_or(Range::bytes(0..).unwrap());
         let (start, end) = range
@@ -1068,8 +1068,8 @@ impl utoipa::ToSchema for Resolution {
 }
 impl utoipa::PartialSchema for Resolution {
     fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
-        use utoipa::openapi::schema::SchemaType;
         use utoipa::openapi::Type;
+        use utoipa::openapi::schema::SchemaType;
         utoipa::openapi::ObjectBuilder::new()
             .property(
                 "width",
@@ -1091,11 +1091,11 @@ impl Resolution {
     }
 
     pub fn width(&self) -> usize {
-        self.0 .0
+        self.0.0
     }
 
     pub fn height(&self) -> usize {
-        self.0 .1
+        self.0.1
     }
 }
 

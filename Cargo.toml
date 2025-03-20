@@ -4,7 +4,7 @@ members = [".", "torrent", "upnp"]
 [package]
 name = "media-server"
 version = "0.4.5"
-edition = "2021"
+edition = "2024"
 
 [features]
 windows-tray = ["dep:tray-icon", "dep:open", "dep:image", "dep:winit"]

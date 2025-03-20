@@ -34,7 +34,7 @@ impl BitField {
     }
 
     /// Iterator over all 'slots' of the bitfield
-    pub fn all_pieces(&self, total_pieces: usize) -> impl IntoIterator<Item = bool> + '_ {
+    pub fn all_pieces(&self, total_pieces: usize) -> impl IntoIterator<Item = bool> + use<'_> {
         self.0.iter().enumerate().flat_map(move |(i, byte)| {
             (0..8).filter_map(move |position| {
                 let piece_i = i * 8 + (position as usize);
@@ -79,7 +79,7 @@ impl BitField {
     }
 
     /// Iterator over indices of all pieces in the bitfield
-    pub fn pieces(&self) -> impl Iterator<Item = usize> + '_ {
+    pub fn pieces(&self) -> impl Iterator<Item = usize> + use<'_> {
         self.0.iter().enumerate().flat_map(|(i, byte)| {
             (0..8).filter_map(move |position| {
                 let piece_i = i * 8 + (position as usize);
@@ -92,7 +92,7 @@ impl BitField {
     /// Remove piece from the bitfield.
     ///
     /// Returns Error when piece is out of bounds
-    pub fn missing_pieces(&self, total_pieces: usize) -> impl Iterator<Item = usize> + '_ {
+    pub fn missing_pieces(&self, total_pieces: usize) -> impl Iterator<Item = usize> + use<'_> {
         self.0.iter().enumerate().flat_map(move |(i, byte)| {
             (0..8).filter_map(move |position| {
                 let piece_i = i * 8 + (position as usize);

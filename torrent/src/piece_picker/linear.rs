@@ -79,7 +79,7 @@ impl Linear {
         self.pieces.len()
     }
 
-    pub fn queue(&self) -> impl IntoIterator<Item = usize> + '_ {
+    pub fn queue(&self) -> impl IntoIterator<Item = usize> + use<'_> {
         self.pieces.iter().rev().map(|p| p.index)
     }
 

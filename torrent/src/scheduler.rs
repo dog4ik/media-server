@@ -174,7 +174,7 @@ impl PendingPiece {
         &mut self,
         take: usize,
         peer_id: Uuid,
-    ) -> impl IntoIterator<Item = (BlockPosition, &mut PendingBlock)> + '_ {
+    ) -> impl IntoIterator<Item = (BlockPosition, &mut PendingBlock)> + use<'_> {
         let p_length = self.piece_length;
         let amount = self.piece.len();
         self.piece
