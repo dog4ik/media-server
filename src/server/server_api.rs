@@ -91,6 +91,9 @@ pub struct DetailedVariant {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedAudioTrack {
     pub is_default: bool,
+    pub is_dub: bool,
+    pub is_visual_impaired: bool,
+    pub is_hearing_impaired: bool,
     pub sample_rate: String,
     pub channels: u16,
     pub profile_idc: i32,
@@ -100,6 +103,8 @@ pub struct DetailedAudioTrack {
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedSubtitleTrack {
     pub is_default: bool,
+    pub is_visual_impaired: bool,
+    pub is_hearing_impaired: bool,
     pub language: Option<String>,
     pub codec: SubtitlesCodec,
 }
@@ -243,6 +248,9 @@ impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
     fn from(val: FFprobeAudioStream<'_>) -> Self {
         DetailedAudioTrack {
             is_default: val.disposition.default == 1,
+            is_hearing_impaired: false,
+            is_visual_impaired: false,
+            is_dub: false,
             sample_rate: val.sample_rate.to_string(),
             channels: val.channels as u16,
             profile_idc: val.profile.unwrap().parse().unwrap(),
@@ -255,6 +263,9 @@ impl From<&Track<Audio>> for DetailedAudioTrack {
     fn from(val: &Track<Audio>) -> Self {
         DetailedAudioTrack {
             is_default: val.is_default(),
+            is_hearing_impaired: val.stream.is_hearing_impaired,
+            is_visual_impaired: val.stream.is_visual_impaired,
+            is_dub: val.stream.is_dub,
             sample_rate: val.stream.sample_rate.to_string(),
             channels: val.stream.channels,
             profile_idc: val.stream.profile_idc,
@@ -267,6 +278,8 @@ impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
     fn from(val: FFprobeSubtitleStream<'_>) -> Self {
         DetailedSubtitleTrack {
             is_default: val.is_default(),
+            is_hearing_impaired: false,
+            is_visual_impaired: false,
             language: val.language.map(|x| x.to_string()),
             codec: val.codec(),
         }
@@ -277,6 +290,8 @@ impl From<&Track<Subtitle>> for DetailedSubtitleTrack {
     fn from(val: &Track<Subtitle>) -> Self {
         DetailedSubtitleTrack {
             is_default: val.is_default(),
+            is_hearing_impaired: val.stream.is_hearing_impaired,
+            is_visual_impaired: val.stream.is_visual_impaired,
             language: val.stream.language.clone(),
             codec: val.stream.codec.clone(),
         }

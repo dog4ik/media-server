@@ -141,12 +141,21 @@ pub struct Audio {
     pub sample_rate: u32,
     pub profile_idc: i32,
     pub bit_rate: usize,
+    pub is_dub: bool,
+    pub is_hearing_impaired: bool,
+    pub is_visual_impaired: bool,
 }
 
 impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
     type Error = anyhow::Error;
 
     fn try_from(stream: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
+        let disposition = stream.disposition();
+        let is_dub = (disposition & Disposition::DUB) == Disposition::DUB;
+        let is_hearing_impaired =
+            (disposition & Disposition::HEARING_IMPAIRED) == Disposition::HEARING_IMPAIRED;
+        let is_visual_impaired =
+            (disposition & Disposition::VISUAL_IMPAIRED) == Disposition::VISUAL_IMPAIRED;
         let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
         let audio = codec.decoder().audio()?;
         let mut profile = unsafe {
@@ -183,6 +192,9 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             profile_idc: profile,
             bit_rate,
             sample_rate,
+            is_dub,
+            is_hearing_impaired,
+            is_visual_impaired,
         })
     }
 }
@@ -202,12 +214,21 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Data {
 pub struct Subtitle {
     pub codec: SubtitlesCodec,
     pub language: Option<String>,
+    pub is_forced: bool,
+    pub is_hearing_impaired: bool,
+    pub is_visual_impaired: bool,
 }
 
 impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
     type Error = anyhow::Error;
 
     fn try_from(stream: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
+        let disposition = stream.disposition();
+        let is_forced = (disposition & Disposition::FORCED) == Disposition::FORCED;
+        let is_hearing_impaired =
+            (disposition & Disposition::HEARING_IMPAIRED) == Disposition::HEARING_IMPAIRED;
+        let is_visual_impaired =
+            (disposition & Disposition::VISUAL_IMPAIRED) == Disposition::VISUAL_IMPAIRED;
         let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
         let subtitle = codec.decoder().subtitle()?;
         let mut language = None;
@@ -233,7 +254,13 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
             }
         };
 
-        Ok(Self { codec, language })
+        Ok(Self {
+            codec,
+            language,
+            is_forced,
+            is_hearing_impaired,
+            is_visual_impaired,
+        })
     }
 }
 
