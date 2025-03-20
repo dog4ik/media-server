@@ -26,6 +26,7 @@ use crate::{
     },
     scheduler::{PendingFiles, Scheduler},
     seeder::Seeder,
+    session::SessionContext,
     storage::{StorageError, StorageFeedback, StorageHandle, StorageResult},
     tracker::{DownloadStat, DownloadTracker},
     DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker, PeerDownloadStats,
@@ -303,7 +304,6 @@ impl Display for DownloadState {
     }
 }
 
-const MAX_PEER_CONNECTIONS: usize = 75;
 /// Keep it not super low to prevent event loop congestion
 const DEFAULT_TICK_DURATION: Duration = Duration::from_millis(500);
 const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
@@ -318,6 +318,7 @@ const PEX_HISTORY_CLEANUP_THRESHOLD: usize = 500;
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
 pub struct Download {
+    session: std::sync::Arc<SessionContext>,
     info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     storage_rx: mpsc::Receiver<Result<StorageFeedback, StorageError>>,
@@ -342,6 +343,7 @@ pub struct Download {
 
 impl Download {
     pub fn new(
+        session: std::sync::Arc<SessionContext>,
         storage_feedback: mpsc::Receiver<StorageResult<StorageFeedback>>,
         storage: StorageHandle,
         download_params: DownloadParams,
@@ -369,6 +371,7 @@ impl Download {
         let peer_storage = PeerStorage::new(client_external_ip);
 
         Self {
+            session,
             new_peers,
             peer_connector: PeerConnector::default(),
             trackers,
@@ -402,7 +405,13 @@ impl Download {
             download_tx,
             cancellation_token: self.cancellation_token.clone(),
         };
-        task_tracker.spawn(self.work(progress, download_rx));
+        let ctx = self.session.clone();
+        task_tracker.spawn(async move {
+            if let Err(e) = self.work(progress, download_rx).await {
+                tracing::error!("Torrent download quit with error: {e}");
+            };
+            ctx.remove_torrent();
+        });
         download_handle
     }
 
@@ -520,7 +529,11 @@ impl Download {
             .filter_map(|a| {
                 (!self.scheduler.peers.iter().any(|p| p.ip == a.addr)).then_some(a.addr)
             })
-            .take(MAX_PEER_CONNECTIONS - self.scheduler.peers.len())
+            .take(
+                self.session
+                    .max_connections_per_torrent()
+                    .saturating_sub(self.scheduler.peers.len()),
+            )
         {
             self.peer_connector.connect(addr, info_hash);
         }
@@ -694,6 +707,7 @@ impl Download {
     }
 
     fn handle_tracker_updates(&mut self, loop_start: Instant) {
+        let max_connections = self.session.max_connections_per_torrent();
         for tracker in &mut self.trackers {
             if loop_start.duration_since(tracker.last_announced_at) > tracker.announce_interval {
                 self.changes
@@ -702,7 +716,7 @@ impl Download {
             }
 
             for ip in tracker.handle_messages() {
-                if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
+                if self.scheduler.peers.len() >= max_connections {
                     self.peer_storage.add(ip);
                     continue;
                 }
@@ -746,7 +760,7 @@ impl Download {
                 self.peer_storage.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
             };
         }
-        if self.scheduler.peers.len() >= MAX_PEER_CONNECTIONS {
+        if self.scheduler.peers.len() >= self.session.max_connections_per_torrent() {
             return;
         }
         let total_pieces = self.scheduler.piece_table.len();
@@ -797,6 +811,7 @@ impl Download {
             ip: active_peer.ip,
             change: PeerStateChange::Connect,
         });
+        self.session.add_peer();
         self.scheduler.add_peer(active_peer);
     }
 
@@ -804,6 +819,7 @@ impl Download {
         &mut self,
         join_res: Result<(Uuid, Result<(), PeerError>), tokio::task::JoinError>,
     ) {
+        self.session.remove_peer();
         if let Ok((uuid, Err(peer_err))) = &join_res {
             tracing::trace!(
                 "Peer with id: {} joined with error: {:?} {}",
@@ -829,8 +845,6 @@ impl Download {
                 panic!("Peer task panicked: {e}");
             }
         };
-
-        debug_assert!(self.scheduler.peers.len() < MAX_PEER_CONNECTIONS);
 
         if let Some(ip) = self.peer_storage.pop() {
             if !self.scheduler.peers.iter().any(|p| p.ip == ip) {

@@ -117,6 +117,7 @@ pub struct Peer {
     pub bitfield: BitField,
     pub handshake: HandShake,
     pub extension_handshake: Option<ExtensionHandshake>,
+    /// Amount of outstanding block requests to the peer
     pub in_flight: usize,
 }
 
@@ -371,7 +372,7 @@ impl Peer {
                 Ok(command_msg) = ipc.message_rx.recv_async() => {
                     if matches!(command_msg, PeerMessage::Request { .. }) {
                         if self.in_flight >= queue_size {
-                            tracing::warn!(len = %messages_buffer.len(), "Pushing into message buffer to respect peer's reqq");
+                            tracing::warn!(len = %messages_buffer.len(), reqq = queue_size, "Pushing into message buffer to respect peer's reqq");
                             messages_buffer.push(command_msg);
                             continue;
                         }
@@ -419,10 +420,11 @@ impl Peer {
 
     pub async fn send_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
         let msg_description = peer_msg.to_string();
+        let is_block = matches!(peer_msg, PeerMessage::Request { .. });
         let socket = self.stream.get_mut();
         match tokio::time::timeout(Duration::from_secs(2), peer_msg.write_to(socket)).await {
             Ok(Ok(_)) => {
-                self.in_flight += 1;
+                self.in_flight += is_block as usize;
                 Ok(())
             }
             Err(_) => {

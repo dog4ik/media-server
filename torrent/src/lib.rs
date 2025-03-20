@@ -15,6 +15,7 @@ use peer_listener::PeerListener;
 use peers::Peer;
 use reqwest::Url;
 pub use resumability::DownloadParams;
+use session::SessionContext;
 use storage::{parts::PartsFile, TorrentStorage};
 use tokio::{
     net::TcpStream,
@@ -51,6 +52,8 @@ mod resumability;
 /// State machine that assigns blocks, chokes peers, etc.
 mod scheduler;
 mod seeder;
+/// Client session
+mod session;
 /// Block saving, files revalidation
 mod storage;
 /// Http / Udp tracker implementations
@@ -83,6 +86,7 @@ pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
 
 pub(crate) const CLIENT_NAME: &str = "SkibidiTorrent";
+pub(crate) const MAX_PEER_CONNECTIONS: usize = 600;
 
 #[derive(Debug)]
 pub struct ClientConfig {
@@ -91,6 +95,7 @@ pub struct ClientConfig {
     pub udp_listener_port: u16,
     pub cancellation_token: Option<CancellationToken>,
     pub upnp_nat_traversal_enabled: bool,
+    pub max_peer_connections: usize,
 }
 
 impl Default for ClientConfig {
@@ -101,6 +106,7 @@ impl Default for ClientConfig {
             udp_listener_port: 7897,
             cancellation_token: Some(CancellationToken::new()),
             upnp_nat_traversal_enabled: true,
+            max_peer_connections: MAX_PEER_CONNECTIONS,
         }
     }
 }
@@ -113,6 +119,7 @@ pub struct Client {
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
     config: ClientConfig,
+    session_context: Arc<SessionContext>,
 }
 
 impl Client {
@@ -146,6 +153,7 @@ impl Client {
             udp_tracker_tx: udp_tracker_channel,
             cancellation_token,
             task_tracker,
+            session_context: Arc::new(SessionContext::new(config.max_peer_connections)),
             config,
         })
     }
@@ -185,6 +193,7 @@ impl Client {
         let storage_handle = storage.spawn(&self.task_tracker).await?;
 
         let download = Download::new(
+            self.session_context.clone(),
             feedback_rx,
             storage_handle,
             params,
@@ -194,6 +203,7 @@ impl Client {
             self.ip
                 .map(|ip| std::net::SocketAddr::V4(SocketAddrV4::new(ip, self.config.port))),
         );
+        self.session_context.add_torrent();
         let download_handle = download.start(progress_consumer, &self.task_tracker);
         Ok(download_handle)
     }
