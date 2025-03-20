@@ -123,7 +123,7 @@ where
     type Error = anyhow::Error;
 
     fn try_from(stream: ffmpeg_next::Stream<'s>) -> Result<Self, Self::Error> {
-        let is_default = stream.disposition() == Disposition::DEFAULT;
+        let is_default = (stream.disposition() & Disposition::DEFAULT) == Disposition::DEFAULT;
         let index = stream.index();
         let stream = T::try_from(stream)?;
         Ok(Self {
