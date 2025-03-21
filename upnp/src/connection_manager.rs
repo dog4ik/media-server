@@ -432,14 +432,14 @@ impl SVariable for ConnectionStatus {
         "UnreliableChannel",
         "Unknown",
     ]);
-    const VAR_NAME: &str = "ConnectionStatus";
+    const VAR_NAME: &str = "A_ARG_TYPE_ConnectionStatus";
 }
 
 #[derive(Default, Debug)]
 struct ConnectionManager;
 impl SVariable for ConnectionManager {
     type VarType = String;
-    const VAR_NAME: &str = "ConnectionManager";
+    const VAR_NAME: &str = "A_ARG_TYPE_ConnectionManager";
 }
 
 #[derive(Debug)]
@@ -476,54 +476,54 @@ impl IntoXml for Direction {
 
 impl SVariable for Direction {
     type VarType = Self;
-    const VAR_NAME: &str = "Direction";
+    const VAR_NAME: &str = "A_ARG_TYPE_Direction";
 }
 
 #[derive(Default, Debug)]
 struct ProtocolInfo;
 impl SVariable for ProtocolInfo {
     type VarType = String;
-    const VAR_NAME: &str = "ProtocolInfo";
+    const VAR_NAME: &str = "A_ARG_TYPE_ProtocolInfo";
 }
 
 #[derive(Default, Debug)]
 struct ConnectionID;
 impl SVariable for ConnectionID {
     type VarType = i32;
-    const VAR_NAME: &str = "ConnectionID";
+    const VAR_NAME: &str = "A_ARG_TYPE_ConnectionID";
 }
 
 #[derive(Default, Debug)]
 struct AVTransportID;
 impl SVariable for AVTransportID {
     type VarType = i32;
-    const VAR_NAME: &str = "AVTransportID";
+    const VAR_NAME: &str = "A_ARG_TYPE_AVTransportID";
 }
 
 #[derive(Default, Debug)]
 struct RcsID;
 impl SVariable for RcsID {
     type VarType = i32;
-    const VAR_NAME: &str = "RcsID";
+    const VAR_NAME: &str = "A_ARG_TYPE_RcsID";
 }
 
 #[derive(Default, Debug)]
 struct ItemInfoFilter;
 impl SVariable for ItemInfoFilter {
     type VarType = String;
-    const VAR_NAME: &str = "ItemInfoFilter";
+    const VAR_NAME: &str = "A_ARG_TYPE_ItemInfoFilter";
 }
 
 #[derive(Default, Debug)]
 struct ArgResult;
 impl SVariable for ArgResult {
     type VarType = String;
-    const VAR_NAME: &str = "Result";
+    const VAR_NAME: &str = "A_ARG_TYPE_Result";
 }
 
 #[derive(Default, Debug)]
 struct RenderingInfoList;
 impl SVariable for RenderingInfoList {
     type VarType = String;
-    const VAR_NAME: &str = "RenderingInfoList";
+    const VAR_NAME: &str = "A_ARG_TYPE_RenderingInfoList";
 }
