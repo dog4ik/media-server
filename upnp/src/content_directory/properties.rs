@@ -131,6 +131,16 @@ macro_rules! impl_basic_property {
     };
 }
 
+/// The upnp:album property indicates the title of the album to which the content item belongs.
+#[derive(Debug, Clone)]
+pub struct Album(pub String);
+impl_basic_property!("upnp:album" for multivalue Album);
+
+/// The upnp:playlist property indicates the name of a playlist (the dc:title of a
+/// playlistItem) to which the content item belongs
+#[derive(Debug, Clone)]
+pub struct Playlist(pub String);
+impl_basic_property!("upnp:playlist" for multivalue Playlist);
 #[derive(Debug, Clone)]
 pub struct AlbumArtUri(pub String);
 impl_basic_property!("upnp:albumArtURI" for multivalue AlbumArtUri);
