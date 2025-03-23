@@ -1,20 +1,39 @@
 use std::str::FromStr;
 
 use crate::{
+    IntoXml,
     content_directory::UpnpDuration,
     device_description::Udn,
     service_client::{ActionCallError, ScpdClient, ScpdService},
     service_variables::{IntoUpnpValue, SVariable},
-    urn::{UrnType, URN},
-    IntoXml,
+    urn::{URN, UrnType},
 };
 
+/// This REQUIRED state variable forms the core of the AVTransport service. It defines the conceptually top-
+/// level state of the transport, for example, whether it is playing, recording, etc.
+///
+/// Device vendors do not need to implement all allowed values of this variable,
+/// for example, non-recordable media will not implement the "RECORDING" state.
+///
+/// Note that dubbing of media at various speeds is not supported in this version of the `AVTransport`, mainly
+/// because there are no standards for cross-device dubbing speeds.
+///
+/// Device vendors are allowed to implement additional vendor-defined transport states.
+///
+/// However, since the semantic meaning of these transport states is not specified,
+/// control points that find a `AVTransport` service in a transport state that they do not understand
+/// are encouraged to refrain from interacting with that `AVTransport` service (for example, forcing the service into the "STOPPED" state).
+/// Rather, they are encouraged to wait until the service transits back into a transport state that they understand.
 #[derive(Debug)]
 pub enum TransportState {
     Stopped,
     Playing,
     Transitioning,
+    /// The `PAUSED_PLAYBACK` state is different from the `PAUSED_RECORDING` state in the sense that in case the media contains
+    /// video, it indicates output of a still image.
     PausedPlayback,
+    /// The `PAUSED_RECORDING` state is different from the `STOPPED` state in the sense that the transport
+    /// is already prepared for recording and can respond faster or more accurate.
     PausedRecording,
     Recording,
     NoMediaPresent,
@@ -66,6 +85,20 @@ impl IntoXml for TransportState {
     }
 }
 
+/// This REQUIRED state variable is used to indicate if asynchronous errors have occurred, during operation
+/// of the AVTransport service, that cannot be returned by a normal action.
+///
+/// For example, some time after
+/// playback of a stream has been started (via SetAVTransportURI() and [ScpdClient::play] actions), there can be network
+/// congestion or server problems causing hiccups in the rendered media.
+///
+/// These types of situations can be signaled to control points by setting this state variable to value "ERROR_OCCURRED".
+///
+/// More specific error descriptions MAY also be used as vendor extensions. The value of TransportState after an error has
+/// occurred is implementation-dependent; some implementations MAY go to "STOPPED" while other
+/// implementations MAY be able to continue playing after an error.
+///
+/// The time at which this state variable returns to "OK" after an error situation is also implementation dependent.
 #[derive(Debug)]
 pub enum TransportStatus {
     Ok,
@@ -100,6 +133,8 @@ impl IntoXml for TransportStatus {
     }
 }
 
+/// This REQUIRED state variable indicates whether the current media is track-aware (both single and multi-
+/// track) or track-unaware (e.g. VHS-tape).
 #[derive(Debug)]
 pub enum CurrentMediaCategory {
     NoMedia,
@@ -137,6 +172,17 @@ impl IntoXml for CurrentMediaCategory {
     }
 }
 
+/// This REQUIRED state variable indicates the storage medium of the resource specified by [AVTransportURI].
+///
+/// If no resource is specified, then the state variable is set to [PlaybackStorageMedium::None]. If [AVTransportURI]
+/// refers to a resource received from the UPnP network, the state variable is set to [PlaybackStorageMedium::Network].
+///
+/// Device vendors MAY extend the specified allowed value list of this variable.
+///
+/// For example, various types of solid- state media formats can be added in a vendor-specific way.
+///
+/// Note that this variable is not intended for signal- or content-formats such as MPEG2. Such type of
+/// information is exposed by the ConnectionManager service associated with this service.
 #[derive(Debug)]
 pub enum PlaybackStorageMedium {
     /// Unknown medium
@@ -366,15 +412,32 @@ impl IntoXml for PlaybackStorageMedium {
     }
 }
 
+/// This REQUIRED state variable indicates the storage medium where the resource specified by
+/// AVTransportURI will be recorded when a Record action is issued.
+///
+/// If no resource is specified, then the state
+/// variable is set to "NONE". Device vendors MAY extend the allowed value list of this variable. For
+/// example, various types of solid-state media formats can be added in a vendor-specific way.
+///
+/// Note that this variable is not intended for signal- or content-formats such as MPEG2. Such type of
+/// information is exposed by the ConnectionManager service associated with this service. If the service
+/// implementation does not support recording, then this state variable MUST be set to
+/// "NOT_IMPLEMENTED".
+///
+/// The allowed values for this state variable are the same as the [PlaybackStorageMedium] state variable.
 #[derive(Debug)]
 pub struct RecordStorageMedium;
 
 impl SVariable for RecordStorageMedium {
-    type VarType = String;
+    type VarType = PlaybackStorageMedium;
 
     const VAR_NAME: &str = "RecordStorageMedium";
 }
 
+/// This REQUIRED state variable contains a static, comma-separated list of storage media that the device can
+/// play.
+///
+/// RECOMMENDED values are defined in the allowed value list for state variable
 #[derive(Debug)]
 pub struct PossiblePlaybackStorageMedia;
 
@@ -384,6 +447,13 @@ impl SVariable for PossiblePlaybackStorageMedia {
     const VAR_NAME: &str = "PossiblePlaybackStorageMedia";
 }
 
+/// This REQUIRED state variable contains a static, comma-separated list of storage media onto which the
+/// device can record.
+///
+/// RECOMMENDED values are defined in the allowed value list for state variable RecordStorageMedium.
+///
+/// If the service implementation does not support recording, then this state variable
+/// MUST be set to "NOT_IMPLEMENTED"
 #[derive(Debug)]
 pub struct PossibleRecordStorageMedia;
 
@@ -393,6 +463,10 @@ impl SVariable for PossibleRecordStorageMedia {
     const VAR_NAME: &str = "PossibleRecordStorageMedia";
 }
 
+/// This REQUIRED state variable indicates the current play mode (for example, random play, repeated play,
+/// etc.).
+///
+/// This notion is typical for CD-based audio media, but is generally not supported by tape-based media.
 #[derive(Debug)]
 pub enum CurrentPlayMode {
     Normal,
@@ -400,7 +474,9 @@ pub enum CurrentPlayMode {
     RepeatOne,
     RepeatAll,
     Random,
+    /// Value "DIRECT_1" indicates playing a single track and then stop (don’t play the next track).
     Direct1,
+    /// Value "INTRO" indicates playing a short sample (typically 10 seconds or so) of each track on the media.
     Intro,
 }
 
@@ -451,7 +527,12 @@ impl IntoXml for CurrentPlayMode {
 }
 
 /// A string representation of a rational fraction that indicates the speed
-/// relative to normal speed. Example values are “1”, “1/2”, “2”, “-1”, “1/10”, etc.
+/// relative to normal speed.
+///
+/// Example values are `1`, `1/2`, `2`, `-1`, `1/10`, etc.
+///
+/// Actually supported speeds can be retrieved from the `AllowedValueList` of this state variable in the AVTransport service description.
+/// Value "1" is REQUIRED, value "0" is not allowed. Negative values indicate reverse playback
 #[derive(Debug)]
 pub struct TransportPlaySpeed;
 
@@ -461,11 +542,15 @@ impl SVariable for TransportPlaySpeed {
     const VAR_NAME: &str = "TransportPlaySpeed";
 }
 
+/// This REQUIRED state variable reflects the write protection status of the currently loaded media
 #[derive(Debug)]
 pub enum RecordMediumWriteStatus {
     Writable,
+    /// indicates a writable media that is currently write-protected (for example, a protected VHS tape)
     Protected,
+    /// Indicates an inherent read-only media (for example, a DVD-ROM disc) or the device doesn’t support recording on the current media
     NotWritable,
+    /// If no media is loaded
     Unknown,
     NotImplemented,
 }
@@ -503,6 +588,18 @@ impl SVariable for RecordMediumWriteStatus {
     const VAR_NAME: &str = "RecordMediumWriteStatus";
 }
 
+/// This REQUIRED state variable indicates the currently set record quality mode.
+///
+/// Such a setting takes the form of "Quality Ordinal:label".
+///
+/// The Quality Ordinal indicates a particular relative quality level available
+/// in the device, from 0 (lowest quality) to n (highest quality).
+///
+/// The label associated with the ordinal provides a
+/// human-readable indication of the ordinal’s meaning.
+///
+/// If the service implementation does not support
+/// recording, then this state variable MUST be set to “NOT_IMPLEMENTED
 #[derive(Debug)]
 pub enum CurrentRecordQualityMode {
     Ep,
@@ -551,8 +648,18 @@ impl SVariable for CurrentRecordQualityMode {
     const VAR_NAME: &str = "CurrentRecordQualityMode";
 }
 
+/// This REQUIRED state variable contains a static, comma-separated list of recording quality modes that the
+/// device supports.
+///
+/// For example, for an analog VHS recorder the string would be “0:EP,1:LP,2:SP”, while for
+/// a PVR the string would be “0:BASIC,1:MEDIUM,2:HIGH”.
+/// The string specifics depend on the type of device containing the AVTransport.
+///
+/// Note that record quality modes are independent of the content-format that MAY be exposed to the network through a `ConnectionManager` service.
+///
+/// If the service implementation does not support recording, then this state variable MUST be set to "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct PossibleRecordQualityModes;
+pub struct PossibleRecordQualityModes;
 
 impl SVariable for PossibleRecordQualityModes {
     type VarType = String;
@@ -560,72 +667,171 @@ impl SVariable for PossibleRecordQualityModes {
     const VAR_NAME: &str = "PossibleRecordQualityModes";
 }
 
+/// This REQUIRED state variable contains the number of tracks controlled by the AVTransport instance.
+///
+/// If no resource is associated with the AVTransport instance (via SetAVTransportURI()), and there is no default
+/// resource (for example, a loaded disc) then NumberOfTracks MUST be 0.
+///
+/// Also, if the implementation is
+/// never able to determine the number of tracks in the currently selected media, NumberOfTracks MUST be
+/// set to 0. Otherwise, it MUST be 1 or higher.
+///
+/// In some cases, for example, large playlist, it can take a long
+/// time to determine the exact number of tracks. Until the exact number is determined, the value of the state
+/// variable is implementation dependent, for example, keeping it to 1 until determined or updating the value
+/// periodically. Note that in any case, the AVTransport service MUST generate a LastChange event with
+/// defined moderation period when the exposed value is updated.
+///
+/// For track-unaware media, this state variable will always be set to 1. For LD and DVD media, a track is
+/// defined as a chapter number. For Tuners that provide an indexed list of channels, a track is defined as an
+/// index number in such a list. This state variable has to be consistent with the resource identified by
+/// [AVTransportURI].
+///
+/// For example, if [AVTransportURI] points to a single MP3 file, then `NumberOfTracks`
+/// MUST be set to 1.
+/// However, if [AVTransportURI] points to a playlist file, then `NumberOfTracks` MUST be
+/// equal to the number of entries in the playlist.
 #[derive(Debug)]
-struct NumberOfTracks;
+pub struct NumberOfTracks;
 
 impl SVariable for NumberOfTracks {
     type VarType = u32;
     const VAR_NAME: &str = "NumberOfTracks";
 }
 
+/// Current track
+///
+/// If [NumberOfTracks] is 0, then `CurrentTrack` will be 0. Otherwise, this
+/// state variable contains the sequence number of the currently selected track, starting at value 1, up to and
+/// including [NumberOfTracks].
+///
+/// For track-unaware media, this state variable is always 1.
+///
+/// For LD and DVD media, the notion of track equals the notion of chapter number.
+///
+/// For Tuners that provide an indexed list of
+/// channels, the current track is defined as the current index number in such a list.
 #[derive(Debug)]
-struct CurrentTrack;
+pub struct CurrentTrack;
 
 impl SVariable for CurrentTrack {
     type VarType = u32;
     const VAR_NAME: &str = "CurrentTrack";
 }
 
+/// This REQUIRED state variable contains the duration of the current track
 #[derive(Debug)]
-struct CurrentTrackDuration;
+pub struct CurrentTrackDuration;
 
 impl SVariable for CurrentTrackDuration {
     type VarType = UpnpDuration;
     const VAR_NAME: &str = "CurrentTrackDuration";
 }
 
+/// Media duration
+///
+/// This REQUIRED state variable contains the duration of the media, as identified by state variable [AVTransportURI].
+///
+/// In case the [AVTransportURI] represents only 1 track, this state variable is equal to [CurrentTrackDuration]
+///
+/// If the service implementation does not support media duration
+/// information, then this state variable MUST be set to "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct CurrentMediaDuration;
+pub struct CurrentMediaDuration;
 
 impl SVariable for CurrentMediaDuration {
     type VarType = UpnpDuration;
     const VAR_NAME: &str = "CurrentMediaDuration";
 }
 
+/// This REQUIRED state variable contains the metadata, in the form of a DIDL-Lite XML Fragment (defined
+/// in the ContentDirectory service template), associated with the resource pointed to by state variable
+/// [CurrentTrackURI].
+///
+/// The metadata could have been extracted from state variable [AVTransportURIMetaData],
+/// or extracted from the resource binary itself (for example, embedded ID3 tags for MP3 audio).
+///
+/// This is implementation dependent.
+///
+/// If the service implementation does not support this feature, then this state variable MUST be set to "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct CurrentTrackMetaData;
+pub struct CurrentTrackMetaData;
 
 impl SVariable for CurrentTrackMetaData {
     type VarType = String;
     const VAR_NAME: &str = "CurrentTrackMetaData";
 }
 
+/// This REQUIRED state variable contains a reference, in the form of a URI, to the current track.
+///
+/// The URI can enable a control point to retrieve any meta-data associated with the current track, such as title and
+/// author information, via the [ContentDirectory service](crate::content_directory)
+/// [Browse()](crate::content_directory::ContentDirectoryService::browse)
+/// and/or `Search` action. In case the media
+/// does contain multi-track content, but there is no separate URI associated with each track,
+/// `CurrentTrackURI` MUST be set equal to [AVTransportURI].
 #[derive(Debug)]
-struct CurrentTrackURI;
+pub struct CurrentTrackURI;
 
 impl SVariable for CurrentTrackURI {
     type VarType = reqwest::Url;
     const VAR_NAME: &str = "CurrentTrackURI";
 }
 
+/// This REQUIRED state variable contains a reference, in the form of a URI, to the resource controlled by the
+/// AVTransport instance.
+///
+/// This URI can refer to a single item (for example, a song) or to a collection of items
+/// (for example, a playlist).
+///
+/// In the single item case, the `AVTransport` will have 1 track and [AVTransportURI] is
+/// equal to [CurrentTrackURI].
+///
+/// In the collection of items case, the `AVTransport` will have multiple tracks, and
+/// [AVTransportURI] will remain constant during track changes.
+///
+/// The URI enables a control point to retrieve
+/// any meta-data associated with the `AVTransport` instance, such as title and author information, via the
+/// [ContentDirectory service](crate::content_directory).
 #[derive(Debug)]
-struct AVTransportURI;
+pub struct AVTransportURI;
 
 impl SVariable for AVTransportURI {
     type VarType = reqwest::Url;
     const VAR_NAME: &str = "AVTransportURI";
 }
 
+/// This REQUIRED state variable contains the meta-data, in the form of a DIDL-Lite XML Fragment,
+/// associated with the resource pointed to by state variable [AVTransportURI].
+///
+/// See the [ContentDirectory service specification](https://upnp.org/specs/av/UPnP-av-ContentDirectory-v4-Service.pdf)
+/// for details.
+///
+/// If the service implementation
+/// does not support this feature, then this state variable MUST be set to "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct AVTransportURIMetaData;
+pub struct AVTransportURIMetaData;
 
 impl SVariable for AVTransportURIMetaData {
     type VarType = String;
     const VAR_NAME: &str = "AVTransportURIMetaData";
 }
 
+/// his REQUIRED state variable contains the [AVTransportURI] value to be played when the playback of the
+/// current [AVTransportURI] finishes.
+///
+/// Setting this variable ahead of time (via action `SetNextAVTransportURI()`) enables a device
+/// to provide seamless transitions between resources for certain
+/// data transfer protocols that need buffering (for example, HTTP).
+///
+/// If the service implementation does not
+/// support this feature, then this state variable MUST be set to "NOT_IMPLEMENTED".
+///
+/// Do not confuse transitions between [AVTransportURI] and `NextAVTransportURI` with track transitions.
+/// When [AVTransportURI] is set to a playlist, `NextAVTransportURI` will be played when the whole playlist
+/// finishes, not when the current playlist entry ([CurrentTrackURI]) finishes.
 #[derive(Debug)]
-struct NextAVTransportURI;
+pub struct NextAVTransportURI;
 
 impl SVariable for NextAVTransportURI {
     // TODO: Handle NOT_IMPLEMENTED value
@@ -633,16 +839,44 @@ impl SVariable for NextAVTransportURI {
     const VAR_NAME: &str = "NextAVTransportURI";
 }
 
+/// This REQUIRED state variable contains the meta-data, in the form of a DIDL-Lite XML Fragment,
+/// associated with the resource pointed to by state variable [NextAVTransportURI].
+///
+/// See the [ContentDirectory service specification](https://upnp.org/specs/av/UPnP-av-ContentDirectory-v4-Service.pdf)
+/// for details.
+///
+/// If the service implementation does not support this feature then this state variable MUST be set to
+/// "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct NextAVTransportURIMetaData;
+pub struct NextAVTransportURIMetaData;
 
 impl SVariable for NextAVTransportURIMetaData {
     type VarType = String;
     const VAR_NAME: &str = "NextAVTransportURIMetaData";
 }
 
+/// For track-aware media, this REQUIRED state variable contains the current position in the current track, in
+/// terms of time, measured from the beginning of the current track.
+///
+/// The range for this state variable is from
+/// "00:00:00" to the duration of the current track as indicated by the CurrentTrackDuration state variable.
+///
+/// For track-aware media, this state variable always contains a positive value.
+///
+/// For track-unaware media (e.g. a single tape), this state variable contains the position, in terms of time,
+/// measured from a zero reference point on the media. The range for this state variable is from the beginning
+/// of the media, measured from the zero reference point to the end of the media, also measured from the zero
+/// reference point. For track-unaware media, this state variable can be negative. Indeed, when the zero
+/// reference point does not coincide with the beginning of the media, all positions before the zero reference
+/// point are expressed as negative values.
+///
+/// The time format used for the `RelativeTimePosition` state variable is the same as for state variable
+/// [CurrentTrackDuration].
+///
+/// If the service implementation does not support relative time-based position
+/// information, then this state variable MUST be set to "NOT_IMPLEMENTED".
 #[derive(Debug)]
-struct RelativeTimePosition;
+pub struct RelativeTimePosition;
 
 impl SVariable for RelativeTimePosition {
     // TODO: Handle NOT_IMPLEMENTED value
@@ -650,8 +884,25 @@ impl SVariable for RelativeTimePosition {
     const VAR_NAME: &str = "RelativeTimePosition";
 }
 
+/// This REQUIRED state variable contains the current position, in terms of time, measured from the
+/// beginning of the media.
+///
+/// The time format used for the [AbsoluteTimePosition] state variable is the same as for
+/// state variable [CurrentTrackDuration].
+///
+/// The range for this state variable is from "00:00:00" to the duration of
+/// the current media as indicated by the [CurrentMediaDuration] state variable.
+///
+/// This state variable always contains a positive value.
+///
+/// If the service implementation does not support any kind of position information, then this state variable
+/// MUST be set to "NOT_IMPLEMENTED".
+///
+/// Devices that do not have time position information, but are able
+/// to detect whether they are at the end of the media MUST use special value "END_OF_MEDIA" when
+/// actually at the end, and the value "NOT_IMPLEMENTED" otherwise.
 #[derive(Debug)]
-struct AbsoluteTimePosition;
+pub struct AbsoluteTimePosition;
 
 impl SVariable for AbsoluteTimePosition {
     // TODO: Handle NOT_IMPLEMENTED | END_OF_MEDIA values
@@ -659,67 +910,156 @@ impl SVariable for AbsoluteTimePosition {
     const VAR_NAME: &str = "AbsoluteTimePosition";
 }
 
+/// For track-aware media, this REQUIRED state variable contains the current position in the current track, in
+/// terms of a dimensionless counter, measured from the beginning of the current track.
+///
+/// The range for this state
+/// variable is from 0 to the counter value that corresponds to the end of the current track.
+///
+/// For track-aware media, this state variable always contains a positive value.
+///
+/// For track-unaware media (e.g. a single tape), this state variable contains the position, in terms of a
+/// dimensionless counter, measured from a zero reference point on the media.
+///
+/// The range for this state variable
+/// is from the counter value that corresponds to the beginning of the media, measured from the zero reference
+/// point to the counter value that corresponds to the end of the media, also measured from the zero reference
+/// point.
+///
+/// For track-unaware media, this state variable can be negative, Indeed, when the zero reference point
+/// does not coincide with the beginning of the media, all positions before the zero reference point are
+/// expressed as negative values.
+///
+/// For devices that support media with addressable ranges that equal or exceed the allowed range of this
+/// counter, the `AVTransport` service MUST scale actual media addresses to counter values to fit within the
+/// range allowed for this counter.
+///
+/// If the service implementation does not support relative count-based position information, then this state
+/// variable MUST be set to the [i32::MAX].
 #[derive(Debug)]
-struct RelativeCounterPosition;
+pub struct RelativeCounterPosition;
 
 impl SVariable for RelativeCounterPosition {
     type VarType = i32;
     const VAR_NAME: &str = "RelativeCounterPosition";
 }
 
+/// This REQUIRED state variable contains the current position, in terms of a dimensionless counter,
+/// measured from the beginning of the loaded media.
+///
+/// The allowed range for this variable is 0 - 2147483646.
+/// For devices that support media with addressable ranges that equal or exceed the allowed range of this
+/// counter, the AVTransport service MUST scale actual media addresses to counter values to fit within the
+/// range allowed for this counter.
+///
+/// If the service implementation does not support absolute count-based
+/// position information, then this state variable MUST be set to the value 2147483647.
+///
+/// Note: Although the data type for state variable AbsoluteCounterPosition is [u32], the range is restricted to
+/// 0 - [i32::MAX] for backwards compatibility reasons
 #[derive(Debug)]
-struct AbsoluteCounterPosition;
+pub struct AbsoluteCounterPosition;
 
 impl SVariable for AbsoluteCounterPosition {
     type VarType = u32;
     const VAR_NAME: &str = "AbsoluteCounterPosition";
 }
 
-#[derive(Debug)]
-pub enum CurrentTransportActions {
-    Play,
-    Stop,
-    Pause,
-    Seek,
-    Next,
-    Previous,
-    Record,
-}
+pub mod current_transport_actions {
+    use crate::{
+        IntoXml,
+        service_variables::{IntoUpnpValue, SVariable},
+    };
 
-impl IntoUpnpValue for CurrentTransportActions {
-    fn from_xml_value(value: &str) -> anyhow::Result<Self> {
-        let out = match value {
-            "PLAY" => Self::Play,
-            "STOP" => Self::Stop,
-            "PAUSE" => Self::Pause,
-            "SEEK" => Self::Seek,
-            "NEXT" => Self::Next,
-            "PREVIOUS" => Self::Previous,
-            "RECORD" => Self::Record,
-            _ => Err(anyhow::anyhow!("Unrecognized value: {value}"))?,
-        };
-        Ok(out)
+    /// This state variable contains a comma-separated list of transport-controlling actions
+    /// that can be successfully invoked for the current resource at this specific point in time.
+    ///
+    /// This CONDITIONALLY REQUIRED state variable MUST be supported if the AVTransport service
+    /// implements the GetCurrentTransportActions() action.
+    ///
+    /// The list MUST contain a subset (including the empty set) of the following action names:
+    /// "Play", "Stop", "Pause", "Seek", "Next", "Previous" and "Record".
+    ///
+    /// In addition, the list MAY be augmented by a subset of vendor-defined transport-controlling action names.
+    /// For example:
+    /// When a live stream from the Internet is being controlled, the variable can be only “Play,Stop”. When a local audio CD
+    /// is being controlled, the variable can be "Play,Stop,Pause,Seek,Next,Previous". This information can be
+    /// used, for example, to dynamically enable or disable play, stop, and pause buttons, etc., on a user interface.
+    #[derive(Debug)]
+    pub struct CurrentTransportActions(pub Vec<CurrentTransportAction>);
+
+    impl IntoXml for CurrentTransportActions {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
+            if self.0.is_empty() {
+                return Ok(());
+            }
+
+            for action in &self.0[..self.0.len() - 1] {
+                action.write_xml(w)?;
+                ",".write_xml(w)?;
+            }
+
+            self.0.last().expect("not empty check above").write_xml(w)
+        }
     }
-}
 
-impl IntoXml for CurrentTransportActions {
-    fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
-        let msg = match self {
-            Self::Play => "PLAY",
-            Self::Stop => "STOP",
-            Self::Pause => "PAUSE",
-            Self::Seek => "SEEK",
-            Self::Next => "NEXT",
-            Self::Previous => "PREVIOUS",
-            Self::Record => "RECORD",
-        };
-        msg.write_xml(w)
+    impl IntoUpnpValue for CurrentTransportActions {
+        fn from_xml_value(value: &str) -> anyhow::Result<Self> {
+            Ok(Self(
+                value
+                    .split(',')
+                    .filter_map(|v| CurrentTransportAction::from_xml_value(v).ok())
+                    .collect(),
+            ))
+        }
     }
-}
 
-impl SVariable for CurrentTransportActions {
-    type VarType = Self;
-    const VAR_NAME: &str = "CurrentTransportActions";
+    impl SVariable for CurrentTransportActions {
+        type VarType = Self;
+        const VAR_NAME: &str = "CurrentTransportActions";
+    }
+
+    #[derive(Debug)]
+    pub enum CurrentTransportAction {
+        Play,
+        Stop,
+        Pause,
+        Seek,
+        Next,
+        Previous,
+        Record,
+    }
+
+    impl IntoUpnpValue for CurrentTransportAction {
+        fn from_xml_value(value: &str) -> anyhow::Result<Self> {
+            let out = match value {
+                "PLAY" => Self::Play,
+                "STOP" => Self::Stop,
+                "PAUSE" => Self::Pause,
+                "SEEK" => Self::Seek,
+                "NEXT" => Self::Next,
+                "PREVIOUS" => Self::Previous,
+                "RECORD" => Self::Record,
+                _ => Err(anyhow::anyhow!("Unrecognized value: {value}"))?,
+            };
+            Ok(out)
+        }
+    }
+
+    impl IntoXml for CurrentTransportAction {
+        fn write_xml(&self, w: &mut crate::XmlWriter) -> std::io::Result<()> {
+            let val = match self {
+                Self::Play => "PLAY",
+                Self::Stop => "STOP",
+                Self::Pause => "PAUSE",
+                Self::Seek => "SEEK",
+                Self::Next => "NEXT",
+                Self::Previous => "PREVIOUS",
+                Self::Record => "RECORD",
+            };
+            val.write_xml(w)
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -731,6 +1071,13 @@ impl SVariable for LastChange {
     const VAR_NAME: &str = "LastChange";
 }
 
+/// The [DRMState] state variable is used by instances of the `AVTransport` service to inform control points about
+/// process failures and other `AVTransport` instance state changes that can occur independently of
+/// `AVTransport` actions.
+///
+/// This CONDITIONALLY REQUIRED state variable MUST be supported if the `AVTransport` service
+/// implements the `GetDRMState` action and the `AVTransport` service supports controlling of the transport
+/// for DRM-controlled content.
 #[derive(Debug)]
 pub enum DRMState {
     /// This setting indicates that DRM related processing has completed successfully.
@@ -833,7 +1180,28 @@ impl IntoXml for DRMState {
         msg.write_xml(w)
     }
 }
-
+/// This state variable indicates a high-precision time offset that is used to adjust the
+/// actual timing of the ConnectionManager CLOCKSYNC feature for a specific instance.
+///
+/// This CONDITIONALLY REQUIRED state variable MUST be supported if the `AVTransport` service
+/// implements `GetSyncOffset` and `SetSyncOffset` actions. Note that if either action is implemented, both
+/// MUST be implemented.
+///
+/// Its value is used to
+/// automatically and uniformly shift all of the presentation time values that are associated with the
+/// [ConnectionManager](crate::connection_manager) CLOCKSYNC feature.
+///
+/// Some examples include the `RelativePresentationTime` input
+/// argument of the `SyncPlay` action or the presentation timestamps associated with a content stream.
+///
+/// A positive value indicates that the relevant time-of-day value(s) MUST be increased by the specified
+/// amount, thus, causing a slight delay.
+///
+/// Conversely, a negative value indicates that the relevant time-of-day
+/// value(s) MUST be decreased by the specified amount, thus, causing the associated effect to occur sooner
+/// than would have otherwise occurred.
+///
+/// Learn more about the format of this state variable in the specification.
 #[derive(Debug)]
 pub struct SyncOffset;
 
@@ -843,6 +1211,16 @@ impl SVariable for SyncOffset {
     const VAR_NAME: &str = "SyncOffset";
 }
 
+/// This REQUIRED state variable is introduced to provide type information for the Unit argument in action `Seek()`.
+///
+/// It indicates the allowed units in which the amount of seeking to be performed is specified. It can be
+/// specified as a time (relative or absolute), a count (relative or absolute), a track number, a tape-index (for
+/// example, for tapes with an indexing facility; relative or absolute) or even a video frame (relative or
+/// absolute).
+///
+/// A device vendor is allowed to implement a subset of the allowed value list of this state variable.
+///
+/// Only the value “TRACK_NR” is REQUIRED.
 #[derive(Debug, Clone, Copy)]
 pub enum ArgSeekMode {
     TrackNr,
@@ -912,6 +1290,27 @@ impl IntoXml for ArgSeekMode {
     }
 }
 
+/// This REQUIRED state variable is introduced to provide type information for the Target argument in action
+/// `Seek`.
+///
+/// It indicates the target position of the `Seek` action, in terms of units defined by state variable
+/// [ArgSeekMode]. The data type of this variable is string.
+///
+/// However, depending on the actual seek
+/// mode used, it MUST contain string representations of values as defined in the following table:
+///
+/// | SeekMode                                 | SeekTarget              |
+/// | ---------------------------------------- | ----------------------- |
+/// | [TRACK_NR](ArgSeekMode::TrackNr)         | [u32]                   |
+/// | [ABS_TIME](ArgSeekMode::AbsTime)         | [UpnpDuration]          |
+/// | [REL_TIME](ArgSeekMode::RelTime)         | [UpnpDuration]          |
+/// | [ABS_COUNT](ArgSeekMode::AbsCount)       | [u32]                   |
+/// | [REL_COUNT](ArgSeekMode::RelCount)       | [i32]                   |
+/// | [CHANNEL_FREQ](ArgSeekMode::ChannelFreq) | [f32], expressed in Hz. |
+/// | [TAPEINDEX](ArgSeekMode::Tape)           | [u32]                   |
+/// | [REL_TAPEINDEX](ArgSeekMode::RelTape)    | [i32]                   |
+/// | [FRAME](ArgSeekMode::Frame)              | [u32]                   |
+/// | [REL_FRAME](ArgSeekMode::RelFrame)       | [i32]                   |
 #[derive(Debug)]
 pub struct ArgSeekTarget;
 
@@ -921,6 +1320,21 @@ impl SVariable for ArgSeekTarget {
     const VAR_NAME: &str = "A_ARG_TYPE_SeekTarget";
 }
 
+/// This REQUIRED state variable is introduced to provide type information for the `InstanceID` input
+/// argument present in all `AVTransport` actions.
+///
+/// It identifies the virtual instance of the `AVTransport` service to
+/// which the action applies.
+///
+/// A valid `InstanceID` is obtained from a factory method in the ConnectionManager
+/// service: the [PrepareForConnection](crate::connection_manager::ConnectionManagerService::prepare_for_connection) action.
+///
+/// If the device’s ConnectionManager does not implement the optional
+/// [PrepareForConnection](crate::connection_manager::ConnectionManagerService::prepare_for_connection) action,
+/// special value "0" MUST be used for the `InstanceID` input argument.
+///
+/// In such a case, the device implements a single static `AVTransport` instance, and only one
+/// stream can be controlled and sent (or received) at any time.
 #[derive(Debug)]
 pub struct ArgInstanceID;
 
@@ -930,6 +1344,8 @@ impl SVariable for ArgInstanceID {
     const VAR_NAME: &str = "A_ARG_TYPE_InstanceID";
 }
 
+/// The state variable is introduced to provide type information for
+/// the AVTransportUDN argument in that action
 #[derive(Debug)]
 pub struct DeviceUDN(pub Udn);
 
@@ -951,6 +1367,8 @@ impl SVariable for DeviceUDN {
     const VAR_NAME: &str = "A_ARG_TYPE_DeviceUDN";
 }
 
+/// The state variable is introduced to provide type information for
+/// the `ServiceType` argument in `SetStateVariables` action
 #[derive(Debug)]
 pub struct ServiceType;
 
@@ -960,6 +1378,8 @@ impl SVariable for ServiceType {
     const VAR_NAME: &str = "A_ARG_TYPE_ServiceType";
 }
 
+/// The state variable is introduced to provide type information for
+/// the `ServiceId` argument in `SetStateVariables` action.
 #[derive(Debug)]
 pub struct ServiceID;
 
@@ -969,12 +1389,12 @@ impl SVariable for ServiceID {
     const VAR_NAME: &str = "A_ARG_TYPE_ServiceID";
 }
 
-mod statevariable_value_pairs {
+pub mod statevariable_value_pairs {
     use quick_xml::events::{BytesStart, Event};
 
     use crate::{
-        service_variables::{IntoUpnpValue, SVariable},
         FromXml, IntoXml, XmlReaderExt,
+        service_variables::{IntoUpnpValue, SVariable},
     };
 
     #[derive(Debug)]
@@ -1002,6 +1422,20 @@ mod statevariable_value_pairs {
         }
     }
 
+    /// This state variable contains a list of state variable
+    /// names and their values.
+    ///
+    /// The list of state variables whose name/value pair is requested is given by another
+    /// argument to the action.
+    ///
+    /// This CONDITIONALLY REQUIRED state variable MUST be supported if the `AVTransport` service
+    /// implements the `GetStateVariables` and `SetStateVariables` actions.
+    ///
+    /// Note that if either action is
+    /// implemented, both MUST be implemented.
+    ///
+    /// The state variable is introduced to provide type information for
+    /// the StateVariableValuePairs argument in that action.
     #[derive(Debug)]
     pub struct ArgStateVariableValuePairs {
         values: Vec<StateVariable>,
@@ -1073,7 +1507,17 @@ http://www.upnp.org/schemas/av/avs.xsd",
         const VAR_NAME: &str = "A_ARG_TYPE_StateVariableValuePairs";
     }
 }
-
+/// CSV list of state variable names.
+///
+/// The state variable is introduced to provide type information for
+/// the StateVariableList argument in that action.
+///
+/// This variable MAY
+/// contain one or more (as required) of the defined AVTransport state variable names except LastChange and
+/// any A_ARG_TYPE_xxx state variable names.
+///
+/// The asterisk ("*") can be specified to indicate all relevant
+/// variable names (excluding LastChange and any A_ARG_TYPE_xxx state variables.)
 #[derive(Debug)]
 pub struct ArgStateVariableList;
 
@@ -1083,6 +1527,7 @@ impl SVariable for ArgStateVariableList {
     const VAR_NAME: &str = "A_ARG_TYPE_StateVariableList";
 }
 
+/// This state variable is introduced to provide a chunk of a playlist document to the device
 #[derive(Debug)]
 pub struct ArgPlaylistData;
 
@@ -1092,6 +1537,7 @@ impl SVariable for ArgPlaylistData {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistData";
 }
 
+/// This state variable is introduced to indicate the chunk’s length of the playlist document
 #[derive(Debug)]
 pub struct ArgPlaylistDataLength;
 
@@ -1101,6 +1547,7 @@ impl SVariable for ArgPlaylistDataLength {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistDataLength";
 }
 
+/// This state variable is introduced to provide a zero-based offset into the playlist document being passed to the renderer.
 #[derive(Debug)]
 pub struct ArgPlaylistOffset;
 
@@ -1110,6 +1557,7 @@ impl SVariable for ArgPlaylistOffset {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistOffset";
 }
 
+/// This state variable is introduced to provide the total length of the entire playlist document.
 #[derive(Debug)]
 pub struct ArgPlaylistTotalLength;
 
@@ -1119,6 +1567,7 @@ impl SVariable for ArgPlaylistTotalLength {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistTotalLength";
 }
 
+/// This state variable is introduced to provide the `MIME` type of the playlist provided to the device
 #[derive(Debug)]
 pub struct ArgPlaylistMIMEType;
 
@@ -1128,6 +1577,13 @@ impl SVariable for ArgPlaylistMIMEType {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistMIMEType";
 }
 
+/// This state variable is introduced
+/// to provide extended type information of the playlist provided to the device.
+///
+/// The value of this argument
+/// corresponds to the contents of the `res@protocolInfo` property 4th field
+///
+/// See `Content Directory` service for more on `protocolInfo`
 #[derive(Debug)]
 pub struct ArgPlaylistExtendedType;
 
@@ -1137,6 +1593,8 @@ impl SVariable for ArgPlaylistExtendedType {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistExtendedType";
 }
 
+/// This state variable is introduced to provide step information
+/// for a streaming playlist operation
 #[derive(Debug)]
 pub enum ArgPlaylistStep {
     ///  Indicates that this is the start of streaming playlist operation.
@@ -1185,6 +1643,7 @@ impl SVariable for ArgPlaylistStep {
     const ALLOWED_VALUE_LIST: Option<&[&str]> = Some(&["Initial", "Continue", "Stop", "Reset"]);
 }
 
+/// This state variable describes the playlist types supported by the implementation
 #[derive(Debug)]
 pub enum ArgPlaylistType {
     Static,
@@ -1220,6 +1679,7 @@ impl SVariable for ArgPlaylistType {
 }
 
 pub mod arg_playlist_info {
+    /// This state variable is a document detailing whether the implementation can play the indicated item formats
     #[derive(Debug)]
     pub enum PlaylistInfo {
         Streaming(StreamingPlaylistInfo),
@@ -1233,6 +1693,9 @@ pub mod arg_playlist_info {
     pub struct StaticPlaylistInfo {}
 }
 
+/// This argument provides a starting object `@id` property value for playlists which employ object linking properties
+///
+/// For playlists that do not employ `objectLinking` properties this state variable SHOULD be set to "".
 #[derive(Debug)]
 pub struct ArgPlaylistStartObjID;
 
@@ -1242,6 +1705,10 @@ impl SVariable for ArgPlaylistStartObjID {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistStartObjID";
 }
 
+/// This argument provides a starting target group ID
+/// objectLink@groupID value for playlists which employ object linking properties
+///
+/// For playlists that do not employ `objectLinking` properties this state variable SHOULD be set to "".
 #[derive(Debug)]
 pub struct ArgPlaylistStartGroupID;
 
@@ -1251,24 +1718,36 @@ impl SVariable for ArgPlaylistStartGroupID {
     const VAR_NAME: &str = "A_ARG_TYPE_PlaylistStartGroupID";
 }
 
+/// This state variable indicates a high-precision time offset that is
+/// used to adjust the actual timing of the ConnectionManager CLOCKSYNC feature for a specific instance.
 #[derive(Debug)]
 pub struct ArgSyncOffsetAdj;
 
 impl SVariable for ArgSyncOffsetAdj {
-    type VarType = String;
+    type VarType = UpnpDuration;
 
     const VAR_NAME: &str = "A_ARG_TYPE_SyncOffsetAdj";
 }
 
+/// This state variable is introduced to provide
+/// type information for the `ReferencePresentationTime` and other similar input arguments for `AVTransport`
+/// actions related to CLOCKSYNC feature.
+///
+/// It represents a high-precision point in time (corresponding to a
+/// specific time on a specific day) that is used to designate the exact time when certain time-sensitive
+/// operations are to be performed.
 #[derive(Debug)]
 pub struct ArgPresentationTime;
 
 impl SVariable for ArgPresentationTime {
-    type VarType = String;
+    type VarType = UpnpDuration;
 
     const VAR_NAME: &str = "A_ARG_TYPE_PresentationTime";
 }
 
+/// This state variable is introduced to provide
+/// type information for the `ReferenceClockId` input argument for `AVTransport` actions related to
+/// CLOCKSYNC feature.
 #[derive(Debug)]
 pub struct ArgClockId;
 
@@ -1300,6 +1779,20 @@ impl ScpdService for AvTransportClient {
 }
 
 impl ScpdClient<AvTransportClient> {
+    /// Start playing the resource
+    ///
+    /// This REQUIRED action starts playing the resource of the specified instance, at the specified speed, starting
+    /// at the current position, according to the current play mode.
+    ///
+    /// Playing MUST continue until the resource ends
+    /// or the transport state is changed via actions `Stop` or [Pause](ScpdClient::pause).
+    ///
+    /// The device MUST do a best effort to match the specified play speed.
+    ///
+    /// Actually supported speeds can be retrieved from the `AllowedValueList` of the
+    /// [TransportPlaySpeed] state variable in the `AVTransport` service description.
+    ///
+    /// If no [AVTransportURI] is set, the resource being played is device-dependent
     pub async fn play(&self, speed: &str) -> Result<(), ActionCallError> {
         let action = self.action("Play")?;
         let payload = action.av_play("0".into(), speed)?;
@@ -1307,6 +1800,19 @@ impl ScpdClient<AvTransportClient> {
         Ok(())
     }
 
+    /// Pause the playback
+    ///
+    /// This is an OPTIONAL action. While the device is in a playing state, that is: `TransportState` is [TransportState::Playing],
+    /// this action halts the progression of the resource that is associated with the specified `InstanceID`.
+    ///
+    /// Any visual representation of the resource SHOULD remain displayed in a static manner (for example, the last frame of
+    /// video remains displayed).
+    ///
+    /// Any audio representation of the resource SHOULD be muted.
+    ///
+    /// The difference between `Pause` and `Stop` actions is that `Pause` MUST remain at the current position within the resource and
+    /// the current resource MUST persist as described above (for example, the current video resource continues to
+    /// be transmitted/displayed).
     pub async fn pause(&self) -> Result<(), ActionCallError> {
         let action = self.action("Pause")?;
         let payload = action.av_pause("0".into())?;
@@ -1323,6 +1829,10 @@ impl ScpdClient<AvTransportClient> {
         Ok(())
     }
 
+    /// This REQUIRED action returns information associated with the current position of the transport of the
+    /// specified instance.
+    ///
+    /// It has no effect on state.
     pub async fn position_info(&self) -> Result<PositionInfo, ActionCallError> {
         let action = self.action("GetPositionInfo")?;
         let payload = action.av_position_info("0".into())?;

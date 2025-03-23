@@ -28,7 +28,7 @@ impl ConnectionManagerHandler for MediaServerConnectionManager {
                 String,
                 String,
                 String,
-                upnp::connection_manager::Direction,
+                upnp::connection_manager::ArgDirection,
                 String,
             ),
             upnp::action::ActionError,

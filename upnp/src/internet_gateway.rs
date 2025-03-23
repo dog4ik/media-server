@@ -4,14 +4,15 @@ use port_listing::{ArgPortListing, PortMappingEntry};
 use quick_xml::events::{BytesText, Event};
 
 use crate::{
+    IntoXml,
     service_client::{ActionCallError, ScpdClient, ScpdService},
     service_variables::{IntoUpnpValue, SVariable},
-    urn::{ServiceType, UrnType, URN},
-    IntoXml,
+    urn::{ServiceType, URN, UrnType},
 };
 
+/// Information on the connection types used in the gateway
 #[derive(Default, Debug, PartialEq, Eq, Clone, Copy)]
-enum ConnectionType {
+pub enum ConnectionType {
     /// Valid connection types cannot be identified. This MAY be due to the fact that the LinkType variable (if
     /// specified in the WAN*LinkConfig service) is uninitialized.
     Unconfigured,
@@ -57,6 +58,8 @@ impl SVariable for ConnectionType {
     const VAR_NAME: &str = "ConnectionType";
 }
 
+/// This variable represents a CSV list indicating the types of connections possible in the context of a specific
+/// modem and link type. Possible values are a subset or proper subset of values listed in Table 2-3 in the specification.
 #[derive(Debug)]
 pub struct PossibleConnectionTypes;
 
@@ -66,8 +69,9 @@ impl SVariable for PossibleConnectionTypes {
     const VAR_NAME: &str = "PossibleConnectionTypes";
 }
 
+/// Contains information on the status of the connection
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum ConnectionStatus {
+pub enum ConnectionStatus {
     /// This value indicates that other variables in the service table are uninitialized or in an invalid state. Examples
     /// of such variables include PossibleConnectionTypes and ConnectionType
     Unconfigured,
@@ -145,7 +149,7 @@ impl SVariable for UpTime {
 /// This variable is a string that provides information about the cause of failure for the last connection setup
 /// attempt
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum LastConnectionError {
+pub enum LastConnectionError {
     None,
     CommandAborted,
     NotEnabledForInternet,
@@ -219,6 +223,19 @@ impl SVariable for LastConnectionError {
     const VAR_NAME: &str = "LastConnectionError";
 }
 
+/// The AutoDisconnectTime variable represents time in seconds (since the establishment of the connection –
+/// measured from the time ConnectionStatus transitions to Connected), after which connection termination is
+/// automatically initiated by the gateway.
+///
+/// This occurs irrespective of whether the connection is being used or
+/// not. A value of zero for AutoDisconnectTime indicates that the connection is not to be turned off
+/// automatically. However, this MAY be overridden by:
+/// - An implementation specific WAN/Gateway device policy,
+/// - EnabledForInternet variable (see WANCommonInterfaceConfig* ) being set to “0” (false) by a control point,
+/// - Connection termination initiated by ISP.
+/// If WarnDisconnectDelay is non-zero, the connection state is changed to PendingDisconnect. It stays in this
+/// state for WarnDisconnectDelay seconds (if no connection requests are made) before switching to
+/// Disconnected. The data type of this variable is ui4.
 #[derive(Debug)]
 pub struct AutoDisconnectTime;
 impl SVariable for AutoDisconnectTime {
@@ -227,6 +244,12 @@ impl SVariable for AutoDisconnectTime {
     const VAR_NAME: &str = "AutoDisconnectTime";
 }
 
+/// IdleDisconnectTime represents the idle time of a connection in seconds (since the establishment of the
+/// connection), after which connection termination is initiated by the gateway.
+///
+/// A value of zero for this variable allows infinite idle time – connection will not be terminated due to idle time.
+///
+/// NOTE: Layer 2 heartbeat packets are included as part of an idle state i.e., they do not reset the idle timer.
 #[derive(Debug)]
 pub struct IdleDisconnectTime;
 impl SVariable for IdleDisconnectTime {
@@ -235,6 +258,13 @@ impl SVariable for IdleDisconnectTime {
     const VAR_NAME: &str = "IdleDisconnectTime";
 }
 
+/// This variable represents time in seconds the [ConnectionStatus] remains in the [ConnectionStatus::PendingDisconnect] state
+/// before transitioning to [ConnectionStatus::Disconnecting] state to drop the connection.
+///
+/// For example, if this variable was set to 5 seconds,
+/// and one of the clients terminates an active connection, the gateway will wait
+/// (with [ConnectionStatus::PendingDisconnect]) for 5 seconds before actual termination of the connection. A value
+/// of zero for this variable indicates that no warning will be given to clients before terminating the connection.
 #[derive(Debug)]
 pub struct WarnDisconnectDelay;
 impl SVariable for WarnDisconnectDelay {
@@ -243,6 +273,7 @@ impl SVariable for WarnDisconnectDelay {
     const VAR_NAME: &str = "WarnDisconnectDelay";
 }
 
+/// This variable indicates if `Realm-specific IP` (RSIP) is available as a feature on the `Internet Gateway Device`.
 #[derive(Debug)]
 pub struct RSIPAvailable;
 impl SVariable for RSIPAvailable {
@@ -251,6 +282,7 @@ impl SVariable for RSIPAvailable {
     const VAR_NAME: &str = "RSIPAvailable";
 }
 
+/// This boolean type variable indicates if `Network Address Translation` (NAT) is enabled for this connection.
 #[derive(Debug)]
 pub struct NATEnabled;
 impl SVariable for NATEnabled {
@@ -259,6 +291,7 @@ impl SVariable for NATEnabled {
     const VAR_NAME: &str = "NATEnabled";
 }
 
+/// `ExternalIPAddress` is the external IP address used by NAT for the connection
 #[derive(Debug)]
 pub struct ExternalIPAddress;
 impl SVariable for ExternalIPAddress {
@@ -267,6 +300,8 @@ impl SVariable for ExternalIPAddress {
     const VAR_NAME: &str = "ExternalIPAddress";
 }
 
+/// This variable indicates the number of NAT port mapping entries (number of elements in the array)
+/// configured on this connection
 #[derive(Debug)]
 pub struct PortMappingNumberOfEntries;
 impl SVariable for PortMappingNumberOfEntries {
@@ -275,6 +310,7 @@ impl SVariable for PortMappingNumberOfEntries {
     const VAR_NAME: &str = "PortMappingNumberOfEntries";
 }
 
+/// This variable allows security conscious users to disable and enable dynamic NAT port mappings on the IGD.
 #[derive(Debug)]
 pub struct PortMappingEnabled;
 impl SVariable for PortMappingEnabled {
@@ -283,6 +319,8 @@ impl SVariable for PortMappingEnabled {
     const VAR_NAME: &str = "PortMappingEnabled";
 }
 
+/// This variable determines the lifetime in seconds of a port-mapping lease. Non-zero values indicate the
+/// duration after which a port mapping will be removed, unless a control point refreshes the mapping
 #[derive(Debug)]
 pub struct PortMappingLeaseDuration;
 impl PortMappingLeaseDuration {
@@ -299,6 +337,7 @@ impl SVariable for PortMappingLeaseDuration {
     const VAR_NAME: &str = "PortMappingLeaseDuration";
 }
 
+/// This variable represents the source of inbound IP packets.
 #[derive(Debug)]
 pub struct RemoteHost;
 
@@ -308,6 +347,8 @@ impl SVariable for RemoteHost {
     const VAR_NAME: &str = "RemoteHost";
 }
 
+/// This variable represents the external port that the `NAT` gateway would "listen" on for
+/// connection requests to a corresponding [InternalPort] on an [InternalClient]
 #[derive(Debug)]
 pub struct ExternalPort;
 impl SVariable for ExternalPort {
@@ -316,6 +357,8 @@ impl SVariable for ExternalPort {
     const VAR_NAME: &str = "ExternalPort";
 }
 
+/// This variable is of type ui2 and represents the port on [InternalClient] that the gateway SHOULD forward
+/// connection requests to. A value of 0 is not allowed.
 #[derive(Debug)]
 pub struct InternalPort;
 impl SVariable for InternalPort {
@@ -324,6 +367,7 @@ impl SVariable for InternalPort {
     const VAR_NAME: &str = "InternalPort";
 }
 
+/// This variable represents the protocol of the port mapping
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum PortMappingProtocol {
     TCP,
@@ -361,6 +405,7 @@ impl SVariable for PortMappingProtocol {
     const VAR_NAME: &str = "PortMappingProtocol";
 }
 
+/// This variable is a string containing the IP address or DNS host name of an `InternalClient`
 #[derive(Debug)]
 pub struct InternalClient;
 impl SVariable for InternalClient {
@@ -369,6 +414,13 @@ impl SVariable for InternalClient {
     const VAR_NAME: &str = "InternalClient";
 }
 
+/// This is a string representation of a port mapping.
+///
+/// The format of the description string is not specified and is
+/// application dependent. If specified, the description string can be displayed to a user via the UI of a control
+/// point, enabling easier management of port mappings. The description string for a port mapping (or a set of
+/// related port mappings) is NOT REQUIRED to be unique across multiple instantiations of an application on
+/// multiple nodes in the residential LAN.
 #[derive(Debug)]
 pub struct PortMappingDescription;
 impl SVariable for PortMappingDescription {
@@ -377,14 +429,30 @@ impl SVariable for PortMappingDescription {
     const VAR_NAME: &str = "PortMappingDescription";
 }
 
+/// The type of this variable is ui4, and it is used to notify of changes done in NAT or firewall rules.
+///
+/// # Examples:
+/// - the user changed the firewall level settings of his IGD, and the NAT port mappings rules are no more valid,
+/// - the user disabled the UPnP IGD NAT traversal facilities through the WWW-administration of the IGD,
+/// - the user updated a NAT rule thanks to the WWW-administration of his IGD, and that NAT rule was previously created by a UPnP IGD control point
+///
+///
+/// Whenever a change is done, the value of this variable is incremented by 1 and evented. A change can be an
+/// addition, a removal, an update, or the fact that a rule is disabled or enabled. So, control points are
+/// encouraged to check if their port mappings are still valid when notified.
+///
+/// This variable is evented when something which affects the port mappings validity occurs. Even if the event
+/// affects several port mappings rules, the variable is evented once (and not for each impacted port mappings
+/// rules).
 #[derive(Debug)]
-struct SystemUpdateID;
+pub struct SystemUpdateID;
 impl SVariable for SystemUpdateID {
     type VarType = u32;
 
     const VAR_NAME: &str = "SystemUpdateID";
 }
 
+/// This argument type is used to describe management intent when issuing certain actions with elevated level of access
 #[derive(Debug)]
 pub struct ArgManage;
 impl SVariable for ArgManage {
@@ -393,14 +461,14 @@ impl SVariable for ArgManage {
     const VAR_NAME: &str = "A_ARG_TYPE_Manage";
 }
 
-mod port_listing {
+pub mod port_listing {
 
     use anyhow::Context;
     use quick_xml::events::{BytesStart, Event};
 
     use crate::{
-        service_variables::{IntoUpnpValue, SVariable},
         FromXml, IntoXml, XmlReaderExt,
+        service_variables::{IntoUpnpValue, SVariable},
     };
 
     use super::{
@@ -554,6 +622,7 @@ mod port_listing {
         }
     }
 
+    /// This argument type contains the list of port mapping entries.
     #[derive(Debug, Clone)]
     pub struct ArgPortListing {
         entries: Vec<PortMappingEntry>,
@@ -606,7 +675,7 @@ http://www.upnp.org/schemas/gw/WANIPConnection-v2.xsd",
                     return Err(anyhow::anyhow!(
                         "expected PortMappingList end, got {:?}",
                         rest
-                    ))
+                    ));
                 }
             }
 
@@ -633,6 +702,7 @@ http://www.upnp.org/schemas/gw/WANIPConnection-v2.xsd",
 
 // Client
 
+/// Marker for [ScpdClient] that makes `WANIPConnection` actions implementation available
 #[derive(Debug)]
 pub struct InternetGatewayClient;
 
@@ -644,6 +714,35 @@ impl ScpdService for InternetGatewayClient {
 }
 
 impl ScpdClient<InternetGatewayClient> {
+    /// Like [add_port_mapping](ScpdClient::add_port_mapping) action, `AddAnyPortMapping` action also creates a port mapping specified with
+    /// the same arguments.
+    ///
+    /// The behaviour differs only on the case where the specified port is not free, because in
+    /// that case the gateway reserves any free `NewExternalPort` and `NewProtocol` pair and returns the
+    /// `NewReservedPort`. It is up to the vendors to define an algorithm which finds a free port.
+    /// It is encouraged to use this new action instead of the former one AddPortMapping() action, because it is
+    /// more efficient, and it will be compatible with future potential solutions based on port range NAT solution
+    /// also called "fractional address" within the IETF.
+    ///
+    /// The goal of "fractional address" NAT solution is to cope
+    /// with the IPv4 public address exhaustion, by providing the same IPv4 public address to several IGDs, where
+    /// each IGD is allocated with a different port range.
+    ///
+    /// NOTE: Not all NAT implementations will support:
+    /// - Wildcard value (i.e. 0) for [ExternalPort],
+    /// - InternalPort values that are different from [ExternalPort].
+    ///
+    /// Regarding the last point, this behaviour is not encouraged because the goal of `AddAnyPortMapping` is to
+    /// provide a free port if the desired port is not free, so the [InternalPort] is potentially different from the
+    /// [ExternalPort].
+    ///
+    /// Nevertheless, in order to be backward compatible with [AddPortMapping](ScpdClient::add_port_mapping) action, this
+    /// behaviour is supported. If parameters `NewInternalClient`, `NewExternalPort` and `NewProtocol` are the same
+    /// as an existing port mapping and control point is authorized for the operation, the port mapping is updated
+    /// instead of creating new one.
+    ///
+    /// When a control point creates a port forwarding rule with `AddAnyPortMapping` for inbound traffic, this
+    /// rule MUST also be applied when NAT port triggering occurs for outbound traffic.
     pub async fn add_any_port_mapping(
         &self,
         external_addr: Option<Ipv4Addr>,
@@ -671,6 +770,9 @@ impl ScpdClient<InternetGatewayClient> {
         Ok(port)
     }
 
+    /// This action creates a new port mapping or overwrites an existing mapping with the same internal client. If
+    /// the [ExternalPort] and [PortMappingProtocol] pair is already mapped to another internal client, an error is
+    /// returned.
     pub async fn add_port_mapping(
         &self,
         external_addr: Option<Ipv4Addr>,
@@ -698,6 +800,11 @@ impl ScpdClient<InternetGatewayClient> {
         Ok(())
     }
 
+    /// This action deletes a previously instantiated port mapping.
+    ///
+    /// As each entry is deleted, the array is compacted,
+    /// the evented variable [PortMappingNumberOfEntries] is decremented and the evented variable
+    /// [SystemUpdateID] is incremented.
     pub async fn delete_port_mapping(
         &self,
         proto: PortMappingProtocol,
@@ -711,6 +818,7 @@ impl ScpdClient<InternetGatewayClient> {
         Ok(())
     }
 
+    /// This action retrieves the value of the external IP address on this connection instance.
     pub async fn get_external_ip_addr(&self) -> Result<Ipv4Addr, ActionCallError> {
         let action = self.action("GetExternalIPAddress")?;
 
@@ -720,6 +828,20 @@ impl ScpdClient<InternetGatewayClient> {
         Ok(ip)
     }
 
+    /// This action returns a list of port mappings matching the arguments.
+    ///
+    /// The operation of this action has two modes depending on `NewManage` value:
+    /// - If the `NewManage` argument is set to "0" (false), then this action returns a list of port mappings
+    /// that have [InternalClient] value matching to the IP address of the control point between
+    /// `NewStartPort` and `NewEndPort`,
+    /// - If the NewManage argument is set to "1" (true), then the gateway MUST return all port mappings
+    /// between NewStartPort and NewEndPort.
+    ///
+    /// With the argument `NewNumberOfPorts` (take), a control point MAY limit the size of the list returned in order to
+    /// limit the length of the list returned. If NewNumberOfPorts is equal to 0, then the gateway MUST return all
+    /// port mappings between `NewStartPort` and `NewEndPort`.
+    ///
+    /// The returned port mappings also depends on the authentication of the control point.
     pub async fn list_all_port_mappings(
         &self,
         port_start: u16,

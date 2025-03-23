@@ -378,7 +378,9 @@ impl<'a> FromXml<'a> for Device<'a> {
     }
 }
 
-/// Unique Device Name. Universally-unique identifier for the device, whether root or
+/// Unique Device Name.
+///
+/// Universally-unique identifier for the device, whether root or
 /// embedded. shall be the same over time for a specific device instance (i.e., shall survive
 /// reboots).
 #[derive(Debug, Clone, Serialize)]

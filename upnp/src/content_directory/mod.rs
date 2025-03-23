@@ -1,6 +1,6 @@
 use std::{
     any::TypeId,
-    collections::{hash_map::Entry, HashMap},
+    collections::{HashMap, hash_map::Entry},
     fmt::Display,
     str::FromStr,
 };
@@ -15,12 +15,12 @@ use crate::{
 };
 
 use super::{
+    IntoXml, XmlWriter,
     action::Action,
     service::Service,
     service_variables::{self, IntoUpnpValue, SVariable, StateVariableDescriptor},
-    templates::{service_description::ServiceDescription, SpecVersion},
-    urn::{ServiceType, UrnType, URN},
-    IntoXml, XmlWriter,
+    templates::{SpecVersion, service_description::ServiceDescription},
+    urn::{ServiceType, URN, UrnType},
 };
 
 pub mod class;
@@ -180,6 +180,19 @@ impl SVariable for SortCriteria {
     const VAR_NAME: &str = "A_ARG_TYPE_SortCriteria";
 }
 
+/// This required state variable is a CSV list of property names that the ContentDirectory service
+/// can use to sort `Search` or [Browse](ContentDirectoryHandler::browse_direct_children) action results.
+///
+/// An empty string indicates that the device
+/// does not support any kind of sorting. A wildcard ("*") indicates that the device supports sorting
+/// using all property names supported by the ContentDirectory service.
+///
+/// The property names returned shall include the appropriate namespace prefixes, except for the DIDL-Lite namespace.
+///
+/// Properties in the DIDL-Lite namespace shall always be returned without the prefix.
+///
+/// All property names shall be fully qualified using the double colon (`::`)
+/// For example: `upnp:foreignMetadata::fmBody::fmURI`.
 #[derive(Default, Debug)]
 struct SortCapabilities;
 impl SVariable for SortCapabilities {
@@ -215,6 +228,45 @@ impl SVariable for ArgResult {
     const VAR_NAME: &str = "A_ARG_TYPE_Result";
 }
 
+/// This required state variable contains a CSV list of property names that can be use d in search
+/// queries.
+///
+/// Each property name shall include the standard namespace prefix for that property,
+/// except for the DIDL-Lite namespace.
+///
+/// Properties in the DIDL-Lite namespace shall always be
+/// returned without the prefix.
+///
+/// If a `ContentDirectory` service does not implement the Search() action, then the
+/// SearchCapabilities state variable shall be the empty string ("").
+///
+/// If a `ContentDirectory` service
+/// implements the Tracking Changes Option then the `Search` action is required and Table 8
+/// identifies the minimum set of properties and operators on those properties that shall be
+/// supported for searching.
+///
+/// All property names shall be fully qualified using the double colon (`::`) syntax.
+/// For example, `upnp:foreignMetadata::fmBody::fmURI`
+///
+/// A wildcard (`*`) indicates that the device supports search queries using any property name(s)
+/// supported by this `ContentDirectory` service implementation.
+///
+/// Note that it is recommended that implementations explicitly enumerate all of the properties
+/// that are supported for the Search() action and not use the wildcard (`*`) indicator.
+///
+/// When the `Tracking Changes Option` is supported, the ContentDirectory service shall provide
+/// certain search capabilities.
+///
+/// The following table identifies the search capabilities values that
+/// shall be supported when the `Track Changes Option` is supported:
+///
+/// | Value                    | Required operators          |
+/// | ------------------------ | --------------------------- |
+/// | `@id`                    | =                           |
+/// | `@parentID`              | =                           |
+/// | `upnp:class`             | =, derivedFrom              |
+/// | `upnp:objectUpdateID`    | <, <=, >=, >, =, !=, exists |
+/// | `upnp:containerUpdateID` | <, <=, >=, >, =, !=, exists |
 #[derive(Default, Debug)]
 struct SearchCapabilities;
 impl SVariable for SearchCapabilities {
@@ -378,8 +430,8 @@ mod filter {
     use quick_xml::events::{BytesText, Event};
 
     use crate::{
-        service_variables::{IntoUpnpValue, SVariable},
         IntoXml, XmlWriter,
+        service_variables::{IntoUpnpValue, SVariable},
     };
 
     #[derive(Debug)]
@@ -504,8 +556,8 @@ mod feature_list {
     use quick_xml::events::{BytesStart, Event};
 
     use crate::{
-        service_variables::{IntoUpnpValue, SVariable},
         IntoXml,
+        service_variables::{IntoUpnpValue, SVariable},
     };
 
     #[derive(Debug, Clone)]
@@ -724,6 +776,9 @@ impl Item {
         }
     }
 
+    /// Set the property on the item.
+    /// If property can be multivalued it will append it to the value list.
+    /// If property is not allowed to be a multivalue it will
     pub fn set_property<T>(&mut self, p: T)
     where
         T: ItemProperty + Into<PropertyValue> + 'static,
@@ -731,20 +786,17 @@ impl Item {
         let type_id = std::any::TypeId::of::<T>();
         let value = p.into();
         if T::MULTIVALUE {
-            let entry = self.multivalue_properties.entry(type_id);
-            match entry {
-                std::collections::hash_map::Entry::Occupied(mut occupied_entry) => {
-                    occupied_entry.get_mut().push(value)
-                }
-                std::collections::hash_map::Entry::Vacant(vacant_entry) => {
-                    vacant_entry.insert(vec![value]);
-                }
-            }
+            self.multivalue_properties
+                .entry(type_id)
+                .or_default()
+                .push(value);
         } else {
             self.properties.insert(type_id, value);
         }
     }
 
+    /// Remove the property.
+    /// If property can have multiple values all previous inserted values are removed
     pub fn unset_property<T>(&mut self)
     where
         T: ItemProperty + IntoXml + 'static,
@@ -1058,6 +1110,14 @@ impl FromStr for UpnpResolution {
     }
 }
 
+/// The frame rate in frames/second
+///
+/// Format of the string is: <numeric value>p or <numeric value>i.
+///
+/// Example:
+/// `29.97i` indicates a frame rate of 29.97 frames per second interlaced scanning.
+/// `30p` indicates a frame rate of 30 frames per second progressive scanning.
+/// `50i` indicates a frame rate of 50 frames per second interlaced scanning
 #[derive(Debug)]
 pub struct UpnpFramerate {
     scanning: Scanning,
