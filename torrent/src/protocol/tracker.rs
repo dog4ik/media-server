@@ -1,10 +1,10 @@
 use std::{
-    io::{Cursor, Read, Write},
+    io::{Read, Write},
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
 };
 
 use anyhow::Context;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use bytes::{BufMut, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
@@ -105,13 +105,15 @@ impl UdpTrackerRequest {
         match &self.request_type {
             UdpTrackerRequestType::Connect => {
                 let protocol: u64 = 0x41727101980;
-                let mut buffer = Cursor::new([0_u8; 16]);
+                let mut bytes = BytesMut::zeroed(16);
+                let mut buffer = &mut bytes[..];
                 buffer.write_all(&protocol.to_be_bytes()).unwrap();
                 buffer.write_all(&0_u32.to_be_bytes()).unwrap();
                 buffer
                     .write_all(&self.transaction_id.to_be_bytes())
                     .unwrap();
-                Bytes::copy_from_slice(&buffer.into_inner())
+                debug_assert!(buffer.is_empty());
+                bytes.freeze()
             }
             UdpTrackerRequestType::Announce {
                 connection_id,
@@ -126,23 +128,26 @@ impl UdpTrackerRequest {
                 num_want,
                 port,
             } => {
-                let mut writer = Cursor::new([0_u8; 98]);
-                writer.write_all(&connection_id.to_be_bytes()).unwrap();
-                writer.write_all(&1_u32.to_be_bytes()).unwrap();
-                writer
+                let mut bytes = BytesMut::zeroed(98);
+                let mut buffer = &mut bytes[..];
+                buffer.write_all(&connection_id.to_be_bytes()).unwrap();
+                buffer.write_all(&1_u32.to_be_bytes()).unwrap();
+                buffer
                     .write_all(&self.transaction_id.to_be_bytes())
                     .unwrap();
-                writer.write_all(info_hash).unwrap();
-                writer.write_all(peer_id).unwrap();
-                writer.write_all(&downloaded.to_be_bytes()).unwrap();
-                writer.write_all(&left.to_be_bytes()).unwrap();
-                writer.write_all(&uploaded.to_be_bytes()).unwrap();
-                writer.write_all(&event.as_bytes()).unwrap();
-                writer.write_all(&ip.to_be_bytes()).unwrap();
-                writer.write_all(&key.to_be_bytes()).unwrap();
-                writer.write_all(&num_want.to_be_bytes()).unwrap();
-                writer.write_all(&port.to_be_bytes()).unwrap();
-                Bytes::copy_from_slice(&writer.into_inner())
+                buffer.write_all(info_hash).unwrap();
+                buffer.write_all(peer_id).unwrap();
+                buffer.write_all(&downloaded.to_be_bytes()).unwrap();
+                buffer.write_all(&left.to_be_bytes()).unwrap();
+                buffer.write_all(&uploaded.to_be_bytes()).unwrap();
+                buffer.write_all(&event.as_bytes()).unwrap();
+                buffer.write_all(&ip.to_be_bytes()).unwrap();
+                buffer.write_all(&key.to_be_bytes()).unwrap();
+                buffer.write_all(&num_want.to_be_bytes()).unwrap();
+                buffer.write_all(&port.to_be_bytes()).unwrap();
+
+                debug_assert!(buffer.is_empty());
+                bytes.freeze()
             }
             UdpTrackerRequestType::Scrape {
                 connection_id,
@@ -211,30 +216,30 @@ fn read_u64(reader: &mut impl Read) -> Option<u64> {
 }
 
 impl UdpTrackerMessage {
-    pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        let mut cursor = Cursor::new(bytes);
-
-        let action = read_u32(&mut cursor).context("message doesn't contain action byte")?;
-        let transaction_id = read_u32(&mut cursor).context("read transaction id")?;
+    pub fn from_bytes(mut bytes: &[u8]) -> anyhow::Result<Self> {
+        let action = read_u32(&mut bytes).context("message doesn't contain action byte")?;
+        let transaction_id = read_u32(&mut bytes).context("read transaction id")?;
 
         let message_type = match action {
             0 => {
-                let connection_id = read_u64(&mut cursor).context("read connection id")?;
+                let connection_id = read_u64(&mut bytes).context("read connection id")?;
+                debug_assert!(bytes.is_empty());
                 UdpTrackerMessageType::Connect { connection_id }
             }
             1 => {
-                let interval = read_u32(&mut cursor).context("read interval")?;
-                let leechers = read_u32(&mut cursor).context("read leechers")?;
-                let seeders = read_u32(&mut cursor).context("read seeders")?;
-                let mut remaining = vec![0; cursor.remaining()];
-                cursor.read_exact(&mut remaining).unwrap();
-                let ips_len = remaining.len().checked_div(6).context("ip's dont add up")?;
+                let interval = read_u32(&mut bytes).context("read interval")?;
+                let leechers = read_u32(&mut bytes).context("read leechers")?;
+                let seeders = read_u32(&mut bytes).context("read seeders")?;
+                let ips_len = bytes.len().checked_div(6).context("ip's dont add up")?;
                 let mut ips = Vec::with_capacity(ips_len);
-                for slice in remaining.array_chunks::<6>() {
-                    let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
-                    let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
+                for mut slice in bytes.chunks(6) {
+                    let ip = read_u32(&mut slice).context("read ip address")?;
+                    let mut port_buf = [0; 2];
+                    slice.read_exact(&mut port_buf).context("read port")?;
+                    let port = u16::from_be_bytes(port_buf);
                     let ip = Ipv4Addr::from_bits(ip);
                     ips.push(SocketAddr::V4(SocketAddrV4::new(ip, port)));
+                    debug_assert!(slice.is_empty())
                 }
                 UdpTrackerMessageType::Announce {
                     interval,
@@ -244,15 +249,12 @@ impl UdpTrackerMessage {
                 }
             }
             2 => {
-                let mut remaining = vec![0; cursor.remaining()];
-                cursor.read_exact(&mut remaining).unwrap();
-                let res_len = remaining.len().checked_div(12).context("incomplete data")?;
+                let res_len = bytes.len().checked_div(12).context("incomplete data")?;
                 let mut units = Vec::with_capacity(res_len);
-                for slice in remaining.array_chunks::<12>() {
-                    let mut reader = Cursor::new(slice);
-                    let seeders = read_u32(&mut reader).unwrap();
-                    let completed = read_u32(&mut reader).unwrap();
-                    let leechers = read_u32(&mut reader).unwrap();
+                for mut slice in bytes.chunks(12) {
+                    let seeders = read_u32(&mut slice).context("read seeds")?;
+                    let completed = read_u32(&mut slice).context("read completed")?;
+                    let leechers = read_u32(&mut slice).context("read leechers")?;
                     units.push(UdpScrapeUnit {
                         seeders,
                         completed,
@@ -262,9 +264,7 @@ impl UdpTrackerMessage {
                 UdpTrackerMessageType::Scrape { units }
             }
             3 => {
-                let mut remaining = vec![0; cursor.remaining()];
-                cursor.read_exact(&mut remaining).unwrap();
-                let message = String::from_utf8(remaining)?;
+                let message = String::from_utf8(bytes.to_vec())?;
                 UdpTrackerMessageType::Error { message }
             }
             rest => return Err(anyhow::anyhow!("Action {} is not recognized", rest)),

@@ -2,20 +2,20 @@ use std::{
     collections::HashMap,
     fmt::Display,
     hash::Hasher,
-    io::{BufRead, Read, Write},
+    io::{Read, Write},
     net::SocketAddr,
 };
 
-use anyhow::{anyhow, ensure, Context};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
+use anyhow::{Context, anyhow, ensure};
+use bytes::{Buf, Bytes, BytesMut};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio_util::codec::Decoder;
 
 use crate::{
+    CLIENT_NAME,
     bitfield::BitField,
     download::{Block, PEER_IN_CHANNEL_CAPACITY},
-    CLIENT_NAME,
 };
 
 use super::{extension::Extension, pex, ut_metadata};
@@ -291,21 +291,20 @@ impl HandShake {
     }
 
     pub fn from_bytes(bytes: &[u8]) -> anyhow::Result<Self> {
-        let mut reader = bytes.reader();
-        let length = bytes.first().ok_or(anyhow!("length byte is not set"))?;
+        let length = bytes.first().context("length byte is not set")?;
         ensure!(*length == 19);
 
-        let identifier =
-            std::str::from_utf8(&bytes[1..20]).context("BitTorrent identifier string")?;
-        ensure!(identifier == "BitTorrent protocol");
-        reader.consume(20);
+        ensure!(bytes.len() > 20);
+        ensure!(&bytes[1..20] == b"BitTorrent protocol");
+        let mut bytes = &bytes[20..];
 
         let mut reserved = [0; 8];
         let mut info_hash = [0; 20];
         let mut peer_id = [0; 20];
-        reader.read_exact(&mut reserved).context("reserved bytes")?;
-        reader.read_exact(&mut info_hash).context("hash bytes")?;
-        reader.read_exact(&mut peer_id).context("peer_id bytes")?;
+        bytes.read_exact(&mut reserved).context("reserved bytes")?;
+        bytes.read_exact(&mut info_hash).context("hash bytes")?;
+        bytes.read_exact(&mut peer_id).context("peer_id bytes")?;
+        debug_assert!(bytes.is_empty());
 
         Ok(Self {
             reserved,
@@ -316,13 +315,14 @@ impl HandShake {
 
     pub fn as_bytes(&self) -> [u8; 68] {
         let mut out = [0_u8; 68];
-        let mut writer = out.writer();
+        let mut slice = &mut out[..];
 
-        writer.write_all(&[19]).unwrap();
-        writer.write_all(b"BitTorrent protocol").unwrap();
-        writer.write_all(&self.reserved).unwrap();
-        writer.write_all(&self.info_hash).unwrap();
-        writer.write_all(&self.peer_id.0).unwrap();
+        slice.write_all(&[19]).unwrap();
+        slice.write_all(b"BitTorrent protocol").unwrap();
+        slice.write_all(&self.reserved).unwrap();
+        slice.write_all(&self.info_hash).unwrap();
+        slice.write_all(&self.peer_id.0).unwrap();
+        debug_assert!(slice.is_empty());
         out
     }
 
@@ -548,20 +548,13 @@ impl PeerMessage {
         if frame.is_empty() {
             return Ok(Self::HeartBeat);
         }
-        let request_payload = |b: &[u8]| -> anyhow::Result<_> {
+        let request_payload = |mut b: &[u8]| -> anyhow::Result<_> {
             let mut index_buffer = [0; 4];
             let mut begin_buffer = [0; 4];
             let mut length_buffer = [0; 4];
-            let mut reader = b.reader();
-            reader
-                .read_exact(&mut index_buffer)
-                .context("index buffer")?;
-            reader
-                .read_exact(&mut begin_buffer)
-                .context("begin buffer")?;
-            reader
-                .read_exact(&mut length_buffer)
-                .context("length buffer")?;
+            b.read_exact(&mut index_buffer).context("index buffer")?;
+            b.read_exact(&mut begin_buffer).context("begin buffer")?;
+            b.read_exact(&mut length_buffer).context("length buffer")?;
             Ok((
                 u32::from_be_bytes(index_buffer),
                 u32::from_be_bytes(begin_buffer),
