@@ -238,7 +238,9 @@ impl Client {
                         downloaded,
                         response_tx,
                     );
-                    tracker.announce().await?;
+                    if let Err(e) = tracker.announce().await {
+                        tracing::warn!("Failed to announce tracker: {e}");
+                    };
                     Ok(())
                 });
             }

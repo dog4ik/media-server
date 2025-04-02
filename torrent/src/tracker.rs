@@ -5,7 +5,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use bytes::BytesMut;
 use reqwest::Url;
 use serde::{Deserialize, Serialize};
@@ -17,11 +17,12 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    BitField, Info,
     protocol::tracker::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
-    utils, BitField, Info,
+    utils,
 };
 
 pub const ID: [u8; 20] = *b"00112233445566778899";
@@ -52,16 +53,30 @@ pub struct AnnouncePayload {
 
 impl AnnouncePayload {
     async fn announce_http(&self) -> anyhow::Result<AnnounceResult> {
-        tracing::debug!("Announcing tracker {} via HTTP", self.announce);
         let url_params = HttpAnnounceUrlParams::from_payload(self);
+        let separator = if self.announce.to_string().contains('?') {
+            '&'
+        } else {
+            '?'
+        };
         let tracker_url = format!(
-            "{}?{}&info_hash={}",
+            "{}{separator}{}&info_hash={}",
             self.announce,
             serde_urlencoded::to_string(&url_params)?,
             &urlencode(&self.info_hash)
         );
-        let response = reqwest::get(tracker_url).await?;
-        let announce_bytes = response.bytes().await?;
+        tracing::debug!(tracker_url, "Announcing tracker {} via HTTP", self.announce);
+        let client = reqwest::Client::new();
+        let response = client
+            .get(tracker_url)
+            .header(
+                "User-Agent",
+                format!("SkibidiTorrent/{}", env!("CARGO_PKG_VERSION")),
+            )
+            .send()
+            .await?;
+
+        let announce_bytes = response.bytes().await.context("collect response bytes")?;
         let response: HttpAnnounceResponse = serde_bencode::from_bytes(&announce_bytes)?;
         Ok(response.into())
     }

@@ -648,6 +648,7 @@ impl Download {
                     }
                     self.storage
                         .try_save_piece(*pending_piece, pending_blocks.as_bytes())
+                        // no available capacity
                         .unwrap();
                 }
                 !is_full
