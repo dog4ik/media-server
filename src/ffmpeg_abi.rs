@@ -144,6 +144,7 @@ pub struct Audio {
     pub is_dub: bool,
     pub is_hearing_impaired: bool,
     pub is_visual_impaired: bool,
+    pub language: Option<String>,
 }
 
 impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
@@ -168,6 +169,19 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
         let bit_rate = audio.bit_rate();
         let channels = audio.channels();
         let sample_rate = audio.rate();
+
+        let mut language = None;
+
+        for (k, v) in &stream.metadata() {
+            match k {
+                "language" => {
+                    language = Some(v.to_owned());
+                    break;
+                }
+                _ => {}
+            }
+        }
+
         let codec = match (audio.id(), audio.profile()) {
             (codec::Id::AAC, codec::Profile::AAC(_)) => {
                 // adjust profile to follow the standard
@@ -195,6 +209,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             is_dub,
             is_hearing_impaired,
             is_visual_impaired,
+            language,
         })
     }
 }

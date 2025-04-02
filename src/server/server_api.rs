@@ -98,6 +98,7 @@ pub struct DetailedAudioTrack {
     pub channels: u16,
     pub profile_idc: i32,
     pub codec: AudioCodec,
+    pub language: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -255,6 +256,7 @@ impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
             channels: val.channels as u16,
             profile_idc: val.profile.unwrap().parse().unwrap(),
             codec: val.codec(),
+            language: None,
         }
     }
 }
@@ -270,6 +272,7 @@ impl From<&Track<Audio>> for DetailedAudioTrack {
             channels: val.stream.channels,
             profile_idc: val.stream.profile_idc,
             codec: val.stream.codec.clone(),
+            language: val.stream.language.clone(),
         }
     }
 }
