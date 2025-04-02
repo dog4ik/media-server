@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
+    BitField,
     peers::Peer,
     protocol::{
         extension::Extension,
@@ -18,7 +19,7 @@ use crate::{
         pex::PexHistory,
         ut_metadata::UtMessage,
     },
-    scheduler, BitField,
+    scheduler,
 };
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]

@@ -2,14 +2,14 @@ use std::{borrow::Cow, str::FromStr};
 
 use anyhow::Context;
 use quick_xml::{
-    events::{BytesStart, Event},
     Writer,
+    events::{BytesStart, Event},
 };
 
 use crate::{
+    FromXml, IntoXml, XmlReaderExt,
     action::{Action, ArgumentDirection},
     service_variables::{DataType, StateVariableDescriptor},
-    FromXml, IntoXml, XmlReaderExt,
 };
 
 use super::SpecVersion;
@@ -271,17 +271,24 @@ impl<'a> ScpdVariable<'a> {
                         b"allowedValueList" => {
                             while let Ok(event) = r.read_event() {
                                 match event {
-                                Event::Start(start) => {
-                                        anyhow::ensure!(start.local_name().as_ref() == b"allowedValue");
+                                    Event::Start(start) => {
+                                        anyhow::ensure!(
+                                            start.local_name().as_ref() == b"allowedValue"
+                                        );
                                         let text = r.read_text(start.name())?;
                                         allowed_values.push(text);
-                                    },
-                                Event::End(end) => {
-                                        anyhow::ensure!(end.local_name().as_ref() == b"allowedValueList");
+                                    }
+                                    Event::End(end) => {
+                                        anyhow::ensure!(
+                                            end.local_name().as_ref() == b"allowedValueList"
+                                        );
                                         break;
-                                    },
-                                Event::Text(_) => {},
-                                r => Err(anyhow::anyhow!("expected allowed value or allowed value list end, got {:?}",r))?
+                                    }
+                                    Event::Text(_) => {}
+                                    r => Err(anyhow::anyhow!(
+                                        "expected allowed value or allowed value list end, got {:?}",
+                                        r
+                                    ))?,
                                 }
                             }
                         }
@@ -352,17 +359,24 @@ impl<'a> FromXml<'a> for ScpdVariable<'a> {
                         b"allowedValueList" => {
                             while let Ok(event) = r.read_event() {
                                 match event {
-                                Event::Start(start) => {
-                                        anyhow::ensure!(start.local_name().as_ref() == b"allowedValue");
+                                    Event::Start(start) => {
+                                        anyhow::ensure!(
+                                            start.local_name().as_ref() == b"allowedValue"
+                                        );
                                         let text = r.read_text(start.name())?;
                                         allowed_values.push(text);
-                                    },
-                                Event::End(end) => {
-                                        anyhow::ensure!(end.local_name().as_ref() == b"allowedValueList");
+                                    }
+                                    Event::End(end) => {
+                                        anyhow::ensure!(
+                                            end.local_name().as_ref() == b"allowedValueList"
+                                        );
                                         break;
-                                    },
-                                Event::Text(_) => {},
-                                r => Err(anyhow::anyhow!("expected allowed value or allowed value list end, got {:?}",r))?
+                                    }
+                                    Event::Text(_) => {}
+                                    r => Err(anyhow::anyhow!(
+                                        "expected allowed value or allowed value list end, got {:?}",
+                                        r
+                                    ))?,
                                 }
                             }
                         }

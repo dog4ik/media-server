@@ -6,8 +6,8 @@ use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
 
-use base64::engine::general_purpose;
 use base64::Engine;
+use base64::engine::general_purpose;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout};
@@ -25,7 +25,7 @@ use crate::progress::TaskTrait;
 use crate::progress::VideoTask;
 use crate::progress::VideoTaskKind;
 use crate::utils;
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 
 const FFMPEG_IMAGE_CODECS: [&str; 6] = ["png", "jpeg", "mjpeg", "gif", "tiff", "bmp"];
 

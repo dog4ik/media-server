@@ -1,5 +1,5 @@
 use std::{
-    any::{type_name, Any, TypeId},
+    any::{Any, TypeId, type_name},
     char,
     collections::HashMap,
     fmt::Display,
@@ -11,7 +11,7 @@ use std::{
 
 use anyhow::Context;
 use clap::Parser;
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sysinfo::System;
 use tokio::{
     fs,

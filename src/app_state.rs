@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::Context;
-use axum::{extract::FromRef, http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, extract::FromRef, http::StatusCode, response::IntoResponse};
 use tokio::{fs, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 
@@ -18,6 +18,7 @@ use crate::{
     db::{Db, DbActions, DbEpisode, DbExternalId, DbMovie, DbSeason, DbShow, DbSubtitles},
     ffmpeg::{self, FFmpegRunningJob, SubtitlesJob, TranscodeJob},
     library::{
+        ContentIdentifier, Library, LibraryItem, Source, TranscodePayload, Video,
         assets::{
             AssetDir, BackdropAsset, BackdropContentType, FileAsset, PosterAsset,
             PosterContentType, SubtitlesDirAsset, VariantAsset,
@@ -25,12 +26,11 @@ use crate::{
         explore_movie_dirs, explore_show_dirs,
         movie::MovieIdentifier,
         show::ShowIdentifier,
-        ContentIdentifier, Library, LibraryItem, Source, TranscodePayload, Video,
     },
     metadata::{
-        metadata_stack::MetadataProvidersStack, tmdb_api::TmdbApi, ContentType,
-        DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider, MovieMetadata,
-        ShowMetadata, ShowMetadataProvider,
+        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider,
+        MovieMetadata, ShowMetadata, ShowMetadataProvider, metadata_stack::MetadataProvidersStack,
+        tmdb_api::TmdbApi,
     },
     progress::TaskResource,
     torrent::TorrentClient,

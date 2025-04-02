@@ -472,7 +472,7 @@ pub mod res {
         /// res@recordQuality property can be specified to indicate the quality level(s) used to make the
         /// recording.
         ///
-        /// The res@recordQuality property is a CSV list of <type> ":" <recording quality>
+        /// The res@recordQuality property is a CSV list of \<type\> ":" \<recording quality\>
         /// pairs. The type and quality in each pair are separated by a colon character (":").
         ///
         /// The type portion indicates what kind of value system is used in the recording quality portion.

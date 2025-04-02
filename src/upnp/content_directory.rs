@@ -4,14 +4,13 @@ use anyhow::Context;
 use upnp::{
     action::ActionError,
     content_directory::{
+        Container, ContentDirectoryHandler, Item, UpnpResolution,
         class::{ItemType, VideoItemType},
         error,
         properties::{
-            self,
+            self, DidlResponse,
             res::{ProtocolInfo, Resource},
-            DidlResponse,
         },
-        Container, ContentDirectoryHandler, Item, UpnpResolution,
     },
 };
 
@@ -480,7 +479,7 @@ impl FromStr for ContentId {
                         show_id,
                         season,
                         episode,
-                    })
+                    });
                 }
                 _ => {}
             }

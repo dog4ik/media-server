@@ -8,10 +8,10 @@ use anyhow::Context;
 use tokio::{net::UdpSocket, task::JoinSet};
 
 use crate::{
-    device_description::DeviceDescription,
-    ssdp::{Announce, AnnounceHandler, SearchMessage, UnicastAnnounce, SSDP_ADDR},
-    templates::service_description::Scpd,
     FromXml,
+    device_description::DeviceDescription,
+    ssdp::{Announce, AnnounceHandler, SSDP_ADDR, SearchMessage, UnicastAnnounce},
+    templates::service_description::Scpd,
 };
 
 #[derive(Debug)]

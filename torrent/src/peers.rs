@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Context};
+use anyhow::{Context, anyhow, ensure};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpStream,
@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use crate::bitfield::BitField;
 use crate::protocol::{
+    Info,
     extension::Extension,
     peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage},
     ut_metadata::{UtMessage, UtMetadata},
-    Info,
 };
 
 const HEARTBEAT: Duration = Duration::from_secs(10);
@@ -182,8 +182,8 @@ impl Peer {
                 }
                 _ => {
                     return Err(anyhow!(
-                    "First 2 messages must be bitfield or extension handshake, got {first_message}"
-                ))
+                        "First 2 messages must be bitfield or extension handshake, got {first_message}"
+                    ));
                 }
             }
         } else {
@@ -264,8 +264,8 @@ impl Peer {
                 }
                 _ => {
                     return Err(anyhow!(
-                    "First 2 messages must be bitfield or extension handshake, got {first_message}"
-                ))
+                        "First 2 messages must be bitfield or extension handshake, got {first_message}"
+                    ));
                 }
             }
         } else {
@@ -578,8 +578,10 @@ mod test {
             serde_bencode::to_string(&message).unwrap(),
             String::from_utf8(request.to_vec()).unwrap()
         );
-        assert!(String::from_utf8(data_request.to_vec())
-            .unwrap()
-            .starts_with(&serde_bencode::to_string(&data_message).unwrap()));
+        assert!(
+            String::from_utf8(data_request.to_vec())
+                .unwrap()
+                .starts_with(&serde_bencode::to_string(&data_message).unwrap())
+        );
     }
 }

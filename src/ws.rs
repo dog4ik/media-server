@@ -3,8 +3,8 @@ use std::{sync::Arc, time::Duration};
 use anyhow::Context;
 use axum::{
     extract::{
-        ws::{self, WebSocket},
         State, WebSocketUpgrade,
+        ws::{self, WebSocket},
     },
     response::Response,
 };

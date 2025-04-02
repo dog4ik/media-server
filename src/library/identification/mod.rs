@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use crate::library::{movie::MovieIdent, show::ShowIdent, Video, SUPPORTED_FILES};
+use crate::library::{SUPPORTED_FILES, Video, movie::MovieIdent, show::ShowIdent};
 
 use super::{movie::MovieIdentifier, show::ShowIdentifier};
 

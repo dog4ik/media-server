@@ -1,6 +1,7 @@
 use std::{fmt::Display, marker::PhantomData};
 
 use crate::{
+    FromXml,
     action::{
         ActionError, ActionResponse, ArgumentDirection, InArgumentPayload, ScannableArguments,
         SoapMessage, WritableAction,
@@ -14,8 +15,7 @@ use crate::{
     service::ArgumentScanner,
     service_variables::SVariable,
     templates::service_description::Scpd,
-    urn::{ServiceType, UrnType, URN},
-    FromXml,
+    urn::{ServiceType, URN, UrnType},
 };
 
 #[derive(Debug)]

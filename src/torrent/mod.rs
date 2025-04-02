@@ -13,11 +13,11 @@ use torrent::{DownloadHandle, DownloadParams, Info, MagnetLink, OutputFile};
 use crate::{
     db::{Db, DbActions, DbTorrentFile},
     library::{
-        is_format_supported, movie::MovieIdentifier, show::ShowIdentifier, ContentIdentifier, Media,
+        ContentIdentifier, Media, is_format_supported, movie::MovieIdentifier, show::ShowIdentifier,
     },
     metadata::{
-        metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MetadataProvider,
-        MovieMetadata, ShowMetadata,
+        ContentType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
+        metadata_stack::MetadataProvidersStack,
     },
     progress::{ProgressChunk, ProgressStatus, TaskResource, TaskTrait},
     utils,

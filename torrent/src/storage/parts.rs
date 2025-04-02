@@ -21,7 +21,7 @@ mod unstable {
         io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
     };
 
-    use crate::{storage::ReadyPiece, DownloadParams, OutputFile};
+    use crate::{DownloadParams, OutputFile, storage::ReadyPiece};
 
     fn file_bounds(files: &[File]) -> Box<[(usize, usize)]> {
         files.iter().map(|v| (v.start_piece, v.end_piece)).collect()
@@ -281,7 +281,7 @@ impl PartsFile {
                     pieces: Vec::new(),
                     file_location,
                     piece_length,
-                })
+                });
             }
             Err(e) => Err(e)?,
         };

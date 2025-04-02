@@ -14,6 +14,8 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::{
+    DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker, PeerDownloadStats,
+    PeerStateChange, StateChange,
     bitfield::BitField,
     peer_listener::NewPeer,
     peers::{Peer, PeerError, PeerIPC, PeerStorage},
@@ -29,8 +31,6 @@ use crate::{
     session::SessionContext,
     storage::{StorageError, StorageFeedback, StorageHandle, StorageResult},
     tracker::{DownloadStat, DownloadTracker},
-    DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker, PeerDownloadStats,
-    PeerStateChange, StateChange,
 };
 
 pub mod peer;

@@ -1,10 +1,10 @@
 use bytes::Bytes;
-use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeMap};
 
 use super::{
-    extension::Extension,
-    peer::{ExtensionHandshake, CLIENT_EXTENSIONS},
     Info,
+    extension::Extension,
+    peer::{CLIENT_EXTENSIONS, ExtensionHandshake},
 };
 
 /// Representation of full / partial ut_metadata.
@@ -106,7 +106,7 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
                     return Err(serde::de::Error::unknown_variant(
                         &key,
                         &["msg_type", "piece", "total_size"],
-                    ))
+                    ));
                 }
             };
         }

@@ -2,8 +2,8 @@ use std::{collections::HashMap, path::Path};
 
 use tokio::sync::mpsc;
 use tray_icon::{
-    menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
     TrayIcon, TrayIconBuilder, TrayIconEvent,
+    menu::{IsMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem},
 };
 use winit::{
     application::ApplicationHandler,

@@ -2,9 +2,9 @@ use std::{ops::Deref, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
+    Acquire, Error, FromRow, Pool, Sqlite, SqliteConnection, SqlitePool, Transaction,
     migrate::{MigrateError, Migrator},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
-    Acquire, Error, FromRow, Pool, Sqlite, SqliteConnection, SqlitePool, Transaction,
 };
 use torrent::DownloadParams;
 

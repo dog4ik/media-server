@@ -3,9 +3,9 @@ use axum::{
     http::{HeaderMap, HeaderValue},
     response::IntoResponse,
 };
-use axum_extra::{headers, TypedHeader};
+use axum_extra::{TypedHeader, headers};
 use bytes::Bytes;
-use reqwest::{header, StatusCode};
+use reqwest::{StatusCode, header};
 use tokio::sync::mpsc;
 use torrent::ScheduleStrategy;
 

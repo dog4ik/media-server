@@ -3,8 +3,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::{
-    identification::{Parseable as Parsable, Parser, Token, SPECIAL_CHARS},
     ContentIdentifier, Media,
+    identification::{Parseable as Parsable, Parser, SPECIAL_CHARS, Token},
 };
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

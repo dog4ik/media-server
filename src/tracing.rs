@@ -4,16 +4,16 @@ use std::fs::OpenOptions;
 use std::io::{LineWriter, Write};
 use std::path::Path;
 
-use axum::response::sse::{Event, KeepAlive};
-use axum::response::Sse;
 use axum::Extension;
+use axum::response::Sse;
+use axum::response::sse::{Event, KeepAlive};
 use serde_json::{Map, Number, Value};
 use tokio::sync::{broadcast, mpsc};
 use tokio_stream::{Stream, StreamExt};
-use tracing::field::{Field, Visit};
 use tracing::Subscriber;
+use tracing::field::{Field, Visit};
 use tracing_subscriber::EnvFilter;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
+use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::AppResources;
 

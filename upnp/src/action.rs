@@ -7,12 +7,12 @@ use axum_extra::headers::{self, HeaderMapExt};
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
 use reqwest::StatusCode;
 
-use crate::{service::ArgumentScanner, XmlReaderExt};
+use crate::{XmlReaderExt, service::ArgumentScanner};
 
 use super::{
+    FromXml, IntoXml, XmlWriter,
     service_variables::{IntoUpnpValue, SVariable, StateVariableDescriptor},
     urn::URN,
-    FromXml, IntoXml, XmlWriter,
 };
 
 #[derive(Debug, Clone)]

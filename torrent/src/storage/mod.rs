@@ -12,10 +12,10 @@ use tokio::{
 use tokio_util::task::TaskTracker;
 
 use crate::{
+    DownloadParams, Priority,
     bitfield::BitField,
     protocol::{Hashes, OutputFile},
     scheduler::BLOCK_LENGTH,
-    DownloadParams, Priority,
 };
 
 mod hash_verification;

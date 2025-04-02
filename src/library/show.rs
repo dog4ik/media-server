@@ -3,8 +3,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use super::{
-    identification::{Parseable, Parser, Token, SPECIAL_CHARS},
     ContentIdentifier, Media,
+    identification::{Parseable, Parser, SPECIAL_CHARS, Token},
 };
 
 mod helpers {
@@ -273,19 +273,49 @@ mod tests {
             ("/server/anything_s01.e02.mp4", "anything", Some(1), Some(2)),
             ("/server/anything_102.mp4", "anything", Some(1), Some(2)),
             ("/server/anything_1x02.mp4", "anything", Some(1), Some(2)),
-            ("/server/The Walking Dead 4x01.mp4", "The Walking Dead", Some(4), Some(1)),
-            ("/server/the_simpsons-s02e01_18536.mp4", "the simpsons", Some(2), Some(1)),
+            (
+                "/server/The Walking Dead 4x01.mp4",
+                "The Walking Dead",
+                Some(4),
+                Some(1),
+            ),
+            (
+                "/server/the_simpsons-s02e01_18536.mp4",
+                "the simpsons",
+                Some(2),
+                Some(1),
+            ),
             ("/server/Temp/S01E02 foo.mp4", "Temp", Some(1), Some(2)),
             ("Series/4x12 - The Woman.mp4", "Series", Some(4), Some(12)),
             // Current implementation thinks '.' is separator so resulting filename does not
             // contain it
             // ("Series/LA X, Pt. 1_s06e32.mp4", "LA X, Pt. 1", Some(6), Some(32)),
-            ("[Baz-BarF,oo - [1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", None, Some(5)),
-            ("/Foo/The.Series.Name.S01E04.WEBRip.x264-Baz[Bar/,the.series.name.s01e04.webrip.x264-Baz[Bar].mkv", "the series name", Some(1), Some(4)),
-            ("Love.Death.and.Robots.S01.1080p.NF.WEB-DL.DDP5.1.x264-NTG/Love.Death.and.Robots.S01E01.Sonnies.Edge.1080p.NF.WEB-DL.DDP5.1.x264-NTG.mkv", "Love Death and Robots", Some(1), Some(1)),
+            (
+                "[Baz-BarF,oo - [1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv",
+                "Foo",
+                None,
+                Some(5),
+            ),
+            (
+                "/Foo/The.Series.Name.S01E04.WEBRip.x264-Baz[Bar/,the.series.name.s01e04.webrip.x264-Baz[Bar].mkv",
+                "the series name",
+                Some(1),
+                Some(4),
+            ),
+            (
+                "Love.Death.and.Robots.S01.1080p.NF.WEB-DL.DDP5.1.x264-NTG/Love.Death.and.Robots.S01E01.Sonnies.Edge.1080p.NF.WEB-DL.DDP5.1.x264-NTG.mkv",
+                "Love Death and Robots",
+                Some(1),
+                Some(1),
+            ),
             // We cannot know if text after explicit separator is the continuation of show name
             // ("[YuiSubs ,Tensura Nikki - Tensei Shitara Slime Datta Ken/[YuiSubs] Tensura Nikki - Tensei Shitara Slime Datta Ken - 12 (NVENC H.265 1080p).mkv", "Tensura Nikki Tensei Shitara Slime Datta Ken", None, Some(12)),
-            ("[Baz-BarF,oo - 01 - 12[1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", None, Some(5)),
+            (
+                "[Baz-BarF,oo - 01 - 12[1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv",
+                "Foo",
+                None,
+                Some(5),
+            ),
             ("Series/4-12 - The Woman.mp4", "Series", Some(4), Some(12)),
         ];
         for test in tests {
@@ -339,7 +369,10 @@ mod tests {
 
     fn seasons_number_tests() {
         let tests = [
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", 25),
+            (
+                "The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv",
+                25,
+            ),
             ("/Show/Season 02/S02E03 blah.avi", 2),
             ("Season 1/seriesname S01x02 blah.avi", 1),
             ("Season 1/S01x02 blah.avi", 1),
@@ -349,7 +382,10 @@ mod tests {
             ("Season 1/S01xE02 blah.avi", 1),
             ("Season 1/seriesname 01x02 blah.avi", 1),
             ("Season 1/seriesname S01E02 blah.avi", 1),
-            ("Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", 2),
+            (
+                "Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4",
+                2,
+            ),
             ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", 2),
             ("Season 2/02x03-04-15 - Ep Name.mp4", 2),
             ("Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", 2),
@@ -362,7 +398,10 @@ mod tests {
             ("Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", 1),
             ("Season 1/S01E23-E24-E26 - The Woman.mp4", 1),
             ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", 25),
-            ("The Simpsons/The Simpsons.S25E09.Steal this episode.mp4", 25),
+            (
+                "The Simpsons/The Simpsons.S25E09.Steal this episode.mp4",
+                25,
+            ),
             ("2016/Season s2016e1.mp4", 2016),
             ("2016/Season 2016x1.mp4", 2016),
             ("Season 2009/2009x02 blah.avi", 2009),
@@ -372,13 +411,25 @@ mod tests {
             ("Season 2009/seriesname 2009x02 blah.avi", 2009),
             ("Season 2009/seriesname S2009x02 blah.avi", 2009),
             ("Season 2009/seriesname S2009E02 blah.avi", 2009),
-            ("Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 2009),
-            ("Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 2009),
+            (
+                "Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4",
+                2009,
+            ),
+            (
+                "Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4",
+                2009,
+            ),
             ("Season 2009/2009x03-04-15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4", 2009),
+            (
+                "Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4",
+                2009,
+            ),
             ("Season 2009/2009x03x04x15 - Ep Name.mp4", 2009),
             ("Season 2009/Elementary - 2009x03x04x15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4", 2009),
+            (
+                "Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4",
+                2009,
+            ),
             ("Season 2009/S2009E23-E24-E26 - The Woman.mp4", 2009),
             ("Series/1-12 - The Woman.mp4", 1),
             ("Running Man/Running Man S2017E368.mkv", 2017),
@@ -401,31 +452,116 @@ mod tests {
             ("/media/Foo/Foo-S01E01", "Foo", Some(1), Some(1)),
             ("/media/Foo - S04E011", "Foo", Some(4), Some(11)),
             ("/media/Foo/Foo s01x01", "Foo", Some(1), Some(1)),
-            ("/media/Foo (2019)/Season 4/Foo (2019).S04E03.mp4", "Foo", Some(4), Some(3)),
-            ("/Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", "Elementary", Some(2), Some(3)),
-            ("/Season 1/seriesname S01E02 blah.avi", "seriesname", Some(1), Some(2)),
-            ("/Running Man/Running Man S2017E368.mkv", "Running Man", Some(2017), Some(368)),
-            ("/Season 1/seriesname 01x02 blah.avi", "seriesname", Some(1), Some(2)),
-            ("/Season 25/The Simpsons.S25E09.Steal this episode.mp4", "The Simpsons", Some(25), Some(9)),
-            ("/Season 1/seriesname S01x02 blah.avi", "seriesname", Some(1), Some(2)),
-            ("/Season 1/seriesname S01xE02 blah.avi", "seriesname", Some(1), Some(2)),
+            (
+                "/media/Foo (2019)/Season 4/Foo (2019).S04E03.mp4",
+                "Foo",
+                Some(4),
+                Some(3),
+            ),
+            (
+                "/Season 2/Elementary - 02x03-04-15 - Ep Name.mp4",
+                "Elementary",
+                Some(2),
+                Some(3),
+            ),
+            (
+                "/Season 1/seriesname S01E02 blah.avi",
+                "seriesname",
+                Some(1),
+                Some(2),
+            ),
+            (
+                "/Running Man/Running Man S2017E368.mkv",
+                "Running Man",
+                Some(2017),
+                Some(368),
+            ),
+            (
+                "/Season 1/seriesname 01x02 blah.avi",
+                "seriesname",
+                Some(1),
+                Some(2),
+            ),
+            (
+                "/Season 25/The Simpsons.S25E09.Steal this episode.mp4",
+                "The Simpsons",
+                Some(25),
+                Some(9),
+            ),
+            (
+                "/Season 1/seriesname S01x02 blah.avi",
+                "seriesname",
+                Some(1),
+                Some(2),
+            ),
+            (
+                "/Season 1/seriesname S01xE02 blah.avi",
+                "seriesname",
+                Some(1),
+                Some(2),
+            ),
             // Multi episodes are not yet supported!
             //("/Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", "Elementary", 2, 3),
             //("/Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", "Elementary", 2, 3),
             //("/Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", "Elementary", 2, 3),
             //("/Season 02/Elementary - 02x03-E15 - Ep Name.mp4", "Elementary", 2, 3),
             //("/Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", "Elementary", 1, 23),
-            ("/The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi", "The Wonder Years", Some(4), Some(7)),
-            ("/The.Sopranos/Season 3/The Sopranos Season 3 Episode 09 - The Telltale Moozadell.avi", "The Sopranos", Some(3), Some(9)),
-            ("/Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv", "Castle Rock", Some(2), Some(1)),
-            ("/After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv", "After Life", Some(1), Some(6)),
-            ("/Season 4/Uchuu.Senkan.Yamato.2199.E03.avi", "Uchuu Senkan Yamato", Some(4), Some(3)),
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", "The Daily Show", Some(25), Some(22)),
-            ("Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv", "Watchmen", Some(1), Some(3)),
+            (
+                "/The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi",
+                "The Wonder Years",
+                Some(4),
+                Some(7),
+            ),
+            (
+                "/The.Sopranos/Season 3/The Sopranos Season 3 Episode 09 - The Telltale Moozadell.avi",
+                "The Sopranos",
+                Some(3),
+                Some(9),
+            ),
+            (
+                "/Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv",
+                "Castle Rock",
+                Some(2),
+                Some(1),
+            ),
+            (
+                "/After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv",
+                "After Life",
+                Some(1),
+                Some(6),
+            ),
+            (
+                "/Season 4/Uchuu.Senkan.Yamato.2199.E03.avi",
+                "Uchuu Senkan Yamato",
+                Some(4),
+                Some(3),
+            ),
+            (
+                "The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv",
+                "The Daily Show",
+                Some(25),
+                Some(22),
+            ),
+            (
+                "Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv",
+                "Watchmen",
+                Some(1),
+                Some(3),
+            ),
             // ??? where the heck is season in this test
             //("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", "The Legend of Condor Heroes", 1, 7),
-            ("[SOFCJ-Raws] Death Note - 14 (BDRip 1920x1080 x264 VFR 10bit FLAC)_combined.mkv", "Death Note", None, Some(14)),
-            ("boring shows/Cool Show/Season 4/14.mkv", "Cool Show", Some(4), Some(14))
+            (
+                "[SOFCJ-Raws] Death Note - 14 (BDRip 1920x1080 x264 VFR 10bit FLAC)_combined.mkv",
+                "Death Note",
+                None,
+                Some(14),
+            ),
+            (
+                "boring shows/Cool Show/Season 4/14.mkv",
+                "Cool Show",
+                Some(4),
+                Some(14),
+            ),
         ];
         for test in tests {
             test_simple_episode(test);
@@ -463,10 +599,22 @@ mod tests {
     fn episode_number_test() {
         let tests = [
             ("Season 21/One Piece 1001", 1001),
-            ("Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv", 3),
-            ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", 22),
-            ("Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv", 1),
-            ("After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv", 6),
+            (
+                "Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv",
+                3,
+            ),
+            (
+                "The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv",
+                22,
+            ),
+            (
+                "Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv",
+                1,
+            ),
+            (
+                "After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv",
+                6,
+            ),
             ("Season 02/S02E03 blah.avi", 3),
             ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", 3),
             ("Season 02/02x03 - x04 - x15 - Ep Name.mp4", 3),
@@ -485,7 +633,10 @@ mod tests {
             ("Season 1/seriesname 01x02 blah.avi", 2),
             ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", 9),
             ("Season 1/seriesname S01x02 blah.avi", 2),
-            ("Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", 3),
+            (
+                "Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4",
+                3,
+            ),
             ("Season 1/seriesname S01xE02 blah.avi", 2),
             ("Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", 3),
             ("Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", 3),
@@ -502,36 +653,63 @@ mod tests {
             ("Season 2009/2009x03x04x15 - Ep Name.mp4", 3),
             ("Season 2009/Elementary - 2009x03-E15 - Ep Name.mp4", 3),
             ("Season 2009/S2009xE02 blah.avi", 2),
-            ("Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4", 23),
+            (
+                "Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4",
+                23,
+            ),
             ("Season 2009/seriesname S2009xE02 blah.avi", 2),
             ("Season 2009/2009x03-E15 - Ep Name.mp4", 3),
             ("Season 2009/seriesname S2009E02 blah.avi", 2),
             ("Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 3),
             ("Season 2009/2009x03 - x04 - x15 - Ep Name.mp4", 3),
             ("Season 2009/seriesname S2009x02 blah.avi", 2),
-            ("Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", 3),
+            (
+                "Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4",
+                3,
+            ),
             ("Season 2009/Elementary - 2009x03-04-15 - Ep Name.mp4", 3),
             ("Season 2009/2009x03-04-15 - Ep Name.mp4", 3),
-            ("Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4", 3),
+            (
+                "Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4",
+                3,
+            ),
             ("Season 1/02 - blah-02 a.avi", 2),
             ("Season 1/02 - blah.avi", 2),
             ("Season 2/02 - blah 14 blah.avi", 2),
             ("Season 2/02.avi", 2),
             ("Season 2/2. Infestation.avi", 2),
-            ("The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi", 7),
+            (
+                "The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi",
+                7,
+            ),
             ("Running Man/Running Man S2017E368.mkv", 368),
-            ("Season 2/[HorribleSubs] Hunter X Hunter - 136 [720p].mkv", 136), // triple digit episode number
-            ("Log Horizon 2/[HorribleSubs] Log Horizon 2 - 03 [720p].mkv", 3), // digit in series name
+            (
+                "Season 2/[HorribleSubs] Hunter X Hunter - 136 [720p].mkv",
+                136,
+            ), // triple digit episode number
+            (
+                "Log Horizon 2/[HorribleSubs] Log Horizon 2 - 03 [720p].mkv",
+                3,
+            ), // digit in series name
             ("Season 1/seriesname 05.mkv", 5), // no hyphen between series name and episode number
             ("[BBT-RMX] Ranma ½ - 154 [50AC421A].mkv", 154), // hyphens in the pre-name info, triple digit episode number
-            ("Season 2/Episode 21 - 94 Meetings.mp4", 21), // Title starts with a number
-            ("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", 7),
+            ("Season 2/Episode 21 - 94 Meetings.mp4", 21),   // Title starts with a number
+            (
+                "/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv",
+                7,
+            ),
             ("Season 3/The Series Season 3 Episode 9 - The title.avi", 9),
             ("Season 3/The Series S3 E9 - The title.avi", 9),
             ("Season 3/S003 E009.avi", 9),
             ("Season 3/Season 3 Episode 9.avi", 9),
-            ("[VCB-Studio] Re Zero kara Hajimeru Isekai Seikatsu [21][Ma10p_1080p][x265_flac].mkv", 21),
-            ("[CASO&Sumisora][Oda_Nobuna_no_Yabou][04][BDRIP][1920x1080][x264_AAC][7620E503].mp4", 4),
+            (
+                "[VCB-Studio] Re Zero kara Hajimeru Isekai Seikatsu [21][Ma10p_1080p][x265_flac].mkv",
+                21,
+            ),
+            (
+                "[CASO&Sumisora][Oda_Nobuna_no_Yabou][04][BDRIP][1920x1080][x264_AAC][7620E503].mp4",
+                4,
+            ),
         ];
     }
 }

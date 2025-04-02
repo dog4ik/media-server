@@ -23,11 +23,7 @@ pub fn piece_size(piece_i: usize, piece_length: u32, total_length: u64) -> u64 {
 
     if piece_i == total_pieces as usize - 1 {
         let md = total_length % piece_length;
-        if md == 0 {
-            piece_length
-        } else {
-            md
-        }
+        if md == 0 { piece_length } else { md }
     } else {
         piece_length
     }

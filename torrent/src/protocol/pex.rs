@@ -1,7 +1,7 @@
 use bytes::{Bytes, BytesMut};
-use serde::{de::Visitor, ser::SerializeMap, Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeMap};
 use std::{
-    collections::{btree_map::Entry, BTreeMap, BTreeSet, HashSet},
+    collections::{BTreeMap, BTreeSet, HashSet, btree_map::Entry},
     net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6},
 };
 
@@ -154,12 +154,14 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
                         &[
                             "added", "added.f", "added6", "added6.f", "dropped", "dropped6",
                         ],
-                    ))
+                    ));
                 }
             };
         }
         if added.is_none() && added6.is_none() && dropped.is_none() && dropped6.is_none() {
-            return Err(serde::de::Error::missing_field("Messages must contain at least one of the following fields: added, added6, dropped, dropped6"));
+            return Err(serde::de::Error::missing_field(
+                "Messages must contain at least one of the following fields: added, added6, dropped, dropped6",
+            ));
         }
 
         let parse_ipv4 = |chunk: [u8; 6]| {

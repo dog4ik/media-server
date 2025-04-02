@@ -34,7 +34,7 @@ impl ConnectionManagerHandler for MediaServerConnectionManager {
             upnp::action::ActionError,
         >,
     > + Send
-           + Sync {
+    + Sync {
         async { todo!() }
     }
 

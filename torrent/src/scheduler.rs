@@ -10,14 +10,14 @@ use rand::seq::SliceRandom;
 use uuid::Uuid;
 
 use crate::{
+    DownloadState,
     download::{
-        self,
+        self, Block, BlockPosition, DataBlock,
         peer::{ActivePeer, Performance},
-        Block, BlockPosition, DataBlock,
     },
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
-    protocol::{peer::PeerMessage, ut_metadata::UtMetadata, Info, OutputFile},
-    utils, DownloadState,
+    protocol::{Info, OutputFile, peer::PeerMessage, ut_metadata::UtMetadata},
+    utils,
 };
 
 #[derive(Debug, Clone, Copy)]

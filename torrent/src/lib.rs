@@ -16,10 +16,10 @@ use peers::Peer;
 use reqwest::Url;
 pub use resumability::DownloadParams;
 use session::SessionContext;
-use storage::{parts::PartsFile, TorrentStorage};
+use storage::{TorrentStorage, parts::PartsFile};
 use tokio::{
     net::TcpStream,
-    sync::{mpsc, Semaphore},
+    sync::{Semaphore, mpsc},
     task::JoinSet,
     time::timeout,
 };
@@ -61,6 +61,10 @@ mod tracker;
 mod utils;
 
 pub use bitfield::BitField;
+pub use download::DownloadError;
+pub use download::DownloadHandle;
+pub use download::DownloadMessage;
+pub use download::DownloadState;
 pub use download::peer::Status;
 pub use download::progress_consumer::DownloadProgress;
 pub use download::progress_consumer::FullState;
@@ -71,10 +75,6 @@ pub use download::progress_consumer::PeerDownloadStats;
 pub use download::progress_consumer::PeerStateChange;
 pub use download::progress_consumer::ProgressConsumer;
 pub use download::progress_consumer::StateChange;
-pub use download::DownloadError;
-pub use download::DownloadHandle;
-pub use download::DownloadMessage;
-pub use download::DownloadState;
 pub use file::TorrentFile;
 pub use magnet::MagnetLink;
 pub use piece_picker::Priority;

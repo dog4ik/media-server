@@ -1112,7 +1112,7 @@ impl FromStr for UpnpResolution {
 
 /// The frame rate in frames/second
 ///
-/// Format of the string is: <numeric value>p or <numeric value>i.
+/// Format of the string is: \<numeric value\>p or \<numeric value\>i.
 ///
 /// Example:
 /// `29.97i` indicates a frame rate of 29.97 frames per second interlaced scanning.

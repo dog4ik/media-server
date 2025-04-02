@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use reqwest::Url;
 
-use crate::{bitfield::BitField, Info};
+use crate::{Info, bitfield::BitField};
 
 /// All necessary data that is needed to save/resume torrent downloads
 #[derive(Debug, Clone)]
