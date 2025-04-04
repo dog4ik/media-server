@@ -154,7 +154,6 @@ pub struct SerdeDuration {
             server_api::UpdateHistoryPayload,
             server_api::ShowSuggestion,
             server_api::MovieHistory,
-            server_api::ProviderType,
             torrent::DownloadContentHint,
             torrent::TorrentDownloadPayload,
             torrent::TorrentInfo,

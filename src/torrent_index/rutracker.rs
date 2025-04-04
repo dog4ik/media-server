@@ -7,7 +7,7 @@ use crate::{
     metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient},
 };
 
-use super::{Torrent, TorrentIndex};
+use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
 
 /// Rutracker torrent index Provod adapter.
 ///
@@ -58,14 +58,14 @@ impl From<ProvodRuTrackerTorrent> for Torrent {
 }
 
 impl ProvodRuTrackerAdapter {
-    pub fn new() -> Self {
-        let (client, base_url) = provod_agent::new_client("rutracker");
+    pub fn new() -> anyhow::Result<Self> {
+        let (client, base_url) = provod_agent::new_client("rutracker")?;
         let limited_client =
             LimitedRequestClient::new(client, 5, std::time::Duration::from_secs(1));
-        Self {
+        Ok(Self {
             base_url,
             limited_client,
-        }
+        })
     }
 
     pub async fn search(&self, query: &str) -> Result<Vec<ProvodRuTrackerTorrent>, AppError> {
@@ -143,7 +143,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         Ok(self.get_magnet_link(torrent_id).await?)
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "rutracker"
+    fn provider_identifier(&self) -> TorrentIndexIdentifier {
+        TorrentIndexIdentifier::RuTracker
     }
 }

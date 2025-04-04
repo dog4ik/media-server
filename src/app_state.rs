@@ -3,7 +3,6 @@ use std::{
     error::Error,
     fmt::Display,
     num::ParseIntError,
-    str::FromStr,
     sync::Mutex,
     time::{Duration, Instant},
 };
@@ -30,11 +29,9 @@ use crate::{
     metadata::{
         ContentType, DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider,
         MovieMetadata, ShowMetadata, ShowMetadataProvider, metadata_stack::MetadataProvidersStack,
-        tmdb_api::TmdbApi,
     },
     progress::TaskResource,
     torrent::TorrentClient,
-    torrent_index::tpb::TpbApi,
     utils,
 };
 
@@ -43,8 +40,6 @@ pub struct AppState {
     pub library: &'static Mutex<Library>,
     pub db: &'static Db,
     pub tasks: &'static TaskResource,
-    pub tmdb_api: &'static TmdbApi,
-    pub tpb_api: &'static TpbApi,
     pub providers_stack: &'static MetadataProvidersStack,
     pub torrent_client: &'static TorrentClient,
     pub cancelation_token: CancellationToken,
@@ -444,10 +439,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
                             .providers_stack
                             .discover_providers()
                             .into_iter()
-                            .find(|p| {
-                                p.provider_identifier()
-                                    == new_metadata.metadata_provider.to_string()
-                            })
+                            .find(|p| p.provider_identifier() == new_metadata.metadata_provider)
                             .unwrap();
                         tracing::info!("Fetching show as new");
                         handle_show_metadata(self.db, new_metadata, provider).await?
@@ -942,7 +934,7 @@ async fn handle_series(
             != item.identifier.title.split_whitespace().count()
     {
         for provider in providers {
-            if provider.provider_identifier() == "local" {
+            if provider.provider_identifier() == MetadataProvider::Local {
                 continue;
             }
             if let Ok(search_result) = provider
@@ -1183,9 +1175,11 @@ async fn handle_season(
         .await
     else {
         for provider in providers {
-            let p = MetadataProvider::from_str(provider.provider_identifier())
-                .expect("all providers are known");
-            if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
+            let identifier = provider.provider_identifier();
+            if let Some(id) = external_shows_ids
+                .iter()
+                .find(|id| id.provider == identifier)
+            {
                 let Ok(season) = provider.season(&id.id, season, fetch_params).await else {
                     continue;
                 };
@@ -1231,9 +1225,11 @@ async fn handle_episode(
         );
         let duration = item.source.video.fetch_duration().await?;
         for provider in providers {
-            let p = MetadataProvider::from_str(provider.provider_identifier())
-                .expect("all providers are known");
-            if let Some(id) = external_shows_ids.iter().find(|id| id.provider == p) {
+            let identifier = provider.provider_identifier();
+            if let Some(id) = external_shows_ids
+                .iter()
+                .find(|id| id.provider == identifier)
+            {
                 let Ok(episode) = provider
                     .episode(&id.id, season, episode, fetch_params)
                     .await
@@ -1476,18 +1472,6 @@ impl FromRef<AppState> for Db {
 impl FromRef<AppState> for &'static TaskResource {
     fn from_ref(app_state: &AppState) -> &'static TaskResource {
         app_state.tasks
-    }
-}
-
-impl FromRef<AppState> for &'static TmdbApi {
-    fn from_ref(app_state: &AppState) -> &'static TmdbApi {
-        app_state.tmdb_api
-    }
-}
-
-impl FromRef<AppState> for &'static TpbApi {
-    fn from_ref(app_state: &AppState) -> &'static TpbApi {
-        app_state.tpb_api
     }
 }
 

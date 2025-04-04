@@ -91,7 +91,7 @@ impl TmdbApi {
     ///
     /// If provided api key, requests will go directly to tmdb.
     /// Otherwise Provod proxy will be used.
-    pub fn new(api_key: Option<String>) -> Self {
+    pub fn new(api_key: Option<String>) -> anyhow::Result<Self> {
         let mut headers = HeaderMap::with_capacity(2);
         // If we don't have token use provod agent
         let (client, base_url) = match api_key {
@@ -113,16 +113,16 @@ impl TmdbApi {
                     Url::parse(Self::API_URL).expect("url to parse"),
                 )
             }
-            None => provod_agent::new_client("tmdb"),
+            None => provod_agent::new_client("tmdb")?,
         };
 
         let limited_client =
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
-        Self {
+        Ok(Self {
             client: limited_client,
             episodes_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             base_url,
-        }
+        })
     }
 
     pub async fn trending_shows(&self) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
@@ -424,8 +424,8 @@ impl MovieMetadataProvider for TmdbApi {
         Ok(movie.into())
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tmdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tmdb
     }
 }
 
@@ -466,8 +466,8 @@ impl ShowMetadataProvider for TmdbApi {
             .map(|e| e.into())
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tmdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tmdb
     }
 }
 
@@ -533,8 +533,8 @@ impl DiscoverMetadataProvider for TmdbApi {
         Ok(out)
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tmdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tmdb
     }
 }
 

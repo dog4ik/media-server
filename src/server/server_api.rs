@@ -47,15 +47,14 @@ use crate::library::assets::{
 use crate::library::{
     AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
-use crate::metadata::tmdb_api::TmdbApi;
 use crate::metadata::{
     ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
 };
-use crate::metadata::{ExternalIdMetadata, MetadataSearchResult};
+use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
 use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
 use crate::server::OptionalTorrentIndexQuery;
-use crate::torrent_index::Torrent;
+use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, FromRow, utoipa::ToSchema)]
@@ -1095,10 +1094,8 @@ pub async fn search_torrent(
         Some(p) => {
             let lang: config::MetadataLanguage = config::CONFIG.get_value();
             let fetch_params = crate::metadata::FetchParams { lang: lang.0 };
-            let providers = providers.torrent_indexes();
             let provider = providers
-                .iter()
-                .find(|t| t.provider_identifier() == p.to_string())
+                .torrent_index(p)
                 .ok_or(AppError::not_found("Provider is not found"))?;
             match content_type.content_type {
                 Some(ContentType::Show) => {
@@ -1130,15 +1127,13 @@ pub async fn search_torrent(
     tag = "Search",
 )]
 pub async fn get_trending_shows(
-    State(tmdb_api): State<&'static TmdbApi>,
+    State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<ShowMetadata>>, AppError> {
+    let tmdb_api = providers
+        .tmdb
+        .ok_or(AppError::bad_request("tmdb provider is not available"))?;
     let res = tmdb_api.trending_shows().await?;
-    let shows = res
-        .results
-        .into_iter()
-        .map(|search_result| search_result.into())
-        .collect();
-    Ok(Json(shows))
+    Ok(Json(res.results.into_iter().map(Into::into).collect()))
 }
 
 /// Get trending movies
@@ -1151,15 +1146,13 @@ pub async fn get_trending_shows(
     tag = "Search",
 )]
 pub async fn get_trending_movies(
-    State(tmdb_api): State<&'static TmdbApi>,
+    State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+    let tmdb_api = providers
+        .tmdb
+        .ok_or(AppError::bad_request("tmdb provider is not available"))?;
     let res = tmdb_api.trending_movies().await?;
-    let shows = res
-        .results
-        .into_iter()
-        .map(|search_result| search_result.into())
-        .collect();
-    Ok(Json(shows))
+    Ok(Json(res.results.into_iter().map(Into::into).collect()))
 }
 
 /// Search for content. Allows to search for all types of content at once
@@ -2194,59 +2187,60 @@ pub async fn reset_server_configuration() -> Result<(), AppError> {
 
 #[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ProviderType {
-    Discover,
-    Movie,
-    Show,
-    Torrent,
-}
-
-#[derive(Debug, Deserialize, serde::Serialize, utoipa::ToSchema)]
-pub struct ProviderOrder {
-    provider_type: ProviderType,
-    order: Vec<String>,
+pub enum ProviderOrder {
+    Discover(Vec<MetadataProvider>),
+    Movie(Vec<MetadataProvider>),
+    Show(Vec<MetadataProvider>),
+    Torrent(Vec<TorrentIndexIdentifier>),
 }
 
 /// Update providers order
+///
+/// Returns updated order
 #[utoipa::path(
     put,
     path = "/api/configuration/providers",
     request_body = ProviderOrder,
     responses(
-        (status = 200, body = ProviderOrder, description = "Updated ordering of providers"),
+        (status = 200, body = Vec<String>, description = "Updated ordering of providers"),
     ),
     tag = "Configuration",
 )]
 pub async fn order_providers(
     State(providers): State<&'static MetadataProvidersStack>,
-    Json(payload): Json<ProviderOrder>,
-) -> Json<ProviderOrder> {
-    let new_order: Vec<_> = match payload.provider_type {
-        ProviderType::Discover => providers
-            .order_discover_providers(payload.order)
+    Json(new_order): Json<ProviderOrder>,
+) -> Json<Vec<String>> {
+    let new_order: Vec<_> = match new_order {
+        ProviderOrder::Discover(order) => providers
+            .order_discover_providers(order)
             .into_iter()
             .map(|x| x.provider_identifier().to_string())
             .collect(),
-        ProviderType::Movie => providers
-            .order_movie_providers(payload.order)
+        ProviderOrder::Movie(order) => providers
+            .order_movie_providers(order)
             .into_iter()
             .map(|x| x.provider_identifier().to_string())
             .collect(),
-        ProviderType::Show => providers
-            .order_show_providers(payload.order)
+        ProviderOrder::Show(order) => providers
+            .order_show_providers(order)
             .into_iter()
             .map(|x| x.provider_identifier().to_string())
             .collect(),
-        ProviderType::Torrent => providers
-            .order_torrent_indexes(payload.order)
+        ProviderOrder::Torrent(order) => providers
+            .order_torrent_indexes(order)
             .into_iter()
             .map(|x| x.provider_identifier().to_string())
             .collect(),
     };
-    Json(ProviderOrder {
-        provider_type: payload.provider_type,
-        order: new_order,
-    })
+    Json(new_order)
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ProviderOrderResponse {
+    discover: Vec<MetadataProvider>,
+    movie: Vec<MetadataProvider>,
+    show: Vec<MetadataProvider>,
+    torrent: Vec<TorrentIndexIdentifier>,
 }
 
 /// Get providers order
@@ -2254,46 +2248,42 @@ pub async fn order_providers(
     get,
     path = "/api/configuration/providers",
     responses(
-        (status = 200, body = Vec<ProviderOrder>, description = "Ordering of providers"),
+        (status = 200, body = ProviderOrderResponse, description = "Ordering of providers"),
     ),
     tag = "Configuration",
 )]
 pub async fn get_providers_order(
     State(providers): State<&'static MetadataProvidersStack>,
-) -> Json<Vec<ProviderOrder>> {
-    let movie_order = ProviderOrder {
-        provider_type: ProviderType::Movie,
-        order: providers
-            .movie_providers()
-            .iter()
-            .map(|p| p.provider_identifier().into())
-            .collect(),
-    };
-    let show_order = ProviderOrder {
-        provider_type: ProviderType::Show,
-        order: providers
-            .show_providers()
-            .iter()
-            .map(|p| p.provider_identifier().into())
-            .collect(),
-    };
-    let discover_order = ProviderOrder {
-        provider_type: ProviderType::Discover,
-        order: providers
-            .discover_providers()
-            .iter()
-            .map(|p| p.provider_identifier().into())
-            .collect(),
-    };
-    let torrent_order = ProviderOrder {
-        provider_type: ProviderType::Torrent,
-        order: providers
-            .torrent_indexes()
-            .iter()
-            .map(|p| p.provider_identifier().into())
-            .collect(),
-    };
-    Json(vec![movie_order, show_order, discover_order, torrent_order])
+) -> Json<ProviderOrderResponse> {
+    let movie = providers
+        .movie_providers()
+        .iter()
+        .map(|p| p.provider_identifier())
+        .collect();
+
+    let show = providers
+        .show_providers()
+        .iter()
+        .map(|p| p.provider_identifier())
+        .collect();
+    let discover = providers
+        .discover_providers()
+        .iter()
+        .map(|p| p.provider_identifier())
+        .collect();
+
+    let torrent = providers
+        .torrent_indexes()
+        .iter()
+        .map(|p| p.provider_identifier())
+        .collect();
+
+    Json(ProviderOrderResponse {
+        movie,
+        show,
+        discover,
+        torrent,
+    })
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]

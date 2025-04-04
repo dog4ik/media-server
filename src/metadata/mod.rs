@@ -189,7 +189,7 @@ pub trait MovieMetadataProvider {
     ) -> Result<MovieMetadata, AppError>;
 
     /// Provider identifier
-    fn provider_identifier(&self) -> &'static str;
+    fn provider_identifier(&self) -> MetadataProvider;
 }
 
 /// This trait must be implemented by all show metadata providers
@@ -223,7 +223,7 @@ pub trait ShowMetadataProvider {
     ) -> Result<EpisodeMetadata, AppError>;
 
     /// Provider identifier
-    fn provider_identifier(&self) -> &'static str;
+    fn provider_identifier(&self) -> MetadataProvider;
 }
 
 /// This trait must be implemented by all metadata providers with discovery capabilities
@@ -258,7 +258,7 @@ pub trait DiscoverMetadataProvider {
     ) -> Result<Vec<ExternalIdMetadata>, AppError>;
 
     /// Provider identifier
-    fn provider_identifier(&self) -> &'static str;
+    fn provider_identifier(&self) -> MetadataProvider;
 }
 
 // types

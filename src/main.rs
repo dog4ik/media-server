@@ -62,33 +62,37 @@ async fn main() {
     let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
 
-    let mut providers_stack = MetadataProvidersStack::default();
+    let mut providers_stack = MetadataProvidersStack::new(db);
 
-    providers_stack.add_show_provider(db);
-    providers_stack.add_movie_provider(db);
-    providers_stack.add_discover_provider(db);
-
-    let tmdb_api = TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0);
-    let tmdb_api = Box::leak(Box::new(tmdb_api));
-    providers_stack.add_show_provider(tmdb_api);
-    providers_stack.add_movie_provider(tmdb_api);
-    providers_stack.add_discover_provider(tmdb_api);
+    match TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0) {
+        Ok(tmdb_api) => {
+            let tmdb_api: &'static _ = Box::leak(Box::new(tmdb_api));
+            providers_stack.tmdb = Some(tmdb_api);
+        }
+        Err(e) => tracing::warn!("Failed to initialize TMDB api: {e}"),
+    };
 
     let tpb_api = TpbApi::new();
     let tpb_api = Box::leak(Box::new(tpb_api));
+    providers_stack.tpb = Some(tpb_api);
 
-    providers_stack.add_torrent_provider(tpb_api);
+    match ProvodRuTrackerAdapter::new() {
+        Ok(rutracker_api) => {
+            let rutracker_api: &'static _ = Box::leak(Box::new(rutracker_api));
+            providers_stack.rutracker = Some(&rutracker_api);
+        }
+        Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
+    }
 
-    let rutracker_api = ProvodRuTrackerAdapter::new();
-    let rutracker_api = Box::leak(Box::new(rutracker_api));
-
-    providers_stack.add_torrent_provider(rutracker_api);
-
-    let tvdb_api = TvdbApi::new(config::CONFIG.get_value::<config::TvdbKey>().0.as_deref());
-    let tvdb_api = Box::leak(Box::new(tvdb_api));
-    providers_stack.add_show_provider(tvdb_api);
-    providers_stack.add_movie_provider(tvdb_api);
-    providers_stack.add_discover_provider(tvdb_api);
+    match TvdbApi::new(config::CONFIG.get_value::<config::TvdbKey>().0.as_deref()) {
+        Ok(tvdb_api) => {
+            let tvdb_api: &'static _ = Box::leak(Box::new(tvdb_api));
+            providers_stack.tvdb = Some(tvdb_api);
+        }
+        Err(e) => tracing::warn!("Failed to initialize TVDB api: {e}"),
+    }
+    providers_stack.apply_config_order();
+    let providers_stack = Box::leak(Box::new(providers_stack));
 
     let tasks = TaskResource::new(cancellation_token.clone());
     let tasks = Box::leak(Box::new(tasks));
@@ -99,14 +103,10 @@ async fn main() {
 
     let torrent_client = Box::leak(Box::new(torrent_client));
 
-    let providers_stack = Box::leak(Box::new(providers_stack));
-
     let app_state = AppState {
         library,
         db,
         tasks,
-        tmdb_api,
-        tpb_api,
         providers_stack,
         torrent_client,
         cancelation_token: cancellation_token.clone(),

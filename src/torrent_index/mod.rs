@@ -9,7 +9,7 @@ use crate::{app_state::AppError, metadata::FetchParams};
 pub mod rutracker;
 pub mod tpb;
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum TorrentIndexIdentifier {
     Tpb,
@@ -78,5 +78,5 @@ pub trait TorrentIndex {
         fetch_params: &FetchParams,
     ) -> Result<Vec<Torrent>, AppError>;
     async fn fetch_magnet_link(&self, torrent_id: &str) -> Result<torrent::MagnetLink, AppError>;
-    fn provider_identifier(&self) -> &'static str;
+    fn provider_identifier(&self) -> TorrentIndexIdentifier;
 }

@@ -32,7 +32,7 @@ pub struct TvdbApi {
 impl TvdbApi {
     pub const RATE_LIMIT: usize = 10;
     pub const API_URL: &'static str = "https://api4.thetvdb.com/v4";
-    pub fn new(api_key: Option<&str>) -> Self {
+    pub fn new(api_key: Option<&str>) -> anyhow::Result<Self> {
         let (client, base_url) = match api_key {
             Some(api_key) => {
                 tracing::info!("Using personal tvdb token");
@@ -46,17 +46,17 @@ impl TvdbApi {
                     Url::parse(Self::API_URL).expect("url to parse"),
                 )
             }
-            None => provod_agent::new_client("tvdb"),
+            None => provod_agent::new_client("tvdb")?,
         };
 
         let limited_client =
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
-        Self {
+        Ok(Self {
             client: limited_client,
             show_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             movie_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             base_url,
-        }
+        })
     }
 
     // https://api4.thetvdb.com/v4/search?query=halo&type=series
@@ -179,8 +179,8 @@ impl MovieMetadataProvider for TvdbApi {
         Ok(movie.into())
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tvdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tvdb
     }
 }
 
@@ -255,8 +255,8 @@ impl ShowMetadataProvider for TvdbApi {
             .ok_or(AppError::not_found("episode is not found"))
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tvdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tvdb
     }
 }
 
@@ -334,8 +334,8 @@ impl DiscoverMetadataProvider for TvdbApi {
         return Ok(retrieve_ids(fresh_ids));
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tvdb"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tvdb
     }
 }
 

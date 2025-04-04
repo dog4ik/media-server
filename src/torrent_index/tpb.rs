@@ -9,7 +9,7 @@ use crate::{
     metadata::{FetchParams, request_client::LimitedRequestClient},
 };
 
-use super::{Torrent, TorrentIndex};
+use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
 
 /// List of default trackers appended to each [Magnet Link](torrent::MagnetLink) in ThePirateBay
 const TRACKERS: [&str; 9] = [
@@ -132,8 +132,8 @@ impl TorrentIndex for TpbApi {
         Ok(self.get_magnet_link(torrent_id).await?)
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "tpb"
+    fn provider_identifier(&self) -> TorrentIndexIdentifier {
+        TorrentIndexIdentifier::Tpb
     }
 }
 

@@ -1142,8 +1142,8 @@ impl ShowMetadataProvider for Db {
             .await
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "local"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Local
     }
 }
 
@@ -1157,8 +1157,8 @@ impl MovieMetadataProvider for Db {
         self.pool.get_movie(movie_metadata_id.parse()?).await
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "local"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Local
     }
 }
 
@@ -1224,8 +1224,8 @@ impl DiscoverMetadataProvider for Db {
         Ok(db_ids.into_iter().map(|i| i.into()).collect())
     }
 
-    fn provider_identifier(&self) -> &'static str {
-        "local"
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Local
     }
 }
 

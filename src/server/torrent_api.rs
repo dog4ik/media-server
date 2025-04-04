@@ -382,7 +382,6 @@ pub async fn index_magnet_link(
     State(app_state): State<AppState>,
 ) -> Result<Json<IndexMagnetLink>, AppError> {
     let torrent_indexes = app_state.providers_stack.torrent_indexes();
-    let provider = provider.to_string();
     let index = torrent_indexes
         .iter()
         .find(|t| t.provider_identifier() == provider)

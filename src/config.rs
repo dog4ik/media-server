@@ -21,7 +21,11 @@ use tokio::{
 };
 use utoipa::openapi::RefOr;
 
-use crate::{app_state::AppError, metadata};
+use crate::{
+    app_state::AppError,
+    metadata::{self, MetadataProvider},
+    torrent_index::TorrentIndexIdentifier,
+};
 
 fn camel_to_snake_case(input: &str) -> String {
     let mut snake = String::new();
@@ -245,6 +249,8 @@ impl ConfigStore {
         store.register_value::<FFprobePath>();
         store.register_value::<TmdbKey>();
         store.register_value::<TvdbKey>();
+        store.register_value::<ProvodKey>();
+        store.register_value::<ProvodUrl>();
         store.register_value::<IntroMinDuration>();
         store.register_value::<IntroDetectionFfmpegBuild>();
         store.register_value::<WebUiPath>();
@@ -520,6 +526,8 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<MovieFolders>::schema())
             .item(UtoipaConfigValue::<TmdbKey>::schema())
             .item(UtoipaConfigValue::<TvdbKey>::schema())
+            .item(UtoipaConfigValue::<ProvodUrl>::schema())
+            .item(UtoipaConfigValue::<ProvodKey>::schema())
             .item(UtoipaConfigValue::<FFmpegPath>::schema())
             .item(UtoipaConfigValue::<FFprobePath>::schema())
             .item(UtoipaConfigValue::<HwAccel>::schema())
@@ -535,7 +543,6 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
 }
 
 #[derive(Debug)]
-#[allow(unused)]
 pub struct UtoipaConfigValue<T> {
     _t: std::marker::PhantomData<T>,
 }
@@ -714,6 +721,18 @@ impl ConfigValue for TmdbKey {
     const ENV_KEY: Option<&str> = Some("TMDB_TOKEN");
 }
 
+/// API key for Provod agent. Allows server to authenticate with Provod proxy server
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct ProvodKey(pub Option<String>);
+impl ConfigValue for ProvodKey {
+    const ENV_KEY: Option<&str> = Some("PROVOD_TOKEN");
+}
+
+/// Url of Provod agent.
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct ProvodUrl(pub Option<String>);
+impl ConfigValue for ProvodUrl {}
+
 impl AsRef<Option<String>> for TmdbKey {
     fn as_ref(&self) -> &Option<String> {
         &self.0
@@ -785,53 +804,53 @@ impl Default for UpnpTtl {
 
 /// Discover metadata providers order
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
-pub struct DiscoverProvidersOrder(pub Vec<String>);
+pub struct DiscoverProvidersOrder(pub Vec<MetadataProvider>);
 impl ConfigValue for DiscoverProvidersOrder {}
 impl Default for DiscoverProvidersOrder {
     fn default() -> Self {
         Self(vec![
-            "local".to_owned(),
-            "tmdb".to_owned(),
-            "tvdb".to_owned(),
+            MetadataProvider::Local,
+            MetadataProvider::Tmdb,
+            MetadataProvider::Tvdb,
         ])
     }
 }
 
 /// Show metadata providers order
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
-pub struct ShowProvidersOrder(pub Vec<String>);
+pub struct ShowProvidersOrder(pub Vec<MetadataProvider>);
 impl ConfigValue for ShowProvidersOrder {}
 impl Default for ShowProvidersOrder {
     fn default() -> Self {
         Self(vec![
-            "local".to_owned(),
-            "tmdb".to_owned(),
-            "tvdb".to_owned(),
+            MetadataProvider::Local,
+            MetadataProvider::Tmdb,
+            MetadataProvider::Tvdb,
         ])
     }
 }
 
 /// Movie metadata providers order
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
-pub struct MovieProvidersOrder(pub Vec<String>);
+pub struct MovieProvidersOrder(pub Vec<MetadataProvider>);
 impl ConfigValue for MovieProvidersOrder {}
 impl Default for MovieProvidersOrder {
     fn default() -> Self {
         Self(vec![
-            "local".to_owned(),
-            "tmdb".to_owned(),
-            "tvdb".to_owned(),
+            MetadataProvider::Local,
+            MetadataProvider::Tmdb,
+            MetadataProvider::Tvdb,
         ])
     }
 }
 
 /// Torrent indexes providers order
 #[derive(Deserialize, Serialize, Clone, Debug, utoipa::ToSchema)]
-pub struct TorrentIndexesOrder(pub Vec<String>);
+pub struct TorrentIndexesOrder(pub Vec<TorrentIndexIdentifier>);
 impl ConfigValue for TorrentIndexesOrder {}
 impl Default for TorrentIndexesOrder {
     fn default() -> Self {
-        Self(vec!["tpb".to_owned()])
+        Self(vec![TorrentIndexIdentifier::Tpb])
     }
 }
 
