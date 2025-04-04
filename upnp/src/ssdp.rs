@@ -26,6 +26,7 @@ use super::{
 pub(crate) const SSDP_IP_ADDR: Ipv4Addr = Ipv4Addr::new(239, 255, 255, 250);
 pub(crate) const SSDP_ADDR: SocketAddr = SocketAddr::V4(SocketAddrV4::new(SSDP_IP_ADDR, 1900));
 const NOTIFY_INTERVAL_DURATION: Duration = Duration::from_secs(90);
+pub const DEFAULT_SSDP_TTL: u32 = 2;
 
 const CACHE_CONTROL: usize = 1800;
 
@@ -40,7 +41,7 @@ async fn sleep_rand_millis_duration(range: &Range<u64>) {
 fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     let local_ip = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 1900);
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-    socket.set_ttl(ttl.unwrap_or(2))?;
+    socket.set_ttl(ttl.unwrap_or(DEFAULT_SSDP_TTL))?;
     socket.set_reuse_address(true)?;
     #[cfg(target_os = "linux")]
     socket.set_reuse_port(false)?;

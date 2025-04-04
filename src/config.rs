@@ -773,13 +773,13 @@ impl Default for WebUiPath {
 pub struct UpnpEnabled(pub bool);
 impl ConfigValue for UpnpEnabled {}
 
-/// Time to live duration of SSDP packet on the local network
+/// Amount of ip routing "hops" for SSDP packet.
 #[derive(Deserialize, Serialize, Clone, Debug, Eq, PartialEq, utoipa::ToSchema)]
 pub struct UpnpTtl(pub u32);
 impl ConfigValue for UpnpTtl {}
 impl Default for UpnpTtl {
     fn default() -> Self {
-        Self(2)
+        Self(upnp::ssdp::DEFAULT_SSDP_TTL)
     }
 }
 
