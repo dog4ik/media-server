@@ -4,23 +4,22 @@ use std::{collections::HashMap, time::Duration};
 use anyhow::anyhow;
 use lru::LruCache;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, ACCEPT_ENCODING, AUTHORIZATION},
     Client, Method, Request, Url,
+    header::{ACCEPT_ENCODING, AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::Deserialize;
 
 use crate::app_state::AppError;
 
 use super::{
-    request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
-    ExternalIdMetadata, MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata,
-    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, MetadataImage,
+    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+    ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
-use super::{FetchParams, Language, METADATA_CACHE_SIZE};
+use super::{FetchParams, Language, METADATA_CACHE_SIZE, provod_agent};
 
 #[derive(Debug)]
 pub struct TmdbApi {
-    pub api_key: String,
     pub base_url: Url,
     client: LimitedRequestClient,
     episodes_cache: Mutex<LruCache<usize, HashMap<usize, Vec<TmdbSeasonEpisode>>>>,
@@ -87,23 +86,39 @@ fn append_language(url: &mut Url, language: Language) {
 impl TmdbApi {
     const API_URL: &'static str = "http://api.themoviedb.org/3";
     const RATE_LIMIT: usize = 50;
-    pub fn new(api_key: String) -> Self {
-        let mut headers = HeaderMap::new();
-        headers.insert(ACCEPT_ENCODING, HeaderValue::from_str("compress").unwrap());
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(&format!("Bearer {api_key}")).unwrap(),
-        );
 
-        let client = Client::builder()
-            .default_headers(headers)
-            .build()
-            .expect("build to succeed");
+    /// Create new instance of TMDB Api client.
+    ///
+    /// If provided api key, requests will go directly to tmdb.
+    /// Otherwise Provod proxy will be used.
+    pub fn new(api_key: Option<String>) -> Self {
+        let mut headers = HeaderMap::with_capacity(2);
+        // If we don't have token use provod agent
+        let (client, base_url) = match api_key {
+            Some(api_key) => {
+                tracing::info!("Using personal TMDB api token");
+                headers.insert(
+                    ACCEPT_ENCODING,
+                    HeaderValue::from_str("compress").expect("ascii"),
+                );
+                headers.insert(
+                    AUTHORIZATION,
+                    HeaderValue::from_str(&format!("Bearer {api_key}")).expect("ascii"),
+                );
+                (
+                    Client::builder()
+                        .default_headers(headers)
+                        .build()
+                        .expect("build to succeed"),
+                    Url::parse(Self::API_URL).expect("url to parse"),
+                )
+            }
+            None => provod_agent::new_client("tmdb"),
+        };
+
         let limited_client =
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
-        let base_url = Url::parse(Self::API_URL).expect("url to parse");
         Self {
-            api_key,
             client: limited_client,
             episodes_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             base_url,

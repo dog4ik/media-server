@@ -7,18 +7,18 @@ use std::{
 
 use lru::LruCache;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, AUTHORIZATION},
     Client, Method, Request, Url,
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::Deserialize;
 
 use crate::app_state::AppError;
 
 use super::{
-    request_client::LimitedRequestClient, ContentType, DiscoverMetadataProvider, EpisodeMetadata,
-    ExternalIdMetadata, FetchParams, Language, MetadataImage, MetadataProvider,
-    MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata,
-    ShowMetadataProvider, METADATA_CACHE_SIZE,
+    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
+    Language, METADATA_CACHE_SIZE, MetadataImage, MetadataProvider, MetadataSearchResult,
+    MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    provod_agent, request_client::LimitedRequestClient,
 };
 
 #[derive(Debug)]
@@ -32,17 +32,25 @@ pub struct TvdbApi {
 impl TvdbApi {
     pub const RATE_LIMIT: usize = 10;
     pub const API_URL: &'static str = "https://api4.thetvdb.com/v4";
-    pub fn new(api_key: &str) -> Self {
-        let mut headers = HeaderMap::new();
-        headers.insert(AUTHORIZATION, HeaderValue::from_str(api_key).unwrap());
+    pub fn new(api_key: Option<&str>) -> Self {
+        let (client, base_url) = match api_key {
+            Some(api_key) => {
+                tracing::info!("Using personal tvdb token");
+                let mut headers = HeaderMap::with_capacity(1);
+                headers.insert(AUTHORIZATION, HeaderValue::from_str(api_key).unwrap());
+                (
+                    Client::builder()
+                        .default_headers(headers)
+                        .build()
+                        .expect("build to succeed"),
+                    Url::parse(Self::API_URL).expect("url to parse"),
+                )
+            }
+            None => provod_agent::new_client("tvdb"),
+        };
 
-        let client = Client::builder()
-            .default_headers(headers)
-            .build()
-            .expect("build to succeed");
         let limited_client =
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
-        let base_url = Url::parse(Self::API_URL).expect("url to parse");
         Self {
             client: limited_client,
             show_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),

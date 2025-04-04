@@ -1,14 +1,17 @@
+use std::str::FromStr;
+
 use reqwest::{Client, Method, Request, Url};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
 use crate::{
     app_state::AppError,
-    metadata::{request_client::LimitedRequestClient, FetchParams},
+    metadata::{FetchParams, request_client::LimitedRequestClient},
 };
 
 use super::{Torrent, TorrentIndex};
 
+/// List of default trackers appended to each [Magnet Link](torrent::MagnetLink) in ThePirateBay
 const TRACKERS: [&str; 9] = [
     "udp://tracker.opentrackr.org:1337",
     "udp://tracker.openbittorrent.com:6969/announce",
@@ -21,6 +24,7 @@ const TRACKERS: [&str; 9] = [
     "udp://opentracker.i2p.rocks:6969/announce",
 ];
 
+/// ThePirateBay content caterogy
 #[derive(Debug, Clone, Copy)]
 pub enum Category {
     Show,
@@ -56,8 +60,8 @@ impl TpbApi {
     pub fn new() -> Self {
         let client = Client::new();
         let limited_client =
-            LimitedRequestClient::new(client, 3, std::time::Duration::from_secs(1));
-        let base_url = Url::parse("https://apibay.org/q.php").unwrap();
+            LimitedRequestClient::new(client, 1, std::time::Duration::from_secs(1));
+        let base_url = Url::parse("https://apibay.org").unwrap();
         Self {
             client: limited_client,
             base_url,
@@ -66,10 +70,22 @@ impl TpbApi {
 
     pub async fn search(&self, query: &str, cat: Category) -> Result<Vec<TpbTorrent>, AppError> {
         let mut url = self.base_url.clone();
+        url.path_segments_mut().expect("base url").push("q.php");
         url.query_pairs_mut().append_pair("q", query);
         url.query_pairs_mut().append_pair("cat", cat.as_str());
         let request = Request::new(Method::GET, url);
         self.client.request(request).await
+    }
+
+    pub async fn get_magnet_link(&self, id: &str) -> Result<torrent::MagnetLink, AppError> {
+        let mut url = self.base_url.clone();
+        url.path_segments_mut().expect("base url").push("t.php");
+        url.query_pairs_mut().append_pair("id", id);
+        let request = Request::new(Method::GET, url);
+        let torrent: TpbTorrent = self.client.request(request).await?;
+        Ok(torrent::MagnetLink::from_str(
+            &torrent.magnet_link().to_string(),
+        )?)
     }
 }
 
@@ -84,7 +100,7 @@ impl TorrentIndex for TpbApi {
             .search(query, Category::Movie)
             .await?
             .into_iter()
-            .map(|x| x.into())
+            .map(Into::into)
             .collect())
     }
     async fn search_show_torrent(
@@ -96,7 +112,7 @@ impl TorrentIndex for TpbApi {
             .search(query, Category::Show)
             .await?
             .into_iter()
-            .map(|x| x.into())
+            .map(Into::into)
             .collect())
     }
     async fn search_any_torrent(
@@ -108,9 +124,14 @@ impl TorrentIndex for TpbApi {
             .search(query, Category::Any)
             .await?
             .into_iter()
-            .map(|x| x.into())
+            .map(Into::into)
             .collect())
     }
+
+    async fn fetch_magnet_link(&self, torrent_id: &str) -> Result<torrent::MagnetLink, AppError> {
+        Ok(self.get_magnet_link(torrent_id).await?)
+    }
+
     fn provider_identifier(&self) -> &'static str {
         "tpb"
     }
@@ -155,13 +176,15 @@ impl From<TpbTorrent> for Torrent {
         let created = OffsetDateTime::from_unix_timestamp(t).unwrap();
         Torrent {
             name: val.name,
-            magnet: magnet_link,
+            magnet: Some(magnet_link),
             author: Some(val.username),
             leechers: val.leechers.parse().unwrap(),
             seeders: val.seeders.parse().unwrap(),
             size: val.size.parse().unwrap(),
             created,
-            imdb_id: val.imdb,
+            imdb_id: Some(val.imdb),
+            provider: super::TorrentIndexIdentifier::Tpb,
+            provider_id: val.id,
         }
     }
 }

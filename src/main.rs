@@ -3,17 +3,18 @@ use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::app_state::AppState;
-use media_server::config::{self, AppResources, Args, ConfigFile, ConfigValue, APP_RESOURCES};
+use media_server::config::{self, APP_RESOURCES, AppResources, Args, ConfigFile};
 use media_server::db::Db;
 use media_server::library::Library;
 use media_server::metadata::metadata_stack::MetadataProvidersStack;
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::tvdb_api::TvdbApi;
 use media_server::progress::TaskResource;
-use media_server::server::{server_api, torrent_api, OpenApiDoc};
+use media_server::server::{OpenApiDoc, server_api, torrent_api};
 use media_server::torrent::TorrentClient;
+use media_server::torrent_index::rutracker::ProvodRuTrackerAdapter;
 use media_server::torrent_index::tpb::TpbApi;
-use media_server::tracing::{init_tracer, LogChannel};
+use media_server::tracing::{LogChannel, init_tracer};
 use media_server::upnp::Upnp;
 use media_server::ws;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -67,10 +68,7 @@ async fn main() {
     providers_stack.add_movie_provider(db);
     providers_stack.add_discover_provider(db);
 
-    let Some(tmdb_key) = config::CONFIG.get_value::<config::TmdbKey>().0 else {
-        panic!("Missing tmdb api token, consider passing it in cli, configuration file or {} environment variable", config::TmdbKey::ENV_KEY.unwrap());
-    };
-    let tmdb_api = TmdbApi::new(tmdb_key);
+    let tmdb_api = TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0);
     let tmdb_api = Box::leak(Box::new(tmdb_api));
     providers_stack.add_show_provider(tmdb_api);
     providers_stack.add_movie_provider(tmdb_api);
@@ -81,13 +79,16 @@ async fn main() {
 
     providers_stack.add_torrent_provider(tpb_api);
 
-    if let Some(tvdb_key) = config::CONFIG.get_value::<config::TvdbKey>().0 {
-        let tvdb_api = TvdbApi::new(&tvdb_key);
-        let tvdb_api = Box::leak(Box::new(tvdb_api));
-        providers_stack.add_show_provider(tvdb_api);
-        providers_stack.add_movie_provider(tvdb_api);
-        providers_stack.add_discover_provider(tvdb_api);
-    }
+    let rutracker_api = ProvodRuTrackerAdapter::new();
+    let rutracker_api = Box::leak(Box::new(rutracker_api));
+
+    providers_stack.add_torrent_provider(rutracker_api);
+
+    let tvdb_api = TvdbApi::new(config::CONFIG.get_value::<config::TvdbKey>().0.as_deref());
+    let tvdb_api = Box::leak(Box::new(tvdb_api));
+    providers_stack.add_show_provider(tvdb_api);
+    providers_stack.add_movie_provider(tvdb_api);
+    providers_stack.add_discover_provider(tvdb_api);
 
     let tasks = TaskResource::new(cancellation_token.clone());
     let tasks = Box::leak(Box::new(tasks));
@@ -274,6 +275,10 @@ async fn main() {
         .route(
             "/torrent/output_location",
             get(torrent_api::output_location),
+        )
+        .route(
+            "/torrent/index_magnet_link",
+            get(torrent_api::index_magnet_link),
         )
         .route("/search/content", get(server_api::search_content))
         .route(

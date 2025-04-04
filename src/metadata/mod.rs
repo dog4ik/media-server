@@ -7,18 +7,42 @@ use crate::{
 };
 use reqwest::Url;
 use serde::{
-    de::{self},
     Deserialize, Deserializer, Serialize,
+    de::{self},
 };
 
 #[allow(unused)]
 pub mod local_provider;
 pub mod metadata_stack;
+/// Fallback service for different metadata providers.
+/// This service is intended to be the authorization middleware.
+///
+/// Currently implemented metadata providers:
+/// - TMDB
+/// - TVDB
+///
+///
+/// In case of content metadata providers this service will mimic all responses.
+///
+/// Currently implemented torrent indexes:
+/// - Rutracker
+///
+/// Allows to access metadata providers and torrent indexes with a single authorization.
+///
+/// Some providers are available only with this agent.
+///
+/// ### Performance
+/// Since all user requests go to this service it will share provider limitation (e.g. rate limit)
+/// between all users.
+///
+/// To prevent slow response times, it is recommended to use personal metadata providers
+/// authorization tokens.
+pub mod provod_agent;
 /// Rate limited request client
 pub mod request_client;
-/// Tmdb API intergartion
+/// Tmdb API agent
 pub mod tmdb_api;
-/// Tvdb API intergartion
+/// Tvdb API agent
 #[allow(unused)]
 pub mod tvdb_api;
 

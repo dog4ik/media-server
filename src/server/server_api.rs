@@ -7,14 +7,14 @@ use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{
-    response::{
-        sse::{Event, KeepAlive},
-        Sse,
-    },
     Json,
+    response::{
+        Sse,
+        sse::{Event, KeepAlive},
+    },
 };
 use axum_extra::headers::Range;
-use axum_extra::{headers, TypedHeader};
+use axum_extra::{TypedHeader, headers};
 use base64::Engine;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
@@ -29,7 +29,7 @@ use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQ
 use super::{CursorQuery, IdQuery, NumberQuery, SearchQuery, TakeParam, VariantQuery};
 use crate::app_state::AppError;
 use crate::config::{
-    self, Capabilities, ConfigurationApplyResult, SerializedSetting, APP_RESOURCES,
+    self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
 };
 use crate::db::DbActions;
 use crate::db::{DbExternalId, DbHistory};
@@ -38,22 +38,23 @@ use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::intro_detection::IntroJob;
+use crate::library::TranscodePayload;
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::assets::{
     BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType, PreviewAsset,
     VariantAsset,
 };
-use crate::library::TranscodePayload;
 use crate::library::{
     AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
 use crate::metadata::tmdb_api::TmdbApi;
 use crate::metadata::{
-    metadata_stack::MetadataProvidersStack, ContentType, EpisodeMetadata, MovieMetadata,
-    SeasonMetadata, ShowMetadata,
+    ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
+    metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataSearchResult};
 use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
+use crate::server::OptionalTorrentIndexQuery;
 use crate::torrent_index::Torrent;
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
@@ -1074,6 +1075,7 @@ pub async fn get_episode(
     params(
         SearchQuery,
         OptionalContentTypeQuery,
+        OptionalTorrentIndexQuery,
     ),
     responses(
         (status = 200, description = "Torrent search results", body = Vec<Torrent>),
@@ -1081,18 +1083,41 @@ pub async fn get_episode(
     tag = "Torrent",
 )]
 pub async fn search_torrent(
-    Query(query): Query<SearchQuery>,
+    Query(SearchQuery { search }): Query<SearchQuery>,
     Query(content_type): Query<OptionalContentTypeQuery>,
+    Query(OptionalTorrentIndexQuery { provider }): Query<OptionalTorrentIndexQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<Torrent>>, AppError> {
-    if query.search.is_empty() {
+    if search.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    Ok(Json(
-        providers
-            .get_torrents(&query.search, content_type.content_type)
-            .await,
-    ))
+    Ok(Json(match provider {
+        Some(p) => {
+            let lang: config::MetadataLanguage = config::CONFIG.get_value();
+            let fetch_params = crate::metadata::FetchParams { lang: lang.0 };
+            let providers = providers.torrent_indexes();
+            let provider = providers
+                .iter()
+                .find(|t| t.provider_identifier() == p.to_string())
+                .ok_or(AppError::not_found("Provider is not found"))?;
+            match content_type.content_type {
+                Some(ContentType::Show) => {
+                    provider.search_show_torrent(&search, &fetch_params).await?
+                }
+                Some(ContentType::Movie) => {
+                    provider
+                        .search_movie_torrent(&search, &fetch_params)
+                        .await?
+                }
+                None => provider.search_any_torrent(&search, &fetch_params).await?,
+            }
+        }
+        None => {
+            providers
+                .get_torrents(&search, content_type.content_type)
+                .await
+        }
+    }))
 }
 
 /// Get trending shows

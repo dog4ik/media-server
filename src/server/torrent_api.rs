@@ -2,12 +2,12 @@ use std::{convert::Infallible, path::PathBuf, str::FromStr};
 
 use anyhow::Context;
 use axum::{
+    Json,
     extract::{FromRequest, Multipart, Path, Query, State},
     response::{
-        sse::{Event, KeepAlive},
         Sse,
+        sse::{Event, KeepAlive},
     },
-    Json,
 };
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer};
@@ -17,13 +17,15 @@ use torrent::{DownloadParams, MagnetLink, TorrentFile};
 use crate::{
     app_state::{AppError, AppState},
     config,
-    metadata::{metadata_stack::MetadataProvidersStack, ContentType},
+    metadata::{ContentType, metadata_stack::MetadataProvidersStack},
     server::OptionalContentTypeQuery,
     torrent::{
         DownloadContentHint, Priority, ResolveMagnetLinkPayload, TorrentClient,
         TorrentDownloadPayload, TorrentInfo, TorrentState,
     },
 };
+
+use super::{StringIdQuery, TorrentIndexQuery};
 
 #[derive(Debug, Clone)]
 pub struct InfoHash(pub [u8; 20]);
@@ -353,6 +355,42 @@ pub async fn resolve_magnet_link(
     let info = client.resolve_magnet_link(&magnet_link).await?;
     let torrent_info = TorrentInfo::new(&info, payload.hint, providers_stack).await;
     Ok(Json(torrent_info))
+}
+
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct IndexMagnetLink {
+    magnet_link: String,
+}
+
+/// Get magnet link by torrent provider index
+#[utoipa::path(
+    get,
+    path = "/api/torrent/index_magnet_link",
+    params(
+        StringIdQuery,
+        TorrentIndexQuery,
+    ),
+    responses(
+        (status = 200, body = IndexMagnetLink),
+        (status = 404, description = "Failed to obtain magnet link"),
+    ),
+    tag = "Torrent",
+)]
+pub async fn index_magnet_link(
+    Query(TorrentIndexQuery { provider }): Query<TorrentIndexQuery>,
+    Query(StringIdQuery { id }): Query<StringIdQuery>,
+    State(app_state): State<AppState>,
+) -> Result<Json<IndexMagnetLink>, AppError> {
+    let torrent_indexes = app_state.providers_stack.torrent_indexes();
+    let provider = provider.to_string();
+    let index = torrent_indexes
+        .iter()
+        .find(|t| t.provider_identifier() == provider)
+        .ok_or(AppError::not_found("torrent index is not found"))?;
+    let link = index.fetch_magnet_link(&id).await?;
+    Ok(Json(IndexMagnetLink {
+        magnet_link: link.to_string(),
+    }))
 }
 
 /// Get fresh full torrent state

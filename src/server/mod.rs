@@ -11,8 +11,8 @@ use crate::torrent_index;
 use crate::tracing;
 use crate::ws;
 use base64::Engine;
-use serde::de::Visitor;
 use serde::Deserialize;
+use serde::de::Visitor;
 use utoipa::OpenApi;
 
 pub mod server_api;
@@ -120,6 +120,7 @@ pub struct SerdeDuration {
         torrent_api::open_torrent,
         torrent_api::open_torrent_file,
         torrent_api::torrent_state,
+        torrent_api::index_magnet_link,
         torrent_api::updates,
         torrent_api::delete_torrent,
         torrent_api::output_location,
@@ -293,6 +294,18 @@ pub struct OptionalContentTypeQuery {
 pub struct ProviderQuery {
     #[param(inline)]
     pub provider: metadata::MetadataProvider,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct TorrentIndexQuery {
+    #[param(inline)]
+    pub provider: torrent_index::TorrentIndexIdentifier,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct OptionalTorrentIndexQuery {
+    #[param(inline)]
+    pub provider: Option<torrent_index::TorrentIndexIdentifier>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
