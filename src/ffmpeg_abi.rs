@@ -263,6 +263,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
             codec::Id::WEBVTT => SubtitlesCodec::WebVTT,
             codec::Id::DVD_SUBTITLE => SubtitlesCodec::DvdSubtitle,
             codec::Id::MOV_TEXT => SubtitlesCodec::MovText,
+            codec::Id::ASS => SubtitlesCodec::ASS,
             rest => {
                 tracing::warn!("Unrecognized subtitle codec: {:?}", rest);
                 return Err(anyhow::anyhow!("Unregonized subtitle codec"));

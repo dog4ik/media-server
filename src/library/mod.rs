@@ -1225,6 +1225,7 @@ pub enum SubtitlesCodec {
     WebVTT,
     DvdSubtitle,
     MovText,
+    ASS,
     Other(String),
 }
 
@@ -1244,6 +1245,7 @@ impl Display for SubtitlesCodec {
             Self::WebVTT => write!(f, "webvtt"),
             Self::DvdSubtitle => write!(f, "dvd_subtitle"),
             Self::MovText => write!(f, "mov_text"),
+            Self::ASS => write!(f, "ass"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -1258,6 +1260,7 @@ impl FromStr for SubtitlesCodec {
             "webvtt" => SubtitlesCodec::WebVTT,
             "dvd_subtitle" => SubtitlesCodec::DvdSubtitle,
             "mov_text" => SubtitlesCodec::MovText,
+            "ass" => SubtitlesCodec::ASS,
             rest => SubtitlesCodec::Other(rest.to_string()),
         };
         Ok(parsed)
@@ -1271,6 +1274,7 @@ impl SubtitlesCodec {
             SubtitlesCodec::WebVTT => true,
             SubtitlesCodec::DvdSubtitle => false,
             SubtitlesCodec::MovText => true,
+            SubtitlesCodec::ASS => true,
             SubtitlesCodec::Other(_) => false,
         }
     }
