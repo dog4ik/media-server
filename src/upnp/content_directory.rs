@@ -149,7 +149,7 @@ impl MediaServerContentDirectory {
             .map(|r| r.into_iter().map(|r| r.id).collect::<Vec<_>>()) else {
                 continue;
             };
-
+            let title = format!("Ep {}: {}", episode.number, episode.title);
             let id = episode.id.unwrap();
             let poster_url = format!(
                 "{server_url}/api/episode/{episode_id}/poster",
@@ -162,11 +162,7 @@ impl MediaServerContentDirectory {
                 season,
                 episode: episode.number,
             };
-            let mut item = Item::new(
-                item_id.to_string(),
-                season_id.to_string(),
-                episode.title.clone(),
-            );
+            let mut item = Item::new(item_id.to_string(), season_id.to_string(), title.clone());
             {
                 for id in video_ids {
                     let watch_url = format!(
@@ -205,7 +201,7 @@ impl MediaServerContentDirectory {
             }
 
             item.set_property(properties::AlbumArtUri(poster_url));
-            item.set_property(properties::ProgramTitle(episode.title));
+            item.set_property(properties::ProgramTitle(title));
             item.set_property(properties::EpisodeNumber(episode.number as u32));
             item.set_property(properties::EpisodeSeason(season as u32));
             item.set_property(properties::SeriesTitle(show_metadata.title.clone()));
