@@ -57,7 +57,7 @@ pub mod show;
 
 const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
 
-const EXTRAS_FOLDERS: [&str; 13] = [
+const EXTRAS_FOLDERS: [&str; 14] = [
     "behind the scenes",
     "deleted scenes",
     "interviews",
@@ -71,6 +71,7 @@ const EXTRAS_FOLDERS: [&str; 13] = [
     "other",
     "extras",
     "trailers",
+    "special",
 ];
 
 /// Mapping between database videos and local files
