@@ -754,9 +754,8 @@ where
             let episodes = sqlx::query_as!(
                 DbEpisode,
                 r#"SELECT episodes.* FROM episodes
-            JOIN shows ON shows.id = seasons.show_id
             JOIN seasons ON seasons.id = episodes.season_id
-            WHERE show_id = ? AND seasons.number = ? ORDER BY episodes.number;"#,
+            WHERE seasons.show_id = ? AND seasons.number = ? ORDER BY episodes.number;"#,
                 show_id,
                 season,
             )
@@ -776,10 +775,7 @@ where
             let mut conn = self.acquire().await?;
             let season = season as i64;
             let season = sqlx::query!(
-                r#"SELECT seasons.*
-            FROM seasons 
-            JOIN shows ON shows.id = seasons.show_id
-            WHERE shows.id = ? AND seasons.number = ?"#,
+                r#"SELECT * FROM seasons WHERE seasons.show_id = ? AND seasons.number = ?"#,
                 show_id,
                 season
             )
@@ -838,7 +834,6 @@ where
                 "SELECT episodes.*, seasons.number as season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN shows ON shows.id = seasons.show_id
-            JOIN videos ON videos.episode_id = episodes.id
             WHERE shows.id = ? AND seasons.number = ? AND episodes.number = ?;",
                 show_id,
                 season,
@@ -862,6 +857,31 @@ where
                 runtime: Some(Duration::from_secs(episode.duration as u64)),
                 season_number: episode.season_number as usize,
             })
+        }
+    }
+
+    fn get_episode_id(
+        self,
+        show_id: i64,
+        season: usize,
+        episode: usize,
+    ) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let season = season as i64;
+            let episode = episode as i64;
+            let episode = sqlx::query!(
+                "SELECT episodes.id FROM episodes
+            JOIN seasons ON seasons.id = episodes.season_id
+            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;",
+                show_id,
+                season,
+                episode
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+
+            Ok(episode.id)
         }
     }
 

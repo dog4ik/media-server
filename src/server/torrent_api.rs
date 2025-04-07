@@ -381,11 +381,10 @@ pub async fn index_magnet_link(
     Query(StringIdQuery { id }): Query<StringIdQuery>,
     State(app_state): State<AppState>,
 ) -> Result<Json<IndexMagnetLink>, AppError> {
-    let torrent_indexes = app_state.providers_stack.torrent_indexes();
-    let index = torrent_indexes
-        .iter()
-        .find(|t| t.provider_identifier() == provider)
-        .ok_or(AppError::not_found("torrent index is not found"))?;
+    let index = app_state
+        .providers_stack
+        .torrent_index(dbg!(provider))
+        .ok_or(AppError::bad_request("Torrent index is not found"))?;
     let link = index.fetch_magnet_link(&id).await?;
     Ok(Json(IndexMagnetLink {
         magnet_link: link.to_string(),

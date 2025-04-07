@@ -390,8 +390,7 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
             r#"SELECT videos.id FROM videos 
 JOIN episodes ON episodes.id = videos.episode_id
 JOIN seasons ON seasons.id = episodes.season_id
-JOIN shows ON shows.id = seasons.show_id
-WHERE shows.id = ? ORDER BY seasons.number;"#,
+WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             show_id
         )
         .fetch_all(&self.db.pool)
@@ -918,6 +917,40 @@ WHERE shows.id = ? ORDER BY seasons.number;"#,
     }
 }
 
+/// external to local show id
+async fn crossreference_show(
+    db: &Db,
+    external_metadata: &ShowMetadata,
+) -> anyhow::Result<Option<i64>> {
+    let provider = external_metadata.metadata_provider.to_string();
+    let show_id = sqlx::query!(
+        r#"SELECT show_id as "show_id!" FROM external_ids WHERE show_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+        provider,
+        external_metadata.metadata_id
+    )
+    .fetch_optional(&db.pool)
+    .await?
+    .map(|r| r.show_id);
+    Ok(show_id)
+}
+
+/// external to local movie id business
+async fn crossreference_movie(
+    db: &Db,
+    external_metadata: &MovieMetadata,
+) -> anyhow::Result<Option<i64>> {
+    let provider = external_metadata.metadata_provider.to_string();
+    let movie_id = sqlx::query!(
+        r#"SELECT movie_id as "movie_id!" FROM external_ids WHERE movie_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+        provider,
+        external_metadata.metadata_id,
+    )
+    .fetch_optional(&db.pool)
+    .await?
+    .map(|r| r.movie_id);
+    Ok(movie_id)
+}
+
 async fn handle_series(
     item: &LibraryItem<ShowIdentifier>,
     db: &Db,
@@ -944,7 +977,10 @@ async fn handle_series(
                 let Some(first_result) = search_result.into_iter().next() else {
                     continue;
                 };
-                let local_id = handle_show_metadata(db, first_result, provider).await?;
+                let local_id = match crossreference_show(&db, &first_result).await {
+                    Ok(Some(crossreference_id)) => crossreference_id,
+                    Ok(None) | Err(_) => handle_show_metadata(db, first_result, provider).await?,
+                };
                 return Ok(local_id);
             }
         }
@@ -1215,10 +1251,15 @@ async fn handle_episode(
     let item = items.first().expect("episodes are chunked");
     let season = item.identifier.season as usize;
     let episode = item.identifier.episode as usize;
-    let Ok(local_episode) = db
-        .episode(&local_show_id.to_string(), season, episode, fetch_params)
-        .await
-    else {
+    if let Ok(local_id) = db.get_episode_id(local_show_id, season, episode).await {
+        // connect new videos to existing episode
+        let mut tx = db.begin().await?;
+        for item in &items {
+            tx.update_video_episode_id(item.source.id, local_id).await?;
+        }
+        tx.commit().await?;
+        Ok(local_id)
+    } else {
         tracing::trace!(
             "Fetching duration for the episode: {}",
             item.source.video.path().display()
@@ -1259,9 +1300,8 @@ async fn handle_episode(
         // fallback
         tracing::warn!("Using episode metadata fallback");
         let id = episode_metadata_fallback(db, item, local_season_id, duration).await?;
-        return Ok(id);
-    };
-    Ok(local_episode.metadata_id.parse().unwrap())
+        Ok(id)
+    }
 }
 
 async fn handle_movie(
@@ -1285,14 +1325,22 @@ async fn handle_movie(
                 let Some(first_result) = search_result.into_iter().next() else {
                     continue;
                 };
-                // save poster, backdrop and mutate result's urls to local,
-                // leave original url in if saving fails
-                let external_ids = provider
-                    .external_ids(&first_result.metadata_id, ContentType::Movie)
-                    .await
-                    .unwrap_or_default();
-                let local_id =
-                    handle_movie_metadata(db, first_result, items, external_ids, duration).await?;
+                let local_id = match crossreference_movie(db, &first_result).await {
+                    Ok(Some(crossreferenced_id)) => {
+                        tracing::debug!(movie_title = first_result.title, "Using local movie ref");
+                        crossreferenced_id
+                    }
+                    Ok(None) | Err(_) => {
+                        // save poster, backdrop and mutate result's urls to local,
+                        // leave original url in if saving fails
+                        let external_ids = provider
+                            .external_ids(&first_result.metadata_id, ContentType::Movie)
+                            .await
+                            .unwrap_or_default();
+                        handle_movie_metadata(db, first_result, items, external_ids, duration)
+                            .await?
+                    }
+                };
                 return Ok(local_id);
             }
         }
