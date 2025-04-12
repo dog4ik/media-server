@@ -497,7 +497,7 @@ pub async fn previews(
         (status = 200, description = "Subtitles", body = String),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Subtitles",
 )]
 pub async fn pull_video_subtitle(
     Path(video_id): Path<i64>,
@@ -545,10 +545,10 @@ impl MultipartSubtitles {
     ),
     request_body(content = inline(MultipartSubtitles), content_type = "multipart/form-data"),
     responses(
-        (status = 200, description = "Subtitles", body = String),
+        (status = 200),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Subtitles",
 )]
 pub async fn upload_subtitles(
     Path(video_id): Path<i64>,
@@ -613,10 +613,10 @@ pub struct SubtitlesReferencePayload {
     ),
     request_body(content = SubtitlesReferencePayload),
     responses(
-        (status = 200, description = "Subtitles are referenced successfully", body = String),
+        (status = 200, description = "Subtitles are referenced successfully"),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Subtitles",
 )]
 pub async fn reference_external_subtitles(
     Path(video_id): Path<i64>,
@@ -646,7 +646,7 @@ pub async fn reference_external_subtitles(
         (status = 200, description = "Subtitles are successfully deleted"),
         (status = 404, description = "Subtitles are not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Subtitles",
 )]
 pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Result<(), AppError> {
     let mut tx = db.begin().await?;
@@ -678,7 +678,7 @@ pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Resu
         (status = 200, description = "Subtitles stream", body = Vec<u8>),
         (status = 404, description = "Subtitles are not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Subtitles",
 )]
 pub async fn get_subtitles(
     Path(id): Path<i64>,

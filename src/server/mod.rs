@@ -213,6 +213,7 @@ pub struct SerdeDuration {
         (name = "Torrent", description = "Torrent client operations"),
         (name = "Transcoding", description = "Live transcoding operations"),
         (name = "Videos", description = "Video files operations"),
+        (name = "Subtitles", description = "Subtitles operations"),
     )
 )]
 pub struct OpenApiDoc;
