@@ -4,23 +4,9 @@ use std::{
     time::Instant,
 };
 
-use crate::library::{SUPPORTED_FILES, Video, movie::MovieIdent, show::ShowIdent};
+use crate::library::{EXTRAS_FOLDERS, SUPPORTED_FILES, Video, movie::MovieIdent, show::ShowIdent};
 
 use super::{movie::MovieIdentifier, show::ShowIdentifier};
-
-pub const EXTRAS_FOLDERS: [&str; 11] = [
-    "behind the scenes",
-    "deleted scenes",
-    "interviews",
-    "scenes",
-    "samples",
-    "shorts",
-    "featurettes",
-    "clips",
-    "other",
-    "extras",
-    "trailers",
-];
 
 const NAME_NOISE: [&str; 68] = [
     "3d",
@@ -209,11 +195,16 @@ pub const SEPARATORS: [char; 4] = ['-', '_', ' ', '.'];
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Token<'a> {
+    /// Represents anything that is not noise, year group or separator. It "may" contain show title
     Unknown(&'a str),
+    /// Noise represents elements from [NAME_NOISE](NAME_NOISE)
     Noise(&'a str),
+    /// 4 numbers digit token that "may" represent the release year
     Year(u16),
     GroupStart,
     /// Separator that have separators as neighbors
+    ///
+    /// For example in `Show - S02E3.mkv` `-` is explicit separator
     ExplicitSeparator,
     GroupEnd,
 }
@@ -346,10 +337,13 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
         let mut dir_year = None;
         let mut dir_show_title = None;
 
+        // true value means that some episodes are missing number
+        // we should try to sort them alphabetically to get their numbers
         let mut need_sort = false;
 
         while let Some(Ok(entry)) = read_dir.next() {
             let Ok(metadata) = entry.metadata() else {
+                tracing::warn!("Failed to get fs metadata for {}", entry.path().display());
                 continue;
             };
             let path = entry.path();
@@ -381,13 +375,16 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                 let show_ident: Result<ShowIdentifier, ShowIdent> =
                     metadata_parser.feed_filename(file_name).try_into();
                 match &show_ident {
+                    // Successfully parsed show identifier
                     Ok(identifier) => {
+                        // use successfully parsed children for directory identifier
                         dir_show_title = Some(identifier.title.clone());
                         dir_season = Some(identifier.season);
                         if let Some(year) = identifier.year {
                             dir_year = Some(year);
                         }
                     }
+                    // Failed parsed show identifier
                     Err(ident) => {
                         if !ident.title.is_empty() {
                             dir_show_title = Some(ident.title.clone());
@@ -404,10 +401,13 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                     }
                 };
                 supported_paths.push((path, show_ident));
+            } else {
+                tracing::trace!("Skipping unsupported file: {}", path.display());
             }
         }
         if need_sort {
-            supported_paths.sort_by_key(|(p, _)| p.to_string_lossy().to_string());
+            tracing::trace!("Sorting detected episodes");
+            supported_paths.sort_by(|(a, _), (b, _)| a.cmp(b));
         }
         for (i, (path, ident_result)) in supported_paths.into_iter().enumerate() {
             let video = Video::from_path_unchecked(&path);

@@ -385,7 +385,7 @@ impl From<TmdbShowSeason> for SeasonMetadata {
             metadata_provider: MetadataProvider::Tmdb,
             release_date: val.air_date,
             plot: val.overview,
-            episodes: val.episodes.into_iter().map(|e| e.into()).collect(),
+            episodes: val.episodes.into_iter().map(Into::into).collect(),
             poster,
             number: val.season_number,
         }
@@ -438,7 +438,7 @@ impl ShowMetadataProvider for TmdbApi {
     ) -> Result<ShowMetadata, AppError> {
         self.show_details(metadata_show_id.parse()?, fetch_params.lang)
             .await
-            .map(|r| r.into())
+            .map(Into::into)
     }
 
     async fn season(
@@ -450,7 +450,7 @@ impl ShowMetadataProvider for TmdbApi {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_season(show_id, season, fetch_params)
             .await
-            .map(|s| s.into())
+            .map(Into::into)
     }
 
     async fn episode(
@@ -463,7 +463,7 @@ impl ShowMetadataProvider for TmdbApi {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_episode(show_id, season, episode, fetch_params)
             .await
-            .map(|e| e.into())
+            .map(Into::into)
     }
 
     fn provider_identifier(&self) -> MetadataProvider {
@@ -492,7 +492,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         fetch_params: FetchParams,
     ) -> Result<Vec<ShowMetadata>, AppError> {
         let shows = self.search_tv_show(query, fetch_params.lang).await?;
-        Ok(shows.results.into_iter().map(|x| x.into()).collect())
+        Ok(shows.results.into_iter().map(Into::into).collect())
     }
 
     async fn movie_search(
@@ -501,7 +501,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         fetch_params: FetchParams,
     ) -> Result<Vec<MovieMetadata>, AppError> {
         let content = self.search_movie(query, fetch_params.lang).await?;
-        Ok(content.results.into_iter().map(|x| x.into()).collect())
+        Ok(content.results.into_iter().map(Into::into).collect())
     }
 
     async fn external_ids(

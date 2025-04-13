@@ -531,7 +531,7 @@ pub mod res {
 
         pub fn set_duartion<T: Into<UpnpDuration>>(&mut self, duration: impl Into<Option<T>>) {
             let duration = duration.into();
-            self.duration = duration.map(|d| d.into());
+            self.duration = duration.map(Into::into);
         }
 
         pub fn set_resoulution(&mut self, resolution: impl Into<Option<UpnpResolution>>) {

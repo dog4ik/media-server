@@ -273,7 +273,7 @@ impl TorrentStorage {
                 save_location_metadata.file_type()
             ));
         }
-        let (message_tx, mut message_rx) = mpsc::channel(200);
+        let (message_tx, mut message_rx) = mpsc::channel(1800);
         tracker.spawn(async move {
             loop {
                 tokio::select! {

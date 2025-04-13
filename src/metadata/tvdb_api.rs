@@ -214,7 +214,7 @@ impl ShowMetadataProvider for TvdbApi {
         let episodes = episodes
             .into_iter()
             .filter(|e| e.season_number == season)
-            .map(|e| e.into())
+            .map(Into::into)
             .collect();
         let season = show
             .seasons
@@ -284,7 +284,7 @@ impl DiscoverMetadataProvider for TvdbApi {
             .search_series(query)
             .await?
             .into_iter()
-            .map(|r| r.into())
+            .map(Into::into)
             .collect())
     }
 
@@ -297,7 +297,7 @@ impl DiscoverMetadataProvider for TvdbApi {
             .search_movie(query)
             .await?
             .into_iter()
-            .map(|r| r.into())
+            .map(Into::into)
             .collect())
     }
 

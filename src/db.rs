@@ -665,7 +665,7 @@ where
             let movies = sqlx::query_as!(DbMovie, "SELECT movies.* FROM movies LIMIT ?", limit)
                 .fetch_all(&mut *conn)
                 .await?;
-            Ok(movies.into_iter().map(|movie| movie.into()).collect())
+            Ok(movies.into_iter().map(Into::into).collect())
         }
     }
 
@@ -1007,7 +1007,7 @@ where
         )
         .fetch_all(&mut *conn)
         .await?;
-            Ok(movies.into_iter().map(|movie| movie.into()).collect())
+            Ok(movies.into_iter().map(Into::into).collect())
         }
     }
 
@@ -1207,11 +1207,11 @@ impl DiscoverMetadataProvider for Db {
         _fetch_params: FetchParams,
     ) -> Result<Vec<crate::metadata::MetadataSearchResult>, AppError> {
         use rand::seq::SliceRandom;
-        let movies = self.pool.search_movie(query).await?;
-        let shows = self.pool.search_show(query).await?;
+        let (movies, shows) =
+            tokio::try_join!(self.pool.search_movie(query), self.pool.search_show(query))?;
         let mut out = Vec::with_capacity(movies.len() + shows.len());
-        out.extend(movies.into_iter().map(|m| m.into()));
-        out.extend(shows.into_iter().map(|m| m.into()));
+        out.extend(movies.into_iter().map(Into::into));
+        out.extend(shows.into_iter().map(Into::into));
         let mut rng = rand::rng();
         out.shuffle(&mut rng);
         Ok(out)
