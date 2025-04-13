@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 
 use crate::{
     app_state::AppError,
-    metadata::{FetchParams, request_client::LimitedRequestClient},
+    metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient},
 };
 
 use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
@@ -58,10 +58,13 @@ impl Default for TpbApi {
 
 impl TpbApi {
     pub fn new() -> Self {
-        let client = Client::new();
+        let (client, base_url) = provod_agent::new_client("tpb").unwrap_or_else(|e| {
+            tracing::warn!("Failed to initialize Provod TPB API: {e}");
+            tracing::info!("Using public TPB API");
+            (Client::new(), Url::parse("https://apibay.org").unwrap())
+        });
         let limited_client =
             LimitedRequestClient::new(client, 1, std::time::Duration::from_secs(1));
-        let base_url = Url::parse("https://apibay.org").unwrap();
         Self {
             client: limited_client,
             base_url,
