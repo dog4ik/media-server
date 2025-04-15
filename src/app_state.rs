@@ -697,19 +697,17 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             library.movies().collect()
         };
 
-        let db_movies_videos = sqlx::query!(
-            r#"SELECT videos.id as "video_id" FROM videos
-        JOIN movies ON videos.movie_id = movies.id"#
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
+        let db_movies_videos =
+            sqlx::query!("SELECT videos.id FROM videos WHERE videos.movie_id NOT NULL;")
+                .fetch_all(&self.db.pool)
+                .await?;
 
         let missing_movies = db_movies_videos
             .iter()
-            .filter(|d| !local_movies.iter().any(|x| x.source.id == d.video_id));
+            .filter(|d| !local_movies.iter().any(|x| x.source.id == d.id));
         for missing_movie in missing_movies {
             let mut tx = self.db.begin().await.context("begin movies removal tx")?;
-            match tx.remove_video(missing_movie.video_id).await {
+            match tx.remove_video(missing_movie.id).await {
                 Ok(_) => {
                     let _ = tx.commit().await;
                 }
@@ -721,7 +719,7 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
 
         let mut new_movies: Vec<_> = local_movies
             .into_iter()
-            .filter(|l| !db_movies_videos.iter().any(|d| d.video_id == l.source.id))
+            .filter(|l| !db_movies_videos.iter().any(|d| d.id == l.source.id))
             .collect();
 
         new_movies.sort_unstable_by(|a, b| {
@@ -770,20 +768,18 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             out
         };
 
-        let db_episodes_videos = sqlx::query!(
-            r#"SELECT videos.id as "video_id" FROM videos
-        JOIN episodes ON videos.episode_id = episodes.id"#
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
+        let db_episodes_videos =
+            sqlx::query!("SELECT videos.id FROM videos WHERE videos.episode_id NOT NULL;")
+                .fetch_all(&self.db.pool)
+                .await?;
 
         let missing_episodes = db_episodes_videos
             .iter()
-            .filter(|d| !local_episodes.iter().any(|x| x.source.id == d.video_id));
+            .filter(|d| !local_episodes.iter().any(|x| x.source.id == d.id));
 
         for missing_episode in missing_episodes {
             let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
-            match tx.remove_video(missing_episode.video_id).await {
+            match tx.remove_video(missing_episode.id).await {
                 Ok(_) => {
                     let _ = tx.commit().await;
                 }
@@ -795,7 +791,7 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
 
         let mut new_episodes: Vec<_> = local_episodes
             .into_iter()
-            .filter(|l| !db_episodes_videos.iter().any(|d| d.video_id == l.source.id))
+            .filter(|l| !db_episodes_videos.iter().any(|d| d.id == l.source.id))
             .collect();
 
         new_episodes.sort_unstable_by(|a, b| {
