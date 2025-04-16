@@ -118,6 +118,7 @@ pub struct DetailedSubtitleTrack {
     pub is_default: bool,
     pub is_visual_impaired: bool,
     pub is_hearing_impaired: bool,
+    pub is_text_format: bool,
     pub language: Option<String>,
     pub codec: SubtitlesCodec,
 }
@@ -329,6 +330,7 @@ impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
             is_default: val.is_default(),
             is_hearing_impaired: false,
             is_visual_impaired: false,
+            is_text_format: val.codec().supports_text(),
             language: val.language.map(|x| x.to_string()),
             codec: val.codec(),
         }
@@ -341,6 +343,7 @@ impl From<&Track<Subtitle>> for DetailedSubtitleTrack {
             is_default: val.is_default(),
             is_hearing_impaired: val.stream.is_hearing_impaired,
             is_visual_impaired: val.stream.is_visual_impaired,
+            is_text_format: val.stream.codec.supports_text(),
             language: val.stream.language.clone(),
             codec: val.stream.codec.clone(),
         }
