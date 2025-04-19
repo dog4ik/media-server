@@ -27,6 +27,13 @@ pub mod library;
 pub mod metadata;
 /// Progress notifications dispatched to the connected Websockets clients
 pub mod progress;
+/// Library scan module
+///
+/// There are 3 things must be done during scan.
+/// 1. Metadata fetch. It can be found locally or fetched from providers.
+/// 2. New metadata and assets must be saved.
+/// 3. Library items should be linked to their metadata
+pub mod scan;
 /// Api surface of the media server
 pub mod server;
 /// Content streams

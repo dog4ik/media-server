@@ -98,7 +98,7 @@ pub async fn explore_show_dirs(
     exclude: &[PathBuf],
 ) {
     let videos = walk_show_dirs(folders);
-    let mut tx = db.begin().await.expect("transaction begin");
+    let mut tx = db.begin().await.expect("transaction to begin");
     let start = Instant::now();
     for (video, identifier) in videos {
         let path = video.path();
@@ -117,7 +117,7 @@ pub async fn explore_show_dirs(
         library.insert(id, library_file.into());
     }
 
-    tx.commit().await.expect("if this fails we are cooked");
+    tx.commit().await.expect("if it fails, we are cooked");
     tracing::debug!(took = ?start.elapsed(), "Finished video reconcilliation");
 }
 

@@ -263,7 +263,9 @@ pub trait DiscoverMetadataProvider {
 
 // types
 
-#[derive(Debug, Serialize, Deserialize, Clone, Copy, Default, PartialEq, Eq, utoipa::ToSchema)]
+#[derive(
+    Debug, Serialize, Deserialize, Clone, Copy, Hash, Default, PartialEq, Eq, utoipa::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum MetadataProvider {
     #[default]
@@ -376,7 +378,7 @@ pub struct CharacterMetadata {
     pub image: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct ExternalIdMetadata {
     pub provider: MetadataProvider,
     pub id: String,
@@ -404,6 +406,27 @@ impl From<ShowMetadata> for MetadataSearchResult {
             metadata_provider: val.metadata_provider,
             content_type: ContentType::Show,
             metadata_id: val.metadata_id,
+        }
+    }
+}
+
+impl From<ShowMetadata> for DbShow {
+    fn from(val: ShowMetadata) -> Self {
+        let poster;
+        if let Some(metadata_image) = val.poster {
+            poster = Some(metadata_image.as_str().to_owned());
+        } else {
+            poster = None;
+        };
+        let backdrop = val.backdrop.map(|p| p.as_str().to_owned());
+
+        DbShow {
+            id: None,
+            title: val.title,
+            release_date: val.release_date,
+            poster,
+            backdrop,
+            plot: val.plot,
         }
     }
 }
@@ -438,27 +461,6 @@ impl SeasonMetadata {
             release_date: self.release_date,
             plot: self.plot,
             poster,
-        }
-    }
-}
-
-impl ShowMetadata {
-    pub fn into_db_show(self) -> DbShow {
-        let poster;
-        if let Some(metadata_image) = self.poster {
-            poster = Some(metadata_image.as_str().to_owned());
-        } else {
-            poster = None;
-        };
-        let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
-
-        DbShow {
-            id: None,
-            title: self.title,
-            release_date: self.release_date,
-            poster,
-            backdrop,
-            plot: self.plot,
         }
     }
 }

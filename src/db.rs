@@ -89,7 +89,7 @@ where
 
     fn insert_show(
         self,
-        show: DbShow,
+        show: &DbShow,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
@@ -131,7 +131,7 @@ where
 
     fn insert_episode(
         self,
-        episode: DbEpisode,
+        episode: &DbEpisode,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
@@ -329,6 +329,38 @@ where
         }
     }
 
+    fn get_external_ids(
+        self,
+        content_id: i64,
+        content_hint: ContentType,
+    ) -> impl std::future::Future<Output = Result<Vec<ExternalIdMetadata>, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+
+            let db_ids = match content_hint {
+                ContentType::Movie => {
+                    sqlx::query_as!(
+                        DbExternalId,
+                        "SELECT * FROM external_ids WHERE movie_id = ?",
+                        content_id
+                    )
+                    .fetch_all(&mut *conn)
+                    .await
+                }
+                ContentType::Show => {
+                    sqlx::query_as!(
+                        DbExternalId,
+                        "SELECT * FROM external_ids WHERE show_id = ?",
+                        content_id
+                    )
+                    .fetch_all(&mut *conn)
+                    .await
+                }
+            }?;
+            Ok(db_ids.into_iter().map(|i| i.into()).collect())
+        }
+    }
+
     fn remove_video(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
@@ -498,7 +530,7 @@ where
     ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let db_show = metadata.into_db_show();
+            let db_show = DbShow::from(metadata);
             let q = sqlx::query!(
                 "UPDATE shows SET
                             title = ?, 
@@ -834,6 +866,27 @@ where
                 poster,
                 number: season.number as usize,
             })
+        }
+    }
+
+    fn get_season_id(
+        self,
+        show_id: i64,
+        season: usize,
+    ) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let season = season as i64;
+            let season = sqlx::query!(
+                "SELECT seasons.id FROM seasons
+            WHERE seasons.show_id = ? AND seasons.number = ?;",
+                show_id,
+                season,
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+
+            Ok(season.id)
         }
     }
 
@@ -1238,27 +1291,8 @@ impl DiscoverMetadataProvider for Db {
         content_id: &str,
         content_hint: ContentType,
     ) -> Result<Vec<ExternalIdMetadata>, AppError> {
-        let db_ids = match content_hint {
-            ContentType::Movie => {
-                sqlx::query_as!(
-                    DbExternalId,
-                    "SELECT * FROM external_ids WHERE movie_id = ?",
-                    content_id
-                )
-                .fetch_all(&self.pool)
-                .await
-            }
-            ContentType::Show => {
-                sqlx::query_as!(
-                    DbExternalId,
-                    "SELECT * FROM external_ids WHERE show_id = ?",
-                    content_id
-                )
-                .fetch_all(&self.pool)
-                .await
-            }
-        }?;
-        Ok(db_ids.into_iter().map(|i| i.into()).collect())
+        self.get_external_ids(content_id.parse()?, content_hint)
+            .await
     }
 
     fn provider_identifier(&self) -> MetadataProvider {

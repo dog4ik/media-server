@@ -1108,7 +1108,7 @@ async fn parse_torrent_files(
                                 .await
                                 .map(|r| r.into_iter().next())
                             else {
-                                tracing::error!("Could not find show: {}", show_title);
+                                tracing::error!(show_title, "Could not find show");
                                 return TorrentContents::without_content(all_files);
                             };
                             show
