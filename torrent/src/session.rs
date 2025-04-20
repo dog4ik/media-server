@@ -37,6 +37,6 @@ impl SessionContext {
     }
 
     pub fn max_connections_per_torrent(&self) -> usize {
-        self.max_peer_connections / self.torrents_amount.load(Ordering::Acquire)
+        (self.max_peer_connections / self.torrents_amount.load(Ordering::Acquire)).min(255)
     }
 }

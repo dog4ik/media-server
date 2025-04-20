@@ -86,7 +86,7 @@ pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
 
 pub(crate) const CLIENT_NAME: &str = "SkibidiTorrent";
-pub(crate) const MAX_PEER_CONNECTIONS: usize = 600;
+pub(crate) const MAX_PEER_CONNECTIONS: usize = 512;
 
 #[derive(Debug)]
 pub struct ClientConfig {
