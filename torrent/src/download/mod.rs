@@ -621,9 +621,10 @@ impl Download {
             );
 
             if min_pex_tip != usize::MAX
+                && min_pex_tip != 0
                 && self.pex_history.tip() - min_pex_tip > PEX_HISTORY_CLEANUP_THRESHOLD
             {
-                tracing::debug!("Shrinking pex history");
+                tracing::debug!(min_pex_tip, pex_tip = %self.pex_history.tip(), "Shrinking pex history");
                 self.shrink_pex_history(min_pex_tip);
             }
 
