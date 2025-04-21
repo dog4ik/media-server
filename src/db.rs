@@ -998,6 +998,17 @@ where
         }
     }
 
+    fn get_uuid(self) -> impl std::future::Future<Output = Result<uuid::Uuid, AppError>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let db_upnp_uuid: DbUpnpUuid = sqlx::query_as(r#"SELECT uuid FROM upnp_uuid"#)
+                .fetch_one(&mut *conn)
+                .await?;
+
+            Ok(db_upnp_uuid.uuid)
+        }
+    }
+
     fn all_torrents(
         self,
         limit: i64,
@@ -1196,6 +1207,15 @@ impl Db {
             }
             Err(e) => return Err(e.into()),
         };
+
+        let uuid = uuid::Uuid::new_v4();
+        sqlx::query!(
+            "INSERT OR IGNORE INTO upnp_uuid (id, uuid) VALUES (0, ?);",
+            uuid,
+        )
+        .execute(&pool)
+        .await
+        .expect("insert upnp uuid");
 
         Ok(Self { pool })
     }
@@ -1540,4 +1560,11 @@ pub struct DbTorrentFile {
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbSystemId {
     pub id: i64,
+}
+
+/// `upnp_uuid` table stores the single row: `uuid`.
+/// This uuid created once during database initialization and used during UPnP announces.
+#[derive(Debug, Clone, FromRow)]
+pub struct DbUpnpUuid {
+    pub uuid: uuid::Uuid,
 }
