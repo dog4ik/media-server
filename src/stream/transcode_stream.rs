@@ -152,7 +152,12 @@ pub async fn retrieve_keyframes(
     min_delay: f64,
 ) -> anyhow::Result<KeyFrames> {
     let ffprobe: config::FFprobePath = config::CONFIG.get_value();
-    let mut child = tokio::process::Command::new(ffprobe.as_ref())
+    let mut cmd = tokio::process::Command::new(ffprobe.as_ref());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .args([
             "-loglevel",
             "error",
@@ -259,7 +264,12 @@ async fn transcode_stream(
             .map(|f| format!("{:.6}", f.time))
             .collect();
         let segment_times = times.join(",");
-        let mut command = tokio::process::Command::new(ffmpeg.as_ref())
+        let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+        }
+        let mut command = cmd
             .args([
                 "-hide_banner",
                 "-ss",

@@ -985,11 +985,13 @@ impl Capabilities {
     pub async fn parse() -> Result<Self, anyhow::Error> {
         let ffmpeg: FFmpegPath = CONFIG.get_value();
         let chromaprint_ffmpeg: IntroDetectionFfmpegBuild = CONFIG.get_value();
-        let output = Command::new(ffmpeg.as_ref())
-            .args(["-codecs"])
-            .output()
-            .await?;
+        let mut cmd = Command::new(ffmpeg.as_ref());
 
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+        }
+        let output = cmd.args(["-codecs"]).output().await?;
         if !output.status.success() {
             return Err(anyhow::anyhow!("ffmpeg -codces command failed"));
         }
@@ -1018,10 +1020,13 @@ impl Capabilities {
                 .skip(1)
                 .any(|flag| flag == "--enable-chromaprint")
         } else {
-            let out = Command::new(chromaprint_ffmpeg.0)
-                .arg("-version")
-                .output()
-                .await?;
+            let mut cmd = Command::new(chromaprint_ffmpeg.0);
+
+            #[cfg(windows)]
+            {
+                cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+            }
+            let out = cmd.arg("-version").output().await?;
             let mut lines = out.stdout.lines();
             let _ = lines.next().context("version line")??;
             let _ = lines.next();

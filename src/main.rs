@@ -1,3 +1,4 @@
+#![windows_subsystem = "windows"]
 use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Extension, Router};
 use clap::Parser;

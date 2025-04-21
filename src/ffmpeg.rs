@@ -366,19 +366,22 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyho
         Path::new(path.file_name().unwrap()).display()
     );
     let ffprobe: config::FFprobePath = config::CONFIG.get_value();
-    let output = Command::new(ffprobe.as_ref())
-        .args([
-            "-v".as_ref(),
-            "quiet".as_ref(),
-            "-print_format".as_ref(),
-            "json=compact=1".as_ref(),
-            "-show_streams".as_ref(),
-            "-show_chapters".as_ref(),
-            "-show_format".as_ref(),
-            path.as_os_str(),
-        ])
-        .output()
-        .await?;
+    let mut cmd = Command::new(ffprobe.as_ref());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    cmd.args([
+        "-v".as_ref(),
+        "quiet".as_ref(),
+        "-print_format".as_ref(),
+        "json=compact=1".as_ref(),
+        "-show_streams".as_ref(),
+        "-show_chapters".as_ref(),
+        "-show_format".as_ref(),
+        path.as_os_str(),
+    ]);
+    let output = cmd.output().await?;
     let metadata: FFprobeOutput = serde_json::from_slice(&output.stdout)?;
     Ok(metadata)
 }
@@ -729,7 +732,13 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
     {
         let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
         tracing::debug!("Spawning ffmpeg with args: {:?}", args);
-        Ok(tokio::process::Command::new(ffmpeg.as_ref())
+        let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+        #[cfg(windows)]
+        {
+            cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+        }
+
+        Ok(cmd
             .kill_on_drop(true)
             .args(["-progress", "pipe:1", "-nostats", "-y"])
             .args(args)
@@ -879,7 +888,12 @@ pub async fn resize_image_ffmpeg(
 ) -> Result<String, anyhow::Error> {
     let scale = format!("scale={}:{}", width, height.unwrap_or(-1));
     let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
-    let mut child = tokio::process::Command::new(ffmpeg.as_ref())
+    let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .args([
             "-hide_banner",
             "-loglevel",
@@ -911,7 +925,13 @@ pub async fn resize_image_ffmpeg(
 /// Extract subtitle track from provided file. Takes in desired track
 pub async fn pull_subtitles(input_file: impl AsRef<Path>, track: usize) -> anyhow::Result<String> {
     let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
-    let output = tokio::process::Command::new(ffmpeg.as_ref())
+    let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    let output = cmd
         .args([
             "-hide_banner",
             "-loglevel",
@@ -971,7 +991,12 @@ pub async fn pull_frame(
         output_file.as_ref().as_os_str(),
         "-y".as_ref(),
     ];
-    let mut child = tokio::process::Command::new(ffmpeg.as_ref())
+    let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -989,24 +1014,28 @@ pub fn spawn_chromaprint_command(path: impl AsRef<Path>, take: Duration) -> std:
     let path = path.as_ref().to_path_buf();
     let str_path = path.to_string_lossy();
     let ffmpeg: config::IntroDetectionFfmpegBuild = config::CONFIG.get_value();
-    tokio::process::Command::new(ffmpeg.0)
-        .args([
-            "-hide_banner",
-            "-i",
-            &str_path,
-            "-to",
-            &format_ffmpeg_time(take),
-            "-ac",
-            "2",
-            "-map",
-            "0:a:0",
-            "-f",
-            "chromaprint",
-            "-fp_format",
-            "raw",
-            "-",
-        ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut cmd = tokio::process::Command::new(ffmpeg.0);
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    cmd.args([
+        "-hide_banner",
+        "-i",
+        &str_path,
+        "-to",
+        &format_ffmpeg_time(take),
+        "-ac",
+        "2",
+        "-map",
+        "0:a:0",
+        "-f",
+        "chromaprint",
+        "-fp_format",
+        "raw",
+        "-",
+    ])
+    .stdout(Stdio::piped())
+    .stderr(Stdio::piped())
+    .spawn()
 }

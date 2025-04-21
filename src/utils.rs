@@ -106,3 +106,6 @@ pub fn stringify_info_hash(hash: &[u8; 20]) -> String {
         acc
     })
 }
+
+#[cfg(windows)]
+pub const CREATE_NO_WINDOW: u32 = 0x08000000;
