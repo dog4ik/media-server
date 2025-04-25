@@ -782,8 +782,7 @@ impl ConfigValue for WebUiPath {
 }
 impl Default for WebUiPath {
     fn default() -> Self {
-        let base_path = &APP_RESOURCES.base_path;
-        Self(base_path.join("dist"))
+        Self(APP_RESOURCES.statics_path.join("dist"))
     }
 }
 
@@ -1062,7 +1061,7 @@ pub struct AppResources {
     #[schema(value_type = Option<String>)]
     pub binary_path: Option<PathBuf>,
     #[schema(value_type = String)]
-    pub base_path: PathBuf,
+    pub statics_path: PathBuf,
     #[schema(value_type = String)]
     pub log_path: PathBuf,
     pub os: String,
@@ -1075,21 +1074,30 @@ pub static APP_RESOURCES: LazyLock<AppResources> = LazyLock::new(AppResources::n
 impl AppResources {
     pub const APP_NAME: &'static str = "media-server";
 
-    fn prod_storage() -> PathBuf {
-        dirs::data_local_dir()
-            .expect("target to have data directory")
-            .join(Self::APP_NAME)
-    }
+    fn static_storage() -> PathBuf {
+        if Self::is_prod() {
+            #[cfg(windows)]
+            {
+                let program_files = std::env::var("PROGRAMFILES").unwrap_or_default();
+                PathBuf::from(program_files).join(Self::APP_NAME)
+            }
 
-    fn debug_storage() -> PathBuf {
-        PathBuf::from(".").canonicalize().unwrap()
+            #[cfg(not(windows))]
+            {
+                Path::new("/usr/share").join(Self::APP_NAME)
+            }
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        }
     }
 
     fn data_storage() -> PathBuf {
         if Self::is_prod() {
-            Self::prod_storage()
+            dirs::data_local_dir()
+                .expect("target to have data directory")
+                .join(Self::APP_NAME)
         } else {
-            Self::debug_storage()
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         }
     }
 
@@ -1098,7 +1106,14 @@ impl AppResources {
     }
 
     pub fn default_config_path() -> PathBuf {
-        Self::data_storage().join("configuration.toml")
+        if Self::is_prod() {
+            dirs::config_local_dir()
+                .expect("target supports config dir")
+                .join(Self::APP_NAME)
+        } else {
+            Self::data_storage()
+        }
+        .join("configuration.toml")
     }
 
     fn temp_storage() -> PathBuf {
@@ -1156,11 +1171,7 @@ impl AppResources {
             .ok()
             .and_then(|d| d.parent().map(|x| x.to_path_buf()));
 
-        let base_path = if cfg!(debug_assertions) {
-            "".into()
-        } else {
-            binary_path.clone().unwrap()
-        };
+        let statics_path = Self::static_storage();
         let (os_version, os) = System::kernel_version()
             .zip(System::long_os_version())
             .expect("all supported targets give us os version");
@@ -1173,7 +1184,7 @@ impl AppResources {
             temp_path,
             cache_path,
             binary_path,
-            base_path,
+            statics_path,
             log_path,
             os_version,
             os,
