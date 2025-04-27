@@ -577,13 +577,16 @@ pub async fn upload_subtitles(
 
             use std::io::{Error, ErrorKind};
             let mut stream = field.map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
-            let mut reader = tokio_util::io::StreamReader::new(&mut stream);
-            subtitles_asset.save_from_reader(&mut reader).await?;
+            let output_path = subtitles_asset.path();
+            crate::ffmpeg::convert_and_save_srt(&output_path, &mut stream).await?;
 
             if tx.commit().await.is_err() {
                 tracing::error!("Failed to commit subtitles transaction");
                 if let Err(e) = subtitles_asset.delete_file().await {
-                    tracing::error!("Failed to created subtitle: {e}");
+                    tracing::error!(
+                        path = %output_path.display(),
+                        "Failed to clean up subtitles file: {e}"
+                    );
                 };
             };
             return Ok(());
@@ -626,6 +629,9 @@ pub async fn reference_external_subtitles(
     State(db): State<Db>,
     Json(reference): Json<SubtitlesReferencePayload>,
 ) -> Result<(), AppError> {
+    if !reference.path.ends_with(".srt") {
+        return Err(AppError::bad_request("only .srt files can be referenced"));
+    }
     let db_subtitles = db::DbSubtitles {
         id: None,
         language: reference.language,

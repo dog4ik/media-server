@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::Semaphore;
+use tokio_stream::StreamExt;
 
 use crate::config::{self};
 use crate::library::{
@@ -920,6 +921,56 @@ pub async fn resize_image_ffmpeg(
     } else {
         Err(anyhow!("resize process was unexpectedly terminated"))
     }
+}
+
+/// Save subtitles stream into the file
+pub async fn convert_and_save_srt(
+    output_path: impl AsRef<Path>,
+    mut stream: impl tokio_stream::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
+) -> anyhow::Result<()> {
+    let output_path = output_path.as_ref();
+    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
+    let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
+
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
+    let mut child = cmd
+        .args([
+            OsStr::new("-hide_banner"),
+            OsStr::new("-loglevel"),
+            OsStr::new("error"),
+            OsStr::new("-i"),
+            OsStr::new("-"),
+            OsStr::new("-c:s"),
+            OsStr::new("text"),
+            OsStr::new("-f"),
+            OsStr::new("srt"),
+            output_path.as_os_str(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let run = async || {
+        let mut stdin = child.stdin.take().expect("not taken");
+        while let Some(Ok(bytes)) = stream.next().await {
+            stdin.write_all(&bytes).await?;
+        }
+        stdin.shutdown().await?;
+        let output = child.wait_with_output().await?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(anyhow!("ffmpeg process was unexpectedly terminated"))
+        }
+    };
+    if let Err(e) = run().await {
+        let _ = tokio::fs::remove_file(output_path).await;
+        return Err(e);
+    }
+    Ok(())
 }
 
 /// Extract subtitle track from provided file. Takes in desired track
