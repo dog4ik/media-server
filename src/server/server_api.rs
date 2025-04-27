@@ -237,7 +237,7 @@ impl DetailedVideo {
             id,
             path: source.video.path().to_path_buf(),
             previews_count,
-            size: source.video.file_size(),
+            size: source.video.file_size().await?,
             duration: video_metadata.duration(),
             variants: detailed_variants,
             scan_date: date.to_string(),
@@ -371,7 +371,7 @@ impl DetailedVariant {
         let metadata = video.metadata().await?;
         Ok(Self {
             id,
-            size: video.file_size(),
+            size: video.file_size().await?,
             duration: metadata.duration(),
             video_tracks: metadata
                 .video_streams()

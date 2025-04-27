@@ -466,18 +466,18 @@ impl LazyFFprobeOutput {
 
 impl Video {
     /// Returns struct compatible with database Video table
-    pub fn into_db_video(&self) -> DbVideo {
+    pub async fn into_db_video(&self) -> std::io::Result<DbVideo> {
         let now = time::OffsetDateTime::now_utc();
 
-        DbVideo {
+        Ok(DbVideo {
             id: None,
             path: self.path.to_string_lossy().to_string(),
-            size: self.file_size() as i64,
+            size: self.file_size().await? as i64,
             episode_id: None,
             movie_id: None,
             is_prime: false,
             scan_date: now.to_string(),
-        }
+        })
     }
 
     pub async fn fetch_duration(&self) -> anyhow::Result<std::time::Duration> {
@@ -493,7 +493,7 @@ impl Video {
         let video_id: Result<i64, anyhow::Error> = match res {
             Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
-                let db_video = self.into_db_video();
+                let db_video = self.into_db_video().await?;
                 let id = tx.insert_video(db_video).await?;
                 Ok(id)
             }
@@ -554,8 +554,8 @@ impl Video {
     }
 
     /// Get file size in bytes
-    pub fn file_size(&self) -> u64 {
-        std::fs::metadata(&self.path).expect("to have access").len()
+    pub async fn file_size(&self) -> std::io::Result<u64> {
+        tokio::fs::metadata(&self.path).await.map(|m| m.len())
     }
 
     /// Get file size in bytes
@@ -570,7 +570,10 @@ impl Video {
     }
 
     pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse + use<> {
-        let file_size = self.file_size();
+        let file_size = match self.file_size().await {
+            Ok(size) => size,
+            Err(e) => return AppError::from(e).into_response(),
+        };
         let range = range.map(|h| h.0).unwrap_or(Range::bytes(0..).unwrap());
         let (start, end) = range
             .satisfiable_ranges(file_size)
