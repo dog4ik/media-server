@@ -1364,10 +1364,11 @@ pub async fn search_torrent(
 pub async fn get_trending_shows(
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<ShowMetadata>>, AppError> {
+    let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
         .ok_or(AppError::bad_request("tmdb provider is not available"))?;
-    let res = tmdb_api.trending_shows().await?;
+    let res = tmdb_api.trending_shows(language.0).await?;
     Ok(Json(res.results.into_iter().map(Into::into).collect()))
 }
 
@@ -1383,10 +1384,11 @@ pub async fn get_trending_shows(
 pub async fn get_trending_movies(
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+    let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
         .ok_or(AppError::bad_request("tmdb provider is not available"))?;
-    let res = tmdb_api.trending_movies().await?;
+    let res = tmdb_api.trending_movies(language.0).await?;
     Ok(Json(res.results.into_iter().map(Into::into).collect()))
 }
 
