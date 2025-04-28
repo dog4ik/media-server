@@ -77,7 +77,29 @@ impl TpbApi {
         url.query_pairs_mut().append_pair("q", query);
         url.query_pairs_mut().append_pair("cat", cat.as_str());
         let request = Request::new(Method::GET, url);
-        self.client.request(request).await
+        let response: Vec<TpbTorrent> = self.client.request(request).await?;
+        // Tpb api returns single row `No results returned` when there are no results
+        // [
+        //   {
+        //     "id": "0",
+        //     "name": "No results returned",
+        //     "info_hash": "0000000000000000000000000000000000000000",
+        //     "leechers": "0",
+        //     "seeders": "0",
+        //     "num_files": "0",
+        //     "size": "0",
+        //     "username": "",
+        //     "added": "0",
+        //     "status": "member",
+        //     "category": "0",
+        //     "imdb": "",
+        //     "total_found": "1"
+        //   }
+        // ]
+        if response.len() == 1 && response[0].id == "0" {
+            return Ok(Vec::new());
+        }
+        Ok(response)
     }
 
     pub async fn get_magnet_link(&self, id: &str) -> Result<torrent::MagnetLink, AppError> {
