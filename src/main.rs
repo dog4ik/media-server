@@ -29,6 +29,7 @@ use utoipa_swagger_ui::SwaggerUi;
 #[tokio::main]
 async fn main() {
     ffmpeg_next::init().expect("ffmpeg abi to initiate");
+    ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Panic);
     Args::parse().apply_configuration();
     if let Err(err) = AppResources::initiate() {
         panic!("Could not initiate app resources: {err}");
