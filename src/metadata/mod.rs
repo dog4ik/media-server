@@ -53,11 +53,18 @@ pub const METADATA_CACHE_SIZE: NonZero<usize> = NonZero::new(20).unwrap();
 pub enum Language {
     #[default]
     En,
+    /// Spanish
     Es,
+    /// German
     De,
+    /// French
     Fr,
+    /// Russian
     Ru,
+    /// Japanese
     Ja,
+    /// Serbian
+    Sr,
 }
 
 impl Display for Language {
@@ -75,6 +82,7 @@ impl Language {
             Language::Fr => "fr",
             Language::Ru => "ru",
             Language::Ja => "ja",
+            Language::Sr => "sr",
         }
     }
 }
@@ -90,6 +98,7 @@ impl FromStr for Language {
             "fr" => Ok(Language::Fr),
             "ru" => Ok(Language::Ru),
             "ja" => Ok(Language::Ja),
+            "sr" => Ok(Language::Sr),
             _ => Err(anyhow::anyhow!("Unsupported language: {s}")),
         }
     }
