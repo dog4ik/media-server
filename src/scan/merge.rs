@@ -32,16 +32,18 @@ pub fn try_merge_chunks<T, M>(statuses: &[MetadataLookupWithIds<M>], items: &mut
                     }
                 }
             }
-            MetadataLookupWithIds::Local(local_id) => match local_id_to_chunk_idx.entry(*local_id) {
-                hash_map::Entry::Occupied(occupied_entry) => {
-                    let chunk_idx = *occupied_entry.get();
-                    let (before, after) = items.split_at_mut(i);
-                    before[chunk_idx].append(&mut after[0]);
+            MetadataLookupWithIds::Local(local_id) => {
+                match local_id_to_chunk_idx.entry(*local_id) {
+                    hash_map::Entry::Occupied(occupied_entry) => {
+                        let chunk_idx = *occupied_entry.get();
+                        let (before, after) = items.split_at_mut(i);
+                        before[chunk_idx].append(&mut after[0]);
+                    }
+                    hash_map::Entry::Vacant(vacant_entry) => {
+                        vacant_entry.insert(i);
+                    }
                 }
-                hash_map::Entry::Vacant(vacant_entry) => {
-                    vacant_entry.insert(i);
-                }
-            },
+            }
         }
     }
 }
