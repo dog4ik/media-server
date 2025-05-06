@@ -45,7 +45,7 @@ where
     fn clear(self) -> impl std::future::Future<Output = Result<(), sqlx::Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            sqlx::query::<Sqlite>(
+            sqlx::query!(
                 "
         DELETE FROM shows;
         DELETE FROM seasons;
@@ -56,7 +56,6 @@ where
         DELETE FROM history;
         DELETE FROM external_ids;
         DELETE FROM episode_intro;
-        DELETE FROM assets;
         ",
             )
             .execute(&mut *conn)
