@@ -903,7 +903,7 @@ pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMeta
     ),
     responses(
         (status = 200, body = DbExternalId),
-        (status = 404, body = AppError),
+        (status = 404, description = "Local id is not found", body = AppError),
     ),
     tag = "Metadata",
 )]
@@ -2208,7 +2208,7 @@ pub struct CancelTaskPayload {
     ),
     responses(
         (status = 200),
-        (status = 400, description = "Task can't be canceled or it is not found"),
+        (status = 400, description = "Task can't be canceled or it is not found", body = AppError),
     ),
     tag = "Tasks",
 )]
@@ -2734,8 +2734,8 @@ pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<Brows
     ),
     responses(
         (status = 200),
-        (status = 404, description = "Transcode job is not found"),
-        (status = 500, description = "Worker is not available"),
+        (status = 404, description = "Transcode job is not found", body = AppError),
+        (status = 500, description = "Worker is not available", body = AppError),
     ),
     tag = "Transcoding",
 )]
@@ -2775,7 +2775,7 @@ pub async fn transcoded_segment(
     ),
     responses(
         (status = 200, body = Task<TranscodeJob>),
-        (status = 404, description = "Video is not found"),
+        (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Transcoding",
 )]
@@ -2999,7 +2999,7 @@ pub struct EditIntroPayload {
     responses(
         (status = 200, description = "Intro is updated"),
         (status = 201, description = "Intro is newly created"),
-        (status = 400, description = "Intro payload is incorrect"),
+        (status = 400, description = "Intro payload is incorrect", body = AppError),
         (status = 404, description = "Video is not found", body = AppError),
     ),
     tag = "Videos",

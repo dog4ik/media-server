@@ -198,8 +198,8 @@ pub async fn set_file_priority(
     request_body = TorrentDownloadPayload,
     responses(
         (status = 201, description = "Torrent is added"),
-        (status = 400, description = "Magnet link is incorrect"),
-        (status = 500, description = "Failed to add torrent"),
+        (status = 400, description = "Magnet link is incorrect", body = AppError),
+        (status = 500, description = "Failed to add torrent", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -265,7 +265,7 @@ pub async fn open_torrent(
     request_body(content = inline(MultipartTorrent), content_type = "multipart/form-data"),
     responses(
         (status = 200, body = TorrentInfo),
-        (status = 400, description = "Failed to parse torrent file"),
+        (status = 400, description = "Failed to parse torrent file", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -285,7 +285,7 @@ pub async fn parse_torrent_file(
     request_body(content = inline(MultipartTorrent), content_type = "multipart/form-data"),
     responses(
         (status = 200),
-        (status = 400, description = "Failed to parse/open torrent file"),
+        (status = 400, description = "Failed to parse/open torrent file", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -340,7 +340,7 @@ pub async fn open_torrent_file(
     ),
     responses(
         (status = 200, body = TorrentInfo),
-        (status = 400, description = "Failed to parse magnet link"),
+        (status = 400, description = "Failed to parse magnet link", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -372,7 +372,7 @@ pub struct IndexMagnetLink {
     ),
     responses(
         (status = 200, body = IndexMagnetLink),
-        (status = 404, description = "Failed to obtain magnet link"),
+        (status = 404, description = "Failed to obtain magnet link", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -400,7 +400,7 @@ pub async fn index_magnet_link(
     ),
     responses(
         (status = 200, body = TorrentState),
-        (status = 404, description = "Torrent not found"),
+        (status = 404, description = "Torrent not found", body = AppError),
     ),
     tag = "Torrent",
 )]
@@ -450,7 +450,7 @@ pub async fn updates(
     ),
     responses(
         (status = 200),
-        (status = 404, description = "Torrent is not found"),
+        (status = 404, description = "Torrent is not found", body = AppError),
     ),
     tag = "Torrent",
 )]
