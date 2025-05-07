@@ -720,19 +720,32 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             }
 
             let mut new_movies = Vec::new();
+            let mut set = JoinSet::new();
             for new_movie in movies
                 .into_iter()
                 .filter(|l| !db_movies_videos.iter().any(|d| d.id == l.source.id))
             {
-                match new_movie.source.video.metadata().await {
-                    Ok(_) => new_movies.push(new_movie),
-                    Err(e) => {
-                        tracing::warn!(
-                            path = ?new_movie.source.video.path().display(), "Skipping invalid video: {e}",
-                        );
+                set.spawn(async move {
+                    match new_movie.source.video.metadata().await {
+                        Ok(_) => Ok(new_movie),
+                        Err(e) => {
+                            tracing::warn!(
+                                path = ?new_movie.source.video.path().display(), "Skipping invalid video: {e}",
+                            );
+                            Err(e)
+                        },
                     }
+                });
+            }
+
+            while let Some(v) = set.join_next().await {
+                match v {
+                    Ok(Ok(movie)) => new_movies.push(movie),
+                    Ok(Err(_)) => {}
+                    Err(e) => panic!("metadata retrieve panicked: {}", e),
                 }
             }
+
 
             new_movies
         };
@@ -776,17 +789,29 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             }
 
             let mut new_episodes = Vec::new();
+            let mut set = JoinSet::new();
             for new_episode in episodes
                 .into_iter()
                 .filter(|l| !db_episodes_videos.iter().any(|d| d.id == l.source.id))
             {
-                match new_episode.source.video.metadata().await {
-                    Ok(_) => new_episodes.push(new_episode),
-                    Err(e) => {
-                        tracing::warn!(
-                            path = ?new_episode.source.video.path().display(), "Skipping invalid video: {e}",
-                        );
+                set.spawn(async move {
+                    match new_episode.source.video.metadata().await {
+                        Ok(_) => Ok(new_episode),
+                        Err(e) => {
+                            tracing::warn!(
+                                path = ?new_episode.source.video.path().display(), "Skipping invalid video: {e}",
+                            );
+                            Err(e)
+                        },
                     }
+                });
+            }
+
+            while let Some(v) = set.join_next().await {
+                match v {
+                    Ok(Ok(episode)) => new_episodes.push(episode),
+                    Ok(Err(_)) => {}
+                    Err(e) => panic!("metadata retrieve panicked: {}", e),
                 }
             }
 
