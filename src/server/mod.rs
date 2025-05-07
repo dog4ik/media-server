@@ -1,4 +1,5 @@
 use crate::app_state;
+use crate::app_state::AppError;
 use crate::config;
 use crate::db;
 use crate::ffmpeg;
@@ -10,8 +11,14 @@ use crate::torrent;
 use crate::torrent_index;
 use crate::tracing;
 use crate::ws;
+use axum::extract::FromRequestParts;
+use axum::extract::path;
+use axum::extract::rejection::PathRejection;
+use axum::extract::rejection::QueryRejection;
+use axum::http::request::Parts;
 use base64::Engine;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use serde::de::Visitor;
 use utoipa::OpenApi;
 
@@ -345,4 +352,94 @@ pub struct LanguageQuery {
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct TakeParam {
     pub take: Option<usize>,
+}
+
+/// `Path` extractor wrapper that customizes the error from `axum::extract::Path`
+pub struct Path<T>(T);
+
+impl<S, T> FromRequestParts<S> for Path<T>
+where
+    T: DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::extract::Path::<T>::from_request_parts(parts, state).await {
+            Ok(value) => Ok(Self(value.0)),
+            Err(rejection) => {
+                let error = match rejection {
+                    PathRejection::FailedToDeserializePathParams(inner) => {
+                        let kind = inner.into_kind();
+                        match &kind {
+                            path::ErrorKind::WrongNumberOfParameters { .. } => {
+                                AppError::bad_request(kind.to_string())
+                            }
+
+                            path::ErrorKind::ParseErrorAtKey { .. } => {
+                                AppError::bad_request(kind.to_string())
+                            }
+
+                            path::ErrorKind::ParseErrorAtIndex { .. } => {
+                                AppError::bad_request(kind.to_string())
+                            }
+
+                            path::ErrorKind::ParseError { .. } => {
+                                AppError::bad_request(kind.to_string())
+                            }
+
+                            path::ErrorKind::InvalidUtf8InPathParam { .. } => {
+                                AppError::bad_request(kind.to_string())
+                            }
+
+                            path::ErrorKind::UnsupportedType { .. } => {
+                                AppError::internal_error(kind.to_string())
+                            }
+
+                            path::ErrorKind::Message(msg) => AppError::bad_request(msg.clone()),
+
+                            _ => AppError::internal_error(format!(
+                                "Unhandled deserialization error: {kind}"
+                            )),
+                        }
+                    }
+                    PathRejection::MissingPathParams(error) => {
+                        AppError::internal_error(error.to_string())
+                    }
+
+                    _ => AppError::internal_error(format!("Unhandled path rejection: {rejection}")),
+                };
+
+                Err(error)
+            }
+        }
+    }
+}
+
+/// `Query` extractor wrapper that customizes the error from `axum::extract::Query`
+pub struct Query<T>(T);
+
+impl<S, T> FromRequestParts<S> for Query<T>
+where
+    T: DeserializeOwned + Send,
+    S: Send + Sync,
+{
+    type Rejection = AppError;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        match axum::extract::Query::<T>::from_request_parts(parts, state).await {
+            Ok(value) => Ok(Self(value.0)),
+            Err(rejection) => {
+                let error = match rejection {
+                    QueryRejection::FailedToDeserializeQueryString(_) => {
+                        AppError::bad_request("Failed to deserialize query string")
+                    }
+                    _ => {
+                        AppError::internal_error(format!("Unhandled query rejection: {rejection}"))
+                    }
+                };
+                Err(error)
+            }
+        }
+    }
 }

@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::str::FromStr;
 
 use anyhow::Context;
-use axum::extract::{Multipart, Path, Query, State};
+use axum::extract::{Multipart, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::{
@@ -54,7 +54,7 @@ use crate::metadata::{
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
 use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
-use crate::server::OptionalTorrentIndexQuery;
+use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 

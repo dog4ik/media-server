@@ -3,7 +3,7 @@ use std::{convert::Infallible, path::PathBuf, str::FromStr};
 use anyhow::Context;
 use axum::{
     Json,
-    extract::{FromRequest, Multipart, Path, Query, State},
+    extract::{FromRequest, Multipart, State},
     response::{
         Sse,
         sse::{Event, KeepAlive},
@@ -18,7 +18,7 @@ use crate::{
     app_state::{AppError, AppState},
     config,
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
-    server::OptionalContentTypeQuery,
+    server::{OptionalContentTypeQuery, Path, Query},
     torrent::{
         DownloadContentHint, Priority, ResolveMagnetLinkPayload, TorrentClient,
         TorrentDownloadPayload, TorrentInfo, TorrentState,
