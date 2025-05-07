@@ -691,37 +691,51 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
         let start = Instant::now();
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
-        self.partial_refresh().await;
-
-        let local_movies: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            library.movies().collect()
-        };
 
         let db_movies_videos =
             sqlx::query!("SELECT videos.id FROM videos WHERE videos.movie_id NOT NULL;")
                 .fetch_all(&self.db.pool)
                 .await?;
 
-        let missing_movies = db_movies_videos
-            .iter()
-            .filter(|d| !local_movies.iter().any(|x| x.source.id == d.id));
-        for missing_movie in missing_movies {
-            let mut tx = self.db.begin().await.context("begin movies removal tx")?;
-            match tx.remove_video(missing_movie.id).await {
-                Ok(_) => {
-                    let _ = tx.commit().await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to remove video: {e}");
-                }
+        let new_movies = {
+            let movies: Vec<_> = {
+                let library = self.library.lock().unwrap();
+                library.movies().collect()
             };
-        }
 
-        let new_movies: Vec<_> = local_movies
-            .into_iter()
-            .filter(|l| !db_movies_videos.iter().any(|d| d.id == l.source.id))
-            .collect();
+            let missing_movies = db_movies_videos
+                .iter()
+                .filter(|d| !movies.iter().any(|x| x.source.id == d.id));
+
+            for missing_movie in missing_movies {
+                let mut tx = self.db.begin().await.context("begin movies removal tx")?;
+                match tx.remove_video(missing_movie.id).await {
+                    Ok(_) => {
+                        let _ = tx.commit().await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to remove video: {e}");
+                    }
+                };
+            }
+
+            let mut new_movies = Vec::new();
+            for new_movie in movies
+                .into_iter()
+                .filter(|l| !db_movies_videos.iter().any(|d| d.id == l.source.id))
+            {
+                match new_movie.source.video.metadata().await {
+                    Ok(_) => new_movies.push(new_movie),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = ?new_movie.source.video.path().display(), "Skipping invalid video: {e}",
+                        );
+                    }
+                }
+            }
+
+            new_movies
+        };
 
         if let Err(e) = scan::movie::scan_movies(
             fetch_params,
@@ -734,50 +748,50 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             tracing::error!("Movie scan failed: {e}");
         };
 
-        let local_episodes = {
-            let episodes: Vec<_> = {
-                let library = self.library.lock().unwrap();
-                library.episodes().collect()
-            };
-            let mut out = Vec::with_capacity(episodes.len());
-            for episode in episodes {
-                match episode.source.video.metadata().await {
-                    Ok(_) => out.push(episode),
-                    Err(e) => {
-                        tracing::warn!(
-                            path = ?episode.source.video.path().display(), "Skipping invalid video: {e}",
-                        );
-                    }
-                }
-            }
-            out
-        };
-
         let db_episodes_videos =
             sqlx::query!("SELECT videos.id FROM videos WHERE videos.episode_id NOT NULL;")
                 .fetch_all(&self.db.pool)
                 .await?;
 
-        let missing_episodes = db_episodes_videos
-            .iter()
-            .filter(|d| !local_episodes.iter().any(|x| x.source.id == d.id));
-
-        for missing_episode in missing_episodes {
-            let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
-            match tx.remove_video(missing_episode.id).await {
-                Ok(_) => {
-                    let _ = tx.commit().await;
-                }
-                Err(e) => {
-                    tracing::error!("Failed to remove video: {e}");
-                }
+        let new_episodes = {
+            let episodes: Vec<_> = {
+                let library = self.library.lock().unwrap();
+                library.episodes().collect()
             };
-        }
 
-        let new_episodes: Vec<_> = local_episodes
-            .into_iter()
-            .filter(|l| !db_episodes_videos.iter().any(|d| d.id == l.source.id))
-            .collect();
+            let missing_episodes = db_episodes_videos
+                .iter()
+                .filter(|d| !episodes.iter().any(|x| x.source.id == d.id));
+
+            for missing_episode in missing_episodes {
+                let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
+                match tx.remove_video(missing_episode.id).await {
+                    Ok(_) => {
+                        let _ = tx.commit().await;
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to remove video: {e}");
+                    }
+                };
+            }
+
+            let mut new_episodes = Vec::new();
+            for new_episode in episodes
+                .into_iter()
+                .filter(|l| !db_episodes_videos.iter().any(|d| d.id == l.source.id))
+            {
+                match new_episode.source.video.metadata().await {
+                    Ok(_) => new_episodes.push(new_episode),
+                    Err(e) => {
+                        tracing::warn!(
+                            path = ?new_episode.source.video.path().display(), "Skipping invalid video: {e}",
+                        );
+                    }
+                }
+            }
+
+            new_episodes
+        };
 
         if let Err(e) = scan::show::scan_shows(
             fetch_params,
