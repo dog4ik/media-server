@@ -83,7 +83,7 @@ impl ApplicationHandler for Tray {
             .with_menu(Box::new(registry.menu))
             .with_menu_on_left_click(false)
             .with_title("Media server");
-        let base_path = APP_RESOURCES.base_path.clone();
+        let base_path = APP_RESOURCES.statics_path.clone();
         if let Ok(icon) = load_icon(base_path.join("dist/logo.webp")) {
             builder = builder.with_icon(icon);
         }
