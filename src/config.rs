@@ -1057,10 +1057,6 @@ pub struct AppResources {
     #[schema(value_type = String)]
     pub temp_path: PathBuf,
     #[schema(value_type = String)]
-    pub cache_path: PathBuf,
-    #[schema(value_type = Option<String>)]
-    pub binary_path: Option<PathBuf>,
-    #[schema(value_type = String)]
     pub statics_path: PathBuf,
     #[schema(value_type = String)]
     pub log_path: PathBuf,
@@ -1120,10 +1116,6 @@ impl AppResources {
         Self::data_storage().join("tmp")
     }
 
-    fn cache_storage() -> PathBuf {
-        dirs::cache_dir().unwrap().join(Self::APP_NAME)
-    }
-
     fn database_directory() -> PathBuf {
         Self::data_storage().join("db")
     }
@@ -1145,7 +1137,6 @@ impl AppResources {
         fs::create_dir_all(Self::resources())?;
         fs::create_dir_all(Self::database_directory())?;
         fs::create_dir_all(Self::temp_storage())?;
-        fs::create_dir_all(Self::cache_storage())?;
         fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -1165,25 +1156,28 @@ impl AppResources {
         let resources_path = Self::resources();
         let database_path = Self::database();
         let temp_path = Self::temp_storage();
-        let cache_path = Self::cache_storage();
         let log_path = Self::log();
-        let binary_path = std::env::current_exe()
-            .ok()
-            .and_then(|d| d.parent().map(|x| x.to_path_buf()));
 
         let statics_path = Self::static_storage();
         let (os_version, os) = System::kernel_version()
             .zip(System::long_os_version())
             .expect("all supported targets give us os version");
         let app_version = std::env!("CARGO_PKG_VERSION");
+
+        tracing::debug!(path = %config_path.display(), "Selected config path");
+        tracing::debug!(path = %statics_path.display(), "Selected statics folder path");
+        tracing::debug!(path = %resources_path.display(), "Selected resources path");
+        tracing::debug!(path = %database_path.display(), "Selected database path");
+        tracing::debug!(path = %temp_path.display(), "Selected tmp path");
+        tracing::debug!(path = %log_path.display(), "Selected log path");
+        tracing::info!("Server version: {app_version}");
+
         Self {
             start_time,
             config_path,
             database_path,
             resources_path,
             temp_path,
-            cache_path,
-            binary_path,
             statics_path,
             log_path,
             os_version,

@@ -355,7 +355,7 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                     .to_str()
                     .is_some_and(|f| EXTRAS_FOLDERS.iter().any(|e| f.eq_ignore_ascii_case(e)))
                 {
-                    tracing::warn!("Skipping extras directory: {}", path.display());
+                    tracing::trace!("Skipping extras directory: {}", path.display());
                     continue;
                 }
                 let mut new_dir_parser = parser.clone();

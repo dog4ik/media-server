@@ -214,7 +214,7 @@ impl ShowIdent {
         let missing_title = self.title.is_empty();
         if self.episode.is_none() || missing_title {
             // we are in trouble because parser could not detect required information.
-            tracing::warn!("Using episode detection fallback");
+            tracing::warn!(?tokens, "Using episode detection fallback");
             let mut nums = Vec::new();
             // iterate over all the tokens that "may" be the title
             for token in fallback_tokens {
