@@ -2625,10 +2625,12 @@ pub async fn update_video_history(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<StatusCode, AppError> {
+    let update_time = OffsetDateTime::now_utc();
     let query = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ? WHERE video_id = ? RETURNING time;",
+        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE video_id = ? RETURNING time;",
         payload.time,
         payload.is_finished,
+        update_time,
         id,
     );
     if let Err(err) = query.fetch_one(&db.pool).await {
@@ -2639,7 +2641,7 @@ pub async fn update_video_history(
                         id: None,
                         time: payload.time,
                         is_finished: payload.is_finished,
-                        update_time: OffsetDateTime::now_utc(),
+                        update_time,
                         video_id: id,
                     })
                     .await?;
