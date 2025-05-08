@@ -688,6 +688,7 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
     }
 
     pub async fn reconciliate_library(&self) -> Result<(), AppError> {
+        self.partial_refresh().await;
         let start = Instant::now();
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
