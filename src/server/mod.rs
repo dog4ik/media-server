@@ -10,6 +10,7 @@ use crate::progress;
 use crate::torrent;
 use crate::torrent_index;
 use crate::tracing;
+use crate::watch;
 use crate::ws;
 use axum::extract::FromRequestParts;
 use axum::extract::path;
@@ -103,12 +104,16 @@ pub struct SerdeDuration {
         server_api::cancel_transcode_task,
         server_api::previews_tasks,
         server_api::cancel_previews_task,
+        server_api::watch_sessions,
+        server_api::stop_watch_session,
         server_api::progress,
         server_api::reconciliate_lib,
         server_api::clear_db,
-        server_api::create_transcode_stream,
-        server_api::transcode_stream_manifest,
-        server_api::transcoded_segment,
+        server_api::start_direct_stream,
+        server_api::start_hls_stream,
+        server_api::hls_manifest,
+        server_api::hls_segment,
+        server_api::hls_init,
         server_api::browse_directory,
         server_api::parent_directory,
         server_api::root_dirs,
@@ -180,6 +185,7 @@ pub struct SerdeDuration {
             torrent::PeerStateChange,
             progress::Task<ffmpeg::TranscodeJob>,
             progress::Task<ffmpeg::PreviewsJob>,
+            progress::Task<watch::WatchTask>,
             progress::VideoTaskKind,
             progress::Notification,
             progress::ProgressStatus<f32>,
@@ -218,7 +224,7 @@ pub struct SerdeDuration {
         (name = "Tasks", description = "Tasks operations"),
         (name = "Search", description = "Endopoints for searching content"),
         (name = "Torrent", description = "Torrent client operations"),
-        (name = "Transcoding", description = "Live transcoding operations"),
+        (name = "Watch", description = "Content watching operations"),
         (name = "Videos", description = "Video files operations"),
         (name = "Subtitles", description = "Subtitles operations"),
     )
@@ -277,6 +283,16 @@ impl<'de> Deserialize<'de> for CursorQuery {
         }
         deserializer.deserialize_map(CursorVisitor)
     }
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct UuidQuery {
+    pub id: uuid::Uuid,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct OptionalUuidQuery {
+    pub id: Option<uuid::Uuid>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]

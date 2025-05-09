@@ -20,6 +20,9 @@ pub mod ffmpeg;
 pub mod ffmpeg_abi;
 /// File browser
 pub mod file_browser;
+/// Library files, config file watcher
+#[allow(unused)]
+pub mod file_watcher;
 /// Chromaprint intro detection module
 pub mod intro_detection;
 /// Everything related to local media files
@@ -37,8 +40,6 @@ pub mod progress;
 pub mod scan;
 /// Api surface of the media server
 pub mod server;
-/// Content streams
-pub mod stream;
 /// Glue between torrent crate and media server
 pub mod torrent;
 /// Torrent providers
@@ -51,8 +52,7 @@ pub mod tray;
 /// Universal Plug and Play capabilities of the server
 pub mod upnp;
 pub mod utils;
-/// Library files, config file watcher
-#[allow(unused)]
+/// Content streams
 pub mod watch;
 /// Websockets clients connection
 pub mod ws;

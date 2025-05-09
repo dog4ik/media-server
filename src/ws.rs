@@ -1,5 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
+use crate::{app_state::AppState, progress::Notification, torrent::TorrentProgress};
 use anyhow::Context;
 use axum::{
     extract::{
@@ -9,8 +10,6 @@ use axum::{
     response::Response,
 };
 
-use crate::{app_state::AppState, progress::Notification, torrent::TorrentProgress};
-
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
 /// Websockets connection input message
@@ -19,6 +18,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 pub enum WsRequest {
     TorrentSubscribe,
     TorrentUnsubscribe,
+
+    TrackWatchSession { task_id: uuid::Uuid },
 }
 
 /// Websockets connection output message
@@ -42,6 +43,7 @@ pub enum WsMessage {
 #[derive(Debug)]
 struct Connection {
     is_torrent_subscribed: bool,
+    active_watch_session: Option<uuid::Uuid>,
     socket: WebSocket,
 }
 
@@ -49,6 +51,7 @@ impl Connection {
     pub fn new(socket: WebSocket) -> Self {
         Self {
             socket,
+            active_watch_session: None,
             is_torrent_subscribed: false,
         }
     }
@@ -90,17 +93,25 @@ pub async fn ws(ws: WebSocketUpgrade, State(app_state): State<AppState>) -> Resp
 
 async fn ws_handler(socket: WebSocket, app_state: AppState) {
     tracing::debug!("Opened ws connection");
-    if let Err(e) = ws_handler_inner(socket, app_state).await {
+    let mut connection = Connection::new(socket);
+    let watch_sessions = &app_state.tasks.watch_sessions;
+    if let Err(e) = ws_handler_inner(&mut connection, app_state).await {
         tracing::debug!("Websocket connection closed: {e}");
     } else {
         tracing::debug!("Websocket connection closed");
     }
+    if let Some(task_id) = connection.active_watch_session {
+        if let Some(t) = watch_sessions.finish_task(task_id) {
+            t.kind.exit_token.cancel();
+        } else {
+            tracing::warn!(%task_id, "Watch session is not found");
+        }
+    }
 }
 
-async fn ws_handler_inner(socket: WebSocket, app_state: AppState) -> anyhow::Result<()> {
+async fn ws_handler_inner(connection: &mut Connection, app_state: AppState) -> anyhow::Result<()> {
     let mut progress = app_state.tasks.progress_channel.0.subscribe();
     let mut torrent_progress = app_state.torrent_client.progress_broadcast.subscribe();
-    let mut connection = Connection::new(socket);
 
     connection.send(WsMessage::Connected).await?;
 
@@ -109,7 +120,7 @@ async fn ws_handler_inner(socket: WebSocket, app_state: AppState) -> anyhow::Res
             msg = connection.recv() => {
                 let msg = msg?;
                 if let Some(msg) = msg {
-                    handle_request(msg, &mut connection, &app_state).await?;
+                    handle_request(msg, connection, &app_state).await?;
                 }
             },
             progress = progress.recv() => {
@@ -118,7 +129,7 @@ async fn ws_handler_inner(socket: WebSocket, app_state: AppState) -> anyhow::Res
             }
             progress = torrent_progress.recv() => {
                 let progress = progress?;
-                handle_torrent_progress(&mut connection, progress).await?;
+                handle_torrent_progress(connection, progress).await?;
             }
         }
     }
@@ -141,6 +152,10 @@ async fn handle_request(
         WsRequest::TorrentUnsubscribe => {
             tracing::debug!("Received unsubscribe from torrent progress");
             connection_state.is_torrent_subscribed = false;
+        }
+        WsRequest::TrackWatchSession { task_id } => {
+            tracing::debug!(%task_id, "Starting watch session tracking");
+            connection_state.active_watch_session = Some(task_id);
         }
     }
     Ok(())

@@ -10,8 +10,8 @@ use crate::{
     app_state::AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
     intro_detection::IntroJob,
-    stream::transcode_stream::TranscodeStream,
     torrent::PendingTorrent,
+    watch::WatchTask,
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema, PartialEq)]
@@ -92,22 +92,12 @@ impl TaskTrait for LibraryScanTask {
     }
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub struct WatchTask {}
-
-impl TaskTrait for WatchTask {
-    type Identifier = ();
-
-    type Progress = ();
-
-    fn identifier(&self) -> Self::Identifier {}
-
-    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
-        TaskProgress::WatchSession(chunk)
-    }
-}
-
+/// Stores and manages task lifecycle
+///
+/// It ensures there are no duplicate tasks.
+///
+/// This is an absraction to store and manage notifications about tasks automatically
+/// Any operation on task will be dispatched to the clients
 #[derive(Debug)]
 pub struct TaskStorage<T: TaskTrait> {
     pub tasks: Mutex<Vec<Task<T>>>,
@@ -199,7 +189,17 @@ impl<T: TaskTrait<Progress: Clone, Identifier: Clone> + PartialEq> TaskStorage<T
         kind: T,
         cancellation_token: Option<CancellationToken>,
     ) -> Result<Uuid, TaskError> {
-        let task = Task::new(kind, cancellation_token);
+        let uuid = uuid::Uuid::new_v4();
+        self.start_with_id(kind, uuid, cancellation_token)
+    }
+
+    pub fn start_with_id(
+        &self,
+        kind: T,
+        uuid: uuid::Uuid,
+        cancellation_token: Option<CancellationToken>,
+    ) -> Result<Uuid, TaskError> {
+        let task = Task::new(kind, uuid, cancellation_token);
         let latest_progress = task.latest_progress.clone();
         let id = self.add_task(task)?;
         let task_progress = T::into_progress(latest_progress);
@@ -215,6 +215,69 @@ impl<T: TaskTrait<Progress: Clone, Identifier: Clone> + PartialEq> TaskStorage<T
 impl<T: TaskTrait + Serialize> TaskStorage<T> {
     pub fn tasks(&self) -> serde_json::Value {
         serde_json::to_value(&*self.tasks.lock().unwrap()).unwrap()
+    }
+}
+
+/// Dispatch progress to the task.
+///
+/// A dispatcher should end with a call to finish or error. If neither are called before the
+/// dispatcher goes out-of-scope, error is called.
+#[derive(Debug)]
+pub struct ProgressDispatcher<T: TaskTrait + 'static> {
+    task_id: uuid::Uuid,
+    task_storage: &'static TaskStorage<T>,
+    identifier: T::Identifier,
+    active: bool,
+}
+
+impl<T: TaskTrait> ProgressDispatcher<T> {
+    pub fn new(
+        identifier: T::Identifier,
+        task_storage: &'static TaskStorage<T>,
+        task_id: uuid::Uuid,
+    ) -> Self {
+        Self {
+            task_id,
+            identifier,
+            task_storage,
+            active: true,
+        }
+    }
+
+    pub fn progress(&self, progress: T::Progress) {
+        let chunk = ProgressChunk {
+            identifier: self.identifier.clone(),
+            status: crate::progress::ProgressStatus::Pending { progress },
+        };
+        self.task_storage.send_progress(self.task_id, chunk);
+    }
+
+    pub fn error(mut self, err: TaskError) {
+        self.active = false;
+        self.task_storage.error_task(self.task_id, err);
+    }
+
+    /// Stop dispatcher from sending error on drop
+    pub fn disarm(&mut self) {
+        self.active = false;
+    }
+
+    pub fn finish(mut self) {
+        self.active = false;
+        self.task_storage.finish_task(self.task_id);
+    }
+
+    pub fn task_id(&self) -> uuid::Uuid {
+        self.task_id
+    }
+}
+
+impl<T: TaskTrait> Drop for ProgressDispatcher<T> {
+    fn drop(&mut self) {
+        if self.active {
+            self.task_storage
+                .error_task(self.task_id, TaskError::Failure);
+        }
     }
 }
 
@@ -287,8 +350,16 @@ impl<T: TaskTrait> Clone for ProgressChunk<T> {
     }
 }
 
+/// Trait implemented by all media server tasks.
+///
+/// Type trait is implemented on will be send when user tries to fetch all tasks of a kind.
+///
+/// The reason why Identifier and Progress are not merged together is because we send Finished,
+/// Start, Errored statuses to the client with Identifier.
 pub trait TaskTrait {
+    /// This is unique identifier for the task. Client will use it to update Progress on task.
     type Identifier: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
+    /// This is the progress type of the task. Client will use it to show progress of the task.
     type Progress: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
 
     fn identifier(&self) -> Self::Identifier;
@@ -317,8 +388,7 @@ pub struct Task<T: TaskTrait> {
 }
 
 impl<T: TaskTrait> Task<T> {
-    pub fn new(kind: T, cancel_token: Option<CancellationToken>) -> Self {
-        let id = Uuid::new_v4();
+    pub fn new(kind: T, id: uuid::Uuid, cancel_token: Option<CancellationToken>) -> Self {
         let now = time::OffsetDateTime::now_utc();
         Self {
             created: now,
@@ -367,7 +437,7 @@ pub struct TaskResource {
     pub library_scan_tasks: TaskStorage<LibraryScanTask>,
     pub torrent_tasks: TaskStorage<PendingTorrent>,
     pub intro_detection_tasks: TaskStorage<IntroJob>,
-    pub active_streams: Mutex<Vec<TranscodeStream>>,
+    pub watch_sessions: TaskStorage<WatchTask>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -427,7 +497,7 @@ impl TaskResource {
             torrent_tasks: TaskStorage::new(progress_channel.clone()),
             previews_tasks: TaskStorage::new(progress_channel.clone()),
             intro_detection_tasks: TaskStorage::new(progress_channel.clone()),
-            active_streams: Mutex::new(Vec::new()),
+            watch_sessions: TaskStorage::new(progress_channel.clone()),
             tracker: TaskTracker::new(),
             progress_channel,
         }

@@ -17,7 +17,7 @@ use media_server::torrent_index::rutracker::ProvodRuTrackerAdapter;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{LogChannel, init_tracer};
 use media_server::upnp::Upnp;
-use media_server::ws;
+use media_server::{ffmpeg_abi, ws};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +28,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() {
+    let server_start_time = std::time::Instant::now();
     ffmpeg_next::init().expect("ffmpeg abi to initiate");
     ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Panic);
     Args::parse().apply_configuration();
@@ -45,12 +46,12 @@ async fn main() {
 
     match ConfigFile::open_and_read().await {
         Ok(toml) => config::CONFIG.apply_toml_settings(toml),
-        Err(err) => tracing::error!("Error reading config file: {err}"),
+        Err(err) => tracing::error!("Failed to read config file: {err}"),
     };
 
-    let cancellation_token = CancellationToken::new();
+    tokio::spawn(ffmpeg_abi::get_or_init_gpu_accelated_apis());
 
-    let cors = CorsLayer::permissive();
+    let cancellation_token = CancellationToken::new();
 
     let db = Db::connect(&APP_RESOURCES.database_path)
         .await
@@ -234,9 +235,10 @@ async fn main() {
         .route("/video/{id}/history", put(server_api::update_video_history))
         .route("/video/{id}/transcode", post(server_api::transcode_video))
         .route(
-            "/video/{id}/stream_transcode",
-            post(server_api::create_transcode_stream),
+            "/watch/direct/start/{id}",
+            post(server_api::start_direct_stream),
         )
+        .route("/watch/hls/start/{id}", post(server_api::start_hls_stream))
         .route("/video/{id}/watch", get(server_api::watch))
         .route(
             "/video/{id}/upload_subtitles",
@@ -331,6 +333,11 @@ async fn main() {
             "/tasks/previews/{id}",
             delete(server_api::cancel_previews_task),
         )
+        .route("/tasks/watch_sessions", get(server_api::watch_sessions))
+        .route(
+            "/tasks/watch_session/{id}",
+            delete(server_api::stop_watch_session),
+        )
         .route(
             "/tasks/intro_detection",
             get(server_api::intro_detection_tasks),
@@ -344,13 +351,11 @@ async fn main() {
             post(server_api::reset_metadata),
         )
         .route(
-            "/transcode/{id}/segment/{segment}",
-            get(server_api::transcoded_segment),
+            "/watch/hls/{id}/segment/{segment}",
+            get(server_api::hls_segment),
         )
-        .route(
-            "/transcode/{id}/manifest",
-            get(server_api::transcode_stream_manifest),
-        )
+        .route("/watch/hls/{id}/manifest", get(server_api::hls_manifest))
+        .route("/watch/hls/{id}/init", get(server_api::hls_init))
         .route("/file_browser/root_dirs", get(server_api::root_dirs))
         .route(
             "/file_browser/browse/{key}",
@@ -378,11 +383,11 @@ async fn main() {
         .nest("/debug", debug_api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .merge(upnp)
-        .layer(cors)
+        .layer(CorsLayer::permissive())
         .fallback_service(assets_service)
         .with_state(app_state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0)), port.0);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port.0);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(e) => {
@@ -401,6 +406,8 @@ async fn main() {
                 .unwrap();
         });
     }
+
+    tracing::debug!(took = ?server_start_time.elapsed(), "Server is ready");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             cancellation_token.cancel();

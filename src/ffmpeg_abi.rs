@@ -2,6 +2,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Context;
 use ffmpeg_next::{codec, format::stream::Disposition, media};
+use tokio::sync::OnceCell;
 
 use crate::library::{AudioCodec, Resolution, SubtitlesCodec, VideoCodec};
 
@@ -319,7 +320,6 @@ pub struct ProbeOutput {
     chapters: Vec<Chapter>,
     duration: Duration,
     bitrate: u32,
-    format_name: String,
     tag_title: Option<String>,
 }
 
@@ -389,14 +389,6 @@ impl ProbeOutput {
         self.bitrate
     }
 
-    pub fn guess_mime(&self) -> &'static str {
-        match self.format_name.as_str() {
-            "matroska,webm" => "video/x-matroska",
-            "mov,mp4,m4a,3gp,3g2,mj2" => "video/mp4",
-            _ => "video/x-matroska",
-        }
-    }
-
     pub fn tag_title(&self) -> Option<&str> {
         self.tag_title.as_deref()
     }
@@ -406,7 +398,6 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
     type Error = anyhow::Error;
 
     fn try_from(format: ffmpeg_next::format::context::Input) -> Result<Self, Self::Error> {
-        let format_name = format.format().name().to_string();
         let container_metadata = format.metadata();
         let mut tag_title = None;
 
@@ -488,7 +479,6 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
             chapters,
             duration,
             bitrate,
-            format_name,
             tag_title,
         })
     }
@@ -506,4 +496,219 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> anyhow::Result<ProbeOutput>
     })
     .await
     .expect("never panic")
+}
+
+/// h265 encoders
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum HevcEncoder {
+    #[default]
+    Libx265,
+    Amf,
+    Nvenc,
+    Qsv,
+    V4l2m2m,
+    Vaapi,
+    Vulkan,
+}
+
+impl HevcEncoder {
+    pub fn gpu_accelerated(api: GpuEncodingApi) -> Option<Self> {
+        match api {
+            GpuEncodingApi::Nvenc => Some(Self::Nvenc),
+            GpuEncodingApi::Amf => Some(Self::Amf),
+            GpuEncodingApi::Vaapi => Some(Self::Vaapi),
+            GpuEncodingApi::Vulkan => Some(Self::Vulkan),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Libx265 => "libx265",
+            Self::Amf => "hevc_amf",
+            Self::Nvenc => "hevc_nvenc",
+            Self::Qsv => "hevc_qsv",
+            Self::V4l2m2m => "hevc_v4l2m2m",
+            Self::Vaapi => "hevc_vaapi",
+            Self::Vulkan => "hevc_vulkan",
+        }
+    }
+}
+
+impl std::fmt::Display for HevcEncoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// av1 encoders
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Av1Encoder {
+    /// libaom AV1
+    #[default]
+    Libaom,
+    /// librav1e AV1
+    Librav1e,
+    /// SVT-AV1(Scalable Video Technology for AV1) encoder
+    Libsvtav1,
+    /// NVIDIA NVENC av1 encoder
+    Nvenc,
+    /// AV1 (Intel Quick Sync Video acceleration)
+    Qsv,
+    /// AMD AMF AV1 encoder
+    Amf,
+    /// AV1 (VAAPI)
+    Vaapi,
+    /// Windows Media Audio 1
+    Wmav1,
+}
+
+impl Av1Encoder {
+    pub fn gpu_accelerated(api: GpuEncodingApi) -> Option<Self> {
+        match api {
+            GpuEncodingApi::Nvenc => Some(Self::Nvenc),
+            GpuEncodingApi::Amf => Some(Self::Amf),
+            GpuEncodingApi::Vaapi => Some(Self::Vaapi),
+            GpuEncodingApi::Vulkan => None,
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Av1Encoder::Libaom => "libaom-av1",
+            Av1Encoder::Librav1e => "librav1e",
+            Av1Encoder::Libsvtav1 => "libsvtav1",
+            Av1Encoder::Nvenc => "av1_nvenc",
+            Av1Encoder::Qsv => "av1_qsv",
+            Av1Encoder::Amf => "av1_amf",
+            Av1Encoder::Vaapi => "av1_vaapi",
+            Av1Encoder::Wmav1 => "wmav1",
+        }
+    }
+}
+
+impl std::fmt::Display for Av1Encoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Advanced video coding encoders
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum H264Encoder {
+    #[default]
+    Libx264,
+    Amf,
+    Nvenc,
+    Qsv,
+    V4l2m2m,
+    Vaapi,
+    Vulkan,
+}
+
+impl H264Encoder {
+    pub fn gpu_accelerated(api: GpuEncodingApi) -> Option<Self> {
+        match api {
+            GpuEncodingApi::Nvenc => Some(Self::Nvenc),
+            GpuEncodingApi::Amf => Some(Self::Amf),
+            GpuEncodingApi::Vaapi => Some(Self::Vaapi),
+            GpuEncodingApi::Vulkan => Some(Self::Vulkan),
+        }
+    }
+
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Libx264 => "libx264",
+            Self::Amf => "h264_amf",
+            Self::Nvenc => "h264_nvenc",
+            Self::Qsv => "h264_qsv",
+            Self::V4l2m2m => "h264_v4l2m2m",
+            Self::Vaapi => "h264_vaapi",
+            Self::Vulkan => "h264_vulkan",
+        }
+    }
+}
+
+impl std::fmt::Display for H264Encoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// Hardware accelerated APIs
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum GpuEncodingApi {
+    Nvenc,
+    Amf,
+    Vaapi,
+    Vulkan,
+}
+
+impl GpuEncodingApi {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Nvenc => "nvenc",
+            Self::Amf => "amf",
+            Self::Vaapi => "vaapi",
+            Self::Vulkan => "vulkan",
+        }
+    }
+}
+
+impl std::fmt::Display for GpuEncodingApi {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+static GPU_ACCEL_APIS: OnceCell<Box<[GpuEncodingApi]>> = OnceCell::const_new();
+
+pub async fn get_or_init_gpu_accelated_apis() -> &'static [GpuEncodingApi] {
+    GPU_ACCEL_APIS
+        .get_or_init(async move || {
+            let handle = tokio::task::spawn_blocking(gpu_accel_apis);
+            handle.await.unwrap().into_boxed_slice()
+        })
+        .await
+}
+
+/// List all supported GPU accelerated APIs
+fn gpu_accel_apis() -> Vec<GpuEncodingApi> {
+    let mut encoders = Vec::new();
+    let mut check = |api: GpuEncodingApi, encoder: &str| {
+        match check_encoder_support(encoder) {
+            Ok(_) => {
+                tracing::info!("Supported GPU accelerated encoder {encoder}");
+                encoders.push(api);
+            }
+            Err(e) => {
+                tracing::trace!("{api} hw encoder is not supported: {e}")
+            }
+        };
+    };
+    check(GpuEncodingApi::Nvenc, "h264_nvenc");
+    check(GpuEncodingApi::Amf, "h264_amf");
+    check(GpuEncodingApi::Vaapi, "h264_vaapi");
+    check(GpuEncodingApi::Vulkan, "h264_vulkan");
+
+    encoders
+}
+
+fn check_encoder_support(encoder_name: &str) -> anyhow::Result<()> {
+    let codec = ffmpeg_next::codec::encoder::find_by_name(encoder_name)
+        .ok_or(anyhow::anyhow!("encoder {encoder_name} is not found"))?;
+    let mut encoder = codec::context::Context::new_with_codec(codec)
+        .encoder()
+        .video()?;
+
+    encoder.set_width(1280);
+    encoder.set_height(720);
+    encoder.set_format(ffmpeg_next::format::Pixel::YUV420P);
+    encoder.set_time_base((1, 25));
+
+    encoder.open()?;
+    Ok(())
 }

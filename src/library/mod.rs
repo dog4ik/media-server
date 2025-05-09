@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    ffi::OsStr,
     fmt::Display,
     io::SeekFrom,
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -27,8 +29,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
-    ffmpeg_abi::ProbeOutput,
-    ffmpeg_abi::get_metadata,
+    ffmpeg_abi::{Av1Encoder, H264Encoder, HevcEncoder, ProbeOutput, get_metadata},
     utils,
 };
 
@@ -54,8 +55,6 @@ pub mod identification;
 pub mod movie;
 /// Identification for show file names
 pub mod show;
-
-const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
 
 const EXTRAS_FOLDERS: [&str; 14] = [
     "behind the scenes",
@@ -87,7 +86,7 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
         .any(|c| EXTRAS_FOLDERS.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_ref()));
     let supports_extension = path
         .extension()
-        .is_some_and(|ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()));
+        .is_some_and(|ex| VideoContainer::try_from(ex).is_ok());
     !is_extra && supports_extension
 }
 
@@ -295,6 +294,15 @@ impl Source {
 
     pub fn variant(&self, id: String) -> VariantAsset {
         VariantAsset::new(self.id, id)
+    }
+
+    pub fn find_variant_video(&self, id: &str) -> Option<&Video> {
+        self.variants.iter().find(|v| {
+            v.path()
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name == id)
+        })
     }
 
     pub fn subtitles_dir(&self) -> SubtitlesDirAsset {
@@ -569,6 +577,12 @@ impl Video {
         tokio::fs::remove_file(&self.path).await
     }
 
+    /// Video file container based on the file extension
+    pub fn container(&self) -> VideoContainer {
+        let ext = self.path().extension().expect("all videos have extension");
+        VideoContainer::try_from(ext).expect("all videos have known container")
+    }
+
     pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse + use<> {
         let file_size = match self.file_size().await {
             Ok(size) => size,
@@ -591,9 +605,6 @@ impl Video {
             std::ops::Bound::Unbounded => file_size,
         };
 
-        let Ok(metadata) = self.metadata().await else {
-            return AppError::internal_error("Failed to get file metadata").into_response();
-        };
         let Ok(mut file) = tokio::fs::File::open(&self.path).await else {
             return AppError::internal_error("Failed to open file").into_response();
         };
@@ -610,7 +621,7 @@ impl Video {
         );
         headers.insert(
             header::CONTENT_TYPE,
-            HeaderValue::from_static(metadata.guess_mime()),
+            HeaderValue::from_static(self.container().mime_type()),
         );
         headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
         headers.insert(
@@ -985,25 +996,29 @@ pub enum VideoCodec {
 }
 
 impl VideoCodec {
-    pub fn nvidia_hw_accel(&self) -> &str {
+    /// Try to get Hardware accelerated encoder for given API
+    pub async fn gpu_accelerated_encoder(&self) -> Option<&'static str> {
+        let apis = crate::ffmpeg_abi::get_or_init_gpu_accelated_apis().await;
+        let api = *apis.first()?;
         match self {
-            VideoCodec::Hevc => "hevc_nvenc",
-            VideoCodec::H264 => "h264_nvenc",
-            VideoCodec::Av1 => "av1",
-            VideoCodec::VP8 => "vp8",
-            VideoCodec::VP9 => "vp9",
-            VideoCodec::Other(o) => o.as_str(),
+            VideoCodec::Hevc => HevcEncoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::H264 => H264Encoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::Av1 => Av1Encoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::VP8 => None,
+            VideoCodec::VP9 => None,
+            VideoCodec::Other(_) => None,
         }
     }
 
-    pub fn amd_hw_accel(&self) -> &str {
+    /// Encoder with the "best" chances to work.
+    pub fn default_encoder(&self) -> &str {
         match self {
-            VideoCodec::Hevc => "hevc_amf",
-            VideoCodec::H264 => "h264_amf",
-            VideoCodec::Av1 => "av1",
+            VideoCodec::Hevc => HevcEncoder::default().as_str(),
+            VideoCodec::H264 => H264Encoder::default().as_str(),
+            VideoCodec::Av1 => Av1Encoder::default().as_str(),
             VideoCodec::VP8 => "vp8",
             VideoCodec::VP9 => "vp9",
-            VideoCodec::Other(o) => o.as_str(),
+            VideoCodec::Other(o) => o,
         }
     }
 }
@@ -1280,6 +1295,48 @@ impl SubtitlesCodec {
             SubtitlesCodec::MovText => true,
             SubtitlesCodec::ASS => true,
             SubtitlesCodec::Other(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoContainer {
+    Avi,
+    Mkv,
+    Mov,
+    Mp4,
+    Ogg,
+    Webm,
+}
+
+impl<'a> TryFrom<&'a OsStr> for VideoContainer {
+    type Error = anyhow::Error;
+    fn try_from(value: &'a OsStr) -> Result<Self, Self::Error> {
+        match value.as_bytes() {
+            b"avi" => Ok(Self::Avi),
+            b"mkv" => Ok(Self::Mkv),
+            b"mov" => Ok(Self::Mov),
+            b"mp4" => Ok(Self::Mp4),
+            b"ogg" => Ok(Self::Ogg),
+            b"webm" => Ok(Self::Webm),
+            _ => Err(anyhow::format_err!(
+                "unsupported container type: {}",
+                value.to_string_lossy()
+            )),
+        }
+    }
+}
+
+impl VideoContainer {
+    pub fn mime_type(&self) -> &'static str {
+        match self {
+            VideoContainer::Avi => "video/x-msvideo",
+            VideoContainer::Mkv => "video/x-matroska",
+            VideoContainer::Mov => "video/quicktime",
+            VideoContainer::Mp4 => "video/mp4",
+            VideoContainer::Ogg => "video/ogg",
+            VideoContainer::Webm => "video/webm",
         }
     }
 }

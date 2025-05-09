@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use crate::library::{EXTRAS_FOLDERS, SUPPORTED_FILES, Video, movie::MovieIdent, show::ShowIdent};
+use crate::library::{EXTRAS_FOLDERS, Video, VideoContainer, movie::MovieIdent, show::ShowIdent};
 
 use super::{movie::MovieIdentifier, show::ShowIdentifier};
 
@@ -363,11 +363,17 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                 directories.push((path, new_dir_parser));
                 continue;
             }
-            let Some(extension) = path.extension().and_then(|x| x.to_str()) else {
-                tracing::trace!("Ignoring file without extension: {}", path.display());
+            if !path
+                .extension()
+                .is_some_and(|e| VideoContainer::try_from(e).is_ok())
+            {
+                tracing::trace!(
+                    "Ignoring file without supported extension: {}",
+                    path.display()
+                );
                 continue;
             };
-            if metadata.is_file() && SUPPORTED_FILES.contains(&extension) {
+            if metadata.is_file() {
                 let Some(file_name) = path.file_name() else {
                     continue;
                 };
@@ -455,11 +461,14 @@ pub async fn walk_movie_dirs(mut dirs: Vec<PathBuf>) -> Vec<(Video, MovieIdentif
                 dirs.push(path);
                 continue;
             }
-            let Some(extension) = path.extension().and_then(|x| x.to_str()) else {
+            if !path
+                .extension()
+                .is_some_and(|e| VideoContainer::try_from(e).is_ok())
+            {
                 tracing::trace!("Ignoring file without extension: {}", path.display());
                 continue;
             };
-            if path.is_file() && SUPPORTED_FILES.contains(&extension) {
+            if path.is_file() {
                 let ident = Parser::parse_filename(&path, MovieIdent::default());
                 let identifier = MovieIdentifier {
                     title: ident.title,
