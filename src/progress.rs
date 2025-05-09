@@ -10,7 +10,7 @@ use crate::{
     app_state::AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
     intro_detection::IntroJob,
-    stream::transcode_stream::TranscodeStream,
+    watch::transcode_stream::TranscodeStream,
     torrent::PendingTorrent,
 };
 

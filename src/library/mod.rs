@@ -1,8 +1,10 @@
 use std::{
     collections::HashMap,
     convert::Infallible,
+    ffi::OsStr,
     fmt::Display,
     io::SeekFrom,
+    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -55,8 +57,6 @@ pub mod movie;
 /// Identification for show file names
 pub mod show;
 
-const SUPPORTED_FILES: [&str; 3] = ["mkv", "webm", "mp4"];
-
 const EXTRAS_FOLDERS: [&str; 14] = [
     "behind the scenes",
     "deleted scenes",
@@ -87,7 +87,7 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
         .any(|c| EXTRAS_FOLDERS.contains(&c.as_os_str().to_string_lossy().to_lowercase().as_ref()));
     let supports_extension = path
         .extension()
-        .is_some_and(|ex| SUPPORTED_FILES.contains(&ex.to_str().unwrap()));
+        .is_some_and(|ex| VideoContainer::try_from(ex).is_ok());
     !is_extra && supports_extension
 }
 
@@ -569,6 +569,12 @@ impl Video {
         tokio::fs::remove_file(&self.path).await
     }
 
+    /// Video file container based on the file extension
+    pub fn container(&self) -> VideoContainer {
+        let ext = self.path().extension().expect("all videos have extension");
+        VideoContainer::try_from(ext).expect("all videos have known container")
+    }
+
     pub async fn serve(&self, range: Option<TypedHeader<Range>>) -> impl IntoResponse + use<> {
         let file_size = match self.file_size().await {
             Ok(size) => size,
@@ -591,9 +597,6 @@ impl Video {
             std::ops::Bound::Unbounded => file_size,
         };
 
-        let Ok(metadata) = self.metadata().await else {
-            return AppError::internal_error("Failed to get file metadata").into_response();
-        };
         let Ok(mut file) = tokio::fs::File::open(&self.path).await else {
             return AppError::internal_error("Failed to open file").into_response();
         };
@@ -610,7 +613,7 @@ impl Video {
         );
         headers.insert(
             header::CONTENT_TYPE,
-            HeaderValue::from_static(metadata.guess_mime()),
+            HeaderValue::from_static(self.container().mime_type()),
         );
         headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
         headers.insert(
@@ -1280,6 +1283,48 @@ impl SubtitlesCodec {
             SubtitlesCodec::MovText => true,
             SubtitlesCodec::ASS => true,
             SubtitlesCodec::Other(_) => false,
+        }
+    }
+}
+
+#[derive(Debug, Serialize, Clone, PartialEq, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum VideoContainer {
+    Avi,
+    Mkv,
+    Mov,
+    Mp4,
+    Ogg,
+    Webm,
+}
+
+impl<'a> TryFrom<&'a OsStr> for VideoContainer {
+    type Error = anyhow::Error;
+    fn try_from(value: &'a OsStr) -> Result<Self, Self::Error> {
+        match value.as_bytes() {
+            b"avi" => Ok(Self::Avi),
+            b"mkv" => Ok(Self::Mkv),
+            b"mov" => Ok(Self::Mov),
+            b"mp4" => Ok(Self::Mp4),
+            b"ogg" => Ok(Self::Ogg),
+            b"webm" => Ok(Self::Webm),
+            _ => Err(anyhow::format_err!(
+                "unsupported container type: {}",
+                value.to_string_lossy()
+            )),
+        }
+    }
+}
+
+impl VideoContainer {
+    pub fn mime_type(&self) -> &'static str {
+        match self {
+            VideoContainer::Avi => "video/x-msvideo",
+            VideoContainer::Mkv => "video/x-matroska",
+            VideoContainer::Mov => "video/quicktime",
+            VideoContainer::Mp4 => "video/mp4",
+            VideoContainer::Ogg => "video/ogg",
+            VideoContainer::Webm => "video/webm",
         }
     }
 }

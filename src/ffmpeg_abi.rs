@@ -319,7 +319,6 @@ pub struct ProbeOutput {
     chapters: Vec<Chapter>,
     duration: Duration,
     bitrate: u32,
-    format_name: String,
     tag_title: Option<String>,
 }
 
@@ -389,14 +388,6 @@ impl ProbeOutput {
         self.bitrate
     }
 
-    pub fn guess_mime(&self) -> &'static str {
-        match self.format_name.as_str() {
-            "matroska,webm" => "video/x-matroska",
-            "mov,mp4,m4a,3gp,3g2,mj2" => "video/mp4",
-            _ => "video/x-matroska",
-        }
-    }
-
     pub fn tag_title(&self) -> Option<&str> {
         self.tag_title.as_deref()
     }
@@ -406,7 +397,6 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
     type Error = anyhow::Error;
 
     fn try_from(format: ffmpeg_next::format::context::Input) -> Result<Self, Self::Error> {
-        let format_name = format.format().name().to_string();
         let container_metadata = format.metadata();
         let mut tag_title = None;
 
@@ -488,7 +478,6 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
             chapters,
             duration,
             bitrate,
-            format_name,
             tag_title,
         })
     }

@@ -747,7 +747,6 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
                 }
             }
 
-
             new_movies
         };
 

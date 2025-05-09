@@ -39,7 +39,6 @@ use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
 use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::intro_detection::IntroJob;
-use crate::library::TranscodePayload;
 use crate::library::assets::{
     self, BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType,
     PreviewAsset, VariantAsset,
@@ -48,6 +47,7 @@ use crate::library::assets::{AssetDir, PreviewsDirAsset};
 use crate::library::{
     AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
 };
+use crate::library::{TranscodePayload, VideoContainer};
 use crate::metadata::{
     ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
@@ -86,6 +86,7 @@ pub struct DetailedVideo {
     pub intro: Option<Intro>,
     pub chapters: Vec<DetailedChapter>,
     pub subtitles: Vec<DetailedSubtitlesAsset>,
+    pub container: VideoContainer,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -98,6 +99,7 @@ pub struct DetailedVariant {
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
+    pub container: VideoContainer,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -260,6 +262,7 @@ impl DetailedVideo {
             history,
             intro,
             subtitles,
+            container: source.video.container(),
         })
     }
 }
@@ -384,6 +387,7 @@ impl DetailedVariant {
                 .map(Into::into)
                 .collect(),
             path: video.path().to_path_buf(),
+            container: video.container(),
         })
     }
 }
