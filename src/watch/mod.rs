@@ -1,15 +1,92 @@
 use std::time::Duration;
 
-pub mod torrent_stream;
-pub mod transcode_stream;
+use hls_stream::{HlsTempPath, job::HlsJobHandle};
+use tokio_util::sync::CancellationToken;
 
-#[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize)]
-pub struct WatchProgress {
-    now_at: Duration,
-    total_duration: Duration,
+use crate::{
+    library::Video,
+    progress::{ProgressDispatcher, TaskTrait},
+};
+
+pub mod direct_play;
+pub mod hls_stream;
+pub mod torrent_stream;
+
+#[derive(Debug, Clone, Copy, serde::Serialize, serde::Deserialize, utoipa::ToSchema, PartialEq)]
+pub enum StreamMethod {
+    DirectPlay,
+    Hls,
 }
 
-#[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize)]
+#[derive(Debug, Clone, Copy, serde::Serialize, utoipa::ToSchema, PartialEq)]
+pub enum ClientType {
+    WebClient,
+    Upnp,
+}
+
+#[derive(Debug)]
+pub enum Stream {
+    DirectPlay(()),
+    Hls(HlsJobHandle),
+}
+
+#[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
+pub struct WatchProgress {
+    current_time: Duration,
+}
+
+/// Task for watch tracking.
+///
+/// Be aware that currently watch tracking can be bypassed.
+/// Therefore, these tasks should not be considered fully reliable.
+#[derive(Debug, utoipa::ToSchema, serde::Serialize)]
 pub struct WatchTask {
-    total_duration: Duration,
+    pub video_id: i64,
+    pub variant_id: Option<uuid::Uuid>,
+    pub method: StreamMethod,
+    pub client_agent: String,
+    pub client_type: ClientType,
+    #[serde(skip)]
+    pub exit_token: CancellationToken,
+    #[serde(skip)]
+    pub stream: crate::watch::Stream,
+}
+
+impl PartialEq for WatchTask {
+    fn eq(&self, _other: &Self) -> bool {
+        // watch tasks are can't be duplicates
+        false
+    }
+}
+
+impl TaskTrait for WatchTask {
+    /// Video id
+    type Identifier = i64;
+
+    type Progress = WatchProgress;
+
+    fn identifier(&self) -> Self::Identifier {
+        self.video_id
+    }
+
+    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress {
+        crate::progress::TaskProgress::WatchSession(chunk)
+    }
+}
+
+impl WatchTask {
+    pub async fn spawn_hls(
+        video: &Video,
+        progress_dispatcher: ProgressDispatcher<WatchTask>,
+    ) -> HlsJobHandle {
+        let task_id = progress_dispatcher.task_id();
+        let hls_path = HlsTempPath::new(task_id);
+        hls_stream::job::start(video, hls_path, task_id.to_string(), progress_dispatcher)
+            .await
+            .unwrap()
+    }
+
+    pub async fn spawn_direct_play(_progress_dispatcher: ProgressDispatcher<WatchTask>) {
+        todo!();
+    }
 }

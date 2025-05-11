@@ -19,6 +19,8 @@ const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 pub enum WsRequest {
     TorrentSubscribe,
     TorrentUnsubscribe,
+
+    TrackWatchSession { task_id: uuid::Uuid },
 }
 
 /// Websockets connection output message
@@ -42,6 +44,7 @@ pub enum WsMessage {
 #[derive(Debug)]
 struct Connection {
     is_torrent_subscribed: bool,
+    watch_session_guard: Option<tokio_util::sync::DropGuard>,
     socket: WebSocket,
 }
 
@@ -49,6 +52,7 @@ impl Connection {
     pub fn new(socket: WebSocket) -> Self {
         Self {
             socket,
+            watch_session_guard: None,
             is_torrent_subscribed: false,
         }
     }
@@ -141,6 +145,23 @@ async fn handle_request(
         WsRequest::TorrentUnsubscribe => {
             tracing::debug!("Received unsubscribe from torrent progress");
             connection_state.is_torrent_subscribed = false;
+        }
+        WsRequest::TrackWatchSession { task_id } => {
+            tracing::debug!(%task_id, "Received tracking watch session");
+            if let Some(task) = app_state
+                .tasks
+                .watch_sessions
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.id == task_id)
+            {
+                let guard = task.kind.exit_token.clone().drop_guard();
+                connection_state.watch_session_guard.replace(guard);
+            } else {
+                tracing::warn!(%task_id, "Watch session is not found");
+            }
         }
     }
     Ok(())

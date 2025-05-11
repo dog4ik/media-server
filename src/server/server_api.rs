@@ -1,7 +1,6 @@
 use std::convert::Infallible;
 use std::fmt::Display;
 use std::path::PathBuf;
-use std::str::FromStr;
 
 use anyhow::Context;
 use axum::extract::{Multipart, State};
@@ -22,8 +21,8 @@ use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
 use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
-use tokio::sync::oneshot;
 use tokio_stream::{Stream, StreamExt};
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
@@ -53,9 +52,10 @@ use crate::metadata::{
     metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
-use crate::progress::{LibraryScanTask, Task, TaskError, TaskResource};
+use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
 use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
+use crate::watch::{ClientType, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -2730,52 +2730,21 @@ pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<Brows
     Ok(Json(resolved_dir))
 }
 
-/// Retrieve transcoded segment
-#[utoipa::path(
-    get,
-    path = "/api/transcode/{id}/segment/{segment}",
-    params(
-        ("id", description = "Transcode job"),
-        ("segment", description = "Desired segment"),
-    ),
-    responses(
-        (status = 200),
-        (status = 404, description = "Transcode job is not found", body = AppError),
-        (status = 500, description = "Worker is not available", body = AppError),
-    ),
-    tag = "Transcoding",
-)]
-pub async fn transcoded_segment(
-    Path((task_id, index)): Path<(String, usize)>,
-    State(tasks): State<&'static TaskResource>,
-) -> Result<bytes::Bytes, AppError> {
-    let sender = {
-        let tasks = tasks.active_streams.lock().unwrap();
-        let task_id = uuid::Uuid::from_str(&task_id).unwrap();
-        let stream = tasks
-            .iter()
-            .find(|t| t.uuid == task_id)
-            .ok_or(AppError::not_found("Requested stream is not found"))?;
-        stream.sender.clone()
-    };
-    let (tx, rx) = oneshot::channel();
-    sender
-        .send((index, tx))
-        .await
-        .map_err(|_| AppError::bad_request("Stream is not available"))?;
-    if let Ok(bytes) = rx.await {
-        Ok(bytes)
-    } else {
-        Err(AppError::internal_error(
-            "Transcode worker is not available",
-        ))
-    }
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct StartWatchSessionRequest {
+    method: crate::watch::StreamMethod,
+    variant_id: Option<uuid::Uuid>,
 }
 
-/// Start transcoded stream
+#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
+pub struct StartWatchSessionResponse {
+    task_id: uuid::Uuid,
+}
+
+/// Start new watch session
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/stream_transcode",
+    path = "/api/video/{id}/start_watch_session",
     params(
         ("id", description = "Video id"),
     ),
@@ -2786,16 +2755,41 @@ pub async fn transcoded_segment(
     tag = "Transcoding",
 )]
 pub async fn create_transcode_stream(
-    Path(_id): Path<i64>,
-    State(_app_state): State<AppState>,
-) -> Result<Json<Task<TranscodeJob>>, AppError> {
-    todo!()
+    Path(video_id): Path<i64>,
+    State(app_state): State<AppState>,
+    TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
+    Json(payload): Json<StartWatchSessionRequest>,
+) -> Result<Json<StartWatchSessionResponse>, AppError> {
+    let watch_sessions = &app_state.tasks.watch_sessions;
+    let source = app_state.get_source_by_id(video_id)?;
+    let cancellation_token = app_state.tasks.parent_cancellation_token.child_token();
+    let task_id = uuid::Uuid::new_v4();
+    let dispatcher = ProgressDispatcher::<WatchTask>::new(video_id, watch_sessions, task_id);
+    let stream = match payload.method {
+        crate::watch::StreamMethod::DirectPlay => {
+            crate::watch::Stream::DirectPlay(WatchTask::spawn_direct_play(dispatcher).await)
+        }
+        crate::watch::StreamMethod::Hls => {
+            crate::watch::Stream::Hls(WatchTask::spawn_hls(&source.video, dispatcher).await)
+        }
+    };
+    let task = WatchTask {
+        video_id,
+        variant_id: payload.variant_id,
+        method: payload.method,
+        client_agent: user_agent.to_string(),
+        client_type: ClientType::WebClient,
+        exit_token: cancellation_token.clone(),
+        stream,
+    };
+    watch_sessions.start_with_id(task, task_id, Some(cancellation_token))?;
+    Ok(Json(StartWatchSessionResponse { task_id }))
 }
 
 /// M3U8 manifest of live transcode task
 #[utoipa::path(
     get,
-    path = "/api/transcode/{id}/manifest",
+    path = "/api/watch/hls/{id}/manifest",
     params(
         ("id", description = "Task id"),
     ),
@@ -2806,19 +2800,103 @@ pub async fn create_transcode_stream(
     ),
     tag = "Transcoding",
 )]
-pub async fn transcode_stream_manifest(
-    Path(stream_id): Path<String>,
+pub async fn hls_manifest(
+    Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
 ) -> Result<String, AppError> {
-    let streams = tasks.active_streams.lock().unwrap();
-    let id = uuid::Uuid::from_str(&stream_id)
-        .map_err(|_| AppError::bad_request("Failed to parse uuid"))?;
-    let stream = streams
+    let sessions = tasks.watch_sessions.tasks.lock().unwrap();
+    let job = sessions
         .iter()
-        .find(|s| s.uuid == id)
-        .ok_or(AppError::not_found("Stream is not found"))?;
+        .find_map(|v| {
+            if v.id != stream_id {
+                return None;
+            }
+            match &v.kind.stream {
+                crate::watch::Stream::DirectPlay(_) => None,
+                crate::watch::Stream::Hls(handle) => Some(handle),
+            }
+        })
+        .ok_or(AppError::not_found("Hls task not found"))?;
+    Ok(job.playlist().to_string())
+}
 
-    Ok(stream.manifest.as_ref().to_string())
+/// Retrieve init segment
+#[utoipa::path(
+    get,
+    path = "/api/watch/hls/{id}/init",
+    params(
+        ("id", description = "Transcode job"),
+        ("segment", description = "Desired segment"),
+    ),
+    responses(
+        (status = 200, body = [u8]),
+        (status = 404, description = "Transcode job is not found", body = AppError),
+    ),
+    tag = "Transcoding",
+)]
+pub async fn hls_init(
+    Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
+    State(tasks): State<&'static TaskResource>,
+) -> Result<axum::response::Response, AppError> {
+    let sessions = tasks.watch_sessions.tasks.lock().unwrap();
+    let job = sessions
+        .iter()
+        .find_map(|v| {
+            if v.id != stream_id {
+                return None;
+            }
+            match &v.kind.stream {
+                crate::watch::Stream::DirectPlay(_) => None,
+                crate::watch::Stream::Hls(handle) => Some(handle),
+            }
+        })
+        .ok_or(AppError::not_found("Hls task not found"))?;
+    let path = job.request_init().await;
+    Ok(
+        axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
+            .await?
+            .into_response(),
+    )
+}
+
+/// Retrieve hls segment
+#[utoipa::path(
+    get,
+    path = "/api/watch/hls/{id}/segment/{segment}",
+    params(
+        ("id", description = "Transcode job"),
+        ("segment", description = "Desired segment"),
+    ),
+    responses(
+        (status = 200, body = [u8]),
+        (status = 404, description = "Transcode job is not found", body = AppError),
+    ),
+    tag = "Transcoding",
+)]
+pub async fn hls_segment(
+    Path((stream_id, index)): Path<(String, usize)>,
+    State(tasks): State<&'static TaskResource>,
+) -> Result<axum::response::Response, AppError> {
+    let uuid = Uuid
+    let sessions = tasks.watch_sessions.tasks.lock().unwrap();
+    let job = sessions
+        .iter()
+        .find_map(|v| {
+            if v.id != stream_id {
+                return None;
+            }
+            match &v.kind.stream {
+                crate::watch::Stream::DirectPlay(_) => None,
+                crate::watch::Stream::Hls(handle) => Some(handle),
+            }
+        })
+        .ok_or(AppError::not_found("Hls task not found"))?;
+    let path = job.request_segment(index).await;
+    Ok(
+        axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
+            .await?
+            .into_response(),
+    )
 }
 
 /// Detect intros for given season

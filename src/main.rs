@@ -344,12 +344,16 @@ async fn main() {
             post(server_api::reset_metadata),
         )
         .route(
-            "/transcode/{id}/segment/{segment}",
-            get(server_api::transcoded_segment),
+            "/watch/hls/{id}/segment/{segment}",
+            get(server_api::hls_segment),
         )
         .route(
-            "/transcode/{id}/manifest",
-            get(server_api::transcode_stream_manifest),
+            "/watch/hls/{id}/manifest",
+            get(server_api::hls_manifest),
+        )
+        .route(
+            "/watch/hls/{id}/init",
+            get(server_api::hls_init),
         )
         .route("/file_browser/root_dirs", get(server_api::root_dirs))
         .route(
