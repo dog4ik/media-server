@@ -5,12 +5,15 @@ use tokio::process::{self, Command};
 pub const DEFAULT_SEGMENT_LENGTH: usize = 3;
 /// Segment if segment gap is higher than this we start new transcoding job.
 pub const ALLOWED_SEGMENT_GAP: usize = 5;
-pub const VIDEO_ENCODER: &str = "libx264";
+pub const VIDEO_ENCODER: &str = "h264_nvenc";
 pub const AUDIO_CODEC: &str = "aac";
 
 fn apply_video_arguments(c: &mut Command, codec: &str) {
     c.arg("-c:v:0");
     c.arg(codec);
+
+    c.arg("-pix_fmt");
+    c.arg("yuv420p");
 
     c.arg("-flags");
     c.arg("+cgop");
@@ -75,6 +78,7 @@ fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usi
 pub fn run(
     video_path: &Path,
     temp_path: &Path,
+    task_id: &str,
     start: usize,
     seek_to: f64,
     video_encoder: &str,
@@ -123,7 +127,7 @@ pub fn run(
     c.arg("-hls_segment_type");
     c.arg("fmp4");
     c.arg("-hls_fmp4_init_filename");
-    let init_filename = format!("0/init.mp4");
+    let init_filename = format!("{}/init.mp4", task_id);
     c.arg(&init_filename);
 
     c.arg("-start_number");
@@ -139,15 +143,20 @@ pub fn run(
     c.arg("-hls_list_size");
     c.arg("0");
 
+    c.arg("-progress");
+    c.arg("pipe:1");
+
     c.arg("-y");
 
     c.arg(temp_path);
 
-    println!("started command | seek_offset={seek_time} | start_segment = {start_number}");
+    tracing::debug!(
+        "Started hls ffmpeg command | seek_offset={seek_time} | start_segment = {start_number}"
+    );
 
     let child = c
-        .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
         .unwrap();

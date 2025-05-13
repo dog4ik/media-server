@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use notify::{
     Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
-    event::{CreateKind, DataChange, ModifyKind},
+    event::{AccessKind, AccessMode},
 };
 use tokio::sync::mpsc::Receiver;
 
@@ -13,13 +13,14 @@ pub fn spawn_watcher(
     let mut watcher = RecommendedWatcher::new(
         move |res| match res {
             Ok(Event {
-                kind:
-                    EventKind::Create(CreateKind::File)
-                    | EventKind::Modify(ModifyKind::Data(DataChange::Content)),
+                kind: EventKind::Access(AccessKind::Close(AccessMode::Write)),
                 paths,
                 ..
             }) => {
-                eprintln!("Detected file change: {}", paths[0].display());
+                tracing::trace!(
+                    "Detected write file handle close event: {}",
+                    paths[0].display()
+                );
                 tx.blocking_send(paths[0].clone()).unwrap();
             }
             Ok(_) => {}

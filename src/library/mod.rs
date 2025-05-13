@@ -1287,7 +1287,7 @@ impl SubtitlesCodec {
     }
 }
 
-#[derive(Debug, Serialize, Clone, PartialEq, utoipa::ToSchema)]
+#[derive(Debug, Serialize, Clone, Copy, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum VideoContainer {
     Avi,

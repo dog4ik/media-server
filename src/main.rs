@@ -233,10 +233,7 @@ async fn main() {
         )
         .route("/video/{id}/history", put(server_api::update_video_history))
         .route("/video/{id}/transcode", post(server_api::transcode_video))
-        .route(
-            "/video/{id}/stream_transcode",
-            post(server_api::create_transcode_stream),
-        )
+        .route("/watch/hls/start/{id}", post(server_api::start_hls_stream))
         .route("/video/{id}/watch", get(server_api::watch))
         .route(
             "/video/{id}/upload_subtitles",
@@ -331,6 +328,11 @@ async fn main() {
             "/tasks/previews/{id}",
             delete(server_api::cancel_previews_task),
         )
+        .route("/tasks/watch_sessions", get(server_api::watch_sessions))
+        .route(
+            "/tasks/watch_session/{id}",
+            delete(server_api::stop_watch_session),
+        )
         .route(
             "/tasks/intro_detection",
             get(server_api::intro_detection_tasks),
@@ -347,14 +349,8 @@ async fn main() {
             "/watch/hls/{id}/segment/{segment}",
             get(server_api::hls_segment),
         )
-        .route(
-            "/watch/hls/{id}/manifest",
-            get(server_api::hls_manifest),
-        )
-        .route(
-            "/watch/hls/{id}/init",
-            get(server_api::hls_init),
-        )
+        .route("/watch/hls/{id}/manifest", get(server_api::hls_manifest))
+        .route("/watch/hls/{id}/init", get(server_api::hls_init))
         .route("/file_browser/root_dirs", get(server_api::root_dirs))
         .route(
             "/file_browser/browse/{key}",

@@ -55,7 +55,7 @@ use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
 use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
-use crate::watch::{ClientType, WatchTask};
+use crate::watch::{ClientType, WatchIdentifier, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -2263,6 +2263,28 @@ pub async fn cancel_previews_task(
     Ok(())
 }
 
+/// Stop watch session
+#[utoipa::path(
+    delete,
+    path = "/api/tasks/watch_session/{id}",
+    params(
+        ("id", description = "Task id"),
+    ),
+    responses(
+        (status = 200),
+        (status = 400, description = "Task can't be canceled", body = AppError),
+        (status = 400, description = "Task can't be found", body = AppError),
+    ),
+    tag = "Tasks",
+)]
+pub async fn stop_watch_session(
+    State(tasks): State<&'static TaskResource>,
+    Path(task_id): Path<Uuid>,
+) -> Result<(), AppError> {
+    tasks.watch_sessions.cancel_task(task_id)?;
+    Ok(())
+}
+
 /// Get all running tasks
 #[utoipa::path(
     get,
@@ -2744,45 +2766,50 @@ pub struct StartWatchSessionResponse {
 /// Start new watch session
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/start_watch_session",
+    path = "/api/watch/hls/start/{id}",
     params(
         ("id", description = "Video id"),
     ),
     responses(
-        (status = 200, body = Task<TranscodeJob>),
+        (status = 200, body = StartWatchSessionResponse),
         (status = 404, description = "Video is not found", body = AppError),
     ),
-    tag = "Transcoding",
+    tag = "Watch",
 )]
-pub async fn create_transcode_stream(
+pub async fn start_hls_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
     Json(payload): Json<StartWatchSessionRequest>,
 ) -> Result<Json<StartWatchSessionResponse>, AppError> {
+    let tracker = app_state.tasks.tracker.clone();
     let watch_sessions = &app_state.tasks.watch_sessions;
     let source = app_state.get_source_by_id(video_id)?;
-    let cancellation_token = app_state.tasks.parent_cancellation_token.child_token();
+    let total_duration = source.video.fetch_duration().await?;
+    let exit_token = app_state.tasks.parent_cancellation_token.child_token();
     let task_id = uuid::Uuid::new_v4();
-    let dispatcher = ProgressDispatcher::<WatchTask>::new(video_id, watch_sessions, task_id);
+    let identifier = WatchIdentifier { video_id };
+    let dispatcher = ProgressDispatcher::<WatchTask>::new(identifier, watch_sessions, task_id);
     let stream = match payload.method {
         crate::watch::StreamMethod::DirectPlay => {
             crate::watch::Stream::DirectPlay(WatchTask::spawn_direct_play(dispatcher).await)
         }
-        crate::watch::StreamMethod::Hls => {
-            crate::watch::Stream::Hls(WatchTask::spawn_hls(&source.video, dispatcher).await)
-        }
+        crate::watch::StreamMethod::Hls => crate::watch::Stream::Hls(
+            WatchTask::spawn_hls(&source.video, dispatcher, exit_token.clone(), tracker).await,
+        ),
     };
+
     let task = WatchTask {
         video_id,
+        total_duration,
         variant_id: payload.variant_id,
         method: payload.method,
         client_agent: user_agent.to_string(),
         client_type: ClientType::WebClient,
-        exit_token: cancellation_token.clone(),
+        exit_token: exit_token.clone(),
         stream,
     };
-    watch_sessions.start_with_id(task, task_id, Some(cancellation_token))?;
+    watch_sessions.start_with_id(task, task_id, Some(exit_token))?;
     Ok(Json(StartWatchSessionResponse { task_id }))
 }
 
@@ -2798,7 +2825,7 @@ pub async fn create_transcode_stream(
         (status = 400, description = "Task uuid is incorrect", body = AppError),
         (status = 404, description = "Task is not found", body = AppError),
     ),
-    tag = "Transcoding",
+    tag = "Watch",
 )]
 pub async fn hls_manifest(
     Path(stream_id): Path<uuid::Uuid>,
@@ -2831,27 +2858,31 @@ pub async fn hls_manifest(
     responses(
         (status = 200, body = [u8]),
         (status = 404, description = "Transcode job is not found", body = AppError),
+        (status = 500, description = "Transcode job is available", body = AppError),
     ),
-    tag = "Transcoding",
+    tag = "Watch",
 )]
 pub async fn hls_init(
-    Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
+    Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
 ) -> Result<axum::response::Response, AppError> {
-    let sessions = tasks.watch_sessions.tasks.lock().unwrap();
-    let job = sessions
-        .iter()
-        .find_map(|v| {
-            if v.id != stream_id {
-                return None;
-            }
-            match &v.kind.stream {
-                crate::watch::Stream::DirectPlay(_) => None,
-                crate::watch::Stream::Hls(handle) => Some(handle),
-            }
-        })
-        .ok_or(AppError::not_found("Hls task not found"))?;
-    let path = job.request_init().await;
+    let job = {
+        let sessions = tasks.watch_sessions.tasks.lock().unwrap();
+        sessions
+            .iter()
+            .find_map(|v| {
+                if v.id != stream_id {
+                    return None;
+                }
+                match &v.kind.stream {
+                    crate::watch::Stream::DirectPlay(_) => None,
+                    crate::watch::Stream::Hls(handle) => Some(handle),
+                }
+            })
+            .cloned()
+            .ok_or(AppError::not_found("Hls task not found"))?
+    };
+    let path = job.request_init().await?;
     Ok(
         axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
             .await?
@@ -2870,28 +2901,33 @@ pub async fn hls_init(
     responses(
         (status = 200, body = [u8]),
         (status = 404, description = "Transcode job is not found", body = AppError),
+        (status = 500, description = "Transcode job is available", body = AppError),
     ),
-    tag = "Transcoding",
+    tag = "Watch",
 )]
 pub async fn hls_segment(
-    Path((stream_id, index)): Path<(String, usize)>,
+    Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
     State(tasks): State<&'static TaskResource>,
 ) -> Result<axum::response::Response, AppError> {
-    let uuid = Uuid
-    let sessions = tasks.watch_sessions.tasks.lock().unwrap();
-    let job = sessions
-        .iter()
-        .find_map(|v| {
-            if v.id != stream_id {
-                return None;
-            }
-            match &v.kind.stream {
-                crate::watch::Stream::DirectPlay(_) => None,
-                crate::watch::Stream::Hls(handle) => Some(handle),
-            }
-        })
-        .ok_or(AppError::not_found("Hls task not found"))?;
-    let path = job.request_segment(index).await;
+    let job = {
+        let sessions = tasks.watch_sessions.tasks.lock().unwrap();
+        sessions
+            .iter()
+            .find_map(|v| {
+                if v.id != stream_id {
+                    return None;
+                }
+                match &v.kind.stream {
+                    crate::watch::Stream::DirectPlay(_) => None,
+                    crate::watch::Stream::Hls(handle) => Some(handle),
+                }
+            })
+            .cloned()
+            .ok_or(AppError::not_found("Hls task not found"))?
+    };
+
+    let path = job.request_segment(index).await?;
+
     Ok(
         axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
             .await?
@@ -3140,6 +3176,19 @@ pub async fn intro_detection_tasks(
     State(tasks): State<&'static TaskResource>,
 ) -> Json<serde_json::Value> {
     Json(tasks.intro_detection_tasks.tasks())
+}
+
+/// Get all watching sessions
+#[utoipa::path(
+    get,
+    path = "/api/tasks/watch_sessions",
+    responses(
+        (status = 200, body = inline(Vec<Task<WatchTask>>))
+    ),
+    tag = "Tasks",
+)]
+pub async fn watch_sessions(State(tasks): State<&'static TaskResource>) -> Json<serde_json::Value> {
+    Json(tasks.watch_sessions.tasks())
 }
 
 #[cfg(test)]

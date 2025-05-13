@@ -147,7 +147,7 @@ async fn handle_request(
             connection_state.is_torrent_subscribed = false;
         }
         WsRequest::TrackWatchSession { task_id } => {
-            tracing::debug!(%task_id, "Received tracking watch session");
+            tracing::debug!(%task_id, "Starting watch session tracking");
             if let Some(task) = app_state
                 .tasks
                 .watch_sessions

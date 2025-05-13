@@ -816,6 +816,11 @@ impl FFmpegProgress {
     pub fn relative_speed(&self) -> f32 {
         self.speed
     }
+
+    /// Get current progress time
+    pub fn time(&self) -> Duration {
+        self.time
+    }
 }
 
 impl FFmpegProgressStdout {

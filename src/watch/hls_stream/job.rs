@@ -1,8 +1,17 @@
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use tokio::sync::{mpsc, oneshot};
+use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-use crate::{library::Video, progress::ProgressDispatcher, watch::WatchTask};
+use crate::{
+    library::Video,
+    progress::ProgressDispatcher,
+    watch::{WatchProgress, WatchTask},
+};
 
 use super::{
     HlsTempPath,
@@ -37,39 +46,32 @@ pub struct SegmentRequest {
 pub struct HlsJobHandle {
     request: mpsc::Sender<Request>,
     manifest: Arc<M3U8Manifest>,
+    path: HlsTempPath,
 }
 
 impl HlsJobHandle {
-    pub async fn request_segment(&self, idx: usize) -> PathBuf {
+    pub async fn request_segment(&self, idx: usize) -> anyhow::Result<PathBuf> {
         let (tx, rx) = oneshot::channel();
         self.request
             .send(Request {
                 kind: RequestKind::Segment(idx),
                 ready: tx,
             })
-            .await
-            .unwrap();
-        rx.await.unwrap();
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tmp")
-            .join("0")
-            .join(format!("{idx}.mp4"))
+            .await?;
+        rx.await?;
+        Ok(self.path.segment_path(idx))
     }
 
-    pub async fn request_init(&self) -> PathBuf {
+    pub async fn request_init(&self) -> anyhow::Result<PathBuf> {
         let (tx, rx) = oneshot::channel();
         self.request
             .send(Request {
                 kind: RequestKind::Init,
                 ready: tx,
             })
-            .await
-            .unwrap();
-        rx.await.unwrap();
-        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("tmp")
-            .join("0")
-            .join(format!("init.mp4"))
+            .await?;
+        rx.await?;
+        Ok(self.path.init_path())
     }
 
     pub fn playlist(&self) -> &str {
@@ -77,16 +79,32 @@ impl HlsJobHandle {
     }
 }
 
+pub async fn clean_up_dir(path: &Path) -> std::io::Result<()> {
+    tokio::fs::remove_dir_all(path).await?;
+    tracing::debug!(path = %path.display(), "Cleaned up hls temp directory");
+    Ok(())
+}
+
 pub async fn start(
     video: &Video,
     tmp_path: HlsTempPath,
     id: String,
     progress_dispatcher: ProgressDispatcher<WatchTask>,
+    exit_token: CancellationToken,
+    tracker: TaskTracker,
 ) -> anyhow::Result<HlsJobHandle> {
     let target_path = video.path().to_path_buf();
-    let duration = video.fetch_duration().await?;
+    let video_metadata = video.metadata().await?;
+    let duration = video_metadata.duration();
+    let avg_framerate = video_metadata
+        .default_video()
+        .map(|v| v.avg_frame_rate as usize);
     tracing::debug!(path = %target_path.display(), "Hls job input path");
     tracing::debug!(path = %tmp_path.0.display(), "Hls job temporary path");
+    tracing::debug!("Hls job duration is {} mins", duration.as_secs_f32() / 60.);
+    if let Some(framerate) = avg_framerate {
+        tracing::debug!("Hls job avg framerate: {}/s", framerate);
+    }
     tokio::fs::create_dir_all(&tmp_path.0).await.unwrap();
     let (_watcher, mut file_change_rx) = spawn_watcher(&tmp_path.0).unwrap();
 
@@ -94,10 +112,11 @@ pub async fn start(
     let child = command::run(
         &target_path,
         &tmp_path.0,
+        &id,
         0,
         0.,
         VIDEO_ENCODER,
-        None,
+        avg_framerate,
         AUDIO_CODEC,
         video_codec_copy,
     )
@@ -108,11 +127,11 @@ pub async fn start(
     let playlist = if video_codec_copy {
         match keyframe::retrieve_keyframes(&target_path, 0, DEFAULT_SEGMENT_LENGTH as f64).await {
             Ok(k) => {
-                println!("exracted {} keyframes", k.key_frames.len());
+                tracing::debug!("Exracted {} keyframes", k.key_frames.len());
                 M3U8Manifest::from_keyframes(k, &id)
             }
             Err(e) => {
-                println!("failed to extract keyframes: {e}");
+                tracing::error!("Failed to extract keyframes: {e}");
                 M3U8Manifest::from_interval(
                     DEFAULT_SEGMENT_LENGTH as f64,
                     duration.as_secs_f64(),
@@ -126,7 +145,8 @@ pub async fn start(
     let playlist = Arc::new(playlist);
 
     let manifiest = playlist.clone();
-    tokio::spawn(async move {
+    let root_path = tmp_path.0.clone();
+    tracker.spawn(async move {
         let _watcher = _watcher;
         let mut child = child;
         let mut requests: Vec<SegmentRequest> = Vec::new();
@@ -148,22 +168,27 @@ pub async fn start(
                         },
                         RequestKind::Segment(s) => SegmentRequest { idx: s, ready: req.ready },
                     };
-
+                    progress_dispatcher.progress(
+                        WatchProgress {
+                            current_time: Duration::from_secs((req.idx * DEFAULT_SEGMENT_LENGTH) as u64)
+                        }
+                    );
                     // We have that segment
                     if segments_len > 0 && req.idx >= start_segment && req.idx < start_segment +  segments_len {
-                        println!("requested exisiting segment {}", req.idx);
+                        tracing::trace!("Requested exisiting segment {}", req.idx);
                         let _ = req.ready.send(());
                         continue;
                     } else if req.idx < start_segment || req.idx > start_segment + segments_len + JOB_RESET_SEGMENT_THRESHOLD {
-                        println!("Segment {} is out of reach, resetting the job", req.idx);
+                        tracing::debug!("Segment {} is out of reach, resetting the job", req.idx);
                         child.kill().await.unwrap();
                         child = command::run(
                             &target_path,
-                            &tmp_path.0,
+                            &root_path,
+                            &id,
                             req.idx,
                             manifiest.seek_time(req.idx),
                             VIDEO_ENCODER,
-                            None,
+                            avg_framerate,
                             AUDIO_CODEC,
                             video_codec_copy
                         )
@@ -202,6 +227,14 @@ pub async fn start(
                         let _ = ready.ready.send(());
                     }
                 }
+                _ = exit_token.cancelled() => {
+                    child.kill().await.unwrap();
+                    progress_dispatcher.finish();
+                    if let Err(e) = clean_up_dir(&root_path).await {
+                        tracing::error!("Failed to clean up hls temp directory: {e}");
+                    }
+                    return;
+                }
             }
         }
     });
@@ -209,5 +242,6 @@ pub async fn start(
     Ok(HlsJobHandle {
         request: request_tx,
         manifest: playlist,
+        path: tmp_path,
     })
 }
