@@ -2554,10 +2554,12 @@ pub async fn update_history(
     Path(id): Path<i64>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<(), AppError> {
-    sqlx::query!(
+    let update_time = OffsetDateTime::now_utc();
         "UPDATE history SET time = ?, is_finished = ? WHERE id = ? RETURNING time;",
+        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING video_id;",
         payload.time,
         payload.is_finished,
+        update_time,
         id,
     )
     .fetch_one(&db.pool)
