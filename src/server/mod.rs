@@ -109,6 +109,7 @@ pub struct SerdeDuration {
         server_api::progress,
         server_api::reconciliate_lib,
         server_api::clear_db,
+        server_api::start_direct_stream,
         server_api::start_hls_stream,
         server_api::hls_manifest,
         server_api::hls_segment,
@@ -282,6 +283,16 @@ impl<'de> Deserialize<'de> for CursorQuery {
         }
         deserializer.deserialize_map(CursorVisitor)
     }
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct UuidQuery {
+    pub id: uuid::Uuid,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct OptionalUuidQuery {
+    pub id: Option<uuid::Uuid>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]

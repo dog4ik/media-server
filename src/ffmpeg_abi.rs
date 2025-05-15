@@ -496,3 +496,57 @@ pub async fn get_metadata(path: impl AsRef<Path>) -> anyhow::Result<ProbeOutput>
     .await
     .expect("never panic")
 }
+
+mod encoder_support {
+    use ffmpeg_next::codec;
+
+    #[derive(Debug, Default)]
+    pub enum H264Encoder {
+        #[default]
+        LibX264,
+        Nvenc,
+        Vaapi,
+    }
+
+    #[derive(Debug, Default)]
+    pub enum H265Encoder {
+        #[default]
+        LibX264,
+        Nvenc,
+        Vaapi,
+    }
+
+    #[derive(Debug)]
+    pub struct HwEncodersSupport {
+        h264: Vec<H264Encoder>,
+        h265: Vec<H265Encoder>,
+    }
+
+    impl HwEncodersSupport {
+        /// Check encoders support for each codec
+        pub fn new_checked() -> anyhow::Result<Self> {
+            todo!()
+        }
+    }
+
+    fn check_encoder_support(encoder_name: &str) {
+        if let Some(codec) = ffmpeg_next::codec::encoder::find_by_name(encoder_name) {
+            println!("Trying {}", codec.name());
+
+            let mut encoder = codec::context::Context::new_with_codec(codec)
+                .encoder()
+                .video()
+                .unwrap();
+            encoder.set_width(1280);
+            encoder.set_height(720);
+            encoder.set_format(ffmpeg_next::format::Pixel::YUV420P);
+            encoder.set_time_base((1, 30));
+
+            if encoder.open_as(codec).is_ok() {
+                println!("{} is usable", codec.name());
+            } else {
+                println!("{} failed to open", codec.name());
+            }
+        }
+    }
+}

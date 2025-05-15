@@ -5,7 +5,7 @@ use tokio::process::{self, Command};
 pub const DEFAULT_SEGMENT_LENGTH: usize = 3;
 /// Segment if segment gap is higher than this we start new transcoding job.
 pub const ALLOWED_SEGMENT_GAP: usize = 5;
-pub const VIDEO_ENCODER: &str = "h264_nvenc";
+pub const VIDEO_ENCODER: &str = "libx264";
 pub const AUDIO_CODEC: &str = "aac";
 
 fn apply_video_arguments(c: &mut Command, codec: &str) {

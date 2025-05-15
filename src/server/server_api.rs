@@ -25,7 +25,9 @@ use tokio_stream::{Stream, StreamExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
-use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
+use super::{
+    ContentTypeQuery, OptionalContentTypeQuery, OptionalUuidQuery, ProviderQuery, StringIdQuery,
+};
 use super::{CursorQuery, IdQuery, NumberQuery, SearchQuery, TakeParam, VariantQuery};
 use crate::app_state::AppError;
 use crate::config::{
@@ -55,7 +57,7 @@ use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
 use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
-use crate::watch::{ClientType, WatchIdentifier, WatchTask};
+use crate::watch::{ClientType, WatchIdentifier, WatchProgress, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -2567,6 +2569,7 @@ pub struct UpdateHistoryPayload {
     path = "/api/history/{id}",
     params(
         ("id", description = "History id"),
+        OptionalUuidQuery,
     ),
     request_body = UpdateHistoryPayload,
     responses(
@@ -2576,12 +2579,14 @@ pub struct UpdateHistoryPayload {
     tag = "History",
 )]
 pub async fn update_history(
-    State(db): State<Db>,
+    State(app_state): State<AppState>,
     Path(id): Path<i64>,
+    Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<(), AppError> {
     let update_time = OffsetDateTime::now_utc();
-        "UPDATE history SET time = ?, is_finished = ? WHERE id = ? RETURNING time;",
+    let db = app_state.db;
+    let video_id = sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING video_id;",
         payload.time,
         payload.is_finished,
@@ -2589,8 +2594,21 @@ pub async fn update_history(
         id,
     )
     .fetch_one(&db.pool)
-    .await?;
-
+    .await?
+    .video_id;
+    if let Some(task_id) = task_id {
+        let watch_sessions = &app_state.tasks.watch_sessions;
+        let current_time = std::time::Duration::from_secs(payload.time as u64);
+        let identifier = WatchIdentifier { video_id };
+        let progress = WatchProgress { current_time };
+        watch_sessions.send_progress(
+            task_id,
+            crate::progress::ProgressChunk {
+                identifier,
+                status: crate::progress::ProgressStatus::Pending { progress },
+            },
+        );
+    }
     Ok(())
 }
 
@@ -2639,6 +2657,7 @@ pub async fn remove_history_item(
     path = "/api/video/{id}/history",
     params(
         ("id", description = "Video id"),
+        OptionalUuidQuery,
     ),
     request_body = UpdateHistoryPayload,
     responses(
@@ -2649,13 +2668,28 @@ pub async fn remove_history_item(
     tag = "Videos",
 )]
 pub async fn update_video_history(
-    State(db): State<Db>,
+    State(app_state): State<AppState>,
     Path(id): Path<i64>,
+    Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<StatusCode, AppError> {
+    let db = app_state.db;
+    if let Some(task_id) = task_id {
+        let watch_sessions = &app_state.tasks.watch_sessions;
+        let current_time = std::time::Duration::from_secs(payload.time as u64);
+        let identifier = WatchIdentifier { video_id: id };
+        let progress = WatchProgress { current_time };
+        watch_sessions.send_progress(
+            task_id,
+            crate::progress::ProgressChunk {
+                identifier,
+                status: crate::progress::ProgressStatus::Pending { progress },
+            },
+        );
+    }
     let update_time = OffsetDateTime::now_utc();
     let query = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE video_id = ? RETURNING time;",
+        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE video_id = ? RETURNING video_id;",
         payload.time,
         payload.is_finished,
         update_time,
@@ -2755,8 +2789,14 @@ pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<Brows
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
-pub struct StartWatchSessionRequest {
-    method: crate::watch::StreamMethod,
+pub struct StartHlsStreamRequest {
+    variant_id: Option<uuid::Uuid>,
+    video_codec: Option<VideoCodec>,
+    audio_codec: Option<AudioCodec>,
+}
+
+#[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
+pub struct StartDirectStreamRequest {
     variant_id: Option<uuid::Uuid>,
 }
 
@@ -2765,13 +2805,53 @@ pub struct StartWatchSessionResponse {
     task_id: uuid::Uuid,
 }
 
-/// Start new watch session
+/// Start direct stream session
+#[utoipa::path(
+    post,
+    path = "/api/watch/direct/start/{id}",
+    params(
+        ("id", description = "Video id"),
+    ),
+    responses(
+        (status = 200, body = StartWatchSessionResponse),
+        (status = 404, description = "Video is not found", body = AppError),
+    ),
+    tag = "Watch",
+)]
+pub async fn start_direct_stream(
+    Path(video_id): Path<i64>,
+    State(app_state): State<AppState>,
+    TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
+    Json(payload): Json<StartDirectStreamRequest>,
+) -> Result<Json<StartWatchSessionResponse>, AppError> {
+    let watch_sessions = &app_state.tasks.watch_sessions;
+    let source = app_state.get_source_by_id(video_id)?;
+    let total_duration = source.video.fetch_duration().await?;
+    let exit_token = app_state.tasks.parent_cancellation_token.child_token();
+
+    let task = WatchTask {
+        video_id,
+        total_duration,
+        variant_id: payload.variant_id,
+        method: crate::watch::StreamMethod::DirectPlay,
+        client_agent: user_agent.to_string(),
+        client_type: ClientType::WebClient,
+        exit_token,
+        stream: crate::watch::Stream::DirectPlay(()),
+    };
+    // Currently there is no point in having cancellation token for direct streams
+    let task_id = watch_sessions.start_task(task, None)?;
+    Ok(Json(StartWatchSessionResponse { task_id }))
+}
+
+/// Start new hls watch session
 #[utoipa::path(
     post,
     path = "/api/watch/hls/start/{id}",
     params(
         ("id", description = "Video id"),
     ),
+    request_body = StartHlsStreamRequest,
     responses(
         (status = 200, body = StartWatchSessionResponse),
         (status = 404, description = "Video is not found", body = AppError),
@@ -2782,7 +2862,7 @@ pub async fn start_hls_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
-    Json(payload): Json<StartWatchSessionRequest>,
+    Json(payload): Json<StartHlsStreamRequest>,
 ) -> Result<Json<StartWatchSessionResponse>, AppError> {
     let tracker = app_state.tasks.tracker.clone();
     let watch_sessions = &app_state.tasks.watch_sessions;
@@ -2792,24 +2872,17 @@ pub async fn start_hls_stream(
     let task_id = uuid::Uuid::new_v4();
     let identifier = WatchIdentifier { video_id };
     let dispatcher = ProgressDispatcher::<WatchTask>::new(identifier, watch_sessions, task_id);
-    let stream = match payload.method {
-        crate::watch::StreamMethod::DirectPlay => {
-            crate::watch::Stream::DirectPlay(WatchTask::spawn_direct_play(dispatcher).await)
-        }
-        crate::watch::StreamMethod::Hls => crate::watch::Stream::Hls(
-            WatchTask::spawn_hls(&source.video, dispatcher, exit_token.clone(), tracker).await,
-        ),
-    };
+    let stream = WatchTask::spawn_hls(&source.video, dispatcher, exit_token.clone(), tracker).await;
 
     let task = WatchTask {
         video_id,
         total_duration,
         variant_id: payload.variant_id,
-        method: payload.method,
+        method: crate::watch::StreamMethod::Hls,
         client_agent: user_agent.to_string(),
         client_type: ClientType::WebClient,
         exit_token: exit_token.clone(),
-        stream,
+        stream: crate::watch::Stream::Hls(stream),
     };
     watch_sessions.start_with_id(task, task_id, Some(exit_token))?;
     Ok(Json(StartWatchSessionResponse { task_id }))

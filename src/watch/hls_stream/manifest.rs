@@ -23,7 +23,11 @@ impl M3U8Manifest {
     pub fn from_interval(segment_duration: f64, mut duration: f64, id: &str) -> Self {
         use std::fmt::Write;
         let mut manifest: String = Self::MANIFEST_HEADER.into();
-        writeln!(&mut manifest, r#"#EXT-X-MAP:URI="/api/watch/hls/{id}/init""#).unwrap();
+        writeln!(
+            &mut manifest,
+            r#"#EXT-X-MAP:URI="/api/watch/hls/{id}/init""#
+        )
+        .unwrap();
         writeln!(
             &mut manifest,
             "#EXT-X-TARGETDURATION:{:.6}",
@@ -68,7 +72,11 @@ impl M3U8Manifest {
         }
 
         let mut manifest: String = Self::MANIFEST_HEADER.into();
-        writeln!(&mut manifest, r#"#EXT-X-MAP:URI="/api/watch/hls/{id}/init""#).unwrap();
+        writeln!(
+            &mut manifest,
+            r#"#EXT-X-MAP:URI="/api/watch/hls/{id}/init""#
+        )
+        .unwrap();
         writeln!(&mut manifest, "#EXT-X-TARGETDURATION:{:.6}", max_duration).unwrap();
         writeln!(&mut manifest, "{}", parts).unwrap();
         writeln!(&mut manifest, "#EXT-X-ENDLIST").unwrap();

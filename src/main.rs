@@ -233,6 +233,10 @@ async fn main() {
         )
         .route("/video/{id}/history", put(server_api::update_video_history))
         .route("/video/{id}/transcode", post(server_api::transcode_video))
+        .route(
+            "/watch/direct/start/{id}",
+            post(server_api::start_direct_stream),
+        )
         .route("/watch/hls/start/{id}", post(server_api::start_hls_stream))
         .route("/video/{id}/watch", get(server_api::watch))
         .route(

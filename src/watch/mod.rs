@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use hls_stream::{HlsTempPath, job::HlsJobHandle};
+use hls_stream::{HlsStreamConfiguration, HlsTempPath, job::HlsJobHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
@@ -35,7 +35,7 @@ pub enum Stream {
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
 pub struct WatchProgress {
     #[schema(value_type = crate::server::SerdeDuration)]
-    current_time: Duration,
+    pub current_time: Duration,
 }
 
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
@@ -95,8 +95,10 @@ impl WatchTask {
     ) -> HlsJobHandle {
         let task_id = progress_dispatcher.task_id();
         let hls_path = HlsTempPath::new(task_id);
+        let configuration = HlsStreamConfiguration::default();
         hls_stream::job::start(
             video,
+            configuration,
             hls_path,
             task_id.to_string(),
             progress_dispatcher,
@@ -107,7 +109,10 @@ impl WatchTask {
         .unwrap()
     }
 
-    pub async fn spawn_direct_play(_progress_dispatcher: ProgressDispatcher<WatchTask>) {
+    pub async fn spawn_direct_play(
+        _progress_dispatcher: ProgressDispatcher<WatchTask>,
+        _tracker: TaskTracker,
+    ) {
         todo!();
     }
 }

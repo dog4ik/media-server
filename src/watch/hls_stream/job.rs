@@ -1,21 +1,16 @@
 use std::{
     path::{Path, PathBuf},
     sync::Arc,
-    time::Duration,
 };
 
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-use crate::{
-    library::Video,
-    progress::ProgressDispatcher,
-    watch::{WatchProgress, WatchTask},
-};
+use crate::{library::Video, progress::ProgressDispatcher, watch::WatchTask};
 
 use super::{
-    HlsTempPath,
-    command::{self, AUDIO_CODEC, DEFAULT_SEGMENT_LENGTH, VIDEO_ENCODER},
+    HlsStreamConfiguration, HlsTempPath,
+    command::{self, DEFAULT_SEGMENT_LENGTH},
     file_watcher::spawn_watcher,
     keyframe,
 };
@@ -87,6 +82,7 @@ pub async fn clean_up_dir(path: &Path) -> std::io::Result<()> {
 
 pub async fn start(
     video: &Video,
+    config: HlsStreamConfiguration,
     tmp_path: HlsTempPath,
     id: String,
     progress_dispatcher: ProgressDispatcher<WatchTask>,
@@ -115,9 +111,9 @@ pub async fn start(
         &id,
         0,
         0.,
-        VIDEO_ENCODER,
+        config.video_encoder.as_ref().map_or("copy", String::as_str),
         avg_framerate,
-        AUDIO_CODEC,
+        config.audio_encoder.as_ref().map_or("copy", String::as_str),
         video_codec_copy,
     )
     .unwrap();
@@ -168,11 +164,13 @@ pub async fn start(
                         },
                         RequestKind::Segment(s) => SegmentRequest { idx: s, ready: req.ready },
                     };
-                    progress_dispatcher.progress(
-                        WatchProgress {
-                            current_time: Duration::from_secs((req.idx * DEFAULT_SEGMENT_LENGTH) as u64)
-                        }
-                    );
+
+                    // progress_dispatcher.progress(
+                    //     WatchProgress {
+                    //         current_time: Duration::from_secs((req.idx * DEFAULT_SEGMENT_LENGTH) as u64)
+                    //     }
+                    // );
+
                     // We have that segment
                     if segments_len > 0 && req.idx >= start_segment && req.idx < start_segment +  segments_len {
                         tracing::trace!("Requested exisiting segment {}", req.idx);
@@ -187,9 +185,9 @@ pub async fn start(
                             &id,
                             req.idx,
                             manifiest.seek_time(req.idx),
-                            VIDEO_ENCODER,
+                            config.video_encoder.as_ref().map_or("copy", String::as_str),
                             avg_framerate,
-                            AUDIO_CODEC,
+                            config.audio_encoder.as_ref().map_or("copy", String::as_str),
                             video_codec_copy
                         )
                         .unwrap();
