@@ -165,38 +165,38 @@ impl MediaServerContentDirectory {
             let mut item = Item::new(item_id.to_string(), season_id.to_string(), title.clone());
             {
                 for id in video_ids {
-                    let watch_url = format!(
-                        "{server_url}/api/video/{video_id}/watch",
-                        server_url = self.server_location,
-                        video_id = id,
-                    );
                     let source = {
                         let library = self.app_state.library.lock().unwrap();
                         library.get_source(id).unwrap().clone()
                     };
 
-                    let metadata = source.video.metadata().await;
+                    let Ok(metadata) = source.video.metadata().await else {
+                        tracing::trace!("Skipping video with invalid metadata");
+                        continue;
+                    };
+                    let watch_url = format!(
+                        "{server_url}/api/video/{video_id}/watch",
+                        server_url = self.server_location,
+                        video_id = id,
+                    );
                     let mut watch_resource = Resource::new(
-                        watch_url.clone(),
-                        ProtocolInfo::http_get("video/matroska".into()),
+                        watch_url,
+                        ProtocolInfo::http_get(source.video.container().mime_type().to_string()),
                     );
                     if let Ok(size) = source.video.async_file_size().await {
                         watch_resource.set_size(size);
                     }
-                    let runtime = std::time::Duration::from_secs(episode.duration as u64);
-                    watch_resource.set_duartion(runtime);
-                    if let Ok(metadata) = metadata {
-                        if let Some(res) = metadata.default_video().map(|v| v.resolution()) {
-                            watch_resource
-                                .set_resoulution(UpnpResolution::new(res.width(), res.height()));
-                        };
-                        if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
-                            watch_resource.set_audio_channels(audio_channels as usize);
-                        };
-                        watch_resource.set_bitrate(metadata.bitrate() as usize);
-                    }
+                    watch_resource.set_duartion(metadata.duration());
+                    if let Some(res) = metadata.default_video().map(|v| v.resolution()) {
+                        watch_resource
+                            .set_resoulution(UpnpResolution::new(res.width(), res.height()));
+                    };
+                    if let Some(audio_channels) = metadata.default_audio().map(|a| a.channels) {
+                        watch_resource.set_audio_channels(audio_channels as usize);
+                    };
+                    watch_resource.set_bitrate(metadata.bitrate() as usize);
                     item.set_property(watch_resource);
-                    item.set_property(properties::RecordedDuration(runtime));
+                    item.set_property(properties::RecordedDuration(metadata.duration()));
                 }
             }
 

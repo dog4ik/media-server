@@ -26,10 +26,15 @@ pub enum ClientType {
     Upnp,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case", tag = "stream_type")]
 pub enum Stream {
-    DirectPlay(()),
-    Hls(HlsJobHandle),
+    DirectPlay,
+    Hls {
+        #[serde(skip)]
+        handle: HlsJobHandle,
+        configuration: HlsStreamConfiguration,
+    },
 }
 
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
@@ -58,7 +63,6 @@ pub struct WatchTask {
     pub client_type: ClientType,
     #[serde(skip)]
     pub exit_token: CancellationToken,
-    #[serde(skip)]
     pub stream: crate::watch::Stream,
 }
 
@@ -89,13 +93,13 @@ impl TaskTrait for WatchTask {
 impl WatchTask {
     pub async fn spawn_hls(
         video: &Video,
+        configuration: HlsStreamConfiguration,
         progress_dispatcher: ProgressDispatcher<WatchTask>,
         exit_token: CancellationToken,
         tracker: TaskTracker,
     ) -> HlsJobHandle {
         let task_id = progress_dispatcher.task_id();
         let hls_path = HlsTempPath::new(task_id);
-        let configuration = HlsStreamConfiguration::default();
         hls_stream::job::start(
             video,
             configuration,

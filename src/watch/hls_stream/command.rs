@@ -77,6 +77,8 @@ fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usi
 
 pub fn run(
     video_path: &Path,
+    video_track_idx: usize,
+    audio_track_idx: usize,
     temp_path: &Path,
     task_id: &str,
     start: usize,
@@ -98,6 +100,12 @@ pub fn run(
 
     c.arg("-i");
     c.arg(video_path);
+
+    c.arg("-map");
+    c.arg(format!("0:{video_track_idx}"));
+
+    c.arg("-map");
+    c.arg(format!("0:{audio_track_idx}"));
 
     apply_video_arguments(&mut c, if copy_video { "copy" } else { video_encoder });
     if copy_video {
@@ -151,12 +159,16 @@ pub fn run(
     c.arg(temp_path);
 
     tracing::debug!(
-        "Started hls ffmpeg command | seek_offset={seek_time} | start_segment = {start_number}"
+        audio_codec,
+        video_encoder,
+        seek_offset = seek_time,
+        start_segment = start_number,
+        "Started hls ffmpeg command"
     );
 
     let child = c
         .stderr(Stdio::null())
-        .stdout(Stdio::piped())
+        .stdout(Stdio::null())
         .kill_on_drop(true)
         .spawn()
         .unwrap();

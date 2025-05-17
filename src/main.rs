@@ -17,7 +17,7 @@ use media_server::torrent_index::rutracker::ProvodRuTrackerAdapter;
 use media_server::torrent_index::tpb::TpbApi;
 use media_server::tracing::{LogChannel, init_tracer};
 use media_server::upnp::Upnp;
-use media_server::ws;
+use media_server::{ffmpeg_abi, ws};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -28,6 +28,7 @@ use utoipa_swagger_ui::SwaggerUi;
 
 #[tokio::main]
 async fn main() {
+    let server_start_time = std::time::Instant::now();
     ffmpeg_next::init().expect("ffmpeg abi to initiate");
     ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Panic);
     Args::parse().apply_configuration();
@@ -45,12 +46,12 @@ async fn main() {
 
     match ConfigFile::open_and_read().await {
         Ok(toml) => config::CONFIG.apply_toml_settings(toml),
-        Err(err) => tracing::error!("Error reading config file: {err}"),
+        Err(err) => tracing::error!("Failed to read config file: {err}"),
     };
 
-    let cancellation_token = CancellationToken::new();
+    tokio::spawn(ffmpeg_abi::get_or_init_gpu_accelated_apis());
 
-    let cors = CorsLayer::permissive();
+    let cancellation_token = CancellationToken::new();
 
     let db = Db::connect(&APP_RESOURCES.database_path)
         .await
@@ -382,7 +383,7 @@ async fn main() {
         .nest("/debug", debug_api)
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .merge(upnp)
-        .layer(cors)
+        .layer(CorsLayer::permissive())
         .fallback_service(assets_service)
         .with_state(app_state);
 
@@ -405,6 +406,8 @@ async fn main() {
                 .unwrap();
         });
     }
+
+    tracing::debug!(took = ?server_start_time.elapsed(), "Server is ready");
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {
             cancellation_token.cancel();

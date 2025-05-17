@@ -29,8 +29,7 @@ use tokio_util::codec::{BytesCodec, FramedRead};
 use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
-    ffmpeg_abi::ProbeOutput,
-    ffmpeg_abi::get_metadata,
+    ffmpeg_abi::{Av1Encoder, H264Encoder, HevcEncoder, ProbeOutput, get_metadata},
     utils,
 };
 
@@ -295,6 +294,15 @@ impl Source {
 
     pub fn variant(&self, id: String) -> VariantAsset {
         VariantAsset::new(self.id, id)
+    }
+
+    pub fn find_variant_video(&self, id: &str) -> Option<&Video> {
+        self.variants.iter().find(|v| {
+            v.path()
+                .file_stem()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name == id)
+        })
     }
 
     pub fn subtitles_dir(&self) -> SubtitlesDirAsset {
@@ -988,25 +996,29 @@ pub enum VideoCodec {
 }
 
 impl VideoCodec {
-    pub fn nvidia_hw_accel(&self) -> &str {
+    /// Try to get Hardware accelerated encoder for given API
+    pub async fn gpu_accelerated_encoder(&self) -> Option<&'static str> {
+        let apis = crate::ffmpeg_abi::get_or_init_gpu_accelated_apis().await;
+        let api = *apis.first()?;
         match self {
-            VideoCodec::Hevc => "hevc_nvenc",
-            VideoCodec::H264 => "h264_nvenc",
-            VideoCodec::Av1 => "av1",
-            VideoCodec::VP8 => "vp8",
-            VideoCodec::VP9 => "vp9",
-            VideoCodec::Other(o) => o.as_str(),
+            VideoCodec::Hevc => HevcEncoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::H264 => H264Encoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::Av1 => Av1Encoder::gpu_accelerated(api).map(|e| e.as_str()),
+            VideoCodec::VP8 => None,
+            VideoCodec::VP9 => None,
+            VideoCodec::Other(_) => None,
         }
     }
 
-    pub fn amd_hw_accel(&self) -> &str {
+    /// Encoder with the "best" chances to work.
+    pub fn default_encoder(&self) -> &str {
         match self {
-            VideoCodec::Hevc => "hevc_amf",
-            VideoCodec::H264 => "h264_amf",
-            VideoCodec::Av1 => "av1",
+            VideoCodec::Hevc => HevcEncoder::default().as_str(),
+            VideoCodec::H264 => H264Encoder::default().as_str(),
+            VideoCodec::Av1 => Av1Encoder::default().as_str(),
             VideoCodec::VP8 => "vp8",
             VideoCodec::VP9 => "vp9",
-            VideoCodec::Other(o) => o.as_str(),
+            VideoCodec::Other(o) => o,
         }
     }
 }

@@ -57,6 +57,7 @@ use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
 use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
+use crate::watch::hls_stream::HlsStreamConfiguration;
 use crate::watch::{ClientType, WatchIdentifier, WatchProgress, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
@@ -2793,6 +2794,8 @@ pub struct StartHlsStreamRequest {
     variant_id: Option<uuid::Uuid>,
     video_codec: Option<VideoCodec>,
     audio_codec: Option<AudioCodec>,
+    video_track: Option<usize>,
+    audio_track: Option<usize>,
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
@@ -2837,7 +2840,7 @@ pub async fn start_direct_stream(
         client_agent: user_agent.to_string(),
         client_type: ClientType::WebClient,
         exit_token,
-        stream: crate::watch::Stream::DirectPlay(()),
+        stream: crate::watch::Stream::DirectPlay,
     };
     // Currently there is no point in having cancellation token for direct streams
     let task_id = watch_sessions.start_task(task, None)?;
@@ -2867,12 +2870,52 @@ pub async fn start_hls_stream(
     let tracker = app_state.tasks.tracker.clone();
     let watch_sessions = &app_state.tasks.watch_sessions;
     let source = app_state.get_source_by_id(video_id)?;
-    let total_duration = source.video.fetch_duration().await?;
+    let video = payload
+        .variant_id
+        .and_then(|id| source.find_variant_video(&id.to_string()))
+        .unwrap_or(&source.video);
+
+    let metadata = video.metadata().await?;
+    let video_track = match payload.video_track {
+        Some(t) => metadata.video_streams().nth(t),
+        None => metadata
+            .video_streams()
+            .find(|t| t.is_default())
+            .or(metadata.video_streams().next()),
+    }
+    .map(|t| t.index)
+    .ok_or(AppError::not_found("video stream is not found"))?;
+
+    let audio_track = match payload.audio_track {
+        Some(t) => metadata.audio_streams().nth(t),
+        None => metadata
+            .audio_streams()
+            .find(|t| t.is_default())
+            .or(metadata.audio_streams().next()),
+    }
+    .map(|t| t.index)
+    .ok_or(AppError::not_found("audio stream is not found"))?;
+
+    let total_duration = metadata.duration();
     let exit_token = app_state.tasks.parent_cancellation_token.child_token();
     let task_id = uuid::Uuid::new_v4();
     let identifier = WatchIdentifier { video_id };
     let dispatcher = ProgressDispatcher::<WatchTask>::new(identifier, watch_sessions, task_id);
-    let stream = WatchTask::spawn_hls(&source.video, dispatcher, exit_token.clone(), tracker).await;
+    let configuration = HlsStreamConfiguration::new(
+        payload.video_codec,
+        payload.audio_codec,
+        video_track,
+        audio_track,
+    )
+    .await;
+    let stream = WatchTask::spawn_hls(
+        &video,
+        configuration.clone(),
+        dispatcher,
+        exit_token.clone(),
+        tracker,
+    )
+    .await;
 
     let task = WatchTask {
         video_id,
@@ -2882,7 +2925,10 @@ pub async fn start_hls_stream(
         client_agent: user_agent.to_string(),
         client_type: ClientType::WebClient,
         exit_token: exit_token.clone(),
-        stream: crate::watch::Stream::Hls(stream),
+        stream: crate::watch::Stream::Hls {
+            handle: stream,
+            configuration,
+        },
     };
     watch_sessions.start_with_id(task, task_id, Some(exit_token))?;
     Ok(Json(StartWatchSessionResponse { task_id }))
@@ -2914,8 +2960,8 @@ pub async fn hls_manifest(
                 return None;
             }
             match &v.kind.stream {
-                crate::watch::Stream::DirectPlay(_) => None,
-                crate::watch::Stream::Hls(handle) => Some(handle),
+                crate::watch::Stream::DirectPlay => None,
+                crate::watch::Stream::Hls { handle, .. } => Some(handle),
             }
         })
         .ok_or(AppError::not_found("Hls task not found"))?;
@@ -2950,8 +2996,8 @@ pub async fn hls_init(
                     return None;
                 }
                 match &v.kind.stream {
-                    crate::watch::Stream::DirectPlay(_) => None,
-                    crate::watch::Stream::Hls(handle) => Some(handle),
+                    crate::watch::Stream::DirectPlay => None,
+                    crate::watch::Stream::Hls { handle, .. } => Some(handle),
                 }
             })
             .cloned()
@@ -2993,8 +3039,8 @@ pub async fn hls_segment(
                     return None;
                 }
                 match &v.kind.stream {
-                    crate::watch::Stream::DirectPlay(_) => None,
-                    crate::watch::Stream::Hls(handle) => Some(handle),
+                    crate::watch::Stream::DirectPlay => None,
+                    crate::watch::Stream::Hls { handle, .. } => Some(handle),
                 }
             })
             .cloned()

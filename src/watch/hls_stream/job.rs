@@ -107,6 +107,8 @@ pub async fn start(
     let video_codec_copy = false;
     let child = command::run(
         &target_path,
+        config.video_track,
+        config.audio_track,
         &tmp_path.0,
         &id,
         0,
@@ -115,8 +117,7 @@ pub async fn start(
         avg_framerate,
         config.audio_encoder.as_ref().map_or("copy", String::as_str),
         video_codec_copy,
-    )
-    .unwrap();
+    )?;
 
     let (request_tx, mut request_rx) = mpsc::channel::<Request>(100);
 
@@ -173,7 +174,7 @@ pub async fn start(
 
                     // We have that segment
                     if segments_len > 0 && req.idx >= start_segment && req.idx < start_segment +  segments_len {
-                        tracing::trace!("Requested exisiting segment {}", req.idx);
+                        tracing::trace!("Requested existing segment {}", req.idx);
                         let _ = req.ready.send(());
                         continue;
                     } else if req.idx < start_segment || req.idx > start_segment + segments_len + JOB_RESET_SEGMENT_THRESHOLD {
@@ -181,6 +182,8 @@ pub async fn start(
                         child.kill().await.unwrap();
                         child = command::run(
                             &target_path,
+                            config.video_track,
+                            config.audio_track,
                             &root_path,
                             &id,
                             req.idx,
@@ -197,7 +200,7 @@ pub async fn start(
                         requests.clear();
                         requests.push(req);
                     } else {
-                        // We client seeked outside the range
+                        // client sought outside the range
                         // reset is needed
                         requests.push(req);
                     }
