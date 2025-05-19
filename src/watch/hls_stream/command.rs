@@ -131,9 +131,6 @@ pub(super) fn run(
     c.arg("-i");
     c.arg(video_path);
 
-    c.arg("-map_metadata");
-    c.arg("-1");
-
     c.arg("-map");
     c.arg(format!("0:{video_track_idx}"));
 

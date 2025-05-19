@@ -65,6 +65,7 @@ pub async fn retrieve_keyframes(
         if let Some(frame) = Frame::from_ffprobe_csv_output_line(line) {
             last_frame = Some(frame);
             if frame.is_key {
+                println!("KEYFRAME: {}", frame.time);
                 if let Some(last) = key_frames.last() {
                     let delta = frame.time - last.time;
                     if delta < min_delay {

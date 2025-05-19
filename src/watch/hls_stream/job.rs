@@ -22,7 +22,7 @@ use super::{
 
 use super::manifest::M3U8Manifest;
 
-pub const JOB_RESET_SEGMENT_THRESHOLD: usize = 3;
+pub const JOB_RESET_SEGMENT_THRESHOLD: usize = 6;
 
 #[derive(Debug)]
 pub enum RequestKind {
@@ -139,7 +139,7 @@ pub async fn start(
         {
             Ok(k) => {
                 tracing::debug!("Exracted {} keyframes", k.key_frames.len());
-                M3U8Manifest::from_keyframes(k, &args.task_id)
+                M3U8Manifest::from_keyframes(k, &args.task_id, duration)
             }
             Err(e) => {
                 tracing::error!("Failed to extract keyframes: {e}");
@@ -157,6 +157,8 @@ pub async fn start(
             &args.task_id,
         )
     };
+
+    println!("{}", &playlist.inner);
 
     let playlist = Arc::new(playlist);
 

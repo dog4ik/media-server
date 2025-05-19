@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use super::keyframe::KeyFrames;
 
 #[derive(Debug)]
@@ -16,9 +18,7 @@ impl M3U8Manifest {
     const MANIFEST_HEADER: &'static str = r#"#EXTM3U
 #EXT-X-VERSION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-ALLOW-CACHE:NO
 #EXT-X-PLAYLIST-TYPE:VOD
-#EXT-X-INDEPENDENT-SEGMENTS
 "#;
 
     pub fn from_interval(segment_duration: f64, mut duration: f64, id: &str) -> Self {
@@ -54,7 +54,7 @@ impl M3U8Manifest {
         }
     }
 
-    pub fn from_keyframes(frames: KeyFrames, id: &str) -> Self {
+    pub fn from_keyframes(frames: KeyFrames, id: &str, total_duration: Duration) -> Self {
         use std::fmt::Write;
         // max duration between keyframes
         let mut max_duration = 0.;
@@ -62,14 +62,19 @@ impl M3U8Manifest {
         for (i, key_frame) in frames.key_frames.iter().enumerate() {
             let next = match frames.key_frames.get(i + 1) {
                 Some(f) => f.time,
-                None => frames.last_frame.time,
+                None => total_duration.as_secs_f64(),
             };
             let duration = next - key_frame.time;
             if duration > max_duration {
                 max_duration = duration;
             }
             writeln!(&mut parts, "#EXTINF:{:.6},", duration).unwrap();
-            writeln!(&mut parts, "/api/watch/hls/{id}/segment/{i}").unwrap();
+            writeln!(
+                &mut parts,
+                "/api/watch/hls/{id}/segment/{i}?key_frame={}",
+                key_frame.time
+            )
+            .unwrap();
         }
 
         let mut manifest: String = Self::MANIFEST_HEADER.into();
@@ -95,8 +100,7 @@ impl M3U8Manifest {
 
     pub fn seek_time(&self, segment_idx: usize) -> f64 {
         match &self.manifest_type {
-            // ugly attempt to make -noaccurate_seek to snap back to the closest keyframe
-            ManifestType::Keyframes(frames) => frames.key_frames[segment_idx].time + 0.1,
+            ManifestType::Keyframes(frames) => frames.key_frames[segment_idx].time,
             ManifestType::Interval(i) => i * segment_idx as f64,
         }
     }
