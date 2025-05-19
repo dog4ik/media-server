@@ -18,6 +18,7 @@ impl M3U8Manifest {
 #EXT-X-MEDIA-SEQUENCE:0
 #EXT-X-ALLOW-CACHE:NO
 #EXT-X-PLAYLIST-TYPE:VOD
+#EXT-X-INDEPENDENT-SEGMENTS
 "#;
 
     pub fn from_interval(segment_duration: f64, mut duration: f64, id: &str) -> Self {
@@ -30,8 +31,8 @@ impl M3U8Manifest {
         .unwrap();
         writeln!(
             &mut manifest,
-            "#EXT-X-TARGETDURATION:{:.6}",
-            segment_duration
+            "#EXT-X-TARGETDURATION:{}",
+            segment_duration.round() as u32
         )
         .unwrap();
         let mut i = 0;
@@ -46,7 +47,7 @@ impl M3U8Manifest {
             i += 1;
             duration -= segment_duration;
         }
-        writeln!(&mut manifest, "#EXT-X-ENDLIST").unwrap();
+        write!(&mut manifest, "#EXT-X-ENDLIST").unwrap();
         Self {
             inner: manifest,
             manifest_type: ManifestType::Interval(segment_duration),
@@ -55,7 +56,7 @@ impl M3U8Manifest {
 
     pub fn from_keyframes(frames: KeyFrames, id: &str) -> Self {
         use std::fmt::Write;
-        // max duration between 2 keyframes
+        // max duration between keyframes
         let mut max_duration = 0.;
         let mut parts = String::new();
         for (i, key_frame) in frames.key_frames.iter().enumerate() {
@@ -77,9 +78,15 @@ impl M3U8Manifest {
             r#"#EXT-X-MAP:URI="/api/watch/hls/{id}/init""#
         )
         .unwrap();
-        writeln!(&mut manifest, "#EXT-X-TARGETDURATION:{:.6}", max_duration).unwrap();
-        writeln!(&mut manifest, "{}", parts).unwrap();
-        writeln!(&mut manifest, "#EXT-X-ENDLIST").unwrap();
+        writeln!(
+            &mut manifest,
+            "#EXT-X-TARGETDURATION:{}",
+            max_duration.round() as u32
+        )
+        .unwrap();
+        write!(&mut manifest, "{}", parts).unwrap();
+        write!(&mut manifest, "#EXT-X-ENDLIST").unwrap();
+
         Self {
             inner: manifest,
             manifest_type: ManifestType::Keyframes(frames),
@@ -88,7 +95,8 @@ impl M3U8Manifest {
 
     pub fn seek_time(&self, segment_idx: usize) -> f64 {
         match &self.manifest_type {
-            ManifestType::Keyframes(frames) => frames.key_frames[segment_idx].time,
+            // ugly attempt to make -noaccurate_seek to snap back to the closest keyframe
+            ManifestType::Keyframes(frames) => frames.key_frames[segment_idx].time + 0.1,
             ManifestType::Interval(i) => i * segment_idx as f64,
         }
     }

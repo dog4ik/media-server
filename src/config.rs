@@ -677,7 +677,7 @@ impl ShowFolders {
 /// Path to ffmpeg binary. This ffmpeg binary will be used for media transcoding tasks
 #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = String)]
-pub struct FFmpegPath(PathBuf);
+pub struct FFmpegPath(pub PathBuf);
 impl ConfigValue for FFmpegPath {
     const KEY: Option<&str> = Some("ffmpeg_path");
 }

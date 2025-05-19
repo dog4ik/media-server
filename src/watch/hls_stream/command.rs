@@ -1,10 +1,10 @@
-use std::{path::Path, process::Stdio};
+use std::{path::PathBuf, process::Stdio};
 
 use tokio::process::{self, Command};
 
-pub const DEFAULT_SEGMENT_LENGTH: usize = 3;
+pub const DEFAULT_SEGMENT_LENGTH: usize = 6;
 /// Segment if segment gap is higher than this we start new transcoding job.
-pub const ALLOWED_SEGMENT_GAP: usize = 5;
+pub const ALLOWED_SEGMENT_GAP: usize = 10;
 pub const VIDEO_ENCODER: &str = "libx264";
 pub const AUDIO_CODEC: &str = "aac";
 
@@ -15,11 +15,18 @@ fn apply_video_arguments(c: &mut Command, codec: &str) {
     c.arg("-pix_fmt");
     c.arg("yuv420p");
 
-    c.arg("-flags");
-    c.arg("+cgop");
+    if codec.contains("264") {
+        c.arg("-bsf:v");
+        c.arg("h264_mp4toannexb");
+    }
 
-    c.arg("-g");
-    c.arg("30");
+    if codec != "copy" {
+        c.arg("-flags");
+        c.arg("+cgop");
+
+        c.arg("-g");
+        c.arg("30");
+    }
 }
 
 fn apply_audio_arguments(c: &mut Command, codec: &str) {
@@ -27,8 +34,10 @@ fn apply_audio_arguments(c: &mut Command, codec: &str) {
     c.arg(codec);
 
     if codec == "aac" {
-        c.arg("-bsf:a");
-        c.arg("aac_adtstoasc");
+        c.arg("-ac");
+        c.arg("2");
+        c.arg("-ab");
+        c.arg("256000");
     }
 }
 
@@ -53,6 +62,7 @@ fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usi
         // Unable to force key frames using these encoders, set key frames by GOP.
         "h264_qsv" | "h264_nvenc" | "h264_amf" | "h264_rkmpp" | "hevc_qsv" | "hevc_nvenc"
         | "hevc_rkmpp" | "av1_qsv" | "av1_nvenc" | "av1_amf" | "libsvtav1" => add_gop_args(c),
+
         "libx264" | "libx265" | "h264_vaapi" | "hevc_vaapi" | "av1_vaapi" => {
             add_keyframe_args(c);
             // prevent the libx264 from post processing to break the set keyframe.
@@ -75,31 +85,54 @@ fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usi
     // }
 }
 
-pub fn run(
-    video_path: &Path,
-    video_track_idx: usize,
-    audio_track_idx: usize,
-    temp_path: &Path,
-    task_id: &str,
-    start: usize,
-    seek_to: f64,
-    video_encoder: &str,
-    framerate: Option<usize>,
-    audio_codec: &str,
-    copy_video: bool,
+#[derive(Debug)]
+pub(super) struct CommandArgumentsParams {
+    pub ffmpeg_path: PathBuf,
+    pub video_path: PathBuf,
+    pub video_track_idx: usize,
+    pub audio_track_idx: usize,
+    pub temp_path: PathBuf,
+    pub task_id: String,
+    pub start: usize,
+    pub seek_to: f64,
+    pub video_encoder: String,
+    pub framerate: Option<usize>,
+    pub audio_codec: String,
+    pub copy_video: bool,
+}
+
+pub(super) fn run(
+    CommandArgumentsParams {
+        ffmpeg_path,
+        video_path,
+        video_track_idx,
+        audio_track_idx,
+        temp_path,
+        task_id,
+        start,
+        seek_to,
+        video_encoder,
+        framerate,
+        audio_codec,
+        copy_video,
+    }: &CommandArgumentsParams,
 ) -> anyhow::Result<process::Child> {
-    let mut c = tokio::process::Command::new("ffmpeg");
+    let mut c = tokio::process::Command::new(ffmpeg_path);
     let segment_file_name = format!("{}/%d.mp4", temp_path.display());
-    c.arg("-hide_banner");
-    c.arg("-progress");
-    c.arg("-");
 
     c.arg("-ss");
     let seek_time = format!("{:.6}", seek_to);
     c.arg(&seek_time);
+    c.arg("-noaccurate_seek");
+
+    c.arg("-fflags");
+    c.arg("+genpts");
 
     c.arg("-i");
     c.arg(video_path);
+
+    c.arg("-map_metadata");
+    c.arg("-1");
 
     c.arg("-map");
     c.arg(format!("0:{video_track_idx}"));
@@ -107,21 +140,22 @@ pub fn run(
     c.arg("-map");
     c.arg(format!("0:{audio_track_idx}"));
 
-    apply_video_arguments(&mut c, if copy_video { "copy" } else { video_encoder });
-    if copy_video {
+    apply_video_arguments(&mut c, if *copy_video { "copy" } else { video_encoder });
+    if *copy_video {
         c.arg("-start_at_zero");
     } else {
-        apply_keyframes_arguments(&mut c, video_encoder, framerate);
+        apply_keyframes_arguments(&mut c, video_encoder, *framerate);
     }
     apply_audio_arguments(&mut c, audio_codec);
-    c.arg("-sn");
 
     c.arg("-copyts");
 
     c.arg("-avoid_negative_ts");
     c.arg("disabled");
+
+    c.arg("-sn");
     c.arg("-max_muxing_queue_size");
-    c.arg("1");
+    c.arg("2084");
 
     c.arg("-f");
     c.arg("hls");
@@ -135,12 +169,10 @@ pub fn run(
     c.arg("-hls_segment_type");
     c.arg("fmp4");
     c.arg("-hls_fmp4_init_filename");
-    let init_filename = format!("{}/init.mp4", task_id);
-    c.arg(&init_filename);
+    c.arg(format!("{}/init.mp4", task_id));
 
     c.arg("-start_number");
-    let start_number = start.to_string();
-    c.arg(&start_number);
+    c.arg(start.to_string());
 
     c.arg("-hls_segment_filename");
     c.arg(&segment_file_name);
@@ -151,9 +183,6 @@ pub fn run(
     c.arg("-hls_list_size");
     c.arg("0");
 
-    c.arg("-progress");
-    c.arg("pipe:1");
-
     c.arg("-y");
 
     c.arg(temp_path);
@@ -162,7 +191,7 @@ pub fn run(
         audio_codec,
         video_encoder,
         seek_offset = seek_time,
-        start_segment = start_number,
+        start_segment = start,
         "Started hls ffmpeg command"
     );
 

@@ -6,7 +6,12 @@ use std::{
 use tokio::sync::{mpsc, oneshot};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
-use crate::{library::Video, progress::ProgressDispatcher, watch::WatchTask};
+use crate::{
+    config,
+    library::Video,
+    progress::ProgressDispatcher,
+    watch::{WatchTask, hls_stream::command::CommandArgumentsParams},
+};
 
 use super::{
     HlsStreamConfiguration, HlsTempPath,
@@ -89,6 +94,7 @@ pub async fn start(
     exit_token: CancellationToken,
     tracker: TaskTracker,
 ) -> anyhow::Result<HlsJobHandle> {
+    let ffmpeg_path: config::FFmpegPath = config::CONFIG.get_value();
     let target_path = video.path().to_path_buf();
     let video_metadata = video.metadata().await?;
     let duration = video_metadata.duration();
@@ -101,141 +107,76 @@ pub async fn start(
     if let Some(framerate) = avg_framerate {
         tracing::debug!("Hls job avg framerate: {}/s", framerate);
     }
-    tokio::fs::create_dir_all(&tmp_path.0).await.unwrap();
-    let (_watcher, mut file_change_rx) = spawn_watcher(&tmp_path.0).unwrap();
+    tokio::fs::create_dir_all(&tmp_path.0).await?;
+    let (_watcher, file_change_rx) = spawn_watcher(&tmp_path.0)?;
 
-    let video_codec_copy = false;
-    let child = command::run(
-        &target_path,
-        config.video_track,
-        config.audio_track,
-        &tmp_path.0,
-        &id,
-        0,
-        0.,
-        config.video_encoder.as_ref().map_or("copy", String::as_str),
-        avg_framerate,
-        config.audio_encoder.as_ref().map_or("copy", String::as_str),
-        video_codec_copy,
-    )?;
+    let video_codec_copy = config.video_encoder.is_none();
+    let args = CommandArgumentsParams {
+        ffmpeg_path: ffmpeg_path.0,
+        video_path: target_path,
+        video_track_idx: config.video_track,
+        audio_track_idx: config.audio_track,
+        temp_path: tmp_path.0.to_path_buf(),
+        task_id: id,
+        start: 0,
+        seek_to: 0.,
+        video_encoder: config.video_encoder.unwrap_or("copy".to_string()),
+        framerate: avg_framerate,
+        audio_codec: config.audio_encoder.unwrap_or("copy".to_string()),
+        copy_video: video_codec_copy,
+    };
+    let child = command::run(&args)?;
 
-    let (request_tx, mut request_rx) = mpsc::channel::<Request>(100);
+    let (request_tx, request_rx) = mpsc::channel::<Request>(100);
 
     let playlist = if video_codec_copy {
-        match keyframe::retrieve_keyframes(&target_path, 0, DEFAULT_SEGMENT_LENGTH as f64).await {
+        match keyframe::retrieve_keyframes(
+            &args.video_path,
+            args.video_track_idx,
+            DEFAULT_SEGMENT_LENGTH as f64,
+        )
+        .await
+        {
             Ok(k) => {
                 tracing::debug!("Exracted {} keyframes", k.key_frames.len());
-                M3U8Manifest::from_keyframes(k, &id)
+                M3U8Manifest::from_keyframes(k, &args.task_id)
             }
             Err(e) => {
                 tracing::error!("Failed to extract keyframes: {e}");
                 M3U8Manifest::from_interval(
                     DEFAULT_SEGMENT_LENGTH as f64,
                     duration.as_secs_f64(),
-                    &id,
+                    &args.task_id,
                 )
             }
         }
     } else {
-        M3U8Manifest::from_interval(DEFAULT_SEGMENT_LENGTH as f64, duration.as_secs_f64(), &id)
+        M3U8Manifest::from_interval(
+            DEFAULT_SEGMENT_LENGTH as f64,
+            duration.as_secs_f64(),
+            &args.task_id,
+        )
     };
+
     let playlist = Arc::new(playlist);
 
-    let manifiest = playlist.clone();
-    let root_path = tmp_path.0.clone();
+    let manifest = playlist.clone();
     tracker.spawn(async move {
         let _watcher = _watcher;
-        let mut child = child;
-        let mut requests: Vec<SegmentRequest> = Vec::new();
-        let mut init_waiters: Vec<oneshot::Sender<()>> = Vec::new();
-        let mut start_segment = 0;
-        let mut segments_len = 0;
-        let mut have_init = false;
-        loop {
-            tokio::select! {
-                Some(req) = request_rx.recv() => {
-                    let req = match req.kind {
-                        RequestKind::Init if have_init => {
-                            let _ = req.ready.send(());
-                            continue;
-                        },
-                        RequestKind::Init => {
-                            init_waiters.push(req.ready);
-                            continue;
-                        },
-                        RequestKind::Segment(s) => SegmentRequest { idx: s, ready: req.ready },
-                    };
-
-                    // progress_dispatcher.progress(
-                    //     WatchProgress {
-                    //         current_time: Duration::from_secs((req.idx * DEFAULT_SEGMENT_LENGTH) as u64)
-                    //     }
-                    // );
-
-                    // We have that segment
-                    if segments_len > 0 && req.idx >= start_segment && req.idx < start_segment +  segments_len {
-                        tracing::trace!("Requested existing segment {}", req.idx);
-                        let _ = req.ready.send(());
-                        continue;
-                    } else if req.idx < start_segment || req.idx > start_segment + segments_len + JOB_RESET_SEGMENT_THRESHOLD {
-                        tracing::debug!("Segment {} is out of reach, resetting the job", req.idx);
-                        child.kill().await.unwrap();
-                        child = command::run(
-                            &target_path,
-                            config.video_track,
-                            config.audio_track,
-                            &root_path,
-                            &id,
-                            req.idx,
-                            manifiest.seek_time(req.idx),
-                            config.video_encoder.as_ref().map_or("copy", String::as_str),
-                            avg_framerate,
-                            config.audio_encoder.as_ref().map_or("copy", String::as_str),
-                            video_codec_copy
-                        )
-                        .unwrap();
-
-                        start_segment = req.idx;
-                        segments_len = 0;
-                        requests.clear();
-                        requests.push(req);
-                    } else {
-                        // client sought outside the range
-                        // reset is needed
-                        requests.push(req);
-                    }
-                }
-                Some(path) = file_change_rx.recv() => {
-                    requests.retain(|r| !r.ready.is_closed());
-                    let Ok(new_segment)= path
-                        .file_stem()
-                        .unwrap()
-                        .to_str()
-                        .unwrap()
-                        .parse::<usize>()
-                    else {
-                        debug_assert_eq!(path.file_stem(), Some(std::ffi::OsStr::new("init")));
-                        have_init = true;
-                        for waiter in init_waiters.drain(..) {
-                            let _ = waiter.send(());
-                        }
-                        continue;
-                    };
-                    segments_len = new_segment.saturating_sub(start_segment);
-
-                    while let Some(ready_idx) = requests.iter().position(|r| r.idx < start_segment + segments_len) {
-                        let ready = requests.swap_remove(ready_idx);
-                        let _ = ready.ready.send(());
-                    }
-                }
-                _ = exit_token.cancelled() => {
-                    child.kill().await.unwrap();
-                    progress_dispatcher.finish();
-                    if let Err(e) = clean_up_dir(&root_path).await {
-                        tracing::error!("Failed to clean up hls temp directory: {e}");
-                    }
-                    return;
-                }
+        match run_hls_handler(
+            args,
+            child,
+            manifest,
+            progress_dispatcher,
+            request_rx,
+            file_change_rx,
+            exit_token,
+        )
+        .await
+        {
+            Ok(_) => {}
+            Err(e) => {
+                tracing::error!("Hls task runner errored: {e}");
             }
         }
     });
@@ -245,4 +186,99 @@ pub async fn start(
         manifest: playlist,
         path: tmp_path,
     })
+}
+
+async fn run_hls_handler(
+    mut args: CommandArgumentsParams,
+    mut child: tokio::process::Child,
+    manifest: Arc<M3U8Manifest>,
+    progress_dispatcher: ProgressDispatcher<WatchTask>,
+    mut request_rx: mpsc::Receiver<Request>,
+    mut file_change_rx: mpsc::Receiver<PathBuf>,
+    exit_token: CancellationToken,
+) -> anyhow::Result<()> {
+    let mut requests: Vec<SegmentRequest> = Vec::new();
+    let mut init_waiters: Vec<oneshot::Sender<()>> = Vec::new();
+    let mut start_segment = 0;
+    let mut segments_len = 0;
+    let mut have_init = false;
+    loop {
+        tokio::select! {
+            Some(req) = request_rx.recv() => {
+                let req = match req.kind {
+                    RequestKind::Init if have_init => {
+                        let _ = req.ready.send(());
+                        continue;
+                    },
+                    RequestKind::Init => {
+                        init_waiters.push(req.ready);
+                        continue;
+                    },
+                    RequestKind::Segment(s) => SegmentRequest { idx: s, ready: req.ready },
+                };
+
+                // Incorrect:
+                // progress_dispatcher.progress(
+                //     WatchProgress {
+                //         current_time: Duration::from_secs((req.idx * DEFAULT_SEGMENT_LENGTH) as u64)
+                //     }
+                // );
+                // Requested segment is always ahead of the current watch time
+                // we can calulate default hls.js buffer size though.
+
+                // We have that segment
+                if segments_len > 0 && req.idx >= start_segment && req.idx < start_segment +  segments_len {
+                    tracing::trace!("Requested existing segment {}", req.idx);
+                    let _ = req.ready.send(());
+                    continue;
+                } else if req.idx < start_segment || req.idx > start_segment + segments_len + JOB_RESET_SEGMENT_THRESHOLD {
+                    tracing::debug!("Segment {} is out of reach, resetting the job", req.idx);
+                    child.kill().await?;
+                    while file_change_rx.try_recv().is_ok() {}
+                    args.start = req.idx;
+                    args.seek_to = manifest.seek_time(req.idx);
+                    child = command::run(&args)?;
+
+                    start_segment = req.idx;
+                    segments_len = 0;
+                    requests.push(req);
+                } else {
+                    // client sought outside the range
+                    // reset is needed
+                    requests.push(req);
+                }
+            }
+            Some(path) = file_change_rx.recv() => {
+                requests.retain(|r| !r.ready.is_closed());
+                let Ok(new_segment)= path
+                    .file_stem()
+                    .expect("segment must have a filename")
+                    .to_str()
+                    .expect("utf-8 filename")
+                    .parse::<usize>()
+                else {
+                    debug_assert_eq!(path.file_stem(), Some(std::ffi::OsStr::new("init")));
+                    have_init = true;
+                    for waiter in init_waiters.drain(..) {
+                        let _ = waiter.send(());
+                    }
+                    continue;
+                };
+                segments_len = new_segment - start_segment;
+
+                while let Some(ready_idx) = requests.iter().position(|r| r.idx < start_segment + segments_len) {
+                    let ready = requests.swap_remove(ready_idx);
+                    let _ = ready.ready.send(());
+                }
+            }
+            _ = exit_token.cancelled() => {
+                child.kill().await?;
+                progress_dispatcher.finish();
+                if let Err(e) = clean_up_dir(&args.temp_path).await {
+                    tracing::error!("Failed to clean up hls temp directory: {e}");
+                }
+                return Ok(());
+            }
+        }
+    }
 }

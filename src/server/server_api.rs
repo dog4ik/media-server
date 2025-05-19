@@ -2987,6 +2987,10 @@ pub async fn hls_init(
     Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
 ) -> Result<axum::response::Response, AppError> {
+    use tokio::fs::File;
+    use axum_extra::headers::{HeaderMap, HeaderMapExt};
+    use std::str::FromStr;
+
     let job = {
         let sessions = tasks.watch_sessions.tasks.lock().unwrap();
         sessions
@@ -3003,11 +3007,18 @@ pub async fn hls_init(
             .cloned()
             .ok_or(AppError::not_found("Hls task not found"))?
     };
+    let mut header_map = HeaderMap::new();
     let path = job.request_init().await?;
+    let file = File::open(&path).await?;
+    let metadata = file.metadata().await?;
+    let stream = ReaderStream::new(file);
+    if let Ok(modified) = metadata.modified() {
+        header_map.typed_insert(headers::LastModified::from(modified));
+    }
+    header_map.typed_insert(headers::ContentType::from_str("video/mp4").unwrap());
+    let file_stream = axum_extra::response::FileStream::new(stream).file_name("init.mp4").content_size(metadata.len());
     Ok(
-        axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
-            .await?
-            .into_response(),
+        (header_map, file_stream).into_response()
     )
 }
 
@@ -3030,6 +3041,10 @@ pub async fn hls_segment(
     Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
     State(tasks): State<&'static TaskResource>,
 ) -> Result<axum::response::Response, AppError> {
+    use tokio::fs::File;
+    use axum_extra::headers::{HeaderMap, HeaderMapExt};
+    use std::str::FromStr;
+
     let job = {
         let sessions = tasks.watch_sessions.tasks.lock().unwrap();
         sessions
@@ -3049,10 +3064,17 @@ pub async fn hls_segment(
 
     let path = job.request_segment(index).await?;
 
+    let mut header_map = HeaderMap::new();
+    let file = File::open(&path).await?;
+    let metadata = file.metadata().await?;
+    let stream = ReaderStream::new(file);
+    if let Ok(modified) = metadata.modified() {
+        header_map.typed_insert(headers::LastModified::from(modified));
+    }
+    header_map.typed_insert(headers::ContentType::from_str("video/mp4").unwrap());
+    let file_stream = axum_extra::response::FileStream::new(stream).file_name("init.mp4").content_size(metadata.len());
     Ok(
-        axum_extra::response::FileStream::<ReaderStream<tokio::fs::File>>::from_path(path)
-            .await?
-            .into_response(),
+        (header_map, file_stream).into_response()
     )
 }
 
