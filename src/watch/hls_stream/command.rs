@@ -1,4 +1,8 @@
-use std::{path::PathBuf, process::Stdio};
+use std::{
+    ffi::{OsStr, OsString},
+    path::PathBuf,
+    process::Stdio,
+};
 
 use tokio::process::{self, Command};
 
@@ -8,28 +12,23 @@ pub const ALLOWED_SEGMENT_GAP: usize = 10;
 pub const VIDEO_ENCODER: &str = "libx264";
 pub const AUDIO_CODEC: &str = "aac";
 
-fn apply_video_arguments(c: &mut Command, codec: &str) {
+fn apply_video_arguments(c: &mut A, codec: &str) {
     c.arg("-c:v:0");
     c.arg(codec);
 
     c.arg("-pix_fmt");
     c.arg("yuv420p");
 
-    if codec.contains("264") {
-        c.arg("-bsf:v");
-        c.arg("h264_mp4toannexb");
-    }
-
-    if codec != "copy" {
-        c.arg("-flags");
-        c.arg("+cgop");
-
-        c.arg("-g");
-        c.arg("30");
-    }
+    // if codec != "copy" {
+    //     c.arg("-flags");
+    //     c.arg("+cgop");
+    //
+    //     c.arg("-g");
+    //     c.arg("30");
+    // }
 }
 
-fn apply_audio_arguments(c: &mut Command, codec: &str) {
+fn apply_audio_arguments(c: &mut A, codec: &str) {
     c.arg("-c:a");
     c.arg(codec);
 
@@ -41,13 +40,13 @@ fn apply_audio_arguments(c: &mut Command, codec: &str) {
     }
 }
 
-fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usize>) {
-    let add_keyframe_args = |c: &mut Command| {
+fn apply_keyframes_arguments(c: &mut A, codec: &str, framerate: Option<usize>) {
+    let add_keyframe_args = |c: &mut A| {
         c.arg("-force_key_frames:0");
         c.arg(format!("expr:gte(t,n_forced*{})", DEFAULT_SEGMENT_LENGTH));
     };
 
-    let add_gop_args = |c: &mut Command| {
+    let add_gop_args = |c: &mut A| {
         if let Some(framerate) = framerate {
             c.arg("-g:v:0");
             // Math.ceil it
@@ -101,6 +100,15 @@ pub(super) struct CommandArgumentsParams {
     pub copy_video: bool,
 }
 
+#[derive(Debug, Default)]
+struct A(pub Vec<OsString>);
+impl A {
+    pub fn arg(&mut self, a: impl AsRef<OsStr>) {
+        let s = OsString::from(a.as_ref());
+        self.0.push(s);
+    }
+}
+
 pub(super) fn run(
     CommandArgumentsParams {
         ffmpeg_path,
@@ -117,7 +125,8 @@ pub(super) fn run(
         copy_video,
     }: &CommandArgumentsParams,
 ) -> anyhow::Result<process::Child> {
-    let mut c = tokio::process::Command::new(ffmpeg_path);
+    let mut command = tokio::process::Command::new(ffmpeg_path);
+    let mut c = A::default();
     let segment_file_name = format!("{}/%d.mp4", temp_path.display());
 
     c.arg("-ss");
@@ -150,7 +159,6 @@ pub(super) fn run(
     c.arg("-avoid_negative_ts");
     c.arg("disabled");
 
-    c.arg("-sn");
     c.arg("-max_muxing_queue_size");
     c.arg("2084");
 
@@ -192,7 +200,9 @@ pub(super) fn run(
         "Started hls ffmpeg command"
     );
 
-    let child = c
+    dbg!(&c.0);
+    let child = command
+        .args(c.0)
         .stderr(Stdio::null())
         .stdout(Stdio::null())
         .kill_on_drop(true)

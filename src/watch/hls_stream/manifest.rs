@@ -1,10 +1,12 @@
 use std::time::Duration;
 
+use crate::watch::hls_stream::command::DEFAULT_SEGMENT_LENGTH;
+
 use super::keyframe::KeyFrames;
 
 #[derive(Debug)]
 enum ManifestType {
-    Keyframes(KeyFrames),
+    Keyframes(Vec<f64>),
     Interval(f64),
 }
 
@@ -16,9 +18,9 @@ pub struct M3U8Manifest {
 
 impl M3U8Manifest {
     const MANIFEST_HEADER: &'static str = r#"#EXTM3U
+#EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-VERSION:7
 #EXT-X-MEDIA-SEQUENCE:0
-#EXT-X-PLAYLIST-TYPE:VOD
 "#;
 
     pub fn from_interval(segment_duration: f64, mut duration: f64, id: &str) -> Self {
@@ -54,28 +56,47 @@ impl M3U8Manifest {
         }
     }
 
-    pub fn from_keyframes(frames: KeyFrames, id: &str, total_duration: Duration) -> Self {
+    pub fn from_keyframes(mut frames: KeyFrames, id: &str, total_duration: Duration) -> Self {
         use std::fmt::Write;
         // max duration between keyframes
         let mut max_duration = 0.;
+        let mut last_keyframe = 0.;
+        let mut desired_cut_time = DEFAULT_SEGMENT_LENGTH as f64;
         let mut parts = String::new();
-        for (i, key_frame) in frames.key_frames.iter().enumerate() {
-            let next = match frames.key_frames.get(i + 1) {
-                Some(f) => f.time,
-                None => total_duration.as_secs_f64(),
-            };
-            let duration = next - key_frame.time;
-            if duration > max_duration {
-                max_duration = duration;
+        let mut i = 0;
+        let mut durations = Vec::new();
+        frames.key_frames.retain(|&keyframe_time| {
+            if keyframe_time >= desired_cut_time {
+                let duration = keyframe_time - last_keyframe;
+                durations.push(duration);
+                writeln!(&mut parts, "#EXTINF:{:.6},", duration).unwrap();
+                writeln!(
+                    &mut parts,
+                    "/api/watch/hls/{id}/segment/{i}?key_frame={}",
+                    keyframe_time
+                )
+                .unwrap();
+                if duration > max_duration {
+                    max_duration = duration;
+                }
+                last_keyframe = keyframe_time;
+                desired_cut_time += DEFAULT_SEGMENT_LENGTH as f64;
+                i += 1;
+                true
+            } else {
+                false
             }
-            writeln!(&mut parts, "#EXTINF:{:.6},", duration).unwrap();
-            writeln!(
-                &mut parts,
-                "/api/watch/hls/{id}/segment/{i}?key_frame={}",
-                key_frame.time
-            )
-            .unwrap();
-        }
+        });
+
+        let last_keyframe_duration = total_duration.as_secs_f64() - last_keyframe;
+        durations.push(last_keyframe_duration);
+        writeln!(&mut parts, "#EXTINF:{:.6},", last_keyframe_duration).unwrap();
+        writeln!(
+            &mut parts,
+            "/api/watch/hls/{id}/segment/{i}?key_frame={}",
+            last_keyframe_duration,
+        )
+        .unwrap();
 
         let mut manifest: String = Self::MANIFEST_HEADER.into();
         writeln!(
@@ -94,13 +115,13 @@ impl M3U8Manifest {
 
         Self {
             inner: manifest,
-            manifest_type: ManifestType::Keyframes(frames),
+            manifest_type: ManifestType::Keyframes(durations),
         }
     }
 
     pub fn seek_time(&self, segment_idx: usize) -> f64 {
         match &self.manifest_type {
-            ManifestType::Keyframes(frames) => frames.key_frames[segment_idx].time,
+            ManifestType::Keyframes(durations) => durations[..segment_idx].iter().sum::<f64>() + 0.001,
             ManifestType::Interval(i) => i * segment_idx as f64,
         }
     }

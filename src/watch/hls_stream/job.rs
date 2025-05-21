@@ -79,7 +79,7 @@ impl HlsJobHandle {
     }
 }
 
-pub async fn clean_up_dir(path: &Path) -> std::io::Result<()> {
+async fn cleanup_temp_dir(path: &Path) -> std::io::Result<()> {
     tokio::fs::remove_dir_all(path).await?;
     tracing::debug!(path = %path.display(), "Cleaned up hls temp directory");
     Ok(())
@@ -130,13 +130,7 @@ pub async fn start(
     let (request_tx, request_rx) = mpsc::channel::<Request>(100);
 
     let playlist = if video_codec_copy {
-        match keyframe::retrieve_keyframes(
-            &args.video_path,
-            args.video_track_idx,
-            DEFAULT_SEGMENT_LENGTH as f64,
-        )
-        .await
-        {
+        match keyframe::retrieve_keyframes(&args.video_path, args.video_track_idx).await {
             Ok(k) => {
                 tracing::debug!("Exracted {} keyframes", k.key_frames.len());
                 M3U8Manifest::from_keyframes(k, &args.task_id, duration)
@@ -276,7 +270,7 @@ async fn run_hls_handler(
             _ = exit_token.cancelled() => {
                 child.kill().await?;
                 progress_dispatcher.finish();
-                if let Err(e) = clean_up_dir(&args.temp_path).await {
+                if let Err(e) = cleanup_temp_dir(&args.temp_path).await {
                     tracing::error!("Failed to clean up hls temp directory: {e}");
                 }
                 return Ok(());

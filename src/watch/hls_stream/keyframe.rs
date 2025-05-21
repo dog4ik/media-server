@@ -7,8 +7,7 @@ use crate::config;
 
 #[derive(Debug, Clone)]
 pub struct KeyFrames {
-    pub key_frames: Vec<Frame>,
-    pub last_frame: Frame,
+    pub key_frames: Vec<f64>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -22,17 +21,13 @@ impl Frame {
         let mut split = line.splitn(3, ',');
         let time = split.next()?.parse().ok()?;
         let is_key = split.next()?.starts_with('K');
-        Some(Self {
-            time,
-            is_key,
-        })
+        Some(Self { time, is_key })
     }
 }
 
 pub async fn retrieve_keyframes(
     input_file: impl AsRef<Path>,
     video_track: usize,
-    min_delay: f64,
 ) -> anyhow::Result<KeyFrames> {
     let ffprobe_path: config::FFprobePath = config::CONFIG.get_value();
     let mut cmd = tokio::process::Command::new(ffprobe_path.as_ref());
@@ -59,25 +54,13 @@ pub async fn retrieve_keyframes(
 
     let stdout = child.stdout.take().expect("std out is not taken");
     let mut lines = BufReader::new(stdout).lines();
-    let mut key_frames: Vec<Frame> = Vec::new();
-    let mut last_frame = None;
+    let mut key_frames = Vec::new();
     while let Ok(Some(line)) = lines.next_line().await {
         if let Some(frame) = Frame::from_ffprobe_csv_output_line(line) {
-            last_frame = Some(frame);
             if frame.is_key {
-                println!("KEYFRAME: {}", frame.time);
-                if let Some(last) = key_frames.last() {
-                    let delta = frame.time - last.time;
-                    if delta < min_delay {
-                        continue;
-                    }
-                };
-                key_frames.push(frame);
+                key_frames.push(frame.time);
             }
         };
     }
-    Ok(KeyFrames {
-        key_frames,
-        last_frame: last_frame.expect("at least one frame"),
-    })
+    Ok(KeyFrames { key_frames })
 }
