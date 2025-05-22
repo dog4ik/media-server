@@ -338,7 +338,7 @@ impl TmdbApi {
         let mut episodes_cache = self.episodes_cache.lock().unwrap();
         let show = episodes_cache.get(&tmdb_show_id)?;
         let season = show.get(&season)?;
-        season.get(episode - 1).cloned()
+        season.get(episode.saturating_sub(1)).cloned()
     }
 }
 
