@@ -522,7 +522,7 @@ pub async fn pull_video_subtitle(
 #[derive(Debug, utoipa::ToSchema)]
 pub struct MultipartSubtitles {
     pub language: Option<String>,
-    #[schema(content_media_type = "application/octet-stream", value_type = Vec<u8>)]
+    #[schema(format = Binary, value_type = String, content_media_type = "application/octet-stream")]
     pub subtitles: bytes::Bytes,
 }
 

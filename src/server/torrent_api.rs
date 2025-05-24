@@ -103,7 +103,7 @@ pub struct PriorityPayload {
 pub struct MultipartTorrent {
     #[schema(value_type = Option<String>)]
     save_location: Option<PathBuf>,
-    #[schema(content_media_type = "application/octet-stream", value_type = Vec<u8>)]
+    #[schema(format = Binary, value_type = String, content_media_type = "application/octet-stream")]
     torrent_file: TorrentFile,
 }
 
