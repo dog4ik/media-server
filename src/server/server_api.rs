@@ -14,6 +14,7 @@ use axum::{
     },
 };
 use axum_extra::headers::Range;
+use axum_extra::response::FileStream;
 use axum_extra::{TypedHeader, headers};
 use base64::Engine;
 use serde::ser::SerializeStruct;
@@ -170,7 +171,7 @@ impl DetailedVideo {
         .await?;
 
         let db_subtitles = sqlx::query!(
-            "select id, language, external_path from subtitles where video_id = ?",
+            "SELECT id, language, external_path FROM subtitles WHERE video_id = ?",
             id,
         )
         .fetch_all(&db.pool)
@@ -585,6 +586,9 @@ pub async fn upload_subtitles(
             use std::io::{Error, ErrorKind};
             let mut stream = field.map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
             let output_path = subtitles_asset.path();
+            if let Some(parent) = output_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
+            }
             crate::ffmpeg::convert_and_save_srt(&output_path, &mut stream).await?;
 
             if tx.commit().await.is_err() {
@@ -637,6 +641,7 @@ pub async fn reference_external_subtitles(
     Json(reference): Json<SubtitlesReferencePayload>,
 ) -> Result<(), AppError> {
     if !reference.path.ends_with(".srt") {
+        tracing::trace!(path = reference.path, "Rejecting subtitles reference path");
         return Err(AppError::bad_request("only .srt files can be referenced"));
     }
     let db_subtitles = db::DbSubtitles {
@@ -665,21 +670,23 @@ pub async fn reference_external_subtitles(
     tag = "Subtitles",
 )]
 pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Result<(), AppError> {
-    let mut tx = db.begin().await?;
     let removed_subs = sqlx::query!(
         "DELETE FROM subtitles WHERE id = ? RETURNING video_id, external_path",
         id
     )
-    .fetch_one(&mut *tx)
+    .fetch_one(&db.pool)
     .await?;
 
     // if subtitles are not referenced delete the asset
     if removed_subs.external_path.is_none() {
-        let subtitles_asset = assets::SubtitleAsset::new(removed_subs.video_id, id);
-        subtitles_asset.delete_file().await?;
+        let video_id = removed_subs.video_id;
+        let subtitles_asset = assets::SubtitleAsset::new(video_id, id);
+        subtitles_asset.delete_file().await.inspect_err(|e| {
+            tracing::error!(id, video_id, "Failed to deleted subtitles asset: {e}");
+        })?;
+        tracing::info!(id, video_id, "Deleted subtitles asset");
     }
 
-    tx.commit().await?;
     Ok(())
 }
 
@@ -700,15 +707,23 @@ pub async fn get_subtitles(
     Path(id): Path<i64>,
     State(db): State<Db>,
 ) -> Result<impl IntoResponse, AppError> {
-    let video_id = sqlx::query!("SELECT video_id FROM subtitles WHERE id = ?", id)
-        .fetch_one(&db.pool)
-        .await?
-        .video_id;
+    let (video_id, external_path) = sqlx::query!(
+        "SELECT video_id, external_path FROM subtitles WHERE id = ?",
+        id
+    )
+    .fetch_one(&db.pool)
+    .await
+    .map(|r| (r.video_id, r.external_path.map(PathBuf::from)))?;
 
-    let response = assets::SubtitleAsset::new(video_id, id)
-        .into_response(headers::ContentType::text(), None)
-        .await?;
-    Ok(response)
+    match external_path {
+        Some(p) => Ok(FileStream::<ReaderStream<tokio::fs::File>>::from_path(p)
+            .await?
+            .into_response()),
+        None => Ok(assets::SubtitleAsset::new(video_id, id)
+            .into_response(headers::ContentType::text(), None)
+            .await?
+            .into_response()),
+    }
 }
 
 /// Video stream

@@ -934,6 +934,9 @@ pub async fn convert_and_save_srt(
     mut stream: impl tokio_stream::Stream<Item = std::io::Result<bytes::Bytes>> + Unpin,
 ) -> anyhow::Result<()> {
     let output_path = output_path.as_ref();
+    if let Some(parent) = output_path.parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
     let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
     let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
 
@@ -958,14 +961,16 @@ pub async fn convert_and_save_srt(
         .stdout(Stdio::piped())
         .kill_on_drop(true)
         .spawn()?;
-    let run = async || {
-        let mut stdin = child.stdin.take().expect("not taken");
-        while let Some(Ok(bytes)) = stream.next().await {
-            stdin.write_all(&bytes).await?;
+    let mut run = async || {
+        {
+            let mut stdin = child.stdin.take().expect("not taken");
+            while let Some(Ok(bytes)) = stream.next().await {
+                stdin.write_all(&bytes).await?;
+            }
+            stdin.shutdown().await?;
         }
-        stdin.shutdown().await?;
-        let output = child.wait_with_output().await?;
-        if output.status.success() {
+        let output = child.wait().await?;
+        if output.success() {
             Ok(())
         } else {
             Err(anyhow!("ffmpeg process was unexpectedly terminated"))

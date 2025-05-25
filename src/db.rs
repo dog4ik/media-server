@@ -180,9 +180,10 @@ where
             let mut conn = self.acquire().await?;
             let subtitles_query = sqlx::query!(
                 "INSERT INTO subtitles
-            (language, video_id)
-            VALUES (?, ?) RETURNING id;",
+            (language, external_path, video_id)
+            VALUES (?, ?, ?) RETURNING id;",
                 db_subtitles.language,
+                db_subtitles.external_path,
                 db_subtitles.video_id
             );
             subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -1455,7 +1456,7 @@ pub struct DbSubtitles {
     pub id: Option<i64>,
     pub language: Option<String>,
     /// This is a path "reference" on subtitles file specified by user.
-    /// When this field is not null, subtitles are not stored in the assets directory.
+    /// When this field is present, subtitles are not stored in the server's assets directory.
     pub external_path: Option<String>,
     pub video_id: i64,
 }
