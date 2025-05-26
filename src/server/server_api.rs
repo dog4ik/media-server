@@ -698,7 +698,7 @@ pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Resu
         ("id", description = "subtitles id"),
     ),
     responses(
-        (status = 200, description = "Subtitles stream", body = Vec<u8>),
+        (status = 200, description = "Subtitles stream", body = String),
         (status = 404, description = "Subtitles are not found", body = AppError),
     ),
     tag = "Subtitles",
