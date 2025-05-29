@@ -44,10 +44,15 @@ async fn run_retry_ssdp(
                 Ok(listener) => listener,
                 Err(err) => {
                     tracing::error!(
-                        "Failed to create ssdp listener: {err}, retrying in {:?}",
+                        "Failed to bind ssdp listener: {err}, retrying in {:?}",
                         RETRY_TIME
                     );
-                    sleep_with_cancel(RETRY_TIME, &cancellation_token).await;
+                    tokio::select! {
+                        _ = tokio::time::sleep(RETRY_TIME) => {}
+                        _ = cancellation_token.cancelled() => {
+                            return;
+                        }
+                    }
                     continue;
                 }
             };
