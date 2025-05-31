@@ -17,15 +17,35 @@ pub fn verify_iter_sha1(hash: &[u8; 20], input: impl Iterator<Item = impl AsRef<
     *hash == result
 }
 
-pub fn piece_size(piece_i: usize, piece_length: u32, total_length: u64) -> u64 {
-    let piece_length = piece_length as u64;
-    let total_pieces = total_length.div_ceil(piece_length);
+/// Lazily measures your p length
+#[derive(Debug, Clone)]
+pub struct LengthCalculator {
+    pub total_pieces: usize,
+    /// Default length of a single piece
+    pub piece_length: u32,
+    /// Length of the last piece
+    pub last_length: u32,
+}
 
-    if piece_i == total_pieces as usize - 1 {
-        let md = total_length % piece_length;
-        if md == 0 { piece_length } else { md }
-    } else {
-        piece_length
+impl LengthCalculator {
+    pub fn new(total_size: u64, piece_length: u32) -> Self {
+        let total_pieces = total_size.div_ceil(piece_length as u64) as usize;
+        let last_length = (total_size % piece_length as u64) as u32;
+
+        Self {
+            total_pieces,
+            piece_length,
+            last_length,
+        }
+    }
+
+    /// Length of the piece, with consideration of the last piece
+    pub fn piece_length(&self, piece_i: usize) -> u32 {
+        if piece_i == self.total_pieces as usize - 1 {
+            self.last_length
+        } else {
+            self.piece_length
+        }
     }
 }
 

@@ -16,12 +16,11 @@ use crate::{
     bitfield::BitField,
     protocol::{Hashes, OutputFile},
     scheduler::BLOCK_LENGTH,
+    utils::LengthCalculator,
 };
 
 mod hash_verification;
 pub mod parts;
-
-const HASHER_WORKERS: usize = 6;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StorageErrorKind {
@@ -164,7 +163,7 @@ pub struct TorrentStorage {
     output_dir: PathBuf,
     files: Box<[StorageFile]>,
     piece_length: u64,
-    total_length: u64,
+    piece_length_measurer: LengthCalculator,
     pieces: Hashes,
     bitfield: BitField,
     // Cache of opened file handles
@@ -205,12 +204,13 @@ impl StorageHandle {
             .await
             .unwrap();
     }
-    //pub async fn validate_hash(&self) {
-    //    self.message_tx
-    //        .send(StorageMessage::Validate)
-    //        .await
-    //        .unwrap()
-    //}
+
+    pub async fn validate(&self) {
+        self.message_tx
+            .send(StorageMessage::Validate)
+            .await
+            .unwrap()
+    }
 }
 
 #[derive(Debug)]
@@ -219,10 +219,12 @@ pub enum StorageMessage {
     EnableFile { file_idx: usize },
     DisableFile { file_idx: usize },
     RetrievePiece { piece_i: usize },
+    Validate,
 }
 
 #[derive(Debug)]
 pub enum StorageFeedback {
+    ValidationProgress { piece: usize, is_valid: bool },
     Saved { piece_i: usize },
     Data { piece_i: usize, bytes: Bytes },
 }
@@ -236,26 +238,22 @@ impl TorrentStorage {
         let info = torrent_params.info;
         let output_dir = torrent_params.save_location;
         let bitfield = torrent_params.bitfield;
-        let s = sysinfo::System::new();
-        let workers = s
-            .physical_core_count()
-            .map_or(HASHER_WORKERS, |cores| cores / 2)
-            .max(1);
         let output_files = info.output_files(&output_dir);
         let files = StorageFile::new_files(&output_files, &torrent_params.files);
-        let hasher = Hasher::new(workers);
+        let hasher = Hasher::new();
+        let piece_length_measurer = LengthCalculator::new(info.total_size(), info.piece_length);
 
         Self {
             feedback_tx,
             output_dir,
             files,
             piece_length: info.piece_length as u64,
-            total_length: info.total_size(),
             pieces: info.pieces.clone(),
             bitfield,
             file_handles: FileHandles::new(),
             parts_file,
             hasher,
+            piece_length_measurer,
         }
     }
 
@@ -284,7 +282,7 @@ impl TorrentStorage {
                             break;
                         }
                     },
-                    work_result = self.hasher.recv() => self.handle_hasher_result(work_result).await,
+                    Some(work_result) = self.hasher.join_next() => self.handle_hasher_result(work_result).await,
                 }
             }
         });
@@ -296,7 +294,7 @@ impl TorrentStorage {
         if result.is_verified {
             self.bitfield.add(piece_i).unwrap();
             let start = Instant::now();
-            let save_result = self.save_piece(piece_i, ReadyPiece(result.piece)).await;
+            let save_result = self.save_piece(piece_i, ReadyPiece(result.blocks)).await;
             tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
             match save_result {
                 Ok(_) => {
@@ -347,12 +345,10 @@ impl TorrentStorage {
             StorageMessage::DisableFile { file_idx } => {
                 self.files[file_idx].is_enabled = false;
             }
+            StorageMessage::Validate => {
+                self.revalidate().await;
+            }
         };
-    }
-
-    /// Helper function to get piece length with consideration of the last piece
-    fn piece_length(&self, piece_i: usize) -> u64 {
-        crate::utils::piece_size(piece_i, self.piece_length as u32, self.total_length)
     }
 
     pub async fn enable_file(&mut self, file_idx: usize) {
@@ -381,7 +377,10 @@ impl TorrentStorage {
         blocks: ReadyPiece,
     ) -> Result<(), StorageErrorKind> {
         let piece_length = blocks.len() as u64;
-        debug_assert_eq!(piece_length, self.piece_length(piece_i));
+        debug_assert_eq!(
+            piece_length as u32,
+            self.piece_length_measurer.piece_length(piece_i)
+        );
 
         let piece_start = piece_i as u64 * self.piece_length;
         let piece_end = piece_start + piece_length;
@@ -405,10 +404,6 @@ impl TorrentStorage {
                     .and_then(|i| self.files.get(i))
                     .is_some_and(|prev| prev.end_piece(self.piece_length) == file_start_piece);
                 if border_next || border_prev {
-                    if piece_i as u64 == self.total_length / self.piece_length {
-                        tracing::error!("Skipping the last piece to avoid .parts aligning issues");
-                        continue;
-                    };
                     if let Err(e) = self.parts_file.write_piece(piece_i, &blocks.0).await {
                         tracing::error!("Failed to write piece {piece_i} to the parts file: {e}");
                     };
@@ -416,7 +411,6 @@ impl TorrentStorage {
                 continue;
             }
 
-            let insert_offset = piece_start.saturating_sub(file_start);
             let f = match self.file_handles.opened_files.get_mut(&file_idx) {
                 Some(f) => f,
                 None => {
@@ -435,26 +429,20 @@ impl TorrentStorage {
                     self.file_handles.opened_files.get_mut(&file_idx).unwrap()
                 }
             };
+            let insert_offset = piece_start.saturating_sub(file_start);
             f.seek(SeekFrom::Start(insert_offset)).await?;
 
-            let relative_start = file_start as isize - piece_start as isize;
-            let relative_end = file_end as isize - piece_end as isize;
-
-            let start = if relative_start > 0 {
-                // start is behind file
-                relative_start.abs()
+            let start = if piece_start < file_start {
+                (file_start - piece_start) as usize
             } else {
-                // start is beyond file
                 0
-            } as usize;
-
-            let end = if relative_end < 0 {
-                // end is beyond file
-                piece_length - relative_end.unsigned_abs() as u64
+            };
+            let end = if file_end < piece_end {
+                (piece_length - (piece_end - file_end)) as usize
             } else {
-                // end is behind file
-                piece_length
-            } as usize;
+                piece_length as usize
+            };
+
             blocks.write_to(f, start..end).await?;
         }
         Ok(())
@@ -469,7 +457,7 @@ impl TorrentStorage {
             return Ok(piece);
         }
 
-        let piece_length = self.piece_length(piece_i);
+        let piece_length = self.piece_length_measurer.piece_length(piece_i) as u64;
         let mut bytes = BytesMut::zeroed(piece_length as usize);
 
         let piece_start = piece_i as u64 * self.piece_length;
@@ -513,14 +501,11 @@ impl TorrentStorage {
         Ok(bytes)
     }
 
-    /// Validate torrent contents to make piece bitfield accurate
+    /// Validate torrent contents and correct storage bitfield
     pub async fn revalidate(&mut self) {
         let mut current_piece = 0;
-        let mut verified_pieces = 0;
         let total_pieces = self.pieces.len();
-        let s = sysinfo::System::new();
-        let workers = s.physical_core_count().unwrap_or(4);
-        let mut hasher = Hasher::new(workers);
+        let mut hasher = Hasher::new();
         const CONCURRENCY: usize = 50;
         for _ in 0..CONCURRENCY {
             if let Ok(bytes) = self.retrieve_piece(current_piece).await {
@@ -529,26 +514,31 @@ impl TorrentStorage {
                     piece_i: current_piece,
                     data: vec![bytes],
                 };
-                hasher.pend_job(payload).await;
+                hasher.pend_job(payload);
             } else {
                 self.bitfield.remove(current_piece).unwrap();
-                verified_pieces += 1;
             };
             current_piece += 1;
             if current_piece >= total_pieces {
                 break;
             }
         }
-        loop {
-            let res = hasher.recv().await;
-            verified_pieces += 1;
+
+        while let Some(res) = hasher.join_next().await {
             if res.is_verified {
                 self.bitfield.add(res.piece_i).unwrap();
             }
-
-            if verified_pieces >= total_pieces {
-                break;
-            }
+            if self
+                .feedback_tx
+                .send(Ok(StorageFeedback::ValidationProgress {
+                    piece: res.piece_i,
+                    is_valid: res.is_verified,
+                }))
+                .await
+                .is_err()
+            {
+                return;
+            };
 
             if current_piece < total_pieces {
                 if let Ok(bytes) = self.retrieve_piece(current_piece).await {
@@ -557,10 +547,9 @@ impl TorrentStorage {
                         piece_i: current_piece,
                         data: vec![bytes],
                     };
-                    hasher.pend_job(payload).await;
+                    hasher.pend_job(payload)
                 } else {
                     self.bitfield.remove(current_piece).unwrap();
-                    verified_pieces += 1;
                 }
                 current_piece += 1;
             }
@@ -574,7 +563,7 @@ impl TorrentStorage {
             piece_i,
             data: data.0,
         };
-        self.hasher.pend_job(payload).await
+        self.hasher.pend_job(payload)
     }
 }
 

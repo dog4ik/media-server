@@ -679,7 +679,7 @@ pub async fn get_or_init_gpu_accelated_apis() -> &'static [GpuEncodingApi] {
 fn gpu_accel_apis() -> Vec<GpuEncodingApi> {
     let mut encoders = Vec::new();
     let mut check = |api: GpuEncodingApi, encoder: &str| {
-        match check_encoder_support(encoder) {
+        match check_encoder_support(encoder, api) {
             Ok(_) => {
                 tracing::info!("Supported GPU accelerated encoder {encoder}");
                 encoders.push(api);
@@ -697,7 +697,7 @@ fn gpu_accel_apis() -> Vec<GpuEncodingApi> {
     encoders
 }
 
-fn check_encoder_support(encoder_name: &str) -> anyhow::Result<()> {
+fn check_encoder_support(encoder_name: &str, api: GpuEncodingApi) -> anyhow::Result<()> {
     let codec = ffmpeg_next::codec::encoder::find_by_name(encoder_name)
         .ok_or(anyhow::anyhow!("encoder {encoder_name} is not found"))?;
     let mut encoder = codec::context::Context::new_with_codec(codec)
@@ -706,7 +706,11 @@ fn check_encoder_support(encoder_name: &str) -> anyhow::Result<()> {
 
     encoder.set_width(1280);
     encoder.set_height(720);
-    encoder.set_format(ffmpeg_next::format::Pixel::YUV420P);
+    match api {
+        GpuEncodingApi::Nvenc | GpuEncodingApi::Amf => encoder.set_format(ffmpeg_next::format::Pixel::YUV420P),
+        GpuEncodingApi::Vaapi => encoder.set_format(ffmpeg_next::format::Pixel::VAAPI),
+        GpuEncodingApi::Vulkan => encoder.set_format(ffmpeg_next::format::Pixel::VULKAN),
+    }
     encoder.set_time_base((1, 25));
 
     encoder.open()?;

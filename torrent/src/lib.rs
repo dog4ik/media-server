@@ -74,6 +74,7 @@ pub use download::progress_consumer::FullStateTracker;
 pub use download::progress_consumer::PeerDownloadStats;
 pub use download::progress_consumer::PeerStateChange;
 pub use download::progress_consumer::ProgressConsumer;
+pub use download::progress_consumer::ProgressDownloadState;
 pub use download::progress_consumer::StateChange;
 pub use file::TorrentFile;
 pub use magnet::MagnetLink;

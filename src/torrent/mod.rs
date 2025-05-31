@@ -154,14 +154,14 @@ pub enum DownloadState {
     Seeding,
 }
 
-impl From<torrent::DownloadState> for DownloadState {
-    fn from(value: torrent::DownloadState) -> Self {
+impl From<torrent::ProgressDownloadState> for DownloadState {
+    fn from(value: torrent::ProgressDownloadState) -> Self {
         match value {
-            torrent::DownloadState::Error(e) => Self::Error { error: e.into() },
-            torrent::DownloadState::Validation => Self::Validation,
-            torrent::DownloadState::Paused => Self::Paused,
-            torrent::DownloadState::Pending => Self::Pending,
-            torrent::DownloadState::Seeding => Self::Seeding,
+            torrent::ProgressDownloadState::Error(e) => Self::Error { error: e.into() },
+            torrent::ProgressDownloadState::Validation => Self::Validation,
+            torrent::ProgressDownloadState::Paused => Self::Paused,
+            torrent::ProgressDownloadState::Pending => Self::Pending,
+            torrent::ProgressDownloadState::Seeding => Self::Seeding,
         }
     }
 }

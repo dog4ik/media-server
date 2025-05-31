@@ -15,7 +15,7 @@ use tokio_util::codec::Decoder;
 use crate::{
     CLIENT_NAME,
     bitfield::BitField,
-    download::{Block, PEER_IN_CHANNEL_CAPACITY},
+    download::{Block, DataBlock, PEER_IN_CHANNEL_CAPACITY},
 };
 
 use super::{extension::Extension, pex, ut_metadata};
@@ -437,11 +437,11 @@ impl ExtensionHandshake {
     /// The default in libtorrent was 250.  
     /// However, as of 2025, 250 is outdated, and the new standard is 2000.
     /// TODO: verify the above
-    pub fn request_queue_size(&self) -> Option<i64> {
+    pub fn request_queue_size(&self) -> Option<usize> {
         let serde_bencode::value::Value::Int(size) = self.fields.get("reqq")? else {
             return None;
         };
-        Some(*size)
+        usize::try_from(*size).ok()
     }
 
     /// Client name and version (as a utf-8 string).
@@ -461,34 +461,13 @@ pub enum PeerMessage {
     Unchoke,
     Interested,
     NotInterested,
-    Have {
-        index: u32,
-    },
-    Bitfield {
-        payload: BitField,
-    },
-    Request {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
-    Piece {
-        index: u32,
-        begin: u32,
-        block: Bytes,
-    },
-    Cancel {
-        index: u32,
-        begin: u32,
-        length: u32,
-    },
-    ExtensionHandshake {
-        payload: ExtensionHandshake,
-    },
-    Extension {
-        extension_id: u8,
-        payload: Bytes,
-    },
+    Have { index: u32 },
+    Bitfield { payload: BitField },
+    Request(Block),
+    Piece(DataBlock),
+    Cancel(Block),
+    ExtensionHandshake { payload: Box<ExtensionHandshake> },
+    Extension { extension_id: u8, payload: Bytes },
 }
 
 impl Display for PeerMessage {
@@ -503,30 +482,30 @@ impl Display for PeerMessage {
             PeerMessage::Bitfield { payload } => {
                 write!(f, "Bitfield with length {}", payload.0.len())
             }
-            PeerMessage::Request {
-                index,
-                begin,
+            PeerMessage::Request(Block {
+                piece,
+                offset,
                 length,
-            } => write!(
+            }) => write!(
                 f,
-                "Request for piece {index} with offset {begin} and length {length}"
+                "Request for piece {piece} with offset {offset} and length {length}"
             ),
-            PeerMessage::Piece {
-                index,
-                begin,
+            PeerMessage::Piece(DataBlock {
+                piece,
+                offset,
                 block,
-            } => write!(
+            }) => write!(
                 f,
-                "Block for piece {index} with offset {begin} and length {}",
+                "Block for piece {piece} with offset {offset} and length {}",
                 block.len()
             ),
-            PeerMessage::Cancel {
-                index,
-                begin,
+            PeerMessage::Cancel(Block {
+                piece,
+                offset,
                 length,
-            } => write!(
+            }) => write!(
                 f,
-                "Cancel for piece {index} with offset {begin} and length {length}",
+                "Cancel for piece {piece} with offset {offset} and length {length}",
             ),
             PeerMessage::ExtensionHandshake { .. } => {
                 write!(f, "Extension handshake")
@@ -580,12 +559,12 @@ impl PeerMessage {
                 Ok(PeerMessage::Bitfield { payload })
             }
             6 => {
-                let (index, begin, length) = request_payload(payload)?;
-                Ok(PeerMessage::Request {
-                    index,
+                let (piece, offset, length) = request_payload(payload)?;
+                Ok(PeerMessage::Request(Block {
+                    piece,
+                    offset,
                     length,
-                    begin,
-                })
+                }))
             }
             7 => {
                 let index_buffer: [u8; 4] = payload[0..4].try_into()?;
@@ -593,25 +572,25 @@ impl PeerMessage {
                 let index = u32::from_be_bytes(index_buffer);
                 let begin = u32::from_be_bytes(begin_buffer);
                 let block = frame.slice(9..);
-                Ok(PeerMessage::Piece {
-                    index,
-                    begin,
+                Ok(PeerMessage::Piece(DataBlock {
+                    piece: index,
+                    offset: begin,
                     block,
-                })
+                }))
             }
             8 => {
-                let (index, begin, length) = request_payload(payload)?;
-                Ok(PeerMessage::Cancel {
-                    index,
+                let (piece, offset, length) = request_payload(payload)?;
+                Ok(PeerMessage::Cancel(Block {
+                    piece,
+                    offset,
                     length,
-                    begin,
-                })
+                }))
             }
             20 => {
                 let extension_id = payload[0];
                 if extension_id == 0 {
                     Ok(PeerMessage::ExtensionHandshake {
-                        payload: ExtensionHandshake::from_bytes(payload[1..].as_ref())?,
+                        payload: Box::new(ExtensionHandshake::from_bytes(payload[1..].as_ref())?),
                     })
                 } else {
                     let payload = frame.slice(2..);
@@ -657,37 +636,37 @@ impl PeerMessage {
                 reader.write_u8(5).await?;
                 reader.write_all(&payload.0).await
             }
-            PeerMessage::Request {
-                index,
-                begin,
+            PeerMessage::Request(Block {
+                piece,
+                offset,
                 length,
-            } => {
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + 4).await?;
                 reader.write_u8(6).await?;
-                reader.write_u32(*index).await?;
-                reader.write_u32(*begin).await?;
+                reader.write_u32(*piece).await?;
+                reader.write_u32(*offset).await?;
                 reader.write_u32(*length).await
             }
-            PeerMessage::Piece {
-                index,
-                begin,
+            PeerMessage::Piece(DataBlock {
+                piece,
+                offset,
                 block,
-            } => {
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + block.len() as u32).await?;
                 reader.write_u8(7).await?;
-                reader.write_u32(*index).await?;
-                reader.write_u32(*begin).await?;
+                reader.write_u32(*piece).await?;
+                reader.write_u32(*offset).await?;
                 reader.write_all(block).await
             }
-            PeerMessage::Cancel {
-                index,
-                begin,
+            PeerMessage::Cancel(Block {
+                piece,
+                offset,
                 length,
-            } => {
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + 4).await?;
                 reader.write_u8(8).await?;
-                reader.write_u32(*index).await?;
-                reader.write_u32(*begin).await?;
+                reader.write_u32(*piece).await?;
+                reader.write_u32(*offset).await?;
                 reader.write_u32(*length).await
             }
             PeerMessage::ExtensionHandshake { payload } => {
@@ -706,14 +685,6 @@ impl PeerMessage {
                 reader.write_u8(*extension_id).await?;
                 reader.write_all(payload).await
             }
-        }
-    }
-
-    pub fn request(block: Block) -> Self {
-        Self::Request {
-            index: block.piece,
-            begin: block.offset,
-            length: block.length,
         }
     }
 }
@@ -843,7 +814,11 @@ mod tests {
     use bytes::{Bytes, BytesMut};
     use tokio_util::codec::Decoder;
 
-    use crate::{bitfield::BitField, protocol::peer::canonical_peer_priority};
+    use crate::{
+        bitfield::BitField,
+        download::{Block, DataBlock},
+        protocol::peer::canonical_peer_priority,
+    };
 
     use super::{ExtensionHandshake, MessageFramer, PeerMessage};
 
@@ -866,26 +841,26 @@ mod tests {
             payload: BitField::empty(300),
         })
         .await;
-        re_encode_message(PeerMessage::Request {
-            index: 22,
-            begin: 100,
+        re_encode_message(PeerMessage::Request(Block {
+            piece: 22,
+            offset: 100,
             length: 200,
-        })
+        }))
         .await;
-        re_encode_message(PeerMessage::Piece {
-            index: 22,
-            begin: 100,
+        re_encode_message(PeerMessage::Piece(DataBlock {
+            piece: 22,
+            offset: 100,
             block: Bytes::from_static(&[23, 222, 32]),
-        })
+        }))
         .await;
-        re_encode_message(PeerMessage::Cancel {
-            index: 22,
-            begin: 100,
+        re_encode_message(PeerMessage::Cancel(Block {
+            piece: 22,
+            offset: 100,
             length: 200,
-        })
+        }))
         .await;
         re_encode_message(PeerMessage::ExtensionHandshake {
-            payload: ExtensionHandshake::my_handshake(),
+            payload: Box::new(ExtensionHandshake::my_handshake()),
         })
         .await;
         re_encode_message(PeerMessage::Extension {

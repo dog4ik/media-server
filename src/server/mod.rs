@@ -139,6 +139,7 @@ pub struct SerdeDuration {
         torrent_api::index_magnet_link,
         torrent_api::updates,
         torrent_api::delete_torrent,
+        torrent_api::validate_torrent,
         torrent_api::output_location,
         ws::ws,
     ),
