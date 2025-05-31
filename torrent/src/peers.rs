@@ -7,27 +7,27 @@ use std::{
 
 use anyhow::{Context, anyhow, ensure};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
+    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
     net::TcpStream,
 };
 use tokio_stream::StreamExt;
 use tokio_util::{codec::Framed, sync::CancellationToken};
 use uuid::Uuid;
 
-use crate::bitfield::BitField;
 use crate::protocol::{
     Info,
     extension::Extension,
     peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage},
     ut_metadata::{UtMessage, UtMetadata},
 };
+use crate::{bitfield::BitField, download::DataBlock};
 
 const HEARTBEAT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
 pub struct PeerIPC {
     pub message_tx: flume::Sender<PeerMessage>,
-    pub message_rx: flume::Receiver<PeerMessage>,
+    pub message_rx: flume::Receiver<Vec<PeerMessage>>,
 }
 
 #[derive(Debug, Clone)]
@@ -116,7 +116,7 @@ pub struct Peer {
     pub stream: Framed<TcpStream, MessageFramer>,
     pub bitfield: BitField,
     pub handshake: HandShake,
-    pub extension_handshake: Option<ExtensionHandshake>,
+    pub extension_handshake: Option<Box<ExtensionHandshake>>,
     /// Amount of outstanding block requests to the peer
     pub in_flight: usize,
 }
@@ -147,7 +147,7 @@ impl Peer {
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
             let socket = messages_stream.get_mut();
-            let mut payload = ExtensionHandshake::my_handshake();
+            let mut payload = Box::new(ExtensionHandshake::my_handshake());
             if let Ok(peer_addr) = socket.peer_addr() {
                 payload.set_your_ip(peer_addr.ip());
             }
@@ -228,7 +228,7 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let mut payload = ExtensionHandshake::my_handshake();
+            let mut payload = Box::new(ExtensionHandshake::my_handshake());
             let socket = messages_stream.get_mut();
             if let Ok(peer_ip) = socket.peer_addr() {
                 payload.set_your_ip(peer_ip.ip());
@@ -362,34 +362,36 @@ impl Peer {
             .and_then(|h| h.request_queue_size())
             .unwrap_or(200) as usize;
 
-        let peer_result = loop {
+        let peer_result = 'outer: loop {
             tokio::select! {
                 _ = tokio::time::sleep(HEARTBEAT) => {
                     if let Err(e) = self.send_peer_msg(PeerMessage::HeartBeat).await {
                         break Err(e);
                     }
                 },
-                Ok(command_msg) = ipc.message_rx.recv_async() => {
-                    if matches!(command_msg, PeerMessage::Request { .. }) {
-                        if self.in_flight >= queue_size {
-                            tracing::warn!(len = %messages_buffer.len(), reqq = queue_size, "Pushing into message buffer to respect peer's reqq");
-                            messages_buffer.push(command_msg);
-                            continue;
+                Ok(messages) = ipc.message_rx.recv_async() => {
+                    for command_msg in messages {
+                        if matches!(command_msg, PeerMessage::Request { .. }) {
+                            if self.in_flight >= queue_size {
+                                tracing::warn!(len = %messages_buffer.len(), reqq = queue_size, "Pushing into message buffer to respect peer's reqq");
+                                messages_buffer.push(command_msg);
+                                continue;
+                            }
                         }
-                    }
-                    if let Err(e) = self.send_peer_msg(command_msg).await {
-                        break Err(e);
+                        if let Err(e) = self.send_peer_msg(command_msg).await {
+                            break 'outer Err(e);
+                        }
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
                     if peer_msg == PeerMessage::HeartBeat {
                         continue;
                     }
-                    if let PeerMessage::Piece { index, .. } = peer_msg {
+                    if let PeerMessage::Piece(DataBlock { piece, .. }) = peer_msg {
                         match self.in_flight.checked_sub(1) {
                             Some(v) => self.in_flight = v,
                             None => {
-                                tracing::warn!(ip = %self.ip(), piece = %index, "Received unexpected block");
+                                tracing::warn!(ip = %self.ip(), %piece, "Received unexpected block");
                             },
                         };
                         if let Some(msg) = messages_buffer.pop() {

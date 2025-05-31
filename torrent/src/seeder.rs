@@ -2,7 +2,11 @@ use std::{collections::HashMap, num::NonZeroUsize};
 
 use bytes::Bytes;
 
-use crate::{download::Block, protocol::peer::PeerMessage, storage::StorageHandle};
+use crate::{
+    download::{Block, DataBlock},
+    protocol::peer::PeerMessage,
+    storage::StorageHandle,
+};
 
 const CACHE_SIZE: usize = 4;
 
@@ -65,11 +69,11 @@ impl Seeder {
         {
             let block_offset = retrieve.block_offset as usize;
             let block = piece.slice(block_offset..block_offset + retrieve.block_length as usize);
-            let _ = retrieve.sender.try_send(PeerMessage::Piece {
-                index,
-                begin: retrieve.block_offset,
+            let _ = retrieve.sender.try_send(PeerMessage::Piece(DataBlock {
+                piece: index,
+                offset: retrieve.block_offset,
                 block,
-            });
+            }));
         }
     }
 

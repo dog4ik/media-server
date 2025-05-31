@@ -190,7 +190,7 @@ pub struct ActivePeer {
     pub cancellation_token: CancellationToken,
     pub interested_pieces: InterestedPieces,
     pub handshake: HandShake,
-    pub extension_handshake: Option<ExtensionHandshake>,
+    pub extension_handshake: Option<Box<ExtensionHandshake>>,
     /// Amount of blocks that are in flight
     /// Note that this number is approximate and not accurate because of race conditions between chokes and requests
     pub pending_blocks: usize,
@@ -198,7 +198,7 @@ pub struct ActivePeer {
 
 impl ActivePeer {
     pub fn new(
-        message_tx: flume::Sender<PeerMessage>,
+        message_tx: flume::Sender<Vec<PeerMessage>>,
         message_rx: flume::Receiver<PeerMessage>,
         peer: &Peer,
         interested_pieces: InterestedPieces,

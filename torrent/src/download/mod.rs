@@ -128,6 +128,16 @@ pub struct DataBlock {
     pub block: Bytes,
 }
 
+impl PartialEq for DataBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.piece == other.piece
+            && self.offset == other.offset
+            && self.block.len() == other.block.len()
+    }
+}
+
+impl Eq for DataBlock {}
+
 impl DataBlock {
     pub fn new(piece: u32, offset: u32, block: Bytes) -> Self {
         Self {
@@ -444,31 +454,17 @@ impl Download {
                 PeerMessage::Have { index } => self
                     .scheduler
                     .handle_peer_have_msg(peer_idx, index as usize),
-                PeerMessage::Request {
-                    index,
-                    begin,
-                    length,
-                } => {
-                    let block = Block {
-                        piece: index,
-                        offset: begin,
-                        length,
-                    };
+                PeerMessage::Request(block) => {
                     // NOTE: this is wrong. We should add it when we are sending requested block.
                     self.stat.uploaded += block.length as u64;
                     let peer = &mut self.scheduler.peers[peer_idx];
                     if !peer.out_status.is_choked() && peer.in_status.is_interested() {
                         peer.uploaded += block.length as u64;
-                        tracing::info!("Peer {} requested piece: {index}", peer.ip);
+                        tracing::info!("Peer {} requested piece: {}", peer.ip, block.piece);
                         self.seeder.request_block(block, peer.message_tx.clone());
                     }
                 }
-                PeerMessage::Piece {
-                    index,
-                    begin,
-                    block,
-                } => {
-                    let block = DataBlock::new(index, begin, block);
+                PeerMessage::Piece(block) => {
                     self.scheduler.save_block(peer_idx, block);
                 }
                 PeerMessage::Cancel { .. } => {}
