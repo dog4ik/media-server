@@ -14,20 +14,94 @@ use tokio_stream::StreamExt;
 use tokio_util::{codec::Framed, sync::CancellationToken};
 use uuid::Uuid;
 
-use crate::protocol::{
-    Info,
-    extension::Extension,
-    peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage},
-    ut_metadata::{UtMessage, UtMetadata},
-};
 use crate::{bitfield::BitField, download::DataBlock};
+use crate::{
+    download::Block,
+    protocol::{
+        Info,
+        extension::Extension,
+        peer::{ExtensionHandshake, HandShake, MessageFramer, PeerMessage},
+        ut_metadata::{UtMessage, UtMetadata},
+    },
+};
 
 const HEARTBEAT: Duration = Duration::from_secs(10);
 
 #[derive(Debug)]
+pub enum PeerCommandMessage {
+    HeartBeat,
+    Choke,
+    Unchoke,
+    Interested,
+    NotInterested,
+    Have {
+        index: u32,
+    },
+    Request(Vec<Block>),
+    Piece(Vec<DataBlock>),
+    Cancel(Block),
+    Extension {
+        extension_id: u8,
+        payload: bytes::Bytes,
+    },
+}
+
+impl PeerCommandMessage {
+    pub async fn write_message(self, stream: &mut TcpStream) -> std::io::Result<()> {
+        let mut buf_writer = BufWriter::new(stream);
+        match self {
+            PeerCommandMessage::HeartBeat => {
+                PeerMessage::HeartBeat.write_to(&mut buf_writer).await?
+            }
+            PeerCommandMessage::Choke => PeerMessage::Choke.write_to(&mut buf_writer).await?,
+            PeerCommandMessage::Unchoke => PeerMessage::Unchoke.write_to(&mut buf_writer).await?,
+            PeerCommandMessage::Interested => {
+                PeerMessage::Interested.write_to(&mut buf_writer).await?
+            }
+            PeerCommandMessage::NotInterested => {
+                PeerMessage::NotInterested.write_to(&mut buf_writer).await?
+            }
+            PeerCommandMessage::Have { index } => {
+                PeerMessage::Have { index }
+                    .write_to(&mut buf_writer)
+                    .await?
+            }
+            PeerCommandMessage::Request(blocks) => {
+                for block in blocks {
+                    PeerMessage::Request(block)
+                        .write_to(&mut buf_writer)
+                        .await?;
+                }
+            }
+            PeerCommandMessage::Piece(data_blocks) => {
+                for block in data_blocks {
+                    PeerMessage::Piece(block).write_to(&mut buf_writer).await?;
+                }
+            }
+            PeerCommandMessage::Cancel(block) => {
+                PeerMessage::Cancel(block).write_to(&mut buf_writer).await?
+            }
+            PeerCommandMessage::Extension {
+                extension_id,
+                payload,
+            } => {
+                PeerMessage::Extension {
+                    extension_id,
+                    payload,
+                }
+                .write_to(&mut buf_writer)
+                .await?
+            }
+        };
+        buf_writer.flush().await?;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
 pub struct PeerIPC {
     pub message_tx: flume::Sender<PeerMessage>,
-    pub message_rx: flume::Receiver<Vec<PeerMessage>>,
+    pub message_rx: flume::Receiver<PeerCommandMessage>,
 }
 
 #[derive(Debug, Clone)]
@@ -311,7 +385,7 @@ impl Peer {
         let mut ut_metadata = UtMetadata::empty_from_handshake(handshake)
             .context("peer does not support ut_metadata")?;
         while let Some(msg) = ut_metadata.request_next_block() {
-            self.send_peer_msg(PeerMessage::Extension {
+            self.send_peer_msg(PeerCommandMessage::Extension {
                 extension_id: ut_metadata.metadata_id,
                 payload: msg.as_bytes().into(),
             })
@@ -355,32 +429,28 @@ impl Peer {
         ipc: PeerIPC,
         cancellation_token: CancellationToken,
     ) -> (Uuid, Result<(), PeerError>) {
-        let mut messages_buffer: Vec<PeerMessage> = Vec::new();
-        let queue_size = self
+        let reqq = self
             .extension_handshake
             .as_ref()
             .and_then(|h| h.request_queue_size())
-            .unwrap_or(200) as usize;
+            .unwrap_or(200);
 
         let peer_result = 'outer: loop {
             tokio::select! {
                 _ = tokio::time::sleep(HEARTBEAT) => {
-                    if let Err(e) = self.send_peer_msg(PeerMessage::HeartBeat).await {
+                    if let Err(e) = self.send_peer_msg(PeerCommandMessage::HeartBeat).await {
                         break Err(e);
                     }
                 },
-                Ok(messages) = ipc.message_rx.recv_async() => {
-                    for command_msg in messages {
-                        if matches!(command_msg, PeerMessage::Request { .. }) {
-                            if self.in_flight >= queue_size {
-                                tracing::warn!(len = %messages_buffer.len(), reqq = queue_size, "Pushing into message buffer to respect peer's reqq");
-                                messages_buffer.push(command_msg);
-                                continue;
-                            }
+                Ok(command_msg) = ipc.message_rx.recv_async() => {
+                    if let PeerCommandMessage::Request(blocks) = &command_msg {
+                        self.in_flight += blocks.len();
+                        if self.in_flight > reqq {
+                            tracing::warn!(reqq, in_flight = self.in_flight, "Excessing reqq size");
                         }
-                        if let Err(e) = self.send_peer_msg(command_msg).await {
-                            break 'outer Err(e);
-                        }
+                    }
+                    if let Err(e) = self.send_peer_msg(command_msg).await {
+                        break 'outer Err(e);
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
@@ -394,11 +464,6 @@ impl Peer {
                                 tracing::warn!(ip = %self.ip(), %piece, "Received unexpected block");
                             },
                         };
-                        if let Some(msg) = messages_buffer.pop() {
-                            if let Err(e) = self.send_peer_msg(msg).await {
-                                break Err(e);
-                            }
-                        }
                     }
                     if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
                         tracing::error!(ip = %self.ip(), "Peer -> scheduler channel is closed");
@@ -420,25 +485,16 @@ impl Peer {
         (self.uuid, peer_result)
     }
 
-    pub async fn send_peer_msg(&mut self, peer_msg: PeerMessage) -> Result<(), PeerError> {
-        let msg_description = peer_msg.to_string();
-        let is_block = matches!(peer_msg, PeerMessage::Request { .. });
+    pub async fn send_peer_msg(&mut self, peer_msg: PeerCommandMessage) -> Result<(), PeerError> {
+        let is_block = matches!(peer_msg, PeerCommandMessage::Request(_));
         let socket = self.stream.get_mut();
-        match tokio::time::timeout(Duration::from_secs(2), peer_msg.write_to(socket)).await {
-            Ok(Ok(_)) => {
+        match peer_msg.write_message(socket).await {
+            Ok(_) => {
                 self.in_flight += is_block as usize;
                 Ok(())
             }
-            Err(_) => {
-                tracing::debug!("Peer write timed out");
-                Err(PeerError::timeout(
-                    "failed to send message to peer (Timeout)",
-                ))
-            }
-            Ok(Err(e)) => {
-                tracing::debug!(
-                    "Peer connection error while sending {msg_description} message: {e}"
-                );
+            Err(e) => {
+                tracing::debug!("Peer connection error while sending message: {e}");
                 Err(PeerError::connection("peer connection failed"))
             }
         }

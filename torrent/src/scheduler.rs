@@ -15,8 +15,9 @@ use crate::{
         self, Block, BlockPosition, DataBlock,
         peer::{ActivePeer, Performance},
     },
+    peers::PeerCommandMessage,
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
-    protocol::{Info, OutputFile, peer::PeerMessage, ut_metadata::UtMetadata},
+    protocol::{Info, OutputFile, ut_metadata::UtMetadata},
     utils,
 };
 
@@ -169,12 +170,13 @@ impl PendingPiece {
         Some(block)
     }
 
-    /// Position of the first None block Does not affect the block queue.
+    /// Position of the first None block
+    ///
+    /// Does not affect the block queue.
     pub fn pend_blocks_endgame(
         &mut self,
-        take: usize,
         peer_id: Uuid,
-    ) -> impl IntoIterator<Item = (BlockPosition, &mut PendingBlock)> + use<'_> {
+    ) -> impl Iterator<Item = (BlockPosition, &mut PendingBlock)> + use<'_> {
         let p_length = self.piece_length;
         let amount = self.piece.len();
         self.piece
@@ -195,7 +197,6 @@ impl PendingPiece {
                 };
                 Some((BlockPosition { offset, length }, x))
             })
-            .take(take)
     }
 
     pub fn unpend_block(&mut self, block: BlockPosition) {
@@ -266,7 +267,7 @@ impl Ord for SchedulerPiece {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
-pub struct ScheduleStat {
+struct ScheduleStat {
     pub rational: usize,
     pub sub_rational: usize,
     pub endgame: usize,
@@ -281,6 +282,47 @@ impl ScheduleStat {
 impl Display for ScheduleStat {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.total())
+    }
+}
+
+#[derive(Debug)]
+struct ScheduleBatch {
+    inner: Vec<Block>,
+    schedule_amount: usize,
+}
+
+impl ScheduleBatch {
+    pub fn new(schedule_amount: usize) -> Self {
+        Self {
+            inner: Vec::with_capacity(schedule_amount),
+            schedule_amount,
+        }
+    }
+
+    pub fn add_block(&mut self, block: Block) -> bool {
+        self.inner.push(block);
+        self.inner.len() >= self.schedule_amount
+    }
+
+    /// Amounts of blocks left to schedule to satisfy the schedule amount
+    pub fn left(&self) -> usize {
+        self.schedule_amount - self.inner.len()
+    }
+
+    pub fn send(self, peer: &ActivePeer) -> anyhow::Result<()> {
+        match peer
+            .message_tx
+            .try_send(PeerCommandMessage::Request(self.inner))
+        {
+            Ok(_) => Ok(()),
+            Err(flume::TrySendError::Disconnected(_)) => {
+                Err(anyhow::anyhow!("peer is not available"))
+            }
+            Err(flume::TrySendError::Full(_)) => {
+                peer.cancel_peer();
+                Err(anyhow::anyhow!("peer is not available"))
+            }
+        }
     }
 }
 
@@ -343,10 +385,14 @@ impl Scheduler {
         crate::utils::piece_size(piece_i, self.piece_size, self.total_length) as u32
     }
 
-    fn schedule_next(&mut self, peer_idx: usize, schedule_amount: usize) -> ScheduleStat {
-        let mut took = 0;
+    fn schedule_next(
+        &mut self,
+        peer_idx: usize,
+        schedule_amount: usize,
+    ) -> anyhow::Result<ScheduleStat> {
         let mut stat = ScheduleStat::default();
         let peer = &mut self.peers[peer_idx];
+        let mut schedule_batch = ScheduleBatch::new(schedule_amount);
 
         // First we try to schedule pending pieces.
         // NOTE: We can merge it with endgame mode logic
@@ -361,21 +407,12 @@ impl Scheduler {
                 .expect("index is from pending pieces");
             while let Some(position) = blocks.pend_block(peer.id) {
                 let block = Block::from_position(*i as u32, position);
-                match peer.message_tx.try_send(PeerMessage::request(block)) {
-                    Ok(_) => {
-                        took += 1;
-                        stat.rational += 1;
-                        peer.pending_blocks += 1;
-                        if took == schedule_amount {
-                            return stat;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Send error: {e}");
-                        blocks.unpend_block(position);
-                        return stat;
-                    }
-                }
+                stat.rational += 1;
+                peer.pending_blocks += 1;
+                if schedule_batch.add_block(block) {
+                    schedule_batch.send(&peer)?;
+                    return Ok(stat);
+                };
             }
         }
 
@@ -383,9 +420,6 @@ impl Scheduler {
         // We should try to add new pending piece for this peer.
 
         loop {
-            if took == schedule_amount {
-                return stat;
-            }
             match self.picker.peek_next() {
                 // Next piece is rational and peer can share it
                 Some(new_piece) if peer.bitfield.has(new_piece) => {
@@ -400,21 +434,12 @@ impl Scheduler {
 
                     while let Some(position) = pending_piece.pend_block(peer.id) {
                         let block = Block::from_position(new_piece as u32, position);
-                        match peer.message_tx.try_send(PeerMessage::request(block)) {
-                            Ok(_) => {
-                                took += 1;
-                                stat.rational += 1;
-                                peer.pending_blocks += 1;
-                                if took == schedule_amount {
-                                    return stat;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Send error: {e}");
-                                pending_piece.unpend_block(position);
-                                return stat;
-                            }
-                        }
+                        stat.rational += 1;
+                        peer.pending_blocks += 1;
+                        if schedule_batch.add_block(block) {
+                            schedule_batch.send(&peer)?;
+                            return Ok(stat);
+                        };
                     }
                 }
                 // Peer does not have next piece we should schedule sub-optional blocks
@@ -425,7 +450,8 @@ impl Scheduler {
                 {
                     let Some(new_piece) = self.picker.pop_closest_for_bitfield(&peer.bitfield)
                     else {
-                        return stat;
+                        schedule_batch.send(&peer)?;
+                        return Ok(stat);
                     };
                     let piece_len =
                         utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
@@ -438,21 +464,12 @@ impl Scheduler {
 
                     while let Some(position) = pending_piece.pend_block(peer.id) {
                         let block = Block::from_position(new_piece as u32, position);
-                        match peer.message_tx.try_send(PeerMessage::request(block)) {
-                            Ok(_) => {
-                                took += 1;
-                                stat.sub_rational += 1;
-                                peer.pending_blocks += 1;
-                                if took == schedule_amount {
-                                    return stat;
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Send error: {e}");
-                                pending_piece.unpend_block(position);
-                                return stat;
-                            }
-                        }
+                        stat.sub_rational += 1;
+                        peer.pending_blocks += 1;
+                        if schedule_batch.add_block(block) {
+                            schedule_batch.send(&peer)?;
+                            return Ok(stat);
+                        };
                     }
                 }
                 // Endgame mode
@@ -467,34 +484,30 @@ impl Scheduler {
                     {
                         let pending_piece = &mut self.piece_table[*piece_idx];
                         let pending_blocks = pending_piece.pending_blocks.as_mut().unwrap();
-                        for (position, pending_block) in
-                            pending_blocks.pend_blocks_endgame(schedule_amount - took, peer.id)
+                        for (position, pending_block) in pending_blocks
+                            .pend_blocks_endgame(peer.id)
+                            .take(schedule_batch.left())
                         {
                             let block = Block::from_position(*piece_idx as u32, position);
-                            match peer.message_tx.try_send(PeerMessage::request(block)) {
-                                Ok(_) => {
-                                    took += 1;
-                                    stat.endgame += 1;
-                                    pending_block.scheduled_to.push(peer.id);
-                                    peer.pending_blocks += 1;
-                                }
-                                Err(e) => {
-                                    tracing::error!("Send error: {e}");
-                                    return stat;
-                                }
-                            }
+                            stat.endgame += 1;
+                            pending_block.scheduled_to.push(peer.id);
+                            peer.pending_blocks += 1;
+                            schedule_batch.add_block(block);
                         }
-                        if took == schedule_amount {
-                            return stat;
+                        if schedule_batch.left() == 0 {
+                            schedule_batch.send(&peer)?;
+                            return Ok(stat);
                         }
                     }
                     // We tried everything at this point
-                    return stat;
+                    schedule_batch.send(&peer)?;
+                    return Ok(stat);
                 }
                 // Peer don't have next piece and no sub-optional slots are available
                 // There is nothing we can do but let it go
                 Some(_) => {
-                    return stat;
+                    schedule_batch.send(&peer)?;
+                    return Ok(stat);
                 }
             }
         }
@@ -536,7 +549,14 @@ impl Scheduler {
         } else {
             performance_kb / 5 + 18
         };
-        let schedule_amount = rate.saturating_sub(peer.pending_blocks);
+
+        let reqq = peer
+            .extension_handshake
+            .as_ref()
+            .and_then(|h| h.request_queue_size())
+            .unwrap_or(200);
+        let schedule_amount = rate.min(reqq).saturating_sub(peer.pending_blocks);
+
         if schedule_amount == 0 {
             return;
         }
@@ -544,18 +564,23 @@ impl Scheduler {
         // ISSUE: Check whether we couldn't assign piece to peer because no more blocks available, not because
         // he just doesn't have these pieces
         // If any peer have single piece available he will force scheduling pending_piece
-        let assigned = self.schedule_next(peer_idx, schedule_amount);
+        match self.schedule_next(peer_idx, schedule_amount) {
+            Ok(assigned) => {
+                tracing::debug!(
+                    "Assigned {} rational | {} sub-rational | {} endgame",
+                    assigned.rational,
+                    assigned.sub_rational,
+                    assigned.endgame
+                );
 
-        tracing::debug!(
-            "Assigned {} rational | {} sub-rational | {} endgame",
-            assigned.rational,
-            assigned.sub_rational,
-            assigned.endgame
-        );
-
-        if assigned.total() < schedule_amount {
-            tracing::warn!("Cannot fulfill peer's rate: {assigned}/{schedule_amount}");
-        }
+                if assigned.total() < schedule_amount {
+                    tracing::warn!("Cannot fulfill peer's rate: {assigned}/{schedule_amount}");
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Schedule failed: {e}")
+            }
+        };
     }
 
     /// Add and announce piece to everyone
@@ -567,7 +592,7 @@ impl Scheduler {
             if peer.bitfield.has(piece) {
                 peer.remove_interested(piece);
             }
-            let _ = peer.message_tx.try_send(PeerMessage::Have {
+            let _ = peer.message_tx.try_send(PeerCommandMessage::Have {
                 index: piece as u32,
             });
         }

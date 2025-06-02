@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     ops::Deref,
     path::{Path, PathBuf},
+    sync::Arc,
 };
 
 use serde::{Deserialize, Serialize, de::Visitor};
@@ -193,7 +194,7 @@ impl Info {
 
 /// List of piece hashes
 #[derive(Debug, Clone)]
-pub struct Hashes(pub Vec<[u8; 20]>);
+pub struct Hashes(pub Arc<[[u8; 20]]>);
 
 impl Hashes {
     pub fn get_hash(&self, piece: usize) -> Option<&[u8; 20]> {
@@ -202,7 +203,7 @@ impl Hashes {
 }
 
 impl Deref for Hashes {
-    type Target = Vec<[u8; 20]>;
+    type Target = [[u8; 20]];
 
     fn deref(&self) -> &Self::Target {
         &self.0

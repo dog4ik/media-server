@@ -11,15 +11,12 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    BitField,
-    peers::Peer,
-    protocol::{
+    peers::{Peer, PeerCommandMessage}, protocol::{
         extension::Extension,
         peer::{ExtensionHandshake, HandShake, PeerMessage},
         pex::PexHistory,
         ut_metadata::UtMessage,
-    },
-    scheduler,
+    }, scheduler, BitField
 };
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -171,7 +168,7 @@ impl InterestedPieces {
 pub struct ActivePeer {
     pub id: Uuid,
     pub ip: SocketAddr,
-    pub message_tx: flume::Sender<PeerMessage>,
+    pub message_tx: flume::Sender<PeerCommandMessage>,
     pub message_rx: flume::Receiver<PeerMessage>,
     pub bitfield: BitField,
     /// Our status towards peer
@@ -198,7 +195,7 @@ pub struct ActivePeer {
 
 impl ActivePeer {
     pub fn new(
-        message_tx: flume::Sender<Vec<PeerMessage>>,
+        message_tx: flume::Sender<PeerCommandMessage>,
         message_rx: flume::Receiver<PeerMessage>,
         peer: &Peer,
         interested_pieces: InterestedPieces,
@@ -227,22 +224,22 @@ impl ActivePeer {
     }
 
     pub fn set_out_choke(&mut self, force: bool) -> anyhow::Result<()> {
-        debug_assert!(self.out_status.is_choked() != force);
+        debug_assert_ne!(self.out_status.is_choked(), force);
         tracing::debug!(ip = %self.ip, "Setting out peer choke status to {force:?}");
         match force {
-            true => self.message_tx.try_send(PeerMessage::Choke)?,
-            false => self.message_tx.try_send(PeerMessage::Unchoke)?,
+            true => self.message_tx.try_send(PeerCommandMessage::Choke)?,
+            false => self.message_tx.try_send(PeerCommandMessage::Unchoke)?,
         }
         self.out_status.set_choke(force);
         Ok(())
     }
 
     pub fn set_out_interest(&mut self, force: bool) -> anyhow::Result<()> {
-        debug_assert!(self.out_status.is_interested() != force);
+        debug_assert_ne!(self.out_status.is_interested(), force);
         tracing::debug!(ip = %self.ip, "Setting out peer interested status to {force:?}");
         match force {
-            true => self.message_tx.try_send(PeerMessage::Interested)?,
-            false => self.message_tx.try_send(PeerMessage::NotInterested)?,
+            true => self.message_tx.try_send(PeerCommandMessage::Interested)?,
+            false => self.message_tx.try_send(PeerCommandMessage::NotInterested)?,
         }
         self.out_status.set_interest(force);
         Ok(())
@@ -257,7 +254,7 @@ impl ActivePeer {
             .dict
             .get(T::NAME)
             .context("extension is not supported by peer")?;
-        let extension_message = PeerMessage::Extension {
+        let extension_message = PeerCommandMessage::Extension {
             extension_id,
             payload: msg.into(),
         };
@@ -298,7 +295,7 @@ impl ActivePeer {
         writer.write_all(&msg)?;
         writer.write_all(&piece)?;
 
-        self.message_tx.try_send(PeerMessage::Extension {
+        self.message_tx.try_send(PeerCommandMessage::Extension {
             extension_id,
             payload: writer.into_inner().freeze(),
         })?;

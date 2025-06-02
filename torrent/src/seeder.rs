@@ -4,7 +4,7 @@ use bytes::Bytes;
 
 use crate::{
     download::{Block, DataBlock},
-    protocol::peer::PeerMessage,
+    peers::PeerCommandMessage,
     storage::StorageHandle,
 };
 
@@ -14,11 +14,11 @@ const CACHE_SIZE: usize = 4;
 struct Retrieve {
     block_offset: u32,
     block_length: u32,
-    sender: flume::Sender<PeerMessage>,
+    sender: flume::Sender<PeerCommandMessage>,
 }
 
 impl Retrieve {
-    fn new(block: Block, sender: flume::Sender<PeerMessage>) -> Self {
+    fn new(block: Block, sender: flume::Sender<PeerCommandMessage>) -> Self {
         Self {
             block_offset: block.offset,
             block_length: block.length,
@@ -46,7 +46,7 @@ impl Seeder {
     pub fn request_block(
         &mut self,
         block: Block,
-        sender: flume::Sender<PeerMessage>,
+        sender: flume::Sender<PeerCommandMessage>,
     ) -> Option<Bytes> {
         if let Some(cache_piece) = self.piece_cache.get(&block.piece) {
             return Some(cache_piece.slice(block.range()));
@@ -69,11 +69,13 @@ impl Seeder {
         {
             let block_offset = retrieve.block_offset as usize;
             let block = piece.slice(block_offset..block_offset + retrieve.block_length as usize);
-            let _ = retrieve.sender.try_send(PeerMessage::Piece(DataBlock {
-                piece: index,
-                offset: retrieve.block_offset,
-                block,
-            }));
+            let _ = retrieve
+                .sender
+                .try_send(PeerCommandMessage::Piece(vec![DataBlock {
+                    piece: index,
+                    offset: retrieve.block_offset,
+                    block,
+                }]));
         }
     }
 
@@ -82,7 +84,7 @@ impl Seeder {
     }
 
     #[allow(unused)]
-    pub fn cancel_retrieve(&self, piece_i: usize, sender: &flume::Sender<PeerMessage>) {
+    pub fn cancel_retrieve(&self, piece_i: usize, sender: &flume::Sender<PeerCommandMessage>) {
         let find_peer = |r: &Vec<Retrieve>| r.iter().any(|c| c.sender.same_channel(sender));
         if self.pending_retrieves.get(&piece_i).is_some_and(find_peer) {}
     }

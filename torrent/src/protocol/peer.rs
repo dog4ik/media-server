@@ -437,11 +437,11 @@ impl ExtensionHandshake {
     /// The default in libtorrent was 250.  
     /// However, as of 2025, 250 is outdated, and the new standard is 2000.
     /// TODO: verify the above
-    pub fn request_queue_size(&self) -> Option<i64> {
+    pub fn request_queue_size(&self) -> Option<usize> {
         let serde_bencode::value::Value::Int(size) = self.fields.get("reqq")? else {
             return None;
         };
-        Some(*size)
+        usize::try_from(*size).ok()
     }
 
     /// Client name and version (as a utf-8 string).
@@ -482,16 +482,28 @@ impl Display for PeerMessage {
             PeerMessage::Bitfield { payload } => {
                 write!(f, "Bitfield with length {}", payload.0.len())
             }
-            PeerMessage::Request(Block { piece, offset, length}) => write!(
+            PeerMessage::Request(Block {
+                piece,
+                offset,
+                length,
+            }) => write!(
                 f,
                 "Request for piece {piece} with offset {offset} and length {length}"
             ),
-            PeerMessage::Piece(DataBlock { piece, offset, block }) => write!(
+            PeerMessage::Piece(DataBlock {
+                piece,
+                offset,
+                block,
+            }) => write!(
                 f,
                 "Block for piece {piece} with offset {offset} and length {}",
                 block.len()
             ),
-            PeerMessage::Cancel(Block { piece, offset, length }) => write!(
+            PeerMessage::Cancel(Block {
+                piece,
+                offset,
+                length,
+            }) => write!(
                 f,
                 "Cancel for piece {piece} with offset {offset} and length {length}",
             ),
@@ -548,7 +560,7 @@ impl PeerMessage {
             }
             6 => {
                 let (piece, offset, length) = request_payload(payload)?;
-                Ok(PeerMessage::Request (Block {
+                Ok(PeerMessage::Request(Block {
                     piece,
                     offset,
                     length,
@@ -568,7 +580,11 @@ impl PeerMessage {
             }
             8 => {
                 let (piece, offset, length) = request_payload(payload)?;
-                Ok(PeerMessage::Cancel(Block { piece, offset, length }))
+                Ok(PeerMessage::Cancel(Block {
+                    piece,
+                    offset,
+                    length,
+                }))
             }
             20 => {
                 let extension_id = payload[0];
@@ -620,21 +636,33 @@ impl PeerMessage {
                 reader.write_u8(5).await?;
                 reader.write_all(&payload.0).await
             }
-            PeerMessage::Request(Block { piece, offset, length}) => {
+            PeerMessage::Request(Block {
+                piece,
+                offset,
+                length,
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + 4).await?;
                 reader.write_u8(6).await?;
                 reader.write_u32(*piece).await?;
                 reader.write_u32(*offset).await?;
                 reader.write_u32(*length).await
             }
-            PeerMessage::Piece(DataBlock { piece, offset, block }) => {
+            PeerMessage::Piece(DataBlock {
+                piece,
+                offset,
+                block,
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + block.len() as u32).await?;
                 reader.write_u8(7).await?;
                 reader.write_u32(*piece).await?;
                 reader.write_u32(*offset).await?;
                 reader.write_all(block).await
             }
-            PeerMessage::Cancel(Block { piece, offset, length }) => {
+            PeerMessage::Cancel(Block {
+                piece,
+                offset,
+                length,
+            }) => {
                 write_len(&mut reader, 1 + 4 + 4 + 4).await?;
                 reader.write_u8(8).await?;
                 reader.write_u32(*piece).await?;
@@ -658,10 +686,6 @@ impl PeerMessage {
                 reader.write_all(payload).await
             }
         }
-    }
-
-    pub fn request(block: Block) -> Self {
-        Self::Request(block)
     }
 }
 
@@ -790,7 +814,11 @@ mod tests {
     use bytes::{Bytes, BytesMut};
     use tokio_util::codec::Decoder;
 
-    use crate::{bitfield::BitField, download::{Block, DataBlock}, protocol::peer::canonical_peer_priority};
+    use crate::{
+        bitfield::BitField,
+        download::{Block, DataBlock},
+        protocol::peer::canonical_peer_priority,
+    };
 
     use super::{ExtensionHandshake, MessageFramer, PeerMessage};
 
@@ -813,7 +841,7 @@ mod tests {
             payload: BitField::empty(300),
         })
         .await;
-        re_encode_message(PeerMessage::Request(Block{
+        re_encode_message(PeerMessage::Request(Block {
             piece: 22,
             offset: 100,
             length: 200,
@@ -825,7 +853,7 @@ mod tests {
             block: Bytes::from_static(&[23, 222, 32]),
         }))
         .await;
-        re_encode_message(PeerMessage::Cancel(Block{
+        re_encode_message(PeerMessage::Cancel(Block {
             piece: 22,
             offset: 100,
             length: 200,

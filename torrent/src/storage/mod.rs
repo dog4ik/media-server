@@ -21,8 +21,6 @@ use crate::{
 mod hash_verification;
 pub mod parts;
 
-const HASHER_WORKERS: usize = 6;
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StorageErrorKind {
     Fs(std::io::ErrorKind),
@@ -236,14 +234,9 @@ impl TorrentStorage {
         let info = torrent_params.info;
         let output_dir = torrent_params.save_location;
         let bitfield = torrent_params.bitfield;
-        let s = sysinfo::System::new();
-        let workers = s
-            .physical_core_count()
-            .map_or(HASHER_WORKERS, |cores| cores / 2)
-            .max(1);
         let output_files = info.output_files(&output_dir);
         let files = StorageFile::new_files(&output_files, &torrent_params.files);
-        let hasher = Hasher::new(workers);
+        let hasher = Hasher::new();
 
         Self {
             feedback_tx,
@@ -284,7 +277,7 @@ impl TorrentStorage {
                             break;
                         }
                     },
-                    work_result = self.hasher.recv() => self.handle_hasher_result(work_result).await,
+                    Some(work_result) = self.hasher.join_next() => self.handle_hasher_result(work_result).await,
                 }
             }
         });
@@ -296,7 +289,7 @@ impl TorrentStorage {
         if result.is_verified {
             self.bitfield.add(piece_i).unwrap();
             let start = Instant::now();
-            let save_result = self.save_piece(piece_i, ReadyPiece(result.piece)).await;
+            let save_result = self.save_piece(piece_i, ReadyPiece(result.blocks)).await;
             tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
             match save_result {
                 Ok(_) => {
@@ -513,14 +506,11 @@ impl TorrentStorage {
         Ok(bytes)
     }
 
-    /// Validate torrent contents to make piece bitfield accurate
+    /// Validate torrent contents and correct storage bitfield
     pub async fn revalidate(&mut self) {
         let mut current_piece = 0;
-        let mut verified_pieces = 0;
         let total_pieces = self.pieces.len();
-        let s = sysinfo::System::new();
-        let workers = s.physical_core_count().unwrap_or(4);
-        let mut hasher = Hasher::new(workers);
+        let mut hasher = Hasher::new();
         const CONCURRENCY: usize = 50;
         for _ in 0..CONCURRENCY {
             if let Ok(bytes) = self.retrieve_piece(current_piece).await {
@@ -532,22 +522,16 @@ impl TorrentStorage {
                 hasher.pend_job(payload).await;
             } else {
                 self.bitfield.remove(current_piece).unwrap();
-                verified_pieces += 1;
             };
             current_piece += 1;
             if current_piece >= total_pieces {
                 break;
             }
         }
-        loop {
-            let res = hasher.recv().await;
-            verified_pieces += 1;
+
+        while let Some(res) = hasher.join_next().await {
             if res.is_verified {
                 self.bitfield.add(res.piece_i).unwrap();
-            }
-
-            if verified_pieces >= total_pieces {
-                break;
             }
 
             if current_piece < total_pieces {
@@ -560,7 +544,6 @@ impl TorrentStorage {
                     hasher.pend_job(payload).await;
                 } else {
                     self.bitfield.remove(current_piece).unwrap();
-                    verified_pieces += 1;
                 }
                 current_piece += 1;
             }
