@@ -22,7 +22,7 @@ use crate::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
-    utils,
+    utils::{self, LengthCalculator},
 };
 
 pub const ID: [u8; 20] = *b"00112233445566778899";
@@ -248,11 +248,12 @@ impl DownloadStat {
         let piece_len = info.piece_length;
         let total_len = info.total_size();
         let mut downloaded = 0;
+        let measurer = LengthCalculator::new(total_len, piece_len);
         for piece_i in bitfield.pieces() {
             if piece_i == total_pieces - 1 {
-                downloaded += utils::piece_size(piece_i, piece_len, total_len)
+                downloaded += measurer.piece_length(piece_i) as u64;
             } else {
-                downloaded += piece_len as u64
+                downloaded += piece_len as u64;
             }
         }
         Self {

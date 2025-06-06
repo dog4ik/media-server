@@ -9,8 +9,9 @@ use tokio::{
     io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::Info;
+use crate::{Info, utils::LengthCalculator};
 
+/// My attpmpt to store only parts of piece that are not in enabled files in .parts file
 #[allow(unused)]
 mod unstable {
     use std::io::SeekFrom;
@@ -257,12 +258,12 @@ mod unstable {
 pub struct PartsFile {
     pieces: Vec<usize>,
     file_location: PathBuf,
-    piece_length: u64,
+    piece_length_measurer: LengthCalculator,
 }
 
 impl PartsFile {
     async fn open_file(&self) -> std::io::Result<fs::File> {
-        tracing::debug!("Opening .parts file: {}", self.file_location.display());
+        tracing::debug!(path = %self.file_location.display(), pieces_amount = self.pieces.len(), "Opening .parts file");
         fs::OpenOptions::new()
             .write(true)
             .read(true)
@@ -272,7 +273,7 @@ impl PartsFile {
     }
 
     pub async fn init(info: &Info, save_location: &Path) -> anyhow::Result<Self> {
-        let piece_length = info.piece_length as u64;
+        let measurer = LengthCalculator::new(info.total_size(), info.piece_length);
         let file_location = save_location.join(format!(".{}.parts", info.hex_hash()));
         let mut file = match fs::File::open(&file_location).await {
             Ok(f) => f,
@@ -280,7 +281,7 @@ impl PartsFile {
                 return Ok(Self {
                     pieces: Vec::new(),
                     file_location,
-                    piece_length,
+                    piece_length_measurer: measurer,
                 });
             }
             Err(e) => Err(e)?,
@@ -289,16 +290,12 @@ impl PartsFile {
 
         let mut pieces = Vec::new();
 
-        anyhow::ensure!(
-            metadata.len() % (4 + piece_length) == 0,
-            "parts file is not aligned"
-        );
-
         let mut position = 0;
         while position < metadata.len() {
             file.seek(SeekFrom::Start(position)).await?;
-            let piece = file.read_u32().await?;
-            pieces.push(piece as usize);
+            let piece = file.read_u32().await? as usize;
+            let piece_length = measurer.piece_length(piece) as u64;
+            pieces.push(piece);
             position += 4 + piece_length;
         }
 
@@ -306,17 +303,18 @@ impl PartsFile {
 
         Ok(Self {
             pieces,
-            piece_length,
             file_location,
+            piece_length_measurer: measurer,
         })
     }
 
     pub async fn write_piece(&mut self, piece_i: usize, piece: &[Bytes]) -> anyhow::Result<()> {
         debug_assert_eq!(
-            self.piece_length,
-            piece.iter().map(|p| p.len() as u64).sum::<u64>(),
+            self.piece_length_measurer.piece_length(piece_i),
+            piece.iter().map(|p| p.len() as u32).sum::<u32>(),
             "piece {piece_i} has unexpected length that will ruin alignment of .parts file",
         );
+
         if self.pieces.contains(&piece_i) {
             tracing::error!("Attempt to write duplicate piece {piece_i} into .parts file");
             return Ok(());
@@ -334,17 +332,22 @@ impl PartsFile {
     }
 
     pub async fn read_piece(&mut self, piece_i: usize) -> anyhow::Result<Bytes> {
-        let Some(idx) = self.pieces.iter().position(|p| *p == piece_i) else {
-            anyhow::bail!("piece {piece_i} is not in parts file");
-        };
-        tracing::debug!("Read piece {piece_i} from .parts file");
-        let position = idx as u64 * (4 + self.piece_length);
-        let mut file = self.open_file().await?;
-        file.seek(SeekFrom::Start(position)).await?;
-        let idx = file.read_u32().await?;
-        anyhow::ensure!(idx == piece_i as u32);
-        let mut piece = BytesMut::zeroed(self.piece_length as usize);
-        file.read_exact(&mut piece).await?;
-        Ok(piece.into())
+        let mut read_position = 0;
+        for &piece in &self.pieces {
+            let piece_length = self.piece_length_measurer.piece_length(piece);
+            if piece == piece_i {
+                tracing::debug!("Read piece {piece_i} from .parts file");
+                let mut file = self.open_file().await?;
+                file.seek(SeekFrom::Start(read_position)).await?;
+                let idx = file.read_u32().await?;
+                anyhow::ensure!(idx == piece_i as u32);
+                let mut piece = BytesMut::zeroed(piece_length as usize);
+                file.read_exact(&mut piece).await?;
+                return Ok(piece.into());
+            } else {
+                read_position += 4 + piece_length as u64;
+            }
+        }
+        Err(anyhow::anyhow!("piece {piece_i} is not found"))
     }
 }

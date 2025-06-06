@@ -3,7 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use crate::{BitField, Priority, Status, TrackerStatus};
+use crate::{BitField, DownloadError, Priority, Status, TrackerStatus};
 
 use super::DownloadState;
 
@@ -28,7 +28,7 @@ pub enum PeerStateChange {
 #[derive(Debug, Clone, PartialEq)]
 pub enum StateChange {
     FinishedPiece(usize),
-    DownloadStateChange(DownloadState),
+    DownloadStateChange(ProgressDownloadState),
     TrackerAnnounce(String),
     FilePriorityChange {
         file_idx: usize,
@@ -41,6 +41,27 @@ pub enum StateChange {
     ValidationResult {
         bitfield: Vec<u8>,
     },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ProgressDownloadState {
+    Error(DownloadError),
+    Validation,
+    Paused,
+    Pending,
+    Seeding,
+}
+
+impl From<DownloadState> for ProgressDownloadState {
+    fn from(value: DownloadState) -> Self {
+        match value {
+            DownloadState::Error(download_error) => Self::Error(download_error),
+            DownloadState::Validation { .. } => Self::Validation,
+            DownloadState::Paused => Self::Paused,
+            DownloadState::Pending => Self::Pending,
+            DownloadState::Seeding => Self::Seeding,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,7 +107,7 @@ pub struct FullState {
     pub peers: Vec<FullStatePeer>,
     pub files: Vec<FullStateFile>,
     pub bitfield: BitField,
-    pub state: DownloadState,
+    pub state: ProgressDownloadState,
     pub pending_pieces: Vec<usize>,
     pub tick_num: usize,
 }

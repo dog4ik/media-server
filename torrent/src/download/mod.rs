@@ -264,6 +264,11 @@ impl PeerConnector {
         }
         None
     }
+
+    pub fn pending_amount(&self) -> usize {
+        debug_assert_eq!(self.join_set.len(), self.pending_ips.len());
+        self.join_set.len()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -284,7 +289,9 @@ impl Display for DownloadError {
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum DownloadState {
     Error(DownloadError),
-    Validation,
+    Validation {
+        validated_amount: usize,
+    },
     Paused,
     #[default]
     Pending,
@@ -296,7 +303,9 @@ impl DownloadState {
     /// All peer connections should be dropped and no messages should be received / send.
     pub fn is_paused(&self) -> bool {
         match self {
-            DownloadState::Error(_) | DownloadState::Validation | DownloadState::Paused => true,
+            DownloadState::Error(_) | DownloadState::Validation { .. } | DownloadState::Paused => {
+                true
+            }
             DownloadState::Pending | DownloadState::Seeding => false,
         }
     }
@@ -306,7 +315,7 @@ impl Display for DownloadState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             DownloadState::Error(e) => write!(f, "Error: {e}"),
-            DownloadState::Validation => write!(f, "Validation"),
+            DownloadState::Validation { .. } => write!(f, "Validation"),
             DownloadState::Paused => write!(f, "Paused"),
             DownloadState::Pending => write!(f, "Pending"),
             DownloadState::Seeding => write!(f, "Seeding"),
@@ -512,26 +521,16 @@ impl Download {
     }
 
     fn handle_pex_message(&mut self, payload: Bytes) -> anyhow::Result<()> {
-        let info_hash = self.info_hash;
         let pex_message = PexMessage::from_bytes(&payload).context("parse pex message")?;
         tracing::debug!(
             "Received {} new peers from pex message",
             pex_message.added.len()
         );
         // put failed ips in set
-        for addr in pex_message
-            .added
-            .into_iter()
-            .filter_map(|a| {
-                (!self.scheduler.peers.iter().any(|p| p.ip == a.addr)).then_some(a.addr)
-            })
-            .take(
-                self.session
-                    .max_connections_per_torrent()
-                    .saturating_sub(self.scheduler.peers.len()),
-            )
-        {
-            self.peer_connector.connect(addr, info_hash);
+        for addr in pex_message.added.into_iter().filter_map(|a| {
+            (!self.scheduler.peers.iter().any(|p| p.ip == a.addr)).then_some(a.addr)
+        }) {
+            self.peer_storage.add(addr);
         }
         Ok(())
     }
@@ -575,106 +574,14 @@ impl Download {
                 self.handle_peer_join(peer);
             }
 
-            if self.state.is_paused() {
-                tokio::select! {
-                    // we must tick here
-                    _ = tick_interval.tick() => {}
-                    Some(command) = commands_rx.recv() => self.handle_command(command).await,
-                    _ = self.cancellation_token.cancelled() => {
-                        self.handle_shutdown().await;
-                        return Ok(());
-                    }
+            match self.state {
+                DownloadState::Error(_) => self.process_paused_tick().await,
+                DownloadState::Validation { .. } => self.process_paused_tick().await,
+                DownloadState::Paused => self.process_paused_tick().await,
+                DownloadState::Pending | DownloadState::Seeding => {
+                    self.process_active_tick(loop_start).await
                 }
-                if !self.changes.is_empty() {
-                    self.handle_progress_dispatch(&mut progress);
-                }
-                continue;
-            }
-
-            // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
-            //    blocks, handle their messages
-
-            let mut min_pex_tip = usize::MAX;
-
-            //let prev_pending_amount = self.scheduler.pending_pieces.len();
-
-            // 99% of time spent here
-            let handle_peer_messages = Instant::now();
-            for i in 0..self.scheduler.peers.len() {
-                self.handle_peer_messages(i);
-                let peer = &mut self.scheduler.peers[i];
-                let pex_idx = peer.pex_idx;
-                if peer.last_pex_message_time.duration_since(loop_start) > PEX_MESSAGE_INTERVAL {
-                    peer.send_pex_message(&self.pex_history);
-                }
-                if pex_idx < min_pex_tip {
-                    min_pex_tip = pex_idx
-                }
-            }
-            tracing::trace!(
-                "Handled peer's messages in {:?}",
-                handle_peer_messages.elapsed()
-            );
-
-            if min_pex_tip != usize::MAX
-                && min_pex_tip != 0
-                && self.pex_history.tip() - min_pex_tip > PEX_HISTORY_CLEANUP_THRESHOLD
-            {
-                tracing::debug!(min_pex_tip, pex_tip = %self.pex_history.tip(), "Shrinking pex history");
-                self.shrink_pex_history(min_pex_tip);
-            }
-
-            // iterate over newly added pieces
-            //for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
-            //    for peer in &mut self.scheduler.peers {
-            //        if peer.bitfield.has(*piece) {
-            //            peer.add_interested();
-            //        }
-            //    }
-            //}
-
-            self.scheduler.pending_pieces.retain(|pending_piece| {
-                let piece = &mut self.scheduler.piece_table[*pending_piece];
-                let blocks = piece.pending_blocks.as_mut().unwrap();
-                let is_full = blocks.is_full();
-                if is_full {
-                    let pending_blocks = piece.pending_blocks.take().unwrap();
-                    piece.is_saving = true;
-                    if pending_blocks.is_sub_rational() {
-                        self.scheduler.sub_rational_amount -= 1;
-                    }
-                    self.storage
-                        .try_save_piece(*pending_piece, pending_blocks.as_bytes())
-                        // no available capacity
-                        .unwrap();
-                }
-                !is_full
-            });
-
-            // 3. Once we have everyone's performance up to date we change our choke status if
-            //    it is time for optimistic unchoke/choke interval
-
-            if loop_start.duration_since(self.last_optimistic_unchoke) > OPTIMISTIC_UNCHOKE_INTERVAL
-            {
-                self.last_optimistic_unchoke = loop_start;
-                // do optimistic unchoke
-            }
-
-            if loop_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
-                self.last_choke = loop_start;
-                self.scheduler.rechoke_peer();
-                // choke someone
-            }
-
-            while let Ok(new_peer) = self.new_peers.try_recv() {
-                match new_peer {
-                    NewPeer::ListenerOrigin(peer) => self.handle_new_peer(peer),
-                };
-            }
-
-            while let Some(peer) = self.peer_connector.try_join_next() {
-                self.handle_new_peer(peer);
-            }
+            };
 
             while let Ok(storage_update) = self.storage_rx.try_recv() {
                 self.handle_storage_feedback(storage_update);
@@ -714,7 +621,10 @@ impl Download {
             }
 
             for ip in tracker.handle_messages() {
-                if self.scheduler.peers.len() >= max_connections {
+                if self.state.is_paused()
+                    || self.scheduler.peers.len() + self.peer_connector.pending_amount()
+                        >= max_connections
+                {
                     self.peer_storage.add(ip);
                     continue;
                 }
@@ -728,27 +638,151 @@ impl Download {
     }
 
     fn set_download_state(&mut self, new_state: DownloadState) {
+        if new_state == self.state {
+            tracing::warn!(%new_state, "Redundant state change");
+            return;
+        }
         match new_state {
             DownloadState::Error(e) => {
                 tracing::error!("Setting download state to error: {e}")
             }
-            DownloadState::Validation => tracing::info!("Setting download state to validation"),
+            DownloadState::Validation { .. } => {
+                tracing::info!("Setting download state to validation")
+            }
             DownloadState::Paused => tracing::info!("Setting download state to paused"),
             DownloadState::Pending => tracing::info!("Setting download state to pending"),
             DownloadState::Seeding => tracing::info!("Setting download state to seeding"),
         }
-        if new_state != self.state {
-            self.changes
-                .push(StateChange::DownloadStateChange(new_state));
-            if new_state.is_paused() {
-                self.stop_peers();
-            } else {
+        // handle resume
+        if self.state.is_paused() && !new_state.is_paused() {
+            debug_assert!(self.scheduler.peers.is_empty());
+            self.connect_peers();
+        }
+
+        // handle pause
+        if !self.state.is_paused() && new_state.is_paused() {
+            while let Some(addr) = self.scheduler.remove_peer(0) {
+                self.peer_storage.add(addr);
             }
         }
+
+        self.changes
+            .push(StateChange::DownloadStateChange(new_state.into()));
         self.state = new_state;
     }
 
-    fn stop_peers(&mut self) {}
+    pub fn connect_peers(&mut self) {
+        let mut allowed_peers = self
+            .session
+            .max_connections_per_torrent()
+            .saturating_sub(self.scheduler.peers.len() + self.peer_connector.pending_amount());
+        while let Some(addr) = self.peer_storage.pop() {
+            if allowed_peers == 0 {
+                break;
+            }
+            self.peer_connector.connect(addr, self.info_hash);
+            allowed_peers -= 1;
+        }
+    }
+
+    async fn process_paused_tick(&mut self) {
+        while let Ok(new_peer) = self.new_peers.try_recv() {
+            match new_peer {
+                NewPeer::ListenerOrigin(peer) => {
+                    self.peer_storage.add(peer.ip());
+                }
+            };
+        }
+        while let Some(peer) = self.peer_connector.try_join_next() {
+            self.peer_storage.add(peer.ip());
+        }
+    }
+
+    async fn process_active_tick(&mut self, loop_start: Instant) {
+        // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
+        //    blocks, handle their messages
+
+        let mut min_pex_tip = usize::MAX;
+
+        //let prev_pending_amount = self.scheduler.pending_pieces.len();
+
+        // 99% of time spent here
+        let handle_peer_messages = Instant::now();
+        for i in 0..self.scheduler.peers.len() {
+            self.handle_peer_messages(i);
+            let peer = &mut self.scheduler.peers[i];
+            let pex_idx = peer.pex_idx;
+            if peer.last_pex_message_time.duration_since(loop_start) > PEX_MESSAGE_INTERVAL {
+                peer.send_pex_message(&self.pex_history);
+            }
+            if pex_idx < min_pex_tip {
+                min_pex_tip = pex_idx
+            }
+        }
+        tracing::trace!(
+            "Handled peer's messages in {:?}",
+            handle_peer_messages.elapsed()
+        );
+
+        if min_pex_tip != usize::MAX
+            && min_pex_tip != 0
+            && self.pex_history.tip() - min_pex_tip > PEX_HISTORY_CLEANUP_THRESHOLD
+        {
+            tracing::debug!(min_pex_tip, pex_tip = %self.pex_history.tip(), "Shrinking pex history");
+            self.shrink_pex_history(min_pex_tip);
+        }
+
+        // iterate over newly added pieces
+        //for piece in &self.scheduler.pending_pieces[prev_pending_amount..] {
+        //    for peer in &mut self.scheduler.peers {
+        //        if peer.bitfield.has(*piece) {
+        //            peer.add_interested();
+        //        }
+        //    }
+        //}
+
+        self.scheduler.pending_pieces.retain(|pending_piece| {
+            let piece = &mut self.scheduler.piece_table[*pending_piece];
+            let blocks = piece.pending_blocks.as_mut().unwrap();
+            let is_full = blocks.is_full();
+            if is_full {
+                let pending_blocks = piece.pending_blocks.take().unwrap();
+                piece.is_saving = true;
+                if pending_blocks.is_sub_rational() {
+                    self.scheduler.sub_rational_amount -= 1;
+                }
+                self.storage
+                    .try_save_piece(*pending_piece, pending_blocks.as_bytes())
+                    // no available capacity
+                    .unwrap();
+            }
+            !is_full
+        });
+
+        // 3. Once we have everyone's performance up to date we change our choke status if
+        //    it is time for optimistic unchoke/choke interval
+
+        if loop_start.duration_since(self.last_optimistic_unchoke) > OPTIMISTIC_UNCHOKE_INTERVAL {
+            self.last_optimistic_unchoke = loop_start;
+            // do optimistic unchoke
+        }
+
+        if loop_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
+            self.last_choke = loop_start;
+            self.scheduler.rechoke_peer();
+            // choke someone
+        }
+
+        while let Ok(new_peer) = self.new_peers.try_recv() {
+            match new_peer {
+                NewPeer::ListenerOrigin(peer) => self.handle_new_peer(peer),
+            };
+        }
+
+        while let Some(peer) = self.peer_connector.try_join_next() {
+            self.handle_new_peer(peer);
+        }
+    }
 
     fn handle_new_peer(&mut self, peer: Peer) {
         if self.peer_storage.my_ip().is_none() {
@@ -844,17 +878,16 @@ impl Download {
             }
         };
 
-        if let Some(ip) = self.peer_storage.pop() {
-            if !self.scheduler.peers.iter().any(|p| p.ip == ip) {
-                self.peer_connector.connect(ip, self.info_hash);
-            } else {
-                tracing::trace!(%ip, "Peer popped from storage is already connected");
-            }
-        }
+        self.connect_peers();
     }
 
     fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
-        let percent = self.scheduler.percent_pending_pieces();
+        let percent = match self.state {
+            DownloadState::Validation { validated_amount } => {
+                self.scheduler.piece_table.len() as f32 / validated_amount as f32
+            }
+            _ => self.scheduler.downloaded_pieces_percent(),
+        };
         let peers = self
             .scheduler
             .peers
@@ -889,8 +922,8 @@ impl Download {
     fn handle_storage_feedback(&mut self, storage_update: Result<StorageFeedback, StorageError>) {
         match storage_update {
             Ok(StorageFeedback::Saved { piece_i }) => {
-                // NOTE: this is wrong. last piece might be less than piece size
-                self.stat.downloaded += self.scheduler.piece_size as u64;
+                self.stat.downloaded +=
+                    self.scheduler.piece_length_measurer.piece_length(piece_i) as u64;
                 self.scheduler.add_piece(piece_i);
                 self.changes.push(StateChange::FinishedPiece(piece_i));
                 if self.scheduler.is_torrent_finished() {
@@ -916,6 +949,19 @@ impl Download {
             Ok(StorageFeedback::Data { piece_i, bytes }) => {
                 self.seeder.handle_retrieve(piece_i, bytes);
             }
+            Ok(StorageFeedback::ValidationProgress { piece, is_valid }) => {
+                tracing::debug!(piece, is_valid, "Validation progress");
+                if let DownloadState::Validation { validated_amount } = &mut self.state {
+                    *validated_amount += 1;
+                    if *validated_amount == self.scheduler.piece_table.len() {
+                        self.set_download_state(DownloadState::Pending);
+                    }
+                } else {
+                    tracing::warn!(current_state = %self.state, "Received validation progress while not in validation state");
+                }
+                self.scheduler
+                    .handle_piece_validation_result(piece, is_valid);
+            }
         }
     }
 
@@ -935,7 +981,10 @@ impl Download {
             }
             DownloadMessage::Validate => {
                 tracing::warn!("Validate is not implemented");
-                self.set_download_state(DownloadState::Validation);
+                self.set_download_state(DownloadState::Validation {
+                    validated_amount: 0,
+                });
+                self.storage.validate().await;
             }
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
@@ -1019,7 +1068,7 @@ impl Download {
         let name = self.info.name.clone();
         let total_size = self.info.total_size();
         let total_pieces = self.info.pieces.len();
-        let percent = self.scheduler.percent_pending_pieces();
+        let percent = self.scheduler.downloaded_pieces_percent();
         let tick_num = self.tick_num;
 
         FullState {
@@ -1032,7 +1081,7 @@ impl Download {
             peers,
             files,
             bitfield,
-            state: self.state,
+            state: self.state.into(),
             pending_pieces: self.scheduler.pending_pieces.clone(),
             tick_num,
         }

@@ -18,7 +18,7 @@ impl Hasher {
         }
     }
 
-    pub async fn pend_job(&mut self, piece: Payload) {
+    pub fn pend_job(&mut self, piece: Payload) {
         self.set.spawn_blocking(|| {
             let is_verified = piece.verify_hash();
             WorkResult {

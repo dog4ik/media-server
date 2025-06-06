@@ -18,7 +18,7 @@ use crate::{
     peers::PeerCommandMessage,
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{Info, OutputFile, ut_metadata::UtMetadata},
-    utils,
+    utils::LengthCalculator,
 };
 
 #[derive(Debug, Clone, Copy)]
@@ -328,10 +328,8 @@ impl ScheduleBatch {
 
 #[derive(Debug)]
 pub struct Scheduler {
-    pub piece_size: u32,
     /// Full ut_metadata used to share it
     pub ut_metadata: UtMetadata,
-    total_length: u64,
     pub peers: Vec<ActivePeer>,
     pub picker: PiecePicker,
     pub pending_files: PendingFiles,
@@ -341,6 +339,7 @@ pub struct Scheduler {
     pub piece_table: Vec<SchedulerPiece>,
     pub pending_pieces: Vec<usize>,
     pub downloaded_pieces: usize,
+    pub piece_length_measurer: LengthCalculator,
 }
 
 pub const BLOCK_LENGTH: u32 = 16 * 1024;
@@ -366,10 +365,9 @@ impl Scheduler {
         }
         let picker = PiecePicker::new(&piece_table);
         let downloaded_pieces = piece_table.iter().filter(|p| p.is_finished).count();
+        let piece_length_measurer = LengthCalculator::new(t.total_size(), t.piece_length);
         Self {
-            piece_size: t.piece_length,
             ut_metadata,
-            total_length: t.total_size(),
             peers: Vec::new(),
             picker,
             pending_files,
@@ -377,12 +375,8 @@ impl Scheduler {
             pending_pieces: Vec::new(),
             downloaded_pieces,
             sub_rational_amount: 0,
+            piece_length_measurer,
         }
-    }
-
-    /// Helper function to get piece length with consideration of the last piece
-    fn piece_length(&self, piece_i: usize) -> u32 {
-        crate::utils::piece_size(piece_i, self.piece_size, self.total_length) as u32
     }
 
     fn schedule_next(
@@ -424,8 +418,7 @@ impl Scheduler {
                 // Next piece is rational and peer can share it
                 Some(new_piece) if peer.bitfield.has(new_piece) => {
                     let new_piece = self.picker.pop_next().expect("we peeking above");
-                    let piece_len =
-                        utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
+                    let piece_len = self.piece_length_measurer.piece_length(new_piece);
                     let pending_piece = PendingPiece::new(piece_len);
                     self.pending_pieces.push(new_piece);
                     let pending_piece = self.piece_table[new_piece]
@@ -453,8 +446,7 @@ impl Scheduler {
                         schedule_batch.send(&peer)?;
                         return Ok(stat);
                     };
-                    let piece_len =
-                        utils::piece_size(new_piece, self.piece_size, self.total_length) as u32;
+                    let piece_len = self.piece_length_measurer.piece_length(new_piece);
                     let pending_piece = PendingPiece::new_sub_rational(piece_len);
                     self.sub_rational_amount += 1;
                     self.pending_pieces.push(new_piece);
@@ -600,17 +592,35 @@ impl Scheduler {
 
     /// Handle failed piece save
     pub fn fail_piece(&mut self, piece_idx: usize) {
-        let piece_len = self.piece_length(piece_idx);
+        let piece_len = self.piece_length_measurer.piece_length(piece_idx);
         let piece = &mut self.piece_table[piece_idx];
         piece.is_saving = false;
+        if piece.is_finished {
+            piece.is_finished = false;
+            self.downloaded_pieces -= 1;
+        }
         piece.pending_blocks = Some(PendingPiece::new(piece_len));
         self.picker.put_back(piece_idx);
     }
 
+    pub fn handle_piece_validation_result(&mut self, piece_idx: usize, is_valid: bool) {
+        let piece = &mut self.piece_table[piece_idx];
+        if piece.is_finished && !is_valid {
+            self.fail_piece(piece_idx);
+            return;
+        }
+        if !piece.is_finished && is_valid {
+            // ISSUE: Prevent this piece to be send to storage if it is currently pending
+            // We run into a lot of race conditions / storage/scheduler synchronisation issues
+            self.add_piece(piece_idx);
+            return;
+        }
+    }
+
     pub fn drain_peer_blocks(&mut self, peer_id: Uuid) {
-        for pending_piece_idx in &self.pending_pieces {
-            let piece_size = self.piece_length(*pending_piece_idx);
-            let pending_piece = self.piece_table[*pending_piece_idx]
+        for &pending_piece_idx in &self.pending_pieces {
+            let piece_size = self.piece_length_measurer.piece_length(pending_piece_idx);
+            let pending_piece = self.piece_table[pending_piece_idx]
                 .pending_blocks
                 .as_mut()
                 .unwrap();
@@ -712,9 +722,12 @@ impl Scheduler {
     }
 
     pub fn remove_peer(&mut self, peer_idx: usize) -> Option<std::net::SocketAddr> {
+        if peer_idx >= self.peers.len() {
+            return None;
+        }
         let peer = self.peers.swap_remove(peer_idx);
-        let id = peer.id;
-        self.drain_peer_blocks(id);
+        peer.cancel_peer();
+        self.drain_peer_blocks(peer.id);
         for piece in peer.bitfield.pieces() {
             self.piece_table[piece].rarity -= 1;
         }
@@ -845,8 +858,8 @@ impl Scheduler {
         }
     }
 
-    /// Get progress percent and the amount of pending_pieces
-    pub fn percent_pending_pieces(&self) -> f32 {
+    /// Download progress percent
+    pub fn downloaded_pieces_percent(&self) -> f32 {
         let total_pieces = self.picker.len() + self.pending_pieces.len() + self.downloaded_pieces;
         // Happens when all pieces are being saved at the same time.
         if total_pieces == 0 {

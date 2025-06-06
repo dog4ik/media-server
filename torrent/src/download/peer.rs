@@ -11,12 +11,15 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    peers::{Peer, PeerCommandMessage}, protocol::{
+    BitField,
+    peers::{Peer, PeerCommandMessage},
+    protocol::{
         extension::Extension,
         peer::{ExtensionHandshake, HandShake, PeerMessage},
         pex::PexHistory,
         ut_metadata::UtMessage,
-    }, scheduler, BitField
+    },
+    scheduler,
 };
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -189,7 +192,7 @@ pub struct ActivePeer {
     pub handshake: HandShake,
     pub extension_handshake: Option<Box<ExtensionHandshake>>,
     /// Amount of blocks that are in flight
-    /// Note that this number is approximate and not accurate because of race conditions between chokes and requests
+    /// Note that this number is approximate and not 100% accurate because of the race between chokes and requests
     pub pending_blocks: usize,
 }
 
@@ -239,7 +242,9 @@ impl ActivePeer {
         tracing::debug!(ip = %self.ip, "Setting out peer interested status to {force:?}");
         match force {
             true => self.message_tx.try_send(PeerCommandMessage::Interested)?,
-            false => self.message_tx.try_send(PeerCommandMessage::NotInterested)?,
+            false => self
+                .message_tx
+                .try_send(PeerCommandMessage::NotInterested)?,
         }
         self.out_status.set_interest(force);
         Ok(())

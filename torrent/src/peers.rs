@@ -596,6 +596,10 @@ impl PeerStorage {
         }
     }
 
+    pub fn contains(&self, addr: &SocketAddr) -> bool {
+        self.stored_peers.contains(addr)
+    }
+
     pub fn my_ip(&self) -> Option<SocketAddr> {
         self.my_ip
     }

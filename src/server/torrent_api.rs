@@ -441,6 +441,36 @@ pub async fn updates(
     Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
+/// Validate torrent by info hash
+#[utoipa::path(
+    post,
+    path = "/api/torrent/{info_hash}/validate",
+    params(
+        ("info_hash", description = "Hex encoded info_hash of the torrent"),
+    ),
+    responses(
+        (status = 202),
+        (status = 404, description = "Torrent is not found", body = AppError),
+    ),
+    tag = "Torrent",
+)]
+pub async fn validate_torrent(
+    Path(info_hash): Path<InfoHash>,
+    State(client): State<&'static TorrentClient>,
+) -> Result<StatusCode, AppError> {
+    let handle = client
+        .get_download(&info_hash.0)
+        .ok_or(AppError::not_found("Torrent is not found"))?
+        .handle();
+    handle
+        .download_handle
+        .validate()
+        .await
+        // Fails only when download finished
+        .map_err(|_| AppError::not_found("Torrent is not found"))?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 /// Remove torrent by its info hash
 #[utoipa::path(
     delete,

@@ -110,7 +110,7 @@ impl BitField {
         Self(vec![0; std::cmp::max(pieces_amount.div_ceil(8), 1)])
     }
 
-    /// Make sure that bitield is appropriate for given pieces amount.
+    /// Make sure that bitield is correct for given pieces amount.
     /// Fails if there are any 1's after the end or it is small or large to fit given pieces.
     pub fn validate(&self, total_pieces: usize) -> anyhow::Result<()> {
         let bitfield_pieces = self.0.len() * 8;
