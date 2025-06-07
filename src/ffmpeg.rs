@@ -195,7 +195,7 @@ impl FFprobeSubtitleStream<'_> {
 }
 
 impl FFprobeOutput {
-    pub fn video_streams(&self) -> Vec<FFprobeVideoStream> {
+    pub fn video_streams(&self) -> Vec<FFprobeVideoStream<'_>> {
         self.streams
             .iter()
             .filter(|s| {
@@ -211,7 +211,7 @@ impl FFprobeOutput {
             .collect()
     }
 
-    pub fn audio_streams(&self) -> Vec<FFprobeAudioStream> {
+    pub fn audio_streams(&self) -> Vec<FFprobeAudioStream<'_>> {
         self.streams
             .iter()
             .filter(|s| s.codec_type == "audio")
@@ -219,7 +219,7 @@ impl FFprobeOutput {
             .collect()
     }
 
-    pub fn subtitle_streams(&self) -> Vec<FFprobeSubtitleStream> {
+    pub fn subtitle_streams(&self) -> Vec<FFprobeSubtitleStream<'_>> {
         self.streams
             .iter()
             .filter(|s| s.codec_type == "subtitle")
@@ -228,17 +228,17 @@ impl FFprobeOutput {
     }
 
     /// Default audio stream
-    pub fn default_audio(&self) -> Option<FFprobeAudioStream> {
+    pub fn default_audio(&self) -> Option<FFprobeAudioStream<'_>> {
         self.audio_streams().into_iter().find(|a| a.is_default())
     }
 
     /// Default video stream
-    pub fn default_video(&self) -> Option<FFprobeVideoStream> {
+    pub fn default_video(&self) -> Option<FFprobeVideoStream<'_>> {
         self.video_streams().into_iter().find(|v| v.is_default())
     }
 
     /// Default subtitles stream
-    pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream> {
+    pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream<'_>> {
         self.subtitle_streams().into_iter().find(|s| s.is_default())
     }
 
