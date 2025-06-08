@@ -41,6 +41,8 @@ mod file;
 mod magnet;
 /// Tcp listener that accepts incoming peers
 mod peer_listener;
+/// Peer storage
+mod peer_storage;
 /// Peer connection task
 mod peers;
 /// Strategies for picking next downloaded piece

@@ -1,5 +1,4 @@
 use std::{
-    collections::HashSet,
     fmt::Display,
     net::SocketAddr,
     ops::Range,
@@ -9,7 +8,7 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use progress_consumer::{DownloadProgress, ProgressConsumer};
-use tokio::{sync::mpsc, task::JoinSet, time::timeout};
+use tokio::{sync::mpsc, task::JoinSet};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
@@ -18,7 +17,8 @@ use crate::{
     PeerStateChange, StateChange,
     bitfield::BitField,
     peer_listener::NewPeer,
-    peers::{Peer, PeerError, PeerIPC, PeerStorage},
+    peer_storage::PeerStorage,
+    peers::{Peer, PeerError, PeerIPC},
     piece_picker::{Priority, ScheduleStrategy},
     protocol::{
         extension::Extension,
@@ -233,44 +233,6 @@ impl Block {
     }
 }
 
-#[derive(Debug, Default)]
-/// Spawns tasks to connect peers ensuring no duplicate concurrent connects
-struct PeerConnector {
-    join_set: JoinSet<Result<Peer, SocketAddr>>,
-    pending_ips: HashSet<SocketAddr>,
-}
-
-impl PeerConnector {
-    pub fn connect(&mut self, ip: SocketAddr, info_hash: [u8; 20]) {
-        if self.pending_ips.insert(ip) {
-            self.join_set.spawn(async move {
-                match timeout(PEER_CONNECT_TIMEOUT, Peer::new_from_ip(ip, info_hash)).await {
-                    Ok(Ok(peer)) => Ok(peer),
-                    _ => Err(ip),
-                }
-            });
-        }
-    }
-
-    pub fn try_join_next(&mut self) -> Option<Peer> {
-        while let Some(Ok(joined_peer)) = self.join_set.try_join_next() {
-            match joined_peer {
-                Ok(peer) => {
-                    self.pending_ips.remove(&peer.ip());
-                    return Some(peer);
-                }
-                Err(ip) => self.pending_ips.remove(&ip),
-            };
-        }
-        None
-    }
-
-    pub fn pending_amount(&self) -> usize {
-        debug_assert_eq!(self.join_set.len(), self.pending_ips.len());
-        self.join_set.len()
-    }
-}
-
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DownloadError {
     Storage(StorageError),
@@ -329,7 +291,7 @@ const OPTIMISTIC_UNCHOKE_INTERVAL: Duration = Duration::from_secs(30);
 pub const CHOKE_INTERVAL: Duration = Duration::from_secs(15);
 pub const PEER_IN_CHANNEL_CAPACITY: usize = 1000;
 pub const PEER_OUT_CHANNEL_CAPACITY: usize = 2000;
-const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+pub const PEER_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const PEX_MESSAGE_INTERVAL: Duration = Duration::from_secs(90);
 // How many unused pex history entries trigger the cleanup
 const PEX_HISTORY_CLEANUP_THRESHOLD: usize = 500;
@@ -342,7 +304,6 @@ pub struct Download {
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     storage_rx: mpsc::Receiver<Result<StorageFeedback, StorageError>>,
     new_peers: mpsc::Receiver<NewPeer>,
-    peer_connector: PeerConnector,
     trackers: Vec<DownloadTracker>,
     scheduler: Scheduler,
     storage: StorageHandle,
@@ -387,12 +348,11 @@ impl Download {
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
         // TODO: Known external ip is not guaranteed!
-        let peer_storage = PeerStorage::new(client_external_ip);
+        let peer_storage = PeerStorage::new(vec![], client_external_ip);
 
         Self {
             session,
             new_peers,
-            peer_connector: PeerConnector::default(),
             trackers,
             info_hash,
             peers_handles: active_peers,
@@ -526,11 +486,8 @@ impl Download {
             "Received {} new peers from pex message",
             pex_message.added.len()
         );
-        // put failed ips in set
-        for addr in pex_message.added.into_iter().filter_map(|a| {
-            (!self.scheduler.peers.iter().any(|p| p.ip == a.addr)).then_some(a.addr)
-        }) {
-            self.peer_storage.add(addr);
+        for entry in pex_message.added {
+            self.peer_storage.add(entry.addr);
         }
         Ok(())
     }
@@ -568,6 +525,7 @@ impl Download {
 
         loop {
             let loop_start = Instant::now();
+            tracing::trace!(download_state = %self.state, tick_num = %self.tick_num, "Started new download tick");
             // 1. We must remove dropped clients.
 
             while let Some(peer) = self.peers_handles.try_join_next() {
@@ -612,7 +570,6 @@ impl Download {
     }
 
     fn handle_tracker_updates(&mut self, loop_start: Instant) {
-        let max_connections = self.session.max_connections_per_torrent();
         for tracker in &mut self.trackers {
             if loop_start.duration_since(tracker.last_announced_at) > tracker.announce_interval {
                 self.changes
@@ -621,18 +578,7 @@ impl Download {
             }
 
             for ip in tracker.handle_messages() {
-                if self.state.is_paused()
-                    || self.scheduler.peers.len() + self.peer_connector.pending_amount()
-                        >= max_connections
-                {
-                    self.peer_storage.add(ip);
-                    continue;
-                }
-                if !self.scheduler.peers.iter().any(|p| p.ip == ip) {
-                    self.peer_connector.connect(ip, self.info_hash);
-                } else {
-                    tracing::trace!(%ip, "Received duplicate peer from tracker");
-                }
+                self.peer_storage.add(ip);
             }
         }
     }
@@ -656,14 +602,12 @@ impl Download {
         // handle resume
         if self.state.is_paused() && !new_state.is_paused() {
             debug_assert!(self.scheduler.peers.is_empty());
-            self.connect_peers();
         }
 
         // handle pause
         if !self.state.is_paused() && new_state.is_paused() {
-            while let Some(addr) = self.scheduler.remove_peer(0) {
-                self.peer_storage.add(addr);
-            }
+            // Peer will join later
+            while self.scheduler.remove_peer(0).is_some() {}
         }
 
         self.changes
@@ -671,17 +615,16 @@ impl Download {
         self.state = new_state;
     }
 
-    pub fn connect_peers(&mut self) {
-        let mut allowed_peers = self
-            .session
-            .max_connections_per_torrent()
-            .saturating_sub(self.scheduler.peers.len() + self.peer_connector.pending_amount());
-        while let Some(addr) = self.peer_storage.pop() {
-            if allowed_peers == 0 {
-                break;
+    pub fn connect_peers(&mut self, max_connections_per_torrent: usize) {
+        let mut allowed_peers = max_connections_per_torrent
+            .saturating_sub(self.scheduler.peers.len() + self.peer_storage.pending_amount());
+        if allowed_peers > 0 {
+            while self.peer_storage.connect_best(&self.info_hash).is_some() {
+                allowed_peers -= 1;
+                if allowed_peers == 0 {
+                    break;
+                }
             }
-            self.peer_connector.connect(addr, self.info_hash);
-            allowed_peers -= 1;
         }
     }
 
@@ -693,9 +636,12 @@ impl Download {
                 }
             };
         }
-        while let Some(peer) = self.peer_connector.try_join_next() {
-            self.peer_storage.add(peer.ip());
-        }
+        while self.peer_storage.discard_store_connected_peer().is_some() {}
+        while self
+            .peer_storage
+            .discard_channel_peer(&mut self.new_peers)
+            .is_some()
+        {}
     }
 
     async fn process_active_tick(&mut self, loop_start: Instant) {
@@ -779,27 +725,18 @@ impl Download {
             };
         }
 
-        while let Some(peer) = self.peer_connector.try_join_next() {
+        while let Some(peer) = self
+            .peer_storage
+            .join_connected_peer(self.scheduler.piece_table.len())
+        {
             self.handle_new_peer(peer);
         }
+        let max_connections_per_torrent = self.session.max_connections_per_torrent();
+
+        self.connect_peers(max_connections_per_torrent);
     }
 
     fn handle_new_peer(&mut self, peer: Peer) {
-        if self.peer_storage.my_ip().is_none() {
-            if let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip()) {
-                tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
-                // TODO: use tcp listener port
-                self.peer_storage.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
-            };
-        }
-        if self.scheduler.peers.len() >= self.session.max_connections_per_torrent() {
-            return;
-        }
-        let total_pieces = self.scheduler.piece_table.len();
-        if let Err(e) = peer.bitfield.validate(total_pieces) {
-            tracing::warn!("Failed to validate peer's bitfield: {e}");
-            return;
-        }
         let (message_tx, message_rx) = flume::bounded(PEER_OUT_CHANNEL_CAPACITY);
         let (peer_message_tx, peer_message_rx) = flume::bounded(PEER_IN_CHANNEL_CAPACITY);
         let child_token = self.cancellation_token.child_token();
@@ -865,6 +802,7 @@ impl Download {
             Ok((uuid, _)) => {
                 let idx = self.scheduler.get_peer_idx(&uuid).unwrap();
                 if let Some(removed_peer) = self.scheduler.remove_peer(idx) {
+                    self.peer_storage.join_disconnected_peer(removed_peer);
                     self.changes.push(StateChange::PeerStateChange {
                         ip: removed_peer,
                         change: PeerStateChange::Disconnect,
@@ -877,8 +815,6 @@ impl Download {
                 panic!("Peer task panicked: {e}");
             }
         };
-
-        self.connect_peers();
     }
 
     fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
