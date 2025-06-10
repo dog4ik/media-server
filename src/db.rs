@@ -1081,13 +1081,13 @@ where
     ) -> impl std::future::Future<Output = Result<Vec<ShowMetadata>, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = query.trim().to_lowercase();
+            let query = format!("\"{}\"", query.trim().to_lowercase());
             let shows = sqlx::query!(
             r#"SELECT shows.*,
             (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
             (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
             FROM shows_fts_idx JOIN shows ON shows.id = shows_fts_idx.rowid 
-            WHERE shows_fts_idx = ?"#,
+            WHERE shows_fts_idx MATCH ?"#,
             query
         )
         .fetch_all(&mut *conn)
