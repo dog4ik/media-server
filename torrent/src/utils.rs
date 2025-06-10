@@ -93,13 +93,6 @@ const RESOLVE_IP_TIMEOUT: Duration = Duration::from_millis(400);
 pub async fn external_ip(
     upnp_client: Option<&ScpdClient<InternetGatewayClient>>,
 ) -> anyhow::Result<Ipv4Addr> {
-    match ipfy_ip(upnp_client.map_or_else(reqwest::Client::new, |c| c.fetch_client.clone())).await {
-        Ok(addr) => {
-            tracing::info!(ip = %addr, "Resolved external ip addr using ipfy service");
-            return Ok(addr);
-        }
-        Err(e) => tracing::warn!("Failed to resolve external ip using ipfy: {e}"),
-    };
     if let Some(client) = upnp_client {
         match tokio::time::timeout(RESOLVE_IP_TIMEOUT, upnp_ip(client)).await {
             Ok(Ok(ip)) => {
@@ -115,18 +108,6 @@ pub async fn external_ip(
         };
     }
     Err(anyhow::anyhow!("Failed to resolve external ip address"))
-}
-
-async fn ipfy_ip(client: reqwest::Client) -> anyhow::Result<Ipv4Addr> {
-    client
-        .get("https://api.ipify.org")
-        .timeout(RESOLVE_IP_TIMEOUT)
-        .send()
-        .await?
-        .text()
-        .await?
-        .parse()
-        .context("parse ipify ip addr")
 }
 
 async fn upnp_ip(client: &ScpdClient<InternetGatewayClient>) -> anyhow::Result<Ipv4Addr> {

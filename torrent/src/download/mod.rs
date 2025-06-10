@@ -615,27 +615,7 @@ impl Download {
         self.state = new_state;
     }
 
-    pub fn connect_peers(&mut self, max_connections_per_torrent: usize) {
-        let mut allowed_peers = max_connections_per_torrent
-            .saturating_sub(self.scheduler.peers.len() + self.peer_storage.pending_amount());
-        if allowed_peers > 0 {
-            while self.peer_storage.connect_best(&self.info_hash).is_some() {
-                allowed_peers -= 1;
-                if allowed_peers == 0 {
-                    break;
-                }
-            }
-        }
-    }
-
     async fn process_paused_tick(&mut self) {
-        while let Ok(new_peer) = self.new_peers.try_recv() {
-            match new_peer {
-                NewPeer::ListenerOrigin(peer) => {
-                    self.peer_storage.add(peer.ip());
-                }
-            };
-        }
         while self.peer_storage.discard_store_connected_peer().is_some() {}
         while self
             .peer_storage
@@ -719,21 +699,46 @@ impl Download {
             // choke someone
         }
 
-        while let Ok(new_peer) = self.new_peers.try_recv() {
-            match new_peer {
-                NewPeer::ListenerOrigin(peer) => self.handle_new_peer(peer),
-            };
-        }
-
         while let Some(peer) = self
             .peer_storage
             .join_connected_peer(self.scheduler.piece_table.len())
         {
             self.handle_new_peer(peer);
         }
+
         let max_connections_per_torrent = self.session.max_connections_per_torrent();
 
-        self.connect_peers(max_connections_per_torrent);
+        let mut allowed_new_connections = max_connections_per_torrent
+            .saturating_sub(self.scheduler.peers.len() + self.peer_storage.pending_amount());
+
+        while let Ok(new_peer) = self.new_peers.try_recv() {
+            match new_peer {
+                NewPeer::ListenerOrigin(peer) => {
+                    if allowed_new_connections > 0 {
+                        if self
+                            .peer_storage
+                            .accept_new_peer(&peer, self.scheduler.piece_table.len())
+                            .is_some()
+                        {
+                            allowed_new_connections -= 1;
+                            self.handle_new_peer(peer);
+                        }
+                    } else {
+                        self.peer_storage
+                            .add_validate(peer, self.scheduler.piece_table.len());
+                    }
+                }
+            };
+        }
+
+        if allowed_new_connections > 0 {
+            while self.peer_storage.connect_best(&self.info_hash).is_some() {
+                allowed_new_connections -= 1;
+                if allowed_new_connections == 0 {
+                    break;
+                }
+            }
+        }
     }
 
     fn handle_new_peer(&mut self, peer: Peer) {
@@ -916,11 +921,14 @@ impl Download {
                 };
             }
             DownloadMessage::Validate => {
-                tracing::warn!("Validate is not implemented");
-                self.set_download_state(DownloadState::Validation {
-                    validated_amount: 0,
-                });
-                self.storage.validate().await;
+                if let DownloadState::Validation { .. } = self.state {
+                    tracing::warn!("Ignoring redundant validation request");
+                } else {
+                    self.set_download_state(DownloadState::Validation {
+                        validated_amount: 0,
+                    });
+                    self.storage.validate().await;
+                }
             }
             DownloadMessage::Abort => {
                 tracing::debug!("Aborting torrent download");
@@ -928,7 +936,6 @@ impl Download {
             }
             DownloadMessage::Pause => {
                 self.set_download_state(DownloadState::Paused);
-                tracing::warn!("Pause is not implemented")
             }
             DownloadMessage::Resume => {
                 if self.scheduler.is_torrent_finished() {
@@ -936,7 +943,6 @@ impl Download {
                 } else {
                     self.set_download_state(DownloadState::Pending);
                 }
-                tracing::warn!("Resume is not implemented")
             }
             DownloadMessage::PostFullState { tx } => {
                 tracing::debug!("Dispatching full torrent progress");

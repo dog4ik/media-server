@@ -79,7 +79,7 @@ pub struct PeerStorage {
 }
 
 impl PeerStorage {
-    const MAX_SIZE: usize = 10_000;
+    const MAX_SIZE: usize = 1_000;
 
     pub fn new(ban_list: Vec<SocketAddr>, my_ip: Option<SocketAddr>) -> Self {
         let peer_statuses =
@@ -93,6 +93,32 @@ impl PeerStorage {
         }
     }
 
+    /// Returns whether inserted peer is new
+    pub fn add_validate(&mut self, peer: Peer, total_pieces: usize) -> bool {
+        if self.len() >= Self::MAX_SIZE {
+            tracing::warn!(
+                "Can't save peer for later. Peer storage is full {}/{}",
+                self.len(),
+                Self::MAX_SIZE
+            );
+            return false;
+        }
+        let ip = peer.ip();
+        if self.my_ip().is_none() {
+            if let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip()) {
+                tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
+                // TODO: use tcp listener port
+                self.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
+            };
+        }
+
+        if let Err(e) = peer.bitfield.validate(total_pieces) {
+            tracing::warn!("Failed to validate peer's bitfield: {e}");
+            return false;
+        }
+
+        self.add(ip)
+    }
     /// Returns whether inserted peer is new
     pub fn add(&mut self, ip: SocketAddr) -> bool {
         if self.len() >= Self::MAX_SIZE {
@@ -215,50 +241,42 @@ impl PeerStorage {
         None
     }
 
-    pub fn recv_new_peer(
-        &mut self,
-        channel: &mut mpsc::Receiver<NewPeer>,
-        total_pieces: usize,
-    ) -> Option<Peer> {
-        if let Ok(new_peer) = channel.try_recv() {
-            match new_peer {
-                NewPeer::ListenerOrigin(peer) => {
-                    let ip = peer.ip();
-                    if self.my_ip().is_none() {
-                        if let Some(my_ip) =
-                            peer.extension_handshake.as_ref().and_then(|e| e.your_ip())
-                        {
-                            tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
-                            // TODO: use tcp listener port
-                            self.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
-                        };
-                    }
+    pub fn accept_new_peer(&mut self, peer: &Peer, total_pieces: usize) -> Option<SocketAddr> {
+        let ip = peer.ip();
+        if self.my_ip().is_none() {
+            if let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip()) {
+                tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
+                // TODO: use tcp listener port
+                self.set_my_ip(Some(SocketAddr::new(my_ip, 0)));
+            };
+        }
 
-                    if let Err(e) = peer.bitfield.validate(total_pieces) {
-                        tracing::warn!("Failed to validate peer's bitfield: {e}");
-                        return None;
-                    }
+        if let Err(e) = peer.bitfield.validate(total_pieces) {
+            tracing::warn!("Failed to validate peer's bitfield: {e}");
+            return None;
+        }
 
-                    let mut entry = match self.peer_statuses.entry(ip) {
-                        hash_map::Entry::Occupied(entry) => entry,
-                        hash_map::Entry::Vacant(_) => {
-                            panic!("Invariant encountered: Connected peer is not tracked")
-                        }
-                    };
-                    match entry.get() {
-                        PeerStatus::Banned => {
-                            tracing::error!("Tried to connect banned peer");
-                            return None;
-                        }
-                        PeerStatus::Active | PeerStatus::Stored | PeerStatus::Connecting => {
-                            entry.insert(PeerStatus::Active);
-                            return Some(peer);
-                        }
-                    }
-                }
+        let mut entry = match self.peer_statuses.entry(ip) {
+            hash_map::Entry::Occupied(entry) => entry,
+            hash_map::Entry::Vacant(entry) => {
+                entry.insert(PeerStatus::Active);
+                return Some(ip);
+            }
+        };
+        match entry.get() {
+            PeerStatus::Banned => {
+                tracing::error!("Tried to connect banned peer");
+                return None;
+            }
+            PeerStatus::Active => {
+                tracing::error!("Tried to connect already active peer");
+                return None;
+            }
+            PeerStatus::Stored | PeerStatus::Connecting => {
+                entry.insert(PeerStatus::Active);
+                return Some(ip);
             }
         }
-        None
     }
 
     pub fn discard_channel_peer(

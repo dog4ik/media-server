@@ -1489,9 +1489,15 @@ pub async fn all_history(
     State(db): State<Db>,
 ) -> Result<Json<CursoredResponse<DbHistory>>, AppError> {
     let take = take.unwrap_or(50) as i64;
-    let cursor: Option<i64> = cursor.map(|x| x.parse().unwrap());
+    let cursor: Option<i64> = cursor
+        .map(|x| {
+            x.parse()
+                .map_err(|_| AppError::bad_request("invalid cursor"))
+        })
+        .transpose()?;
     let history = match cursor {
         Some(cursor) => {
+            tracing::trace!("Getting history with cursor");
             sqlx::query_as!(
                 DbHistory,
                 "SELECT * FROM history WHERE update_time < datetime(?, 'unixepoch') ORDER BY update_time DESC LIMIT ?;",
@@ -1502,6 +1508,7 @@ pub async fn all_history(
             .await?
         }
         None => {
+            tracing::trace!("Getting history without cursor");
             sqlx::query_as!(
                 DbHistory,
                 "SELECT * FROM history ORDER BY update_time DESC LIMIT ?;",
@@ -2602,6 +2609,11 @@ pub async fn update_history(
 ) -> Result<(), AppError> {
     let update_time = OffsetDateTime::now_utc();
     let db = app_state.db;
+    tracing::trace!(
+        history_id = id,
+        time = payload.time,
+        "Updating history entry"
+    );
     let video_id = sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING video_id;",
         payload.time,
@@ -2704,6 +2716,7 @@ pub async fn update_video_history(
         );
     }
     let update_time = OffsetDateTime::now_utc();
+    tracing::trace!(video_id = id, time = payload.time, "Updating video history");
     let query = sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE video_id = ? RETURNING video_id;",
         payload.time,
