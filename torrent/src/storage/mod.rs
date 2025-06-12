@@ -346,6 +346,7 @@ impl TorrentStorage {
                 self.files[file_idx].is_enabled = false;
             }
             StorageMessage::Validate => {
+                tracing::trace!("Received validation command");
                 self.revalidate().await;
             }
         };
@@ -506,52 +507,59 @@ impl TorrentStorage {
         let mut current_piece = 0;
         let total_pieces = self.pieces.len();
         let mut hasher = Hasher::new();
-        const CONCURRENCY: usize = 50;
-        for _ in 0..CONCURRENCY {
-            if let Ok(bytes) = self.retrieve_piece(current_piece).await {
-                let payload = Payload {
-                    hash: self.pieces[current_piece],
-                    piece_i: current_piece,
-                    data: vec![bytes],
-                };
-                hasher.pend_job(payload);
-            } else {
-                self.bitfield.remove(current_piece).unwrap();
-            };
-            current_piece += 1;
-            if current_piece >= total_pieces {
-                break;
-            }
-        }
+        const CONCURRENCY: usize = 10;
+        tracing::debug!(
+            total_pieces,
+            concurrency = CONCURRENCY,
+            "Started torrent validation"
+        );
 
-        while let Some(res) = hasher.join_next().await {
-            if res.is_verified {
-                self.bitfield.add(res.piece_i).unwrap();
-            }
-            if self
-                .feedback_tx
-                .send(Ok(StorageFeedback::ValidationProgress {
-                    piece: res.piece_i,
-                    is_valid: res.is_verified,
-                }))
-                .await
-                .is_err()
-            {
-                return;
-            };
-
-            if current_piece < total_pieces {
+        while current_piece < total_pieces {
+            if hasher.len() < CONCURRENCY {
                 if let Ok(bytes) = self.retrieve_piece(current_piece).await {
                     let payload = Payload {
                         hash: self.pieces[current_piece],
                         piece_i: current_piece,
                         data: vec![bytes],
                     };
-                    hasher.pend_job(payload)
+                    hasher.pend_job(payload);
                 } else {
                     self.bitfield.remove(current_piece).unwrap();
+                    if self
+                        .feedback_tx
+                        .send(Ok(StorageFeedback::ValidationProgress {
+                            piece: current_piece,
+                            is_valid: false,
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("Download disconnected during validation");
+                        return;
+                    };
+                    current_piece += 1;
+                };
+            } else {
+                while let Some(res) = hasher.join_next().await {
+                    if res.is_verified {
+                        self.bitfield.add(res.piece_i).unwrap();
+                    } else {
+                        self.bitfield.remove(res.piece_i).unwrap();
+                    }
+                    if self
+                        .feedback_tx
+                        .send(Ok(StorageFeedback::ValidationProgress {
+                            piece: res.piece_i,
+                            is_valid: res.is_verified,
+                        }))
+                        .await
+                        .is_err()
+                    {
+                        tracing::warn!("Download disconnected during validation");
+                        return;
+                    };
+                    current_piece += 1;
                 }
-                current_piece += 1;
             }
         }
     }
