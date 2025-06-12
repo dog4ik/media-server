@@ -63,11 +63,11 @@ Feel free to try out demo [here](https://demo.provod.rs)
 
 ##### Arch Linux
 
-`pacman -S pkgconf ffmpeg`
+`pacman -S pkgconf ffmpeg clang`
 
 ##### Ubuntu
 
-`apt install pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev`
+`apt install pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev clang`
 
 Nightly version of rust is required
 
