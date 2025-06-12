@@ -533,9 +533,9 @@ impl Download {
             }
 
             match self.state {
-                DownloadState::Error(_) => self.process_paused_tick().await,
-                DownloadState::Validation { .. } => self.process_paused_tick().await,
-                DownloadState::Paused => self.process_paused_tick().await,
+                DownloadState::Error(_) => self.process_paused_tick(),
+                DownloadState::Validation { .. } => self.process_paused_tick(),
+                DownloadState::Paused => self.process_paused_tick(),
                 DownloadState::Pending | DownloadState::Seeding => {
                     self.process_active_tick(loop_start).await
                 }
@@ -607,7 +607,9 @@ impl Download {
         // handle pause
         if !self.state.is_paused() && new_state.is_paused() {
             // Peer will join later
-            while self.scheduler.remove_peer(0).is_some() {}
+            for peer in &self.scheduler.peers {
+                peer.cancel_peer();
+            }
         }
 
         self.changes
@@ -615,7 +617,7 @@ impl Download {
         self.state = new_state;
     }
 
-    async fn process_paused_tick(&mut self) {
+    fn process_paused_tick(&mut self) {
         while self.peer_storage.discard_store_connected_peer().is_some() {}
         while self
             .peer_storage
@@ -825,7 +827,7 @@ impl Download {
     fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
         let percent = match self.state {
             DownloadState::Validation { validated_amount } => {
-                self.scheduler.piece_table.len() as f32 / validated_amount as f32
+                validated_amount as f32 / self.scheduler.piece_table.len() as f32 * 100.
             }
             _ => self.scheduler.downloaded_pieces_percent(),
         };
@@ -893,9 +895,20 @@ impl Download {
             Ok(StorageFeedback::ValidationProgress { piece, is_valid }) => {
                 tracing::debug!(piece, is_valid, "Validation progress");
                 if let DownloadState::Validation { validated_amount } = &mut self.state {
+                    tracing::trace!(
+                        piece,
+                        is_valid,
+                        validated_amount,
+                        "Received validation progress"
+                    );
                     *validated_amount += 1;
                     if *validated_amount == self.scheduler.piece_table.len() {
-                        self.set_download_state(DownloadState::Pending);
+                        tracing::info!("Torrent validation finished, changing download status");
+                        if self.scheduler.is_torrent_finished() {
+                            self.set_download_state(DownloadState::Seeding);
+                        } else {
+                            self.set_download_state(DownloadState::Pending)
+                        };
                     }
                 } else {
                     tracing::warn!(current_state = %self.state, "Received validation progress while not in validation state");

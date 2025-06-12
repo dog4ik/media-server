@@ -36,6 +36,10 @@ impl Hasher {
             .await
             .map(|v| v.expect("join task never panic"))
     }
+
+    pub fn len(&self) -> usize {
+        self.set.len()
+    }
 }
 
 #[derive(Debug, Clone)]
