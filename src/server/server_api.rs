@@ -85,7 +85,8 @@ pub struct DetailedVideo {
     pub audio_tracks: Vec<DetailedAudioTrack>,
     pub subtitle_tracks: Vec<DetailedSubtitleTrack>,
     pub variants: Vec<DetailedVariant>,
-    pub scan_date: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub scan_date: time::OffsetDateTime,
     pub history: Option<DbHistory>,
     pub intro: Option<Intro>,
     pub chapters: Vec<DetailedChapter>,
@@ -246,7 +247,7 @@ impl DetailedVideo {
             size: source.video.file_size().await?,
             duration: video_metadata.duration(),
             variants: detailed_variants,
-            scan_date: date.to_string(),
+            scan_date: date,
             video_tracks: video_metadata
                 .video_streams()
                 .into_iter()
