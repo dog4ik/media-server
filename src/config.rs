@@ -1074,8 +1074,18 @@ impl AppResources {
         if Self::is_prod() {
             #[cfg(windows)]
             {
-                let program_files = std::env::var("PROGRAMFILES").unwrap_or_default();
-                PathBuf::from(program_files).join(Self::APP_NAME)
+                std::env::current_exe()
+                    .ok()
+                    .as_deref()
+                    .and_then(Path::parent)
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| {
+                        tracing::error!("Failed to get exe path, fallinig back to Program Files");
+                        PathBuf::from(
+                            std::env::var("PROGRAMFILES").expect("program files are always defined"),
+                        )
+                        .join(Self::APP_NAME)
+                    });
             }
 
             #[cfg(not(windows))]
