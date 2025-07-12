@@ -2868,11 +2868,10 @@ pub async fn start_direct_stream(
         method: crate::watch::StreamMethod::DirectPlay,
         client_agent: user_agent.to_string(),
         client_type: ClientType::WebClient,
-        exit_token,
+        exit_token: exit_token.clone(),
         stream: crate::watch::Stream::DirectPlay,
     };
-    // Currently there is no point in having cancellation token for direct streams
-    let task_id = watch_sessions.start_task(task, None)?;
+    let task_id = watch_sessions.start_task(task, Some(exit_token))?;
     Ok(Json(StartWatchSessionResponse { task_id }))
 }
 
