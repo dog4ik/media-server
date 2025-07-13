@@ -326,6 +326,7 @@ pub struct MetadataSearchResult {
     pub metadata_provider: MetadataProvider,
     pub content_type: ContentType,
     pub metadata_id: String,
+    pub locale_metadata: Option<LocaleMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
@@ -339,6 +340,7 @@ pub struct MovieMetadata {
     #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
+    pub locale_metadata: Option<LocaleMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToResponse, utoipa::ToSchema)]
@@ -353,6 +355,7 @@ pub struct ShowMetadata {
     pub episodes_amount: Option<usize>,
     pub release_date: Option<String>,
     pub title: String,
+    pub locale_metadata: Option<LocaleMetadata>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
@@ -360,6 +363,7 @@ pub struct SeasonMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
     pub release_date: Option<String>,
+    pub title: Option<String>,
     pub episodes: Vec<EpisodeMetadata>,
     pub plot: Option<String>,
     pub poster: Option<MetadataImage>,
@@ -378,6 +382,12 @@ pub struct EpisodeMetadata {
     #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct LocaleMetadata {
+    pub original_title: String,
+    pub original_language: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -402,6 +412,7 @@ impl From<MovieMetadata> for MetadataSearchResult {
             metadata_provider: val.metadata_provider,
             content_type: ContentType::Movie,
             metadata_id: val.metadata_id,
+            locale_metadata: val.locale_metadata,
         }
     }
 }
@@ -415,6 +426,7 @@ impl From<ShowMetadata> for MetadataSearchResult {
             metadata_provider: val.metadata_provider,
             content_type: ContentType::Show,
             metadata_id: val.metadata_id,
+            locale_metadata: val.locale_metadata,
         }
     }
 }
@@ -428,6 +440,10 @@ impl From<ShowMetadata> for DbShow {
             poster = None;
         };
         let backdrop = val.backdrop.map(|p| p.as_str().to_owned());
+        let (original_language, original_title) = match val.locale_metadata {
+            Some(m) => (Some(m.original_language), Some(m.original_title)),
+            None => (None, None),
+        };
 
         DbShow {
             id: None,
@@ -436,6 +452,8 @@ impl From<ShowMetadata> for DbShow {
             poster,
             backdrop,
             plot: val.plot,
+            original_language,
+            original_title,
         }
     }
 }
@@ -470,6 +488,7 @@ impl SeasonMetadata {
             release_date: self.release_date,
             plot: self.plot,
             poster,
+            title: self.title,
         }
     }
 }
@@ -484,6 +503,11 @@ impl MovieMetadata {
         };
         let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
 
+        let (original_language, original_title) = match self.locale_metadata {
+            Some(m) => (Some(m.original_language), Some(m.original_title)),
+            None => (None, None),
+        };
+
         DbMovie {
             id: None,
             title: self.title,
@@ -492,6 +516,8 @@ impl MovieMetadata {
             backdrop,
             duration: duration.as_secs() as i64,
             plot: self.plot,
+            original_language,
+            original_title,
         }
     }
 }

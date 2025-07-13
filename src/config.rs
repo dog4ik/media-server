@@ -1082,7 +1082,8 @@ impl AppResources {
                     .unwrap_or_else(|| {
                         tracing::error!("Failed to get exe path, fallinig back to Program Files");
                         PathBuf::from(
-                            std::env::var("PROGRAMFILES").expect("program files are always defined"),
+                            std::env::var("PROGRAMFILES")
+                                .expect("program files are always defined"),
                         )
                         .join(Self::APP_NAME)
                     });

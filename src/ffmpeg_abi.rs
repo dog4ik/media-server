@@ -707,7 +707,9 @@ fn check_encoder_support(encoder_name: &str, api: GpuEncodingApi) -> anyhow::Res
     encoder.set_width(1280);
     encoder.set_height(720);
     match api {
-        GpuEncodingApi::Nvenc | GpuEncodingApi::Amf => encoder.set_format(ffmpeg_next::format::Pixel::YUV420P),
+        GpuEncodingApi::Nvenc | GpuEncodingApi::Amf => {
+            encoder.set_format(ffmpeg_next::format::Pixel::YUV420P)
+        }
         GpuEncodingApi::Vaapi => encoder.set_format(ffmpeg_next::format::Pixel::VAAPI),
         GpuEncodingApi::Vulkan => encoder.set_format(ffmpeg_next::format::Pixel::VULKAN),
     }

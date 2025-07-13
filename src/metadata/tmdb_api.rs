@@ -12,9 +12,9 @@ use serde::Deserialize;
 use crate::app_state::AppError;
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, MetadataImage,
-    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
-    ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
+    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
+    MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider,
+    SeasonMetadata, ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
 use super::{FetchParams, Language, METADATA_CACHE_SIZE, provod_agent};
 
@@ -350,6 +350,8 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+        let original_title = val.original_title;
+        let original_language = val.original_language;
         MovieMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -359,6 +361,10 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
             release_date: val.release_date,
             runtime: None,
             title: val.title,
+            locale_metadata: Some(LocaleMetadata {
+                original_title,
+                original_language,
+            }),
         }
     }
 }
@@ -371,7 +377,8 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
-
+        let original_title = val.original_name;
+        let original_language = val.original_language;
         ShowMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -380,7 +387,12 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             plot: val.overview,
             release_date: val.first_air_date,
             title: val.name,
-            ..Default::default()
+            locale_metadata: Some(LocaleMetadata {
+                original_title,
+                original_language,
+            }),
+            seasons: None,
+            episodes_amount: None,
         }
     }
 }
@@ -398,6 +410,7 @@ impl From<TmdbShowSeason> for SeasonMetadata {
             episodes: val.episodes.into_iter().map(Into::into).collect(),
             poster,
             number: val.season_number,
+            title: Some(val.name),
         }
     }
 }
@@ -565,6 +578,10 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             release_date: val.release_date,
             runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: val.title,
+            locale_metadata: Some(LocaleMetadata {
+                original_title: val.original_title,
+                original_language: val.original_language,
+            }),
         }
     }
 }
@@ -587,6 +604,10 @@ impl From<TmdbShowDetails> for ShowMetadata {
             title: val.name,
             seasons: Some((1..=val.number_of_seasons).collect()),
             episodes_amount: Some(val.number_of_episodes),
+            locale_metadata: Some(LocaleMetadata {
+                original_title: val.original_name,
+                original_language: val.original_language,
+            }),
         }
     }
 }
@@ -599,6 +620,8 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
         let tmdb_id;
         let plot;
         let content_type;
+        let original_title;
+        let original_language;
         match self {
             Self::Movie(movie) => {
                 title = movie.title;
@@ -608,6 +631,8 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 tmdb_id = movie.id;
                 plot = movie.overview;
                 content_type = ContentType::Movie;
+                original_title = movie.original_title;
+                original_language = movie.original_language;
             }
             Self::Show(show) => {
                 title = show.name;
@@ -617,6 +642,8 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 tmdb_id = show.id;
                 plot = show.overview;
                 content_type = ContentType::Show;
+                original_title = show.original_name;
+                original_language = show.original_language;
             }
             Self::Episode(_) => return Err(anyhow!("Episode is not implemented")),
             Self::Other {} => return Err(anyhow!("Other is not implemented")),
@@ -628,6 +655,10 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
             metadata_id: tmdb_id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             content_type,
+            locale_metadata: Some(LocaleMetadata {
+                original_title,
+                original_language,
+            }),
         })
     }
 }
@@ -674,7 +705,7 @@ pub struct TmdbShowDetails {
     pub name: String,
     pub number_of_episodes: usize,
     pub number_of_seasons: usize,
-    pub original_language: Option<String>,
+    pub original_language: String,
     pub original_name: String,
     pub overview: String,
     pub poster_path: Option<String>,
@@ -686,8 +717,8 @@ pub struct TmdbMovieDetails {
     pub genres: Option<Vec<TmdbGenre>>,
     pub id: usize,
     pub imdb_id: Option<String>,
-    pub original_language: Option<String>,
-    pub original_title: Option<String>,
+    pub original_language: String,
+    pub original_title: String,
     pub overview: String,
     pub poster_path: Option<String>,
     pub release_date: Option<String>,
@@ -775,7 +806,9 @@ pub struct TmdbSearchShowResult {
     pub overview: Option<String>,
     pub first_air_date: Option<String>,
     pub name: String,
+    #[serde(alias = "original_title")]
     pub original_name: String,
+    pub original_language: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -794,5 +827,7 @@ pub struct TmdbSearchMovieResult {
     pub overview: Option<String>,
     pub release_date: Option<String>,
     pub title: String,
-    pub original_title: Option<String>,
+    #[serde(alias = "original_name")]
+    pub original_title: String,
+    pub original_language: String,
 }

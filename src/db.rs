@@ -14,8 +14,8 @@ use crate::{
     library::assets::{self, AssetDir},
     metadata::{
         ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-        MetadataImage, MetadataProvider, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
-        ShowMetadata, ShowMetadataProvider,
+        LocaleMetadata, MetadataImage, MetadataProvider, MovieMetadata, MovieMetadataProvider,
+        SeasonMetadata, ShowMetadata, ShowMetadataProvider,
     },
 };
 
@@ -73,14 +73,16 @@ where
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO movies 
             (title, release_date, poster,
-            backdrop, plot, duration)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            backdrop, plot, duration, original_language, original_title)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
                 movie.title,
                 movie.release_date,
                 movie.poster,
                 movie.backdrop,
                 movie.plot,
                 movie.duration,
+                movie.original_language,
+                movie.original_title,
             );
             query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
@@ -94,13 +96,15 @@ where
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO shows 
-            (title, release_date, poster, backdrop, plot)
-            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+            (title, release_date, poster, backdrop, plot, original_language, original_title)
+            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
                 show.title,
                 show.release_date,
                 show.poster,
                 show.backdrop,
                 show.plot,
+                show.original_language,
+                show.original_title,
             );
 
             query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -115,13 +119,14 @@ where
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
                 "INSERT OR IGNORE INTO seasons
-            (show_id, number, release_date, plot, poster)
-            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+            (show_id, number, release_date, plot, poster, title)
+            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
                 season.show_id,
                 season.number,
                 season.release_date,
                 season.plot,
                 season.poster,
+                season.title,
             );
 
             query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -726,6 +731,12 @@ where
                         .split(',')
                         .filter_map(|x| x.parse().ok())
                         .collect();
+                    let locale_metadata = show.original_language.zip(show.original_title).map(
+                        |(original_language, original_title)| LocaleMetadata {
+                            original_language,
+                            original_title,
+                        },
+                    );
                     ShowMetadata {
                         metadata_id: show.id.to_string(),
                         metadata_provider: MetadataProvider::Local,
@@ -736,6 +747,7 @@ where
                         seasons: Some(seasons),
                         release_date: show.release_date,
                         title: show.title,
+                        locale_metadata,
                     }
                 })
                 .collect())
@@ -777,6 +789,12 @@ where
                 .filter_map(|x| x.parse().ok())
                 .collect();
             seasons.sort_unstable();
+            let locale_metadata = show.original_language.zip(show.original_title).map(
+                |(original_language, original_title)| LocaleMetadata {
+                    original_language,
+                    original_title,
+                },
+            );
             Ok(ShowMetadata {
                 metadata_id: show.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
@@ -787,6 +805,7 @@ where
                 seasons: Some(seasons),
                 release_date: show.release_date,
                 title: show.title,
+                locale_metadata,
             })
         }
     }
@@ -864,6 +883,7 @@ where
                 plot: season.plot,
                 episodes,
                 poster,
+                title: season.title,
                 number: season.number as usize,
             })
         }
@@ -1104,6 +1124,12 @@ where
                         .split(',')
                         .filter_map(|x| x.parse().ok())
                         .collect();
+                    let locale_metadata = show.original_title.zip(show.original_language).map(
+                        |(original_title, original_language)| LocaleMetadata {
+                            original_title,
+                            original_language,
+                        },
+                    );
                     ShowMetadata {
                         metadata_id: show.id.to_string(),
                         metadata_provider: MetadataProvider::Local,
@@ -1114,6 +1140,7 @@ where
                         seasons: Some(seasons),
                         release_date: show.release_date,
                         title: show.title,
+                        locale_metadata,
                     }
                 })
                 .collect())
@@ -1131,7 +1158,7 @@ where
                 r#"SELECT episodes.*, seasons.number AS season_number FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             JOIN videos ON videos.episode_id = episodes.id
-            WHERE title = ? COLLATE NOCASE"#,
+            WHERE episodes.title = ? COLLATE NOCASE"#,
                 query
             )
             .fetch_all(&mut *conn)
@@ -1324,6 +1351,12 @@ impl From<DbMovie> for MovieMetadata {
     fn from(val: DbMovie) -> Self {
         let poster = val.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
         let backdrop = val.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
+        let locale_metadata = val.original_language.zip(val.original_title).map(
+            |(original_language, original_title)| LocaleMetadata {
+                original_language,
+                original_title,
+            },
+        );
 
         MovieMetadata {
             metadata_id: val.id.unwrap().to_string(),
@@ -1334,6 +1367,7 @@ impl From<DbMovie> for MovieMetadata {
             release_date: val.release_date,
             runtime: None,
             title: val.title,
+            locale_metadata,
         }
     }
 }
@@ -1357,6 +1391,8 @@ impl From<DbExternalId> for ExternalIdMetadata {
 pub struct DbShow {
     pub id: Option<i64>,
     pub title: String,
+    pub original_language: Option<String>,
+    pub original_title: Option<String>,
     pub release_date: Option<String>,
     /// Url that we get from information provider.
     ///
@@ -1382,6 +1418,8 @@ pub struct DbSeason {
     pub number: i64,
     pub release_date: Option<String>,
     pub plot: Option<String>,
+    /// Some providers attach meaningful titles to the seasons
+    pub title: Option<String>,
     /// Url that we get from information provider.
     ///
     /// Note that it is not local url.
@@ -1396,6 +1434,8 @@ pub struct DbSeason {
 pub struct DbMovie {
     pub id: Option<i64>,
     pub title: String,
+    pub original_language: Option<String>,
+    pub original_title: Option<String>,
     pub plot: Option<String>,
     /// Url that we get from information provider.
     /// Note that it is not local poster url.

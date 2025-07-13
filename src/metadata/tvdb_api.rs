@@ -12,7 +12,7 @@ use reqwest::{
 };
 use serde::Deserialize;
 
-use crate::app_state::AppError;
+use crate::{app_state::AppError, metadata::LocaleMetadata};
 
 use super::{
     ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
@@ -237,6 +237,7 @@ impl ShowMetadataProvider for TvdbApi {
             plot,
             poster,
             number: season.number,
+            title: season.name,
         })
     }
 
@@ -358,6 +359,15 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
             .map(|s| s.number)
             .filter(|s| *s != 0)
             .collect();
+        let locale_metadata = self
+            .translations
+            .name_translations
+            .into_iter()
+            .find(|t| t.language == self.original_language && t.is_primary && !t.is_alias)
+            .map(|translation| LocaleMetadata {
+                original_language: self.original_language,
+                original_title: translation.overview,
+            });
 
         ShowMetadata {
             metadata_id: self.id.to_string(),
@@ -369,6 +379,7 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
             title: self.name,
             episodes_amount: Some(self.episodes.len()),
             seasons: Some(seasons.into_iter().collect()),
+            locale_metadata,
         }
     }
 }
@@ -388,9 +399,17 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             .translations
             .overview_translations
             .into_iter()
-            .find(|t| t.is_primary.unwrap_or(false))
-            .unwrap()
-            .overview;
+            .find(|t| t.is_primary)
+            .map(|t| t.overview);
+        let locale_metadata = self
+            .translations
+            .name_translations
+            .into_iter()
+            .find(|t| t.language == self.original_language && t.is_primary && !t.is_alias)
+            .map(|translation| LocaleMetadata {
+                original_language: self.original_language,
+                original_title: translation.overview,
+            });
         MovieMetadata {
             metadata_id: self.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
@@ -400,16 +419,24 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             release_date: self.first_release.map(|r| r.date),
             runtime: self.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
             title: self.name,
+            locale_metadata,
         }
     }
 }
 
 impl From<TvdbSearchResult> for MovieMetadata {
-    fn from(val: TvdbSearchResult) -> Self {
+    fn from(mut val: TvdbSearchResult) -> Self {
         let poster = val
             .image_url
             .and_then(|url| url.parse().ok())
             .map(MetadataImage::new);
+        let locale_metadata =
+            val.translations
+                .remove(&val.primary_language)
+                .map(|original_title| LocaleMetadata {
+                    original_language: val.primary_language,
+                    original_title,
+                });
 
         MovieMetadata {
             metadata_id: val.tvdb_id,
@@ -420,16 +447,25 @@ impl From<TvdbSearchResult> for MovieMetadata {
             release_date: val.first_air_time,
             runtime: None,
             title: val.name,
+            locale_metadata,
         }
     }
 }
 
 impl From<TvdbSearchResult> for ShowMetadata {
-    fn from(val: TvdbSearchResult) -> Self {
+    fn from(mut val: TvdbSearchResult) -> Self {
         let poster = val
             .image_url
             .and_then(|url| url.parse().ok())
             .map(MetadataImage::new);
+
+        let locale_metadata =
+            val.translations
+                .remove(&val.primary_language)
+                .map(|original_title| LocaleMetadata {
+                    original_language: val.primary_language,
+                    original_title,
+                });
 
         ShowMetadata {
             metadata_id: val.tvdb_id,
@@ -439,6 +475,7 @@ impl From<TvdbSearchResult> for ShowMetadata {
             plot: val.overview,
             release_date: val.first_air_time,
             title: val.name,
+            locale_metadata,
             ..Default::default()
         }
     }
@@ -462,7 +499,7 @@ impl From<TvdbEpisode> for EpisodeMetadata {
 }
 impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
     type Error = AppError;
-    fn try_from(val: TvdbSearchResult) -> Result<Self, Self::Error> {
+    fn try_from(mut val: TvdbSearchResult) -> Result<Self, Self::Error> {
         let content_type = match val.search_type.as_ref() {
             "series" => ContentType::Show,
             "movie" => ContentType::Movie,
@@ -472,6 +509,13 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
             .image_url
             .and_then(|url| url.parse().ok())
             .map(MetadataImage::new);
+        let locale_metadata =
+            val.translations
+                .remove(&val.primary_language)
+                .map(|original_title| LocaleMetadata {
+                    original_language: val.primary_language,
+                    original_title,
+                });
 
         Ok(MetadataSearchResult {
             title: val.name,
@@ -480,6 +524,7 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
             metadata_provider: MetadataProvider::Tvdb,
             content_type,
             metadata_id: val.tvdb_id,
+            locale_metadata,
         })
     }
 }
@@ -531,7 +576,7 @@ struct TvdbSearchResult {
     name: String,
     first_air_time: Option<String>,
     overview: Option<String>,
-    primary_language: Option<String>,
+    primary_language: String,
     #[serde(rename = "type")]
     search_type: String,
     tvdb_id: String,
@@ -628,7 +673,7 @@ struct TvdbSeriesExtendedRecord {
     last_aired: Option<String>,
     next_aired: Option<String>,
     original_country: Option<String>,
-    original_language: Option<String>,
+    original_language: String,
     seasons: Vec<TvdbSeasonBaseRecord>,
     is_order_randomized: bool,
     last_updated: Option<String>,
@@ -640,6 +685,7 @@ struct TvdbSeriesExtendedRecord {
     genres: Vec<TvdbGenre>,
     remote_ids: Vec<TvdbRemoteIds>,
     characters: Option<Vec<TvdbCharacter>>,
+    translations: TvdbTranslations,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -656,7 +702,7 @@ struct TvdbMovieExtendedRecord {
     remote_ids: Vec<TvdbRemoteIds>,
     characters: Vec<TvdbCharacter>,
     original_country: Option<String>,
-    original_language: Option<String>,
+    original_language: String,
     first_release: Option<TvdbRelease>,
 }
 
@@ -670,10 +716,11 @@ struct TvdbTranslations {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TvdbTranslation {
-    overview: Option<String>,
+    overview: String,
     language: String,
     tagline: Option<String>,
-    is_primary: Option<bool>,
+    is_primary: bool,
+    is_alias: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

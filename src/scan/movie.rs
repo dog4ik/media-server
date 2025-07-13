@@ -264,6 +264,8 @@ async fn movie_metadata_fallback(
         release_date: None,
         duration: duration.as_secs() as i64,
         title,
+        original_language: None,
+        original_title: None,
     };
     let mut tx = db.begin().await?;
     let id = tx.insert_movie(fallback_movie).await?;

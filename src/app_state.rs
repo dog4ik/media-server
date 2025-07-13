@@ -1346,6 +1346,8 @@ pub async fn series_metadata_fallback(
         backdrop: None,
         plot: None,
         release_date: None,
+        original_language: None,
+        original_title: None,
         title: file.identifier.title.to_string(),
     };
     let video_metadata = file.source.video.metadata().await?;
@@ -1383,6 +1385,7 @@ pub async fn season_metadata_fallback(
         id: None,
         release_date: None,
         plot: None,
+        title: None,
         poster: None,
     };
     let id = db.insert_season(fallback_season).await?;
@@ -1437,6 +1440,8 @@ pub async fn movie_metadata_fallback(
         backdrop: None,
         plot: None,
         release_date: None,
+        original_language: None,
+        original_title: None,
         duration: duration.as_secs() as i64,
         title,
     };

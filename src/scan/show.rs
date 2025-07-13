@@ -516,6 +516,8 @@ async fn series_metadata_fallback(
         plot: None,
         release_date: None,
         title: file.identifier.title.to_string(),
+        original_language: None,
+        original_title: None,
     };
     let video_metadata = file.source.video.metadata().await?;
     let id = db.insert_show(&show_fallback).await.unwrap();
@@ -544,6 +546,7 @@ async fn season_metadata_fallback(
         release_date: None,
         plot: None,
         poster: None,
+        title: None,
     };
     let id = db.insert_season(fallback_season).await?;
     Ok(id)
