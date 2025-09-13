@@ -959,7 +959,7 @@ impl Codec {
         let mut split = line.split_terminator(' ').filter(|chunk| !chunk.is_empty());
         let mut params = split.next().unwrap().chars();
         let name = split.next().unwrap().to_string();
-        let long_name: String = split.intersperse(" ").collect();
+        let long_name = split.collect::<Vec<_>>().join(" ");
         let decode_supported = params.next().unwrap() == 'D';
         let encode_supported = params.next().unwrap() == 'E';
         let codec_type = CodecType::from_char(params.next().unwrap()).unwrap();

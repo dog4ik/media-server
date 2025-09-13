@@ -184,26 +184,26 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
         );
 
         if let Some(added) = added {
-            for (i, chunk) in added.array_chunks::<6>().enumerate() {
+            for (i, chunk) in added.into_iter().array_chunks::<6>().enumerate() {
                 let flags = added_flags
                     .as_ref()
                     .and_then(|f| f.get(i))
                     .map(|x| PexFlags(*x));
                 added_list.push(PexEntry {
-                    addr: parse_ipv4(*chunk),
+                    addr: parse_ipv4(chunk),
                     flags,
                 });
             }
         }
 
         if let Some(added6) = added6 {
-            for (i, chunk) in added6.array_chunks::<18>().enumerate() {
+            for (i, chunk) in added6.into_iter().array_chunks::<18>().enumerate() {
                 let flags = added6_flags
                     .as_ref()
                     .and_then(|f| f.get(i))
                     .map(|x| PexFlags(*x));
                 added_list.push(PexEntry {
-                    addr: parse_ipv6(*chunk),
+                    addr: parse_ipv6(chunk),
                     flags,
                 });
             }
@@ -215,14 +215,14 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
         );
 
         if let Some(dropped) = dropped {
-            for chunk in dropped.array_chunks::<6>() {
-                dropped_list.push(parse_ipv4(*chunk));
+            for chunk in dropped.into_iter().array_chunks::<6>() {
+                dropped_list.push(parse_ipv4(chunk));
             }
         }
 
         if let Some(dropped6) = dropped6 {
-            for chunk in dropped6.array_chunks::<18>() {
-                dropped_list.push(parse_ipv6(*chunk));
+            for chunk in dropped6.into_iter().array_chunks::<18>() {
+                dropped_list.push(parse_ipv6(chunk));
             }
         }
 

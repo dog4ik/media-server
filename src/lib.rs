@@ -1,7 +1,4 @@
 #![windows_subsystem = "windows"]
-#![feature(iter_intersperse)]
-#![feature(iter_array_chunks)]
-#![feature(array_chunks)]
 #![doc = include_str!("../README.md")]
 
 /// Shared state of the application

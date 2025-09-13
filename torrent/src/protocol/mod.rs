@@ -228,8 +228,9 @@ impl Visitor<'_> for HashesVisitor {
                 "payload is not multiple of 20 bytes long",
             ));
         }
-        let chunks = v.array_chunks::<20>().cloned().collect();
-        Ok(Hashes(chunks))
+        Ok(Hashes(
+            v.into_iter().copied().array_chunks::<20>().collect(),
+        ))
     }
 
     fn visit_borrowed_bytes<E>(self, v: &'_ [u8]) -> Result<Self::Value, E>
@@ -239,8 +240,9 @@ impl Visitor<'_> for HashesVisitor {
         if v.len() % 20 != 0 {
             return Err(serde::de::Error::custom("payload is not 20 bytes long"));
         }
-        let chunks = v.array_chunks::<20>().cloned().collect();
-        Ok(Hashes(chunks))
+        Ok(Hashes(
+            v.into_iter().copied().array_chunks::<20>().collect(),
+        ))
     }
 }
 

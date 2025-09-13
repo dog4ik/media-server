@@ -1,7 +1,4 @@
-#![feature(array_chunks)]
-#![feature(assert_matches)]
 #![feature(iter_array_chunks)]
-#![feature(iter_collect_into)]
 
 use std::{
     collections::HashSet,
