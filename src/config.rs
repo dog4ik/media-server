@@ -1086,7 +1086,7 @@ impl AppResources {
                                 .expect("program files are always defined"),
                         )
                         .join(Self::APP_NAME)
-                    });
+                    })
             }
 
             #[cfg(not(windows))]
