@@ -1,0 +1,21 @@
+[Unit]
+Description=The Media Server
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/media-server
+WorkingDirectory=/usr/share/media-server
+Restart=always
+RestartSec=5
+User=media-server
+Group=media-server
+Environment=RUST_LOG=media_server=info
+Environment=PROVOD_URL=https://agent.provod.rs
+Environment=PROVOD_TOKEN="Bearer auth_token"
+KillMode=process
+TimeoutStopSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,40 @@
+post_install() {
+    echo "Creating media-server user and group..."
+
+    if ! getent group media-server >/dev/null; then
+        groupadd -r media-server
+    fi
+
+    if ! id -u media-server >/dev/null 2>&1; then
+        useradd -r -g media-server \
+            -d /var/lib/media-server \
+            -s /usr/bin/nologin \
+            -m media-server
+    fi
+
+    install -d -o media-server -g media-server /var/lib/media-server
+    chown -R media-server:media-server /var/lib/media-server
+
+    echo "Enabling and starting media-server.service..."
+    systemctl daemon-reexec
+    systemctl enable --now media-server.service
+}
+
+post_upgrade() {
+    echo "Ensuring media-server permissions after upgrade..."
+    chown -R media-server:media-server /var/lib/media-server
+}
+
+pre_remove() {
+    echo "Stopping media-server.service..."
+    systemctl stop media-server.service || true
+    systemctl disable media-server.service || true
+}
+
+post_remove() {
+    echo "Package removed."
+    echo "NOTE: media-server user and data in /var/lib/media-server were left in place."
+    echo "You may remove them manually if not needed:"
+    echo "  sudo userdel media-server"
+    echo "  sudo rm -rf /var/lib/media-server"
+}
