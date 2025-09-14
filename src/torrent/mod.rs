@@ -23,6 +23,8 @@ use crate::{
     utils,
 };
 
+mod from;
+
 #[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema)]
 pub struct Status {
     choked: bool,
@@ -64,28 +66,6 @@ impl TryFrom<usize> for Priority {
     }
 }
 
-impl From<torrent::Priority> for Priority {
-    fn from(value: torrent::Priority) -> Self {
-        match value {
-            torrent::Priority::Disabled => Self::Disabled,
-            torrent::Priority::Low => Self::Low,
-            torrent::Priority::Medium => Self::Medium,
-            torrent::Priority::High => Self::High,
-        }
-    }
-}
-
-impl From<Priority> for torrent::Priority {
-    fn from(val: Priority) -> Self {
-        match val {
-            Priority::Disabled => torrent::Priority::Disabled,
-            Priority::Low => torrent::Priority::Low,
-            Priority::Medium => torrent::Priority::Medium,
-            Priority::High => torrent::Priority::High,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
 pub struct StateFile {
     pub path: Vec<String>,
@@ -96,19 +76,6 @@ pub struct StateFile {
     pub priority: Priority,
 }
 
-impl From<torrent::FullStateFile> for StateFile {
-    fn from(value: torrent::FullStateFile) -> Self {
-        Self {
-            index: value.index,
-            size: value.size,
-            start_piece: value.start_piece,
-            end_piece: value.end_piece,
-            path: path_components(value.path),
-            priority: value.priority.into(),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum StorageError {
@@ -117,31 +84,10 @@ pub enum StorageError {
     Bounds,
 }
 
-impl From<torrent::StorageError> for StorageError {
-    fn from(value: torrent::StorageError) -> Self {
-        match value.kind {
-            torrent::StorageErrorKind::Fs(e) => Self::Fs(e.to_string()),
-            torrent::StorageErrorKind::Hash => Self::Hash,
-            torrent::StorageErrorKind::Bounds => Self::Bounds,
-            torrent::StorageErrorKind::MissingPiece => {
-                unreachable!("missing piece can't be the reason why storage failed")
-            }
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum DownloadError {
     Storage(StorageError),
-}
-
-impl From<torrent::DownloadError> for DownloadError {
-    fn from(value: torrent::DownloadError) -> Self {
-        match value {
-            torrent::DownloadError::Storage(e) => Self::Storage(e.into()),
-        }
-    }
 }
 
 #[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
@@ -152,18 +98,6 @@ pub enum DownloadState {
     Paused,
     Pending,
     Seeding,
-}
-
-impl From<torrent::ProgressDownloadState> for DownloadState {
-    fn from(value: torrent::ProgressDownloadState) -> Self {
-        match value {
-            torrent::ProgressDownloadState::Error(e) => Self::Error { error: e.into() },
-            torrent::ProgressDownloadState::Validation => Self::Validation,
-            torrent::ProgressDownloadState::Paused => Self::Paused,
-            torrent::ProgressDownloadState::Pending => Self::Pending,
-            torrent::ProgressDownloadState::Seeding => Self::Seeding,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -180,39 +114,12 @@ pub struct StatePeer {
     pub client_name: String,
 }
 
-impl From<torrent::FullStatePeer> for StatePeer {
-    fn from(value: torrent::FullStatePeer) -> Self {
-        Self {
-            addr: value.addr.to_string(),
-            uploaded: value.uploaded,
-            upload_speed: value.upload_speed,
-            downloaded: value.downloaded,
-            download_speed: value.download_speed,
-            in_status: value.in_status.into(),
-            out_status: value.out_status.into(),
-            interested_amount: value.interested_amount,
-            pending_blocks_amount: value.pending_blocks_amount,
-            client_name: value.client_name,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "status")]
 pub enum TrackerStatus {
     Working,
     NotContacted,
     Error { message: String },
-}
-
-impl From<torrent::TrackerStatus> for TrackerStatus {
-    fn from(value: torrent::TrackerStatus) -> Self {
-        match value {
-            torrent::TrackerStatus::Working => Self::Working,
-            torrent::TrackerStatus::NotContacted => Self::NotContacted,
-            torrent::TrackerStatus::Error(message) => Self::Error { message },
-        }
-    }
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -224,14 +131,17 @@ pub struct StateTracker {
     pub status: TrackerStatus,
 }
 
-impl From<torrent::FullStateTracker> for StateTracker {
-    fn from(value: torrent::FullStateTracker) -> Self {
-        Self {
-            url: value.url,
-            announce_interval: value.announce_interval,
-            status: value.status.into(),
-        }
-    }
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionStats {
+    pub download_speed: f64,
+    pub upload_speed: f64,
+    pub connected_peers: u16,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionState {
+    pub session_stats: SessionStats,
+    pub torrents: Vec<TorrentState>,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -240,163 +150,146 @@ pub struct TorrentState {
     pub name: String,
     pub total_pieces: usize,
     pub percent: f32,
+    pub download_speed: f64,
+    pub upload_speed: f64,
     pub total_size: u64,
     pub trackers: Vec<StateTracker>,
     pub peers: Vec<StatePeer>,
     pub files: Vec<StateFile>,
+    /// This is a little too much for a state
     pub downloaded_pieces: Vec<bool>,
     pub state: DownloadState,
     pub pending_pieces: Vec<usize>,
-    pub tick_num: usize,
-}
-
-impl From<torrent::FullState> for TorrentState {
-    fn from(value: torrent::FullState) -> Self {
-        let downloaded_pieces = value
-            .bitfield
-            .all_pieces(value.total_pieces)
-            .into_iter()
-            .collect();
-        Self {
-            info_hash: utils::stringify_info_hash(&value.info_hash),
-            name: value.name,
-            total_pieces: value.total_pieces,
-            percent: value.percent,
-            total_size: value.total_size,
-            trackers: value.trackers.into_iter().map(Into::into).collect(),
-            peers: value.peers.into_iter().map(Into::into).collect(),
-            files: value.files.into_iter().map(Into::into).collect(),
-            downloaded_pieces,
-            state: value.state.into(),
-            pending_pieces: value.pending_pieces,
-            tick_num: value.tick_num,
-        }
-    }
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(tag = "change_type", content = "value", rename_all = "lowercase")]
-pub enum PeerStateChange {
-    Connect,
-    Disconnect,
-    InChoke(bool),
-    OutChoke(bool),
-    InInterested(bool),
-    OutInterested(bool),
-}
-
-impl From<torrent::PeerStateChange> for PeerStateChange {
-    fn from(value: torrent::PeerStateChange) -> Self {
-        match value {
-            torrent::PeerStateChange::Connect => Self::Connect,
-            torrent::PeerStateChange::Disconnect => Self::Disconnect,
-            torrent::PeerStateChange::InChoke(v) => Self::InChoke(v),
-            torrent::PeerStateChange::OutChoke(v) => Self::OutChoke(v),
-            torrent::PeerStateChange::InInterested(v) => Self::InInterested(v),
-            torrent::PeerStateChange::OutInterested(v) => Self::OutInterested(v),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(tag = "type", content = "change", rename_all = "lowercase")]
-pub enum StateChange {
-    PeerStateChange {
-        #[schema(value_type = String)]
-        ip: std::net::SocketAddr,
-        peer_change: PeerStateChange,
-    },
-    FinishedPiece(usize),
-    DownloadStateChange(DownloadState),
-    TrackerAnnounce(String),
-    FilePriorityChange {
-        file_idx: usize,
-        priority: Priority,
-    },
-    ValidationResult {
-        bitfield: Vec<u8>,
-    },
-}
-
-impl From<torrent::StateChange> for StateChange {
-    fn from(value: torrent::StateChange) -> Self {
-        match value {
-            torrent::StateChange::PeerStateChange { ip, change } => Self::PeerStateChange {
-                ip,
-                peer_change: change.into(),
-            },
-            torrent::StateChange::FinishedPiece(p) => Self::FinishedPiece(p),
-            torrent::StateChange::DownloadStateChange(s) => Self::DownloadStateChange(s.into()),
-            torrent::StateChange::TrackerAnnounce(t) => Self::TrackerAnnounce(t),
-            torrent::StateChange::FilePriorityChange { file_idx, priority } => {
-                Self::FilePriorityChange {
-                    file_idx,
-                    priority: priority.into(),
-                }
-            }
-            torrent::StateChange::ValidationResult { bitfield } => {
-                Self::ValidationResult { bitfield }
-            }
-        }
-    }
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct PeerDownloadStats {
-    #[schema(value_type = String)]
-    pub ip: std::net::SocketAddr,
+pub struct PeerStateChange {
     pub downloaded: u64,
     pub uploaded: u64,
-    pub download_speed: u64,
     pub upload_speed: u64,
-    pub interested_amount: usize,
-    pub pending_blocks_amount: usize,
+    pub download_speed: u64,
+    pub in_choked: bool,
+    pub in_interested: bool,
+    pub out_choked: bool,
+    pub out_interested: bool,
 }
 
-impl From<torrent::PeerDownloadStats> for PeerDownloadStats {
-    fn from(value: torrent::PeerDownloadStats) -> Self {
-        Self {
-            ip: value.ip,
-            downloaded: value.downloaded,
-            uploaded: value.uploaded,
-            download_speed: value.download_speed,
-            upload_speed: value.upload_speed,
-            interested_amount: value.interested_amount,
-            pending_blocks_amount: value.pending_blocks_amount,
-        }
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TorrentStateChange {
+    pub downloaded: u64,
+    pub uploaded: u64,
+    pub state: DownloadState,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct SessionUpdate {
+    pub connected_peers: u16,
+    pub download_speed: f64,
+    pub upload_speed: f64,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct Progress {
+    pub changed_torrents: Vec<TorrentUpdate>,
+    pub session_update: Option<SessionUpdate>,
+    pub tick_num: usize,
+}
+
+impl Progress {
+    pub fn download_speed(&self) -> u64 {
+        // self.changed_torrents.iter().map(|p| p.download_speed).sum()
+        todo!()
     }
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct DownloadProgress {
-    pub peers: Vec<PeerDownloadStats>,
-    pub percent: f32,
-    pub tick_num: usize,
-    pub changes: Vec<StateChange>,
+#[serde(rename_all = "lowercase", tag = "event_kind")]
+pub enum ProgressEvent {
+    Peer(PeerEvent),
+    State(TorrentStateChange),
+    Tracker(TrackerEvent),
+    StoragePiece(StoragePieceEvent),
+    StorageFile(StorageFileEvent),
+    ValidationComplete { valid_bitfield: Vec<u8> },
+    Session(SessionEvent),
 }
 
-impl DownloadProgress {
-    pub fn download_speed(&self) -> u64 {
-        self.peers.iter().map(|p| p.download_speed).sum()
-    }
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct PeerEvent {
+    pub ip: String,
+    pub peer_event: PeerEventKind,
 }
 
-impl From<torrent::DownloadProgress> for DownloadProgress {
-    fn from(value: torrent::DownloadProgress) -> Self {
-        let changes = value.changes.into_iter().map(Into::into).collect();
-        let peers = value.peers.into_iter().map(Into::into).collect();
-        Self {
-            peers,
-            percent: value.percent,
-            tick_num: value.tick_num,
-            changes,
-        }
-    }
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum PeerEventKind {
+    StatUpdate(PeerStateChange),
+    Disconnect,
+    Connect { client_name: String },
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TrackerEvent {
+    pub tracker_event: TrackerEventKind,
+    pub url: String,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum TrackerEventKind {
+    Reannounce { interval: std::time::Duration },
+    Failed { reason: String },
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct StoragePieceEvent {
+    pub piece: usize,
+    pub piece_event: StoragePieceEventKind,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum StoragePieceEventKind {
+    Validated,
+    HashFailed,
+    SaveFailed,
+    Finished,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct StorageFileEvent {
+    pub idx: usize,
+    pub file_event: StorageFileEventKind,
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum StorageFileEventKind {
+    PriorityChange(Priority),
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "kind")]
+pub enum SessionEvent {
+    TorrentAdd { state: TorrentState },
+    TorrentRemove { info_hash: String },
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct TorrentUpdate {
+    pub events: Vec<ProgressEvent>,
+    pub download_speed: f64,
+    pub upload_speed: f64,
+    pub total_downloaded: u64,
+    pub total_uploaded: u64,
+    pub state: DownloadState,
+    pub info_hash: [u8; 20],
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct PendingTorrent {
     pub info_hash: [u8; 20],
+    pub torrent_size: u64,
     #[serde(skip)]
     pub download_handle: DownloadHandle,
     pub torrent_info: TorrentInfo,
@@ -419,16 +312,21 @@ impl TorrentTask {
 #[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema, PartialEq)]
 pub struct CompactTorrentProgress {
     percent: f32,
-    peers_amount: usize,
-    download_speed: u64,
+    download_speed: f64,
+    upload_speed: f64,
 }
 
 impl CompactTorrentProgress {
-    pub fn new(progress: &DownloadProgress) -> Self {
+    pub fn new(progress: &TorrentUpdate, total_size: u64) -> Self {
+        let percent = if progress.total_downloaded > 0 {
+            total_size as f64 / progress.total_downloaded as f64 * 100.
+        } else {
+            0.
+        };
         Self {
-            percent: progress.percent,
-            peers_amount: progress.peers.len(),
-            download_speed: progress.download_speed(),
+            percent: percent as f32,
+            download_speed: progress.download_speed,
+            upload_speed: progress.upload_speed,
         }
     }
 }
@@ -586,16 +484,14 @@ pub struct TorrentProgress {
     pub progress: Progress,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase", tag = "type")]
-pub enum Progress {
-    Start,
-    Pending(DownloadProgress),
-    Delete,
-}
-
 #[derive(Debug, Clone)]
-pub struct TorrentProgressChannel(broadcast::Sender<Arc<TorrentProgress>>);
+pub struct TorrentProgressChannel(broadcast::Sender<Arc<Progress>>);
+
+impl torrent::ProgressConsumer for TorrentProgressChannel {
+    fn consume_progress(&mut self, progress: torrent::Progress) {
+        self.send(progress.into());
+    }
+}
 
 impl Default for TorrentProgressChannel {
     fn default() -> Self {
@@ -609,11 +505,11 @@ impl TorrentProgressChannel {
         Self(tx)
     }
 
-    pub fn send(&self, progress: TorrentProgress) {
+    pub fn send(&self, progress: Progress) {
         let _ = self.0.send(Arc::new(progress));
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<Arc<TorrentProgress>> {
+    pub fn subscribe(&self) -> broadcast::Receiver<Arc<Progress>> {
         self.0.subscribe()
     }
 }
@@ -627,21 +523,6 @@ pub struct TorrentClient {
     manager: Db,
 }
 
-pub fn progress_handler(
-    torrent_hash: [u8; 20],
-    broadcast: TorrentProgressChannel,
-) -> impl torrent::ProgressConsumer {
-    move |progress: torrent::DownloadProgress| {
-        //if progress.changes.is_empty() {
-        //    return;
-        //}
-        broadcast.send(TorrentProgress {
-            torrent_hash,
-            progress: Progress::Pending(progress.into()),
-        });
-    }
-}
-
 async fn handle_progress(
     progress_broadcast: TorrentProgressChannel,
     tasks: &'static TaskResource,
@@ -649,53 +530,73 @@ async fn handle_progress(
     manager: impl TorrentManager,
 ) {
     let mut sub = progress_broadcast.subscribe();
-    while let Ok(chunk) = sub.recv().await.as_deref() {
-        let TorrentProgress {
-            torrent_hash,
-            progress: Progress::Pending(progress),
-        } = chunk
-        else {
-            continue;
-        };
+    while let Ok(Progress {
+        session_update,
+        changed_torrents,
+        tick_num,
+        ..
+    }) = sub.recv().await.as_deref()
+    {
+        tracing::debug!(
+            tick_num,
+            connected_peers = ?session_update.as_ref().map(|v| v.connected_peers),
+            "Received torrent progress"
+        );
         let mut new_pieces = Vec::new();
-        for change in &progress.changes {
-            match change {
-                StateChange::FinishedPiece(piece) => new_pieces.push(*piece),
-                StateChange::ValidationResult { bitfield } => {
-                    if let Err(e) = manager.update_pieces(torrent_hash, bitfield).await {
-                        tracing::error!("Failed to save torrent validation result: {e}");
-                        continue;
+        for torrent in changed_torrents {
+            for event in &torrent.events {
+                match event {
+                    ProgressEvent::StoragePiece(StoragePieceEvent {
+                        piece,
+                        piece_event: StoragePieceEventKind::Finished,
+                    }) => {
+                        new_pieces.push(*piece);
                     }
+                    ProgressEvent::ValidationComplete { valid_bitfield } => {
+                        if let Err(e) = manager
+                            .update_pieces(&torrent.info_hash, &valid_bitfield)
+                            .await
+                        {
+                            tracing::error!("Failed to save torrent validation result: {e}");
+                            continue;
+                        }
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
-        }
-
-        if !new_pieces.is_empty() {
-            if let Err(e) = manager.update_torrent(torrent_hash, &new_pieces).await {
-                tracing::error!("Failed to update torrent state: {e}");
+            if !new_pieces.is_empty() {
+                if let Err(e) = manager
+                    .update_torrent(&torrent.info_hash, &new_pieces)
+                    .await
+                {
+                    tracing::error!("Failed to update torrent state: {e}");
+                    continue;
+                };
+            }
+            new_pieces.clear();
+            let mut torrents = torrents.lock().unwrap();
+            let Some(pending_torrent) = torrents
+                .iter_mut()
+                .find(|t| t.info_hash == torrent.info_hash)
+            else {
+                tracing::error!(
+                    "Torrent with info_hash {} is not found",
+                    utils::stringify_info_hash(&torrent.info_hash)
+                );
                 continue;
             };
+            let ident = pending_torrent.identifier();
+
+            let progress = CompactTorrentProgress::new(torrent, pending_torrent.torrent_size);
+            let progress_chunk = ProgressChunk {
+                identifier: ident,
+                status: ProgressStatus::Pending { progress },
+            };
+            tasks
+                .torrent_tasks
+                // fix this crap
+                .send_progress(uuid::Uuid::new_v4(), progress_chunk);
         }
-        let mut torrents = torrents.lock().unwrap();
-        let Some(pending_torrent) = torrents.iter_mut().find(|t| t.info_hash == *torrent_hash)
-        else {
-            tracing::error!(
-                "Torrent with info_hash {} is not found",
-                utils::stringify_info_hash(torrent_hash)
-            );
-            continue;
-        };
-        let ident = pending_torrent.identifier();
-        let progress = CompactTorrentProgress::new(progress);
-        let progress_chunk = ProgressChunk {
-            identifier: ident,
-            status: ProgressStatus::Pending { progress },
-        };
-        tasks
-            .torrent_tasks
-            // fix this crap
-            .send_progress(uuid::Uuid::new_v4(), progress_chunk);
     }
 }
 
@@ -705,8 +606,8 @@ impl TorrentClient {
             cancellation_token: Some(tasks.parent_cancellation_token.clone()),
             ..Default::default()
         };
-        let client = torrent::Client::new(config).await?;
         let progress_broadcast = TorrentProgressChannel::new();
+        let client = torrent::Client::new(config, progress_broadcast.clone()).await?;
         let torrents = Arc::new(Mutex::new(Vec::new()));
         tokio::spawn(handle_progress(
             progress_broadcast.clone(),
@@ -727,9 +628,6 @@ impl TorrentClient {
         let start = Instant::now();
         let mut count = 0;
         for torrent in self.manager.read_torrents().await? {
-            let progress_handler =
-                progress_handler(torrent.info.hash(), self.progress_broadcast.clone());
-
             let mut files = Vec::new();
             let mut file_offset = 0;
             for (i, file) in torrent
@@ -743,20 +641,22 @@ impl TorrentClient {
                 files.push(resolved_file);
                 file_offset += file.length();
             }
+            let total_size = torrent.info.total_size();
 
             let torrent_info = TorrentInfo {
                 name: torrent.info.name.clone(),
                 contents: TorrentContents::without_content(files),
                 piece_length: torrent.info.piece_length,
                 pieces_amount: torrent.info.pieces.len(),
-                total_size: torrent.info.total_size(),
+                total_size,
             };
             let info_hash = torrent.info.hash();
 
-            match self.client.open(torrent, progress_handler).await {
+            match self.client.open(torrent).await {
                 Ok(download_handle) => {
                     let torrent = PendingTorrent {
                         info_hash,
+                        torrent_size: total_size,
                         download_handle,
                         torrent_info,
                     };
@@ -801,25 +701,23 @@ impl TorrentClient {
     ) -> anyhow::Result<TorrentHandle> {
         self.manager.create_torrent(params.clone()).await?;
         let info_hash = params.info.hash();
-        let progress_handler = progress_handler(info_hash, self.progress_broadcast.clone());
+        let torrent_size = params.info.total_size();
 
-        let download_handle = self.client.open(params.clone(), progress_handler).await?;
+        let download_handle = self.client.open(params).await?;
 
         let torrent = PendingTorrent {
             info_hash,
+            torrent_size,
             download_handle,
             torrent_info,
         };
         let handle = torrent.handle();
         self.torrents.lock().unwrap().push(torrent);
-        self.progress_broadcast.send(TorrentProgress {
-            torrent_hash: info_hash,
-            progress: Progress::Start,
-        });
         Ok(handle)
     }
 
     pub async fn remove_download(&self, info_hash: [u8; 20]) -> Option<PendingTorrent> {
+        self.client.handle().remove_torrent(info_hash).await;
         let download = {
             let mut downloads = self.torrents.lock().unwrap();
             downloads
@@ -829,10 +727,6 @@ impl TorrentClient {
         };
         if let Some(download) = &download {
             download.download_handle.abort();
-            self.progress_broadcast.send(TorrentProgress {
-                torrent_hash: info_hash,
-                progress: Progress::Delete,
-            });
             if let Err(e) = self.manager.delete_torrent(&info_hash).await {
                 tracing::error!("Failed to remove torrent: {e}");
             };
@@ -875,28 +769,22 @@ impl TorrentClient {
     }
 
     pub async fn all_downloads(&self) -> Vec<TorrentState> {
-        use tokio::sync::oneshot;
-        let recvs: Vec<_> = self
+        self.client
+            .handle()
+            .fetch_progress(torrent::TorrentStateRequest::All)
+            .await
             .torrents
-            .lock()
-            .unwrap()
-            .iter()
-            .filter_map(|d| {
-                let (tx, rx) = oneshot::channel();
-                d.download_handle
-                    .download_tx
-                    .try_send(torrent::DownloadMessage::PostFullState { tx })
-                    .ok()?;
-                Some(rx)
-            })
-            .collect();
-        let mut torrents = Vec::new();
-        for rx in recvs {
-            if let Ok(val) = rx.await {
-                torrents.push(val.into());
-            }
-        }
-        torrents
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
+    pub async fn fetch_session_state(&self) -> SessionState {
+        self.client
+            .handle()
+            .fetch_progress(torrent::TorrentStateRequest::All)
+            .await
+            .into()
     }
 
     pub async fn full_progress(&self, info_hash: &[u8; 20]) -> Option<TorrentState> {

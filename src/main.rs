@@ -272,6 +272,7 @@ async fn main() {
         )
         .route("/torrent/open", post(torrent_api::open_torrent))
         .route("/torrent/all", get(torrent_api::all_torrents))
+        .route("/torrent/session_state", get(torrent_api::session_state))
         .route(
             "/torrent/open_torrent_file",
             post(torrent_api::open_torrent_file),

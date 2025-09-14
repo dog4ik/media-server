@@ -18,10 +18,12 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     BitField, Info,
+    progress::events,
     protocol::tracker::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
+    session::tick_context::TickContext,
     utils::{self, LengthCalculator},
 };
 
@@ -604,14 +606,24 @@ impl DownloadTracker {
         self.handle.announce(stat);
     }
 
-    pub fn handle_messages(&mut self) -> Vec<SocketAddr> {
+    pub fn handle_messages(&mut self, ctx: &mut TickContext) -> Vec<SocketAddr> {
         let mut announce_peers = Vec::new();
         while let Ok(message) = self.response_rx.try_recv() {
             match message {
                 TrackerResponse::Failure { reason } => {
+                    ctx.events.emit_tracker(
+                        self.url().to_owned(),
+                        events::TrackerEventKind::Failed {
+                            reason: reason.clone(),
+                        },
+                    );
                     self.status = TrackerStatus::Error(reason);
                 }
                 TrackerResponse::AnnounceResponse { peers, interval } => {
+                    ctx.events.emit_tracker(
+                        self.url().to_owned(),
+                        events::TrackerEventKind::Reannounce { interval },
+                    );
                     self.announce_interval = interval;
                     announce_peers.extend(peers.into_iter());
                     self.status = TrackerStatus::Working;

@@ -20,7 +20,7 @@ use crate::{
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
     server::{OptionalContentTypeQuery, Path, Query},
     torrent::{
-        DownloadContentHint, Priority, ResolveMagnetLinkPayload, TorrentClient,
+        DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState, TorrentClient,
         TorrentDownloadPayload, TorrentInfo, TorrentState,
     },
 };
@@ -153,6 +153,19 @@ where
 )]
 pub async fn all_torrents(State(client): State<&'static TorrentClient>) -> Json<Vec<TorrentState>> {
     Json(client.all_downloads().await)
+}
+
+/// Get full session state
+#[utoipa::path(
+    get,
+    path = "/api/torrent/session",
+    responses(
+        (status = 200, body = SessionState),
+    ),
+    tag = "Torrent",
+)]
+pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json<SessionState> {
+    Json(client.fetch_session_state().await)
 }
 
 /// Set file priority

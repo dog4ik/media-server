@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 use crate::{
     BitField,
+    download::DEFAULT_TICK_DURATION,
+    metric,
     peers::{Peer, PeerCommandMessage},
     protocol::{
         extension::Extension,
@@ -182,6 +184,8 @@ pub struct ActivePeer {
     pub downloaded: u64,
     /// Amount of bytes uploaded to peer
     pub uploaded: u64,
+    /// Slightly different approach to calculate peer performance
+    pub running_performance: metric::RollingSpeedMeter,
     /// Peer's performance history (holds diff rates) useful to say how peer is performing
     pub performance_history: PerformanceHistory,
     /// Current pointer to the relevant pex history
@@ -215,6 +219,7 @@ impl ActivePeer {
             out_status: Status::default(),
             downloaded: 0,
             uploaded: 0,
+            running_performance: metric::RollingSpeedMeter::new(),
             performance_history: PerformanceHistory::new(),
             pex_idx,
             last_pex_message_time: Instant::now(),
@@ -359,6 +364,23 @@ impl ActivePeer {
     #[allow(unused)]
     pub fn canonical_priority(&self, my_ip: SocketAddr) -> u32 {
         crate::protocol::peer::canonical_peer_priority(my_ip, self.ip)
+    }
+
+    pub fn current_progress_state(&self) -> crate::progress::events::PeerStateChange {
+        crate::progress::events::PeerStateChange {
+            downloaded: self.downloaded,
+            uploaded: self.uploaded,
+            upload_speed: self
+                .performance_history
+                .avg_down_speed_sec(&DEFAULT_TICK_DURATION),
+            download_speed: self
+                .performance_history
+                .avg_up_speed_sec(&DEFAULT_TICK_DURATION),
+            in_choked: self.in_status.is_choked(),
+            in_interested: self.in_status.is_interested(),
+            out_choked: self.out_status.is_choked(),
+            out_interested: self.out_status.is_interested(),
+        }
     }
 }
 

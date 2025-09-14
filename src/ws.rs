@@ -26,12 +26,12 @@ pub enum WsRequest {
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "type")]
 pub enum WsMessage {
-    AllTorrents {
-        torrents: Vec<crate::torrent::TorrentState>,
+    TorrentSessionState {
+        session: crate::torrent::SessionState,
     },
     TorrentProgress {
         #[schema(value_type = TorrentProgress)]
-        progress: Arc<TorrentProgress>,
+        progress: Arc<crate::torrent::Progress>,
     },
     Progress {
         progress: Notification,
@@ -143,9 +143,9 @@ async fn handle_request(
     match request {
         WsRequest::TorrentSubscribe => {
             tracing::debug!("Received torrents subscription");
-            let torrents = app_state.torrent_client.all_downloads().await;
+            let session = app_state.torrent_client.fetch_session_state().await;
             connection_state
-                .send(WsMessage::AllTorrents { torrents })
+                .send(WsMessage::TorrentSessionState { session })
                 .await?;
             connection_state.is_torrent_subscribed = true;
         }
@@ -163,7 +163,7 @@ async fn handle_request(
 
 async fn handle_torrent_progress(
     connection: &mut Connection,
-    progress: Arc<TorrentProgress>,
+    progress: Arc<crate::torrent::Progress>,
 ) -> anyhow::Result<()> {
     if connection.is_torrent_subscribed {
         connection

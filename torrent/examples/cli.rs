@@ -6,8 +6,7 @@ use std::{
 use clap::{ArgGroup, Parser, Subcommand};
 use tokio::sync::mpsc;
 use torrent::{
-    Client, ClientConfig, DownloadParams, DownloadProgress, DownloadState, Info, MagnetLink,
-    Priority, StateChange, TorrentFile,
+    Client, ClientConfig, DownloadParams, DownloadState, Info, MagnetLink, Priority, TorrentFile,
 };
 use tracing::Level;
 use tracing_subscriber::EnvFilter;
@@ -50,9 +49,8 @@ enum Commands {
     },
 }
 
-fn bytes_in_mb(speed: u64) -> f64 {
-    let bytes = speed;
-    let kb = bytes as f64 / 1024.;
+fn bytes_in_mb(bytes: f64) -> f64 {
+    let kb = bytes / 1024.;
     kb / 1024.
 }
 
@@ -79,23 +77,27 @@ fn parse_torrent_file(path: impl AsRef<Path>) -> anyhow::Result<TorrentFile> {
     TorrentFile::from_path(path)
 }
 
-fn show_progress(p: DownloadProgress) {
+fn show_progress(total_size: u64, progress: torrent::Progress) {
+    let Some((session_update, downloaded)) = progress.session_update.zip(
+        progress
+            .changed_torrents
+            .first()
+            .map(|v| v.total_downloaded),
+    ) else {
+        return;
+    };
     println!();
     println!();
-    let mut total_download_speed = 0;
-    let mut total_upload_speed = 0;
-    for peer in &p.peers {
-        total_download_speed += peer.download_speed;
-        total_upload_speed += peer.upload_speed;
-    }
-    println!();
-    println!("Progress: {}", p.percent);
-    println!("Total Peers: {}", p.peers.len());
+    println!("Progress: {}", downloaded as f64 / total_size as f64 * 100.);
+    println!("Total Peers: {}", session_update.connected_peers);
     println!(
         "TOTAL DOWNLOAD SPEED: {} mb",
-        bytes_in_mb(total_download_speed)
+        bytes_in_mb(session_update.download_speed)
     );
-    println!("TOTAL UPLOAD SPEED: {} mb", bytes_in_mb(total_upload_speed));
+    println!(
+        "TOTAL UPLOAD SPEED: {} mb",
+        bytes_in_mb(session_update.upload_speed)
+    );
 }
 
 #[tokio::main]
@@ -104,8 +106,9 @@ async fn main() {
         .with_max_level(Level::TRACE)
         .with_env_filter(EnvFilter::from_default_env())
         .init();
+    let (tx, mut rx) = mpsc::channel(100);
     let args = Args::parse();
-    let client = Client::new(ClientConfig::default()).await.unwrap();
+    let client = Client::new(ClientConfig::default(), tx).await.unwrap();
 
     match args.command {
         Commands::ResolveMagnet { magnet_link } => {
@@ -142,7 +145,6 @@ async fn main() {
                     unreachable!();
                 }
             };
-            let (tx, mut rx) = mpsc::channel(100);
             let output = output.unwrap_or(PathBuf::from("."));
             let files = files.map_or(
                 vec![Priority::default(); info.files_amount()],
@@ -154,19 +156,19 @@ async fn main() {
                     files
                 },
             );
+            let total_size = info.total_size();
             let torrent_params = DownloadParams::empty(info, announce_list, files, output);
-            client.open(torrent_params, tx).await.unwrap();
+            client.open(torrent_params).await.unwrap();
             loop {
                 tokio::select! {
                     Some(progress) = rx.recv() => {
-                        if progress
-                            .changes
+                        if progress.changed_torrents
                             .iter()
-                            .any(|p| *p == StateChange::DownloadStateChange(DownloadState::Seeding))
+                            .any(|ev| ev.state == DownloadState::Seeding)
                         {
                             break;
                         }
-                        show_progress(progress);
+                        show_progress(total_size, progress);
                     },
                     _ = tokio::signal::ctrl_c() => {
                         break;

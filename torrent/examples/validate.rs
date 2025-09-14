@@ -7,7 +7,7 @@ async fn main() {
     tracing_subscriber::fmt()
         .with_max_level(tracing::Level::TRACE)
         .init();
-    let client = Client::new(ClientConfig::default()).await.unwrap();
+    let client = Client::new(ClientConfig::default(), ()).await.unwrap();
     let torrent = include_bytes!("../sample.torrent");
     let torrent = TorrentFile::from_bytes(torrent).unwrap();
     let total_pieces = torrent.info.pieces.len();

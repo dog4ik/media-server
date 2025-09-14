@@ -49,10 +49,6 @@ impl PiecePicker {
         self.queue.push(index);
     }
 
-    pub fn len(&self) -> usize {
-        self.queue.len()
-    }
-
     pub fn strategy(&self) -> ScheduleStrategy {
         self.strategy
     }

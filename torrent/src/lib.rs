@@ -12,7 +12,6 @@ use peer_listener::PeerListener;
 use peers::Peer;
 use reqwest::Url;
 pub use resumability::DownloadParams;
-use session::SessionContext;
 use storage::{TorrentStorage, parts::PartsFile};
 use tokio::{
     net::TcpStream,
@@ -25,9 +24,12 @@ use tracker::{DownloadTracker, TrackerResponse, TrackerType, UdpTrackerChannel, 
 
 use crate::{
     download::Download,
+    session::{Session, session_message::SessionHandle},
     tracker::{DownloadStat, Tracker},
 };
 
+/// Data structure that holds list of banned peers
+mod ban_list;
 /// Basic bitfield implementation
 mod bitfield;
 /// Event loop of the download
@@ -36,6 +38,7 @@ mod download;
 mod file;
 /// Magnet link parsing
 mod magnet;
+mod metric;
 /// Tcp listener that accepts incoming peers
 mod peer_listener;
 /// Peer storage
@@ -44,6 +47,8 @@ mod peer_storage;
 mod peers;
 /// Strategies for picking next downloaded piece
 mod piece_picker;
+/// Various progress events dispatched to the client
+pub mod progress;
 /// BitTorrent protocol types / implementations
 mod protocol;
 /// Data used for download resume
@@ -65,22 +70,24 @@ pub use download::DownloadHandle;
 pub use download::DownloadMessage;
 pub use download::DownloadState;
 pub use download::peer::Status;
-pub use download::progress_consumer::DownloadProgress;
-pub use download::progress_consumer::FullState;
-pub use download::progress_consumer::FullStateFile;
-pub use download::progress_consumer::FullStatePeer;
-pub use download::progress_consumer::FullStateTracker;
-pub use download::progress_consumer::PeerDownloadStats;
-pub use download::progress_consumer::PeerStateChange;
-pub use download::progress_consumer::ProgressConsumer;
-pub use download::progress_consumer::ProgressDownloadState;
-pub use download::progress_consumer::StateChange;
 pub use file::TorrentFile;
 pub use magnet::MagnetLink;
 pub use piece_picker::Priority;
 pub use piece_picker::ScheduleStrategy;
+pub use progress::Progress;
+pub use progress::consumer::ProgressConsumer;
+pub use progress::events::PeerStateChange;
+pub use progress::events::ProgressEvent;
+pub use progress::full::FullSessionState;
+pub use progress::full::FullSessionStats;
+pub use progress::full::FullState;
+pub use progress::full::FullStateFile;
+pub use progress::full::FullStatePeer;
+pub use progress::full::FullStateTracker;
 pub use protocol::Info;
 pub use protocol::OutputFile;
+pub use session::session_message::SessionMessage;
+pub use session::session_message::TorrentStateRequest;
 pub use storage::StorageError;
 pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
@@ -119,11 +126,14 @@ pub struct Client {
     cancellation_token: CancellationToken,
     task_tracker: TaskTracker,
     config: ClientConfig,
-    session_context: Arc<SessionContext>,
+    session: SessionHandle,
 }
 
 impl Client {
-    pub async fn new(config: ClientConfig) -> anyhow::Result<Self> {
+    pub async fn new(
+        config: ClientConfig,
+        progress_consumer: impl progress::consumer::ProgressConsumer,
+    ) -> anyhow::Result<Self> {
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
         let task_tracker = TaskTracker::new();
         let upnp_client = match config.upnp_nat_traversal_enabled {
@@ -145,15 +155,21 @@ impl Client {
         }?;
         let udp_listener_addr = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, config.udp_listener_port);
         let udp_worker = UdpTrackerWorker::bind(udp_listener_addr).await?;
-        let udp_tracker_channel = udp_worker.spawn().await?;
+        let udp_tracker_tx = udp_worker.spawn().await?;
+
+        let session_config = session::config::SessionConfiguration {
+            cancellation_token: config.cancellation_token.clone().unwrap_or_default(),
+            ..Default::default()
+        };
+        let session = Session::spawn(session_config, progress_consumer);
 
         Ok(Self {
             ip: Arc::new(external_ip),
             peer_listener,
-            udp_tracker_tx: udp_tracker_channel,
+            udp_tracker_tx,
             cancellation_token,
             task_tracker,
-            session_context: Arc::new(SessionContext::new(config.max_peer_connections)),
+            session,
             config,
         })
     }
@@ -165,11 +181,7 @@ impl Client {
         self.task_tracker.wait().await
     }
 
-    pub async fn open(
-        &self,
-        params: DownloadParams,
-        progress_consumer: impl ProgressConsumer,
-    ) -> anyhow::Result<DownloadHandle> {
+    pub async fn open(&self, params: DownloadParams) -> anyhow::Result<DownloadHandle> {
         let child_token = self.cancellation_token.child_token();
         let hash = params.info.hash();
         let initial_stat = DownloadStat::new(&params.bitfield, &params.info);
@@ -184,8 +196,7 @@ impl Client {
             initial_stat,
             self.task_tracker.clone(),
             child_token.clone(),
-        )
-        .await;
+        );
 
         self.peer_listener.subscribe(hash, peers_tx).await;
         let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
@@ -193,7 +204,6 @@ impl Client {
         let storage_handle = storage.spawn(&self.task_tracker).await?;
 
         let download = Download::new(
-            self.session_context.clone(),
             feedback_rx,
             storage_handle,
             params,
@@ -203,9 +213,8 @@ impl Client {
             self.ip
                 .map(|ip| std::net::SocketAddr::V4(SocketAddrV4::new(ip, self.config.port))),
         );
-        self.session_context.add_torrent();
-        let download_handle = download.start(progress_consumer, &self.task_tracker);
-        Ok(download_handle)
+
+        Ok(self.session.add_torrent(download).await)
     }
 
     pub async fn validate(&self, params: DownloadParams) -> anyhow::Result<BitField> {
@@ -282,9 +291,13 @@ impl Client {
             }
         }
     }
+
+    pub fn handle(&self) -> SessionHandle {
+        self.session.clone()
+    }
 }
 
-async fn spawn_trackers(
+fn spawn_trackers(
     urls: Vec<Url>,
     info_hash: [u8; 20],
     tracker_tx: UdpTrackerChannel,
@@ -292,9 +305,11 @@ async fn spawn_trackers(
     task_tracker: TaskTracker,
     cancellation_token: CancellationToken,
 ) -> Vec<DownloadTracker> {
-    let mut handles = Vec::new();
+    let mut handles = Vec::with_capacity(urls.len());
     for url in urls {
-        let Ok(tracker_type) = TrackerType::from_url(&url, &tracker_tx) else {
+        let Ok(tracker_type) = TrackerType::from_url(&url, &tracker_tx)
+            .inspect_err(|e| tracing::warn!("Unknown tracker type: {e}"))
+        else {
             continue;
         };
         {

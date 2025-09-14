@@ -18,6 +18,7 @@ use crate::{
     peers::PeerCommandMessage,
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{Info, OutputFile, ut_metadata::UtMetadata},
+    session::tick_context::TickContext,
     utils::LengthCalculator,
 };
 
@@ -739,15 +740,18 @@ impl Scheduler {
             peer.set_out_interest(true).expect("channel is empty");
         }
         for piece in peer.bitfield.pieces() {
+            // Ensure that we don't exceed 255 peers for each torrent so rarity don't overflow
             self.piece_table[piece].rarity += 1;
         }
         self.peers.push(peer);
     }
 
-    pub fn register_performance(&mut self) {
+    pub fn register_performance(&mut self, ctx: &TickContext) {
         for peer in self.peers.iter_mut() {
-            let newest_performance = Performance::new(peer.downloaded, peer.uploaded);
-            peer.performance_history.update(newest_performance);
+            let latest_performance = Performance::new(peer.downloaded, peer.uploaded);
+            peer.performance_history.update(latest_performance);
+            peer.running_performance
+                .update(ctx.tick_start, latest_performance);
         }
     }
 
@@ -859,13 +863,8 @@ impl Scheduler {
     }
 
     /// Download progress percent
-    pub fn downloaded_pieces_percent(&self) -> f32 {
-        let total_pieces = self.picker.len() + self.pending_pieces.len() + self.downloaded_pieces;
-        // Happens when all pieces are being saved at the same time.
-        if total_pieces == 0 {
-            return 100.;
-        }
-        self.downloaded_pieces as f32 / total_pieces as f32 * 100.
+    pub fn total_downloaded_percent(&self) -> f32 {
+        self.downloaded_pieces as f32 / self.piece_table.len() as f32 * 100.
     }
 
     pub fn strategy(&self) -> ScheduleStrategy {

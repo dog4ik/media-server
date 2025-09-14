@@ -7,19 +7,19 @@ use std::{
 
 use anyhow::Context;
 use bytes::Bytes;
-use progress_consumer::{DownloadProgress, ProgressConsumer};
 use tokio::{sync::mpsc, task::JoinSet};
-use tokio_util::{sync::CancellationToken, task::TaskTracker};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker, PeerDownloadStats,
-    PeerStateChange, StateChange,
+    DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker,
     bitfield::BitField,
+    metric,
     peer_listener::NewPeer,
     peer_storage::PeerStorage,
     peers::{Peer, PeerError, PeerIPC},
     piece_picker::{Priority, ScheduleStrategy},
+    progress::{self, events},
     protocol::{
         extension::Extension,
         peer::PeerMessage,
@@ -28,14 +28,12 @@ use crate::{
     },
     scheduler::{PendingFiles, Scheduler},
     seeder::Seeder,
-    session::SessionContext,
+    session::tick_context::TickContext,
     storage::{StorageError, StorageFeedback, StorageHandle, StorageResult},
     tracker::{DownloadStat, DownloadTracker},
 };
 
 pub mod peer;
-/// Torrent download progress types
-pub mod progress_consumer;
 
 #[derive(Debug)]
 pub enum DownloadMessage {
@@ -299,9 +297,12 @@ const PEX_HISTORY_CLEANUP_THRESHOLD: usize = 500;
 /// Glue between active peers, scheduler, storage, udp listener
 #[derive(Debug)]
 pub struct Download {
-    session: std::sync::Arc<SessionContext>,
-    info_hash: [u8; 20],
+    pub info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
+    commands: (
+        mpsc::Sender<DownloadMessage>,
+        mpsc::Receiver<DownloadMessage>,
+    ),
     storage_rx: mpsc::Receiver<Result<StorageFeedback, StorageError>>,
     new_peers: mpsc::Receiver<NewPeer>,
     trackers: Vec<DownloadTracker>,
@@ -310,20 +311,39 @@ pub struct Download {
     pex_history: PexHistory,
     cancellation_token: CancellationToken,
     state: DownloadState,
-    tick_duration: Duration,
     last_optimistic_unchoke: Instant,
     last_choke: Instant,
     stat: DownloadStat,
     seeder: Seeder,
-    changes: Vec<StateChange>,
+    running_performance: metric::RollingSpeedMeter,
     info: crate::Info,
-    tick_num: usize,
     peer_storage: PeerStorage,
 }
 
 impl Download {
+    pub fn performance(&self) -> &metric::RollingSpeedMeter {
+        &self.running_performance
+    }
+
+    pub fn state(&self) -> DownloadState {
+        self.state.clone()
+    }
+
+    pub fn connections_count(&self) -> usize {
+        self.scheduler.peers.len()
+    }
+
+    pub fn total_download(&self) -> u64 {
+        self.stat.downloaded
+    }
+
+    pub fn total_uploaded(&self) -> u64 {
+        self.stat.uploaded
+    }
+}
+
+impl Download {
     pub fn new(
-        session: std::sync::Arc<SessionContext>,
         storage_feedback: mpsc::Receiver<StorageResult<StorageFeedback>>,
         storage: StorageHandle,
         download_params: DownloadParams,
@@ -347,11 +367,11 @@ impl Download {
         let scheduler = Scheduler::new(&info, pending_files, &download_params.bitfield);
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
-        // TODO: Known external ip is not guaranteed!
         let peer_storage = PeerStorage::new(vec![], client_external_ip);
 
+        let commands = mpsc::channel(10);
+
         Self {
-            session,
             new_peers,
             trackers,
             info_hash,
@@ -362,63 +382,51 @@ impl Download {
             pex_history: PexHistory::new(),
             cancellation_token,
             state,
-            tick_duration: DEFAULT_TICK_DURATION,
             last_optimistic_unchoke: Instant::now(),
             last_choke: Instant::now(),
             stat,
             seeder,
-            changes: Vec::new(),
             info,
-            tick_num: 0,
+            commands,
             peer_storage,
+            running_performance: metric::RollingSpeedMeter::new(),
         }
     }
 
-    pub fn start(
-        self,
-        progress: impl ProgressConsumer,
-        task_tracker: &TaskTracker,
-    ) -> DownloadHandle {
-        let (download_tx, download_rx) = mpsc::channel(100);
-        let download_handle = DownloadHandle {
-            download_tx,
+    pub fn make_handle(&self) -> DownloadHandle {
+        DownloadHandle {
+            download_tx: self.commands.0.clone(),
             cancellation_token: self.cancellation_token.clone(),
-        };
-        let ctx = self.session.clone();
-        task_tracker.spawn(async move {
-            if let Err(e) = self.work(progress, download_rx).await {
-                tracing::error!("Torrent download quit with error: {e}");
-            };
-            ctx.remove_torrent();
-        });
-        download_handle
+        }
     }
 
-    fn handle_peer_messages(&mut self, peer_idx: usize) {
+    fn handle_peer_messages(&mut self, peer_idx: usize, ctx: &mut TickContext) {
+        // This single clone holds the entire codebase in piece.
         let peer_rx = self.scheduler.peers[peer_idx].message_rx.clone();
         let ip = self.scheduler.peers[peer_idx].ip;
+        let state_before = self.scheduler.peers[peer_idx].current_progress_state();
 
         while let Ok(peer_msg) = peer_rx.try_recv() {
-            let mut add_peer_change = |change: PeerStateChange| {
-                self.changes
-                    .push(StateChange::PeerStateChange { ip, change })
-            };
+            // let mut add_peer_change = |change: PeerStateChange| {
+            //     self.changes
+            //         .push(StateChange::PeerStateChange { ip, change })
+            // };
             match peer_msg {
                 PeerMessage::Choke => {
                     self.scheduler.handle_peer_choke(peer_idx);
-                    add_peer_change(PeerStateChange::InChoke(true));
+                    // add_peer_change(PeerStateChange::InChoke(true));
                 }
                 PeerMessage::Unchoke => {
                     self.scheduler.handle_peer_unchoke(peer_idx);
-                    add_peer_change(PeerStateChange::InChoke(false));
+                    // add_peer_change(PeerStateChange::InChoke(false));
                 }
                 PeerMessage::Interested => {
                     self.scheduler.handle_peer_interest(peer_idx);
-                    add_peer_change(PeerStateChange::InInterested(true));
+                    // add_peer_change(PeerStateChange::InInterested(true));
                 }
                 PeerMessage::NotInterested => {
                     self.scheduler.handle_peer_uninterest(peer_idx);
-                    add_peer_change(PeerStateChange::InInterested(false));
+                    // add_peer_change(PeerStateChange::InInterested(false));
                 }
                 PeerMessage::Have { index } => self
                     .scheduler
@@ -475,8 +483,13 @@ impl Download {
         }
 
         let peer = &self.scheduler.peers[peer_idx];
+        let state_after = peer.current_progress_state();
+        if state_after != state_before {
+            ctx.events
+                .emit_peer(peer.ip, events::PeerEventKind::StatUpdate(state_after));
+        }
         if !peer.in_status.is_choked() && peer.out_status.is_interested() {
-            self.scheduler.schedule(peer_idx, &self.tick_duration);
+            self.scheduler.schedule(peer_idx, &ctx.tick_interval);
         }
     }
 
@@ -511,79 +524,58 @@ impl Download {
         Ok(())
     }
 
-    async fn work(
-        mut self,
-        mut progress: impl ProgressConsumer,
-        mut commands_rx: mpsc::Receiver<DownloadMessage>,
-    ) -> anyhow::Result<()> {
-        // initial tracker announce
+    pub fn tick(&mut self, ctx: &mut TickContext) {
+        // 1. We must remove dropped clients.
+
+        while let Some(peer) = self.peers_handles.try_join_next() {
+            self.handle_peer_join(ctx, peer);
+        }
+
+        match self.state {
+            DownloadState::Error(_) => self.process_paused_tick(),
+            DownloadState::Validation { .. } => self.process_paused_tick(),
+            DownloadState::Paused => self.process_paused_tick(),
+            DownloadState::Pending | DownloadState::Seeding => self.process_active_tick(ctx),
+        };
+
+        while let Ok(storage_update) = self.storage_rx.try_recv() {
+            self.handle_storage_feedback(ctx, storage_update);
+        }
+
+        self.scheduler.register_performance(&ctx);
+
+        self.running_performance.update(
+            ctx.tick_start,
+            peer::Performance {
+                downloaded: self.stat.downloaded,
+                uploaded: self.stat.uploaded,
+            },
+        );
+
+        self.handle_tracker_updates(ctx);
+    }
+
+    /// Announce tracker at the start
+    pub fn initial_tracker_announce(&mut self) {
         for tracker in &mut self.trackers {
             tracker.announce(self.stat);
         }
-
-        let mut tick_interval = tokio::time::interval(self.tick_duration);
-
-        loop {
-            let loop_start = Instant::now();
-            tracing::trace!(download_state = %self.state, tick_num = %self.tick_num, "Started new download tick");
-            // 1. We must remove dropped clients.
-
-            while let Some(peer) = self.peers_handles.try_join_next() {
-                self.handle_peer_join(peer);
-            }
-
-            match self.state {
-                DownloadState::Error(_) => self.process_paused_tick(),
-                DownloadState::Validation { .. } => self.process_paused_tick(),
-                DownloadState::Paused => self.process_paused_tick(),
-                DownloadState::Pending | DownloadState::Seeding => {
-                    self.process_active_tick(loop_start).await
-                }
-            };
-
-            while let Ok(storage_update) = self.storage_rx.try_recv() {
-                self.handle_storage_feedback(storage_update);
-            }
-
-            self.scheduler.register_performance();
-            self.handle_tracker_updates(loop_start);
-
-            self.handle_progress_dispatch(&mut progress);
-
-            tracing::trace!(took = ?loop_start.elapsed(), "Download tick finished");
-            self.tick_num += 1;
-
-            loop {
-                // 4. We sleep until the next tick
-                tokio::select! {
-                    _ = tick_interval.tick() => {
-                        break;
-                    }
-                    Some(command) = commands_rx.recv() => self.handle_command(command).await,
-                    _ = self.cancellation_token.cancelled() => {
-                        self.handle_shutdown().await;
-                        return Ok(());
-                    }
-                }
-            }
-        }
     }
 
-    fn handle_tracker_updates(&mut self, loop_start: Instant) {
+    fn handle_tracker_updates(&mut self, ctx: &mut TickContext) {
         for tracker in &mut self.trackers {
-            if loop_start.duration_since(tracker.last_announced_at) > tracker.announce_interval {
-                self.changes
-                    .push(StateChange::TrackerAnnounce(tracker.url().to_owned()));
+            if ctx.tick_start.duration_since(tracker.last_announced_at) > tracker.announce_interval
+            {
                 tracker.announce(self.stat);
             }
 
-            for ip in tracker.handle_messages() {
+            for ip in tracker.handle_messages(ctx) {
                 self.peer_storage.add(ip);
             }
         }
     }
 
-    fn set_download_state(&mut self, new_state: DownloadState) {
+    fn set_download_state(&mut self, ctx: &mut TickContext, new_state: DownloadState) {
         if new_state == self.state {
             tracing::warn!(%new_state, "Redundant state change");
             return;
@@ -612,8 +604,11 @@ impl Download {
             }
         }
 
-        self.changes
-            .push(StateChange::DownloadStateChange(new_state.into()));
+        ctx.events.emit_state(events::TorrentStateChange {
+            downloaded: 0,
+            uploaded: 0,
+            state: new_state,
+        });
         self.state = new_state;
     }
 
@@ -626,7 +621,7 @@ impl Download {
         {}
     }
 
-    async fn process_active_tick(&mut self, loop_start: Instant) {
+    fn process_active_tick(&mut self, ctx: &mut TickContext) {
         // 2. We iterate over all peers, measure performance, schedule more blocks, save ready
         //    blocks, handle their messages
 
@@ -637,10 +632,10 @@ impl Download {
         // 99% of time spent here
         let handle_peer_messages = Instant::now();
         for i in 0..self.scheduler.peers.len() {
-            self.handle_peer_messages(i);
+            self.handle_peer_messages(i, ctx);
             let peer = &mut self.scheduler.peers[i];
             let pex_idx = peer.pex_idx;
-            if peer.last_pex_message_time.duration_since(loop_start) > PEX_MESSAGE_INTERVAL {
+            if peer.last_pex_message_time.duration_since(ctx.tick_start) > PEX_MESSAGE_INTERVAL {
                 peer.send_pex_message(&self.pex_history);
             }
             if pex_idx < min_pex_tip {
@@ -690,13 +685,14 @@ impl Download {
         // 3. Once we have everyone's performance up to date we change our choke status if
         //    it is time for optimistic unchoke/choke interval
 
-        if loop_start.duration_since(self.last_optimistic_unchoke) > OPTIMISTIC_UNCHOKE_INTERVAL {
-            self.last_optimistic_unchoke = loop_start;
+        if ctx.tick_start.duration_since(self.last_optimistic_unchoke) > OPTIMISTIC_UNCHOKE_INTERVAL
+        {
+            self.last_optimistic_unchoke = ctx.tick_start;
             // do optimistic unchoke
         }
 
-        if loop_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
-            self.last_choke = loop_start;
+        if ctx.tick_start.duration_since(self.last_choke) > CHOKE_INTERVAL {
+            self.last_choke = ctx.tick_start;
             self.scheduler.rechoke_peer();
             // choke someone
         }
@@ -705,12 +701,11 @@ impl Download {
             .peer_storage
             .join_connected_peer(self.scheduler.piece_table.len())
         {
-            self.handle_new_peer(peer);
+            self.handle_new_peer(ctx, peer);
         }
 
-        let max_connections_per_torrent = self.session.max_connections_per_torrent();
-
-        let mut allowed_new_connections = max_connections_per_torrent
+        let mut allowed_new_connections = ctx
+            .allowed_connections
             .saturating_sub(self.scheduler.peers.len() + self.peer_storage.pending_amount());
 
         while let Ok(new_peer) = self.new_peers.try_recv() {
@@ -723,7 +718,7 @@ impl Download {
                             .is_some()
                         {
                             allowed_new_connections -= 1;
-                            self.handle_new_peer(peer);
+                            self.handle_new_peer(ctx, peer);
                         }
                     } else {
                         self.peer_storage
@@ -743,7 +738,7 @@ impl Download {
         }
     }
 
-    fn handle_new_peer(&mut self, peer: Peer) {
+    fn handle_new_peer(&mut self, ctx: &mut TickContext, peer: Peer) {
         let (message_tx, message_rx) = flume::bounded(PEER_OUT_CHANNEL_CAPACITY);
         let (peer_message_tx, peer_message_rx) = flume::bounded(PEER_IN_CHANNEL_CAPACITY);
         let child_token = self.cancellation_token.child_token();
@@ -783,19 +778,22 @@ impl Download {
                 tracing::warn!("Failed to send pex initial message to peer: {e}")
             };
         }
-        self.changes.push(StateChange::PeerStateChange {
-            ip: active_peer.ip,
-            change: PeerStateChange::Connect,
-        });
-        self.session.add_peer();
+        ctx.events.emit_peer(
+            active_peer.ip,
+            events::PeerEventKind::Connect {
+                client_name: active_peer.client_name().to_owned(),
+            },
+        );
+        // self.session.add_peer();
         self.scheduler.add_peer(active_peer);
     }
 
     fn handle_peer_join(
         &mut self,
+        ctx: &mut TickContext,
         join_res: Result<(Uuid, Result<(), PeerError>), tokio::task::JoinError>,
     ) {
-        self.session.remove_peer();
+        // self.session.remove_peer();
         if let Ok((uuid, Err(peer_err))) = &join_res {
             tracing::trace!(
                 "Peer with id: {} joined with error: {:?} {}",
@@ -810,10 +808,8 @@ impl Download {
                 let idx = self.scheduler.get_peer_idx(&uuid).unwrap();
                 if let Some(removed_peer) = self.scheduler.remove_peer(idx) {
                     self.peer_storage.join_disconnected_peer(removed_peer);
-                    self.changes.push(StateChange::PeerStateChange {
-                        ip: removed_peer,
-                        change: PeerStateChange::Disconnect,
-                    });
+                    ctx.events
+                        .emit_peer(removed_peer, events::PeerEventKind::Disconnect);
                     self.pex_history
                         .push_value(PexHistoryEntry::dropped(removed_peer));
                 };
@@ -824,53 +820,20 @@ impl Download {
         };
     }
 
-    fn handle_progress_dispatch(&mut self, progress_consumer: &mut impl ProgressConsumer) {
-        let percent = match self.state {
-            DownloadState::Validation { validated_amount } => {
-                validated_amount as f32 / self.scheduler.piece_table.len() as f32 * 100.
-            }
-            _ => self.scheduler.downloaded_pieces_percent(),
-        };
-        let peers = self
-            .scheduler
-            .peers
-            .iter()
-            .map(|p| {
-                let download_speed = p
-                    .performance_history
-                    .avg_down_speed_sec(&self.tick_duration);
-                let upload_speed = p.performance_history.avg_up_speed_sec(&self.tick_duration);
-                PeerDownloadStats {
-                    ip: p.ip,
-                    downloaded: p.downloaded,
-                    uploaded: p.uploaded,
-                    interested_amount: p.interested_pieces.amount(),
-                    download_speed,
-                    upload_speed,
-                    pending_blocks_amount: p.pending_blocks,
-                }
-            })
-            .collect();
-        let mut changes = Vec::new();
-        changes.append(&mut self.changes);
-        let progress = DownloadProgress {
-            tick_num: self.tick_num,
-            peers,
-            percent,
-            changes,
-        };
-        progress_consumer.consume_progress(progress);
-    }
-
-    fn handle_storage_feedback(&mut self, storage_update: Result<StorageFeedback, StorageError>) {
+    fn handle_storage_feedback(
+        &mut self,
+        ctx: &mut TickContext,
+        storage_update: Result<StorageFeedback, StorageError>,
+    ) {
         match storage_update {
             Ok(StorageFeedback::Saved { piece_i }) => {
                 self.stat.downloaded +=
                     self.scheduler.piece_length_measurer.piece_length(piece_i) as u64;
                 self.scheduler.add_piece(piece_i);
-                self.changes.push(StateChange::FinishedPiece(piece_i));
+                ctx.events
+                    .emit_piece(piece_i, events::StoragePieceEventKind::Finished);
                 if self.scheduler.is_torrent_finished() {
-                    self.set_download_state(DownloadState::Seeding);
+                    self.set_download_state(ctx, DownloadState::Seeding);
                     for peer in &mut self.scheduler.peers {
                         peer.pending_blocks = 0;
                     }
@@ -880,6 +843,7 @@ impl Download {
                 self.scheduler.fail_piece(piece);
                 match kind {
                     crate::storage::StorageErrorKind::Fs(_) => self.set_download_state(
+                        ctx,
                         DownloadState::Error(DownloadError::Storage(StorageError { kind, piece })),
                     ),
                     crate::storage::StorageErrorKind::Hash => {}
@@ -905,9 +869,9 @@ impl Download {
                     if *validated_amount == self.scheduler.piece_table.len() {
                         tracing::info!("Torrent validation finished, changing download status");
                         if self.scheduler.is_torrent_finished() {
-                            self.set_download_state(DownloadState::Seeding);
+                            self.set_download_state(ctx, DownloadState::Seeding);
                         } else {
-                            self.set_download_state(DownloadState::Pending)
+                            self.set_download_state(ctx, DownloadState::Pending)
                         };
                     }
                 } else {
@@ -919,13 +883,15 @@ impl Download {
         }
     }
 
-    pub async fn handle_command(&mut self, command: DownloadMessage) {
+    pub async fn handle_command(&mut self, ctx: &mut TickContext<'_>, command: DownloadMessage) {
         match command {
             DownloadMessage::SetStrategy(strategy) => self.scheduler.set_strategy(strategy),
             DownloadMessage::SetFilePriority { file_idx, priority } => {
-                self.changes
-                    .push(StateChange::FilePriorityChange { file_idx, priority });
                 if self.scheduler.change_file_priority(file_idx, priority) {
+                    ctx.events.emit_file(
+                        file_idx,
+                        events::StorageFileEventKind::PriorityChange(priority),
+                    );
                     if priority == Priority::Disabled {
                         self.storage.disable_file(file_idx).await;
                     } else {
@@ -937,9 +903,12 @@ impl Download {
                 if let DownloadState::Validation { .. } = self.state {
                     tracing::warn!("Ignoring redundant validation request");
                 } else {
-                    self.set_download_state(DownloadState::Validation {
-                        validated_amount: 0,
-                    });
+                    self.set_download_state(
+                        ctx,
+                        DownloadState::Validation {
+                            validated_amount: 0,
+                        },
+                    );
                     self.storage.validate().await;
                 }
             }
@@ -948,23 +917,23 @@ impl Download {
                 self.cancellation_token.cancel();
             }
             DownloadMessage::Pause => {
-                self.set_download_state(DownloadState::Paused);
+                self.set_download_state(ctx, DownloadState::Paused);
             }
             DownloadMessage::Resume => {
                 if self.scheduler.is_torrent_finished() {
-                    self.set_download_state(DownloadState::Seeding);
+                    self.set_download_state(ctx, DownloadState::Seeding);
                 } else {
-                    self.set_download_state(DownloadState::Pending);
+                    self.set_download_state(ctx, DownloadState::Pending);
                 }
             }
             DownloadMessage::PostFullState { tx } => {
                 tracing::debug!("Dispatching full torrent progress");
-                let _ = tx.send(self.full_state());
+                let _ = tx.send(self.full_state(ctx));
             }
         };
     }
 
-    pub fn full_state(&self) -> FullState {
+    pub fn full_state(&self, ctx: &mut TickContext) -> FullState {
         let trackers = self
             .trackers
             .iter()
@@ -984,10 +953,8 @@ impl Download {
                 addr: p.ip,
                 uploaded: p.uploaded,
                 downloaded: p.downloaded,
-                upload_speed: p.performance_history.avg_up_speed_sec(&self.tick_duration),
-                download_speed: p
-                    .performance_history
-                    .avg_down_speed_sec(&self.tick_duration),
+                upload_speed: p.performance_history.avg_up_speed_sec(&ctx.tick_interval),
+                download_speed: p.performance_history.avg_down_speed_sec(&ctx.tick_interval),
                 in_status: p.in_status,
                 out_status: p.out_status,
                 interested_amount: p.interested_pieces.amount(),
@@ -1023,13 +990,15 @@ impl Download {
         let name = self.info.name.clone();
         let total_size = self.info.total_size();
         let total_pieces = self.info.pieces.len();
-        let percent = self.scheduler.downloaded_pieces_percent();
-        let tick_num = self.tick_num;
+        let percent = self.scheduler.total_downloaded_percent();
+        let (download_speed, upload_speed) = self.running_performance.speed();
 
         FullState {
             name,
             total_pieces,
             percent,
+            download_speed,
+            upload_speed,
             total_size,
             info_hash,
             trackers,
@@ -1038,7 +1007,6 @@ impl Download {
             bitfield,
             state: self.state.into(),
             pending_pieces: self.scheduler.pending_pieces.clone(),
-            tick_num,
         }
     }
 
@@ -1052,6 +1020,26 @@ impl Download {
         self.pex_history.shrink(min_tip);
         for peer in &mut self.scheduler.peers {
             peer.pex_idx -= min_tip;
+        }
+    }
+
+    pub fn construct_torrent_update(
+        &self,
+        events: events::TorrentTickEvents,
+    ) -> progress::TorrentUpdate {
+        let (download_speed, upload_speed) = self.running_performance.speed();
+        let peer::Performance {
+            downloaded,
+            uploaded,
+        } = self.running_performance.total_downloaded();
+        progress::TorrentUpdate {
+            events,
+            download_speed,
+            upload_speed,
+            total_downloaded: downloaded,
+            total_uploaded: uploaded,
+            state: self.state,
+            info_hash: self.info_hash,
         }
     }
 }
