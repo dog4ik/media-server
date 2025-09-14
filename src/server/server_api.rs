@@ -2417,7 +2417,14 @@ pub async fn server_configuration() -> Json<Vec<SerializedSetting>> {
     tag = "Configuration",
 )]
 pub async fn server_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
+    #[cfg(debug_assertions)]
+    {
+        concat!(env!("CARGO_PKG_VERSION"), "\n", "debug build")
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        concat!(env!("CARGO_PKG_VERSION"), "\n", "release build")
+    }
 }
 
 /// Server capabalities
