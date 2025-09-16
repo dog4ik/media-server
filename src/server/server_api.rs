@@ -2797,6 +2797,8 @@ pub async fn root_dirs() -> Json<BrowseRootDirs> {
     ),
     responses(
         (status = 200, body = BrowseDirectory),
+        (status = 404, body = AppError, description = "Directory is not found"),
+        (status = 500, body = AppError, description = "Invalid permissions, other errors"),
     ),
     tag = "FileBrowser",
 )]

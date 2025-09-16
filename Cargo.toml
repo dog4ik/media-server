@@ -6,10 +6,6 @@ name = "media-server"
 version = "0.4.5"
 edition = "2024"
 
-[toolchain]
-channel = "nightly"
-components = ["rustfmt", "clippy"]
-
 [features]
 windows-tray = ["dep:tray-icon", "dep:open", "dep:image", "dep:winit"]
 

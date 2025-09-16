@@ -237,8 +237,13 @@ pub struct TrackerEvent {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "kind")]
 pub enum TrackerEventKind {
-    Reannounce { interval: std::time::Duration },
-    Failed { reason: String },
+    Reannounce {
+        #[schema(value_type = crate::server::SerdeDuration)]
+        interval: std::time::Duration,
+    },
+    Failed {
+        reason: String,
+    },
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
