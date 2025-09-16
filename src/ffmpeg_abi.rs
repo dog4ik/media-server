@@ -2,7 +2,7 @@ use std::{path::Path, time::Duration};
 
 use anyhow::Context;
 use ffmpeg_next::{codec, format::stream::Disposition, media};
-use tokio::sync::OnceCell;
+use tokio::sync::{OnceCell, Semaphore};
 
 use crate::library::{AudioCodec, Resolution, SubtitlesCodec, VideoCodec};
 
@@ -72,20 +72,25 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Video {
     fn try_from(stream: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
         let params = stream.parameters();
 
-        let (level, profile) = unsafe {
-            let av_codec_params = params.as_ptr();
-            if av_codec_params.is_null() {
-                anyhow::bail!("av codec params is null");
+        let width;
+        let height;
+        let bit_rate;
+        let profile;
+        let level;
+        unsafe {
+            let p = params.as_ptr();
+            if p.is_null() {
+                anyhow::bail!("codec parameters null");
             }
-            ((*av_codec_params).level, (*av_codec_params).profile)
+            profile = (*p).profile;
+            bit_rate = (*p).bit_rate as usize;
+            width = (*p).width as u32;
+            height = (*p).height as u32;
+            level = (*p).level;
         };
 
-        let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
-        let video = codec.decoder().video()?;
-        let width = video.width();
-        let height = video.height();
-        let bit_rate = video.bit_rate();
-        let codec = match (params.id(), video.profile()) {
+        let raw_profile = ffmpeg_next::codec::Profile::from((params.id(), profile));
+        let codec = match (params.id(), raw_profile) {
             (codec::Id::H264, codec::Profile::H264(_)) => VideoCodec::H264,
             (codec::Id::H264, codec::Profile::Unknown) => VideoCodec::H264,
             (codec::Id::HEVC, codec::Profile::HEVC(_)) => VideoCodec::Hevc,
@@ -158,18 +163,23 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             (disposition & Disposition::HEARING_IMPAIRED) == Disposition::HEARING_IMPAIRED;
         let is_visual_impaired =
             (disposition & Disposition::VISUAL_IMPAIRED) == Disposition::VISUAL_IMPAIRED;
-        let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
-        let audio = codec.decoder().audio()?;
-        let mut profile = unsafe {
-            let p = audio.as_ptr();
+        let params = stream.parameters();
+
+        let mut profile;
+        let channels;
+        let bit_rate;
+        let sample_rate;
+
+        unsafe {
+            let p = params.as_ptr();
             if p.is_null() {
                 anyhow::bail!("codec context is null");
             }
-            (*p).profile
+            profile = (*p).profile;
+            channels = (*p).ch_layout.nb_channels as u16;
+            bit_rate = (*p).bit_rate as usize;
+            sample_rate = (*p).sample_rate as u32;
         };
-        let bit_rate = audio.bit_rate();
-        let channels = audio.channels();
-        let sample_rate = audio.rate();
 
         let mut language = None;
 
@@ -183,7 +193,8 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             }
         }
 
-        let codec = match (audio.id(), audio.profile()) {
+        let raw_profile = ffmpeg_next::codec::Profile::from((params.id(), profile));
+        let codec = match (params.id(), raw_profile) {
             (codec::Id::AAC, codec::Profile::AAC(_)) => {
                 // adjust profile to follow the standard
                 // ffmpeg aac profiles have 0 based index
@@ -245,8 +256,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
             (disposition & Disposition::HEARING_IMPAIRED) == Disposition::HEARING_IMPAIRED;
         let is_visual_impaired =
             (disposition & Disposition::VISUAL_IMPAIRED) == Disposition::VISUAL_IMPAIRED;
-        let codec = ffmpeg_next::codec::context::Context::from_parameters(stream.parameters())?;
-        let subtitle = codec.decoder().subtitle()?;
+        let params = stream.parameters();
         let mut language = None;
 
         for (k, v) in &stream.metadata() {
@@ -259,7 +269,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
             }
         }
 
-        let codec = match subtitle.id() {
+        let codec = match params.id() {
             codec::Id::SRT | codec::Id::SUBRIP => SubtitlesCodec::SubRip,
             codec::Id::WEBVTT => SubtitlesCodec::WebVTT,
             codec::Id::DVD_SUBTITLE => SubtitlesCodec::DvdSubtitle,
@@ -314,7 +324,7 @@ pub enum StreamType {
     Attachment(Track<Attachment>),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct ProbeOutput {
     streams: Vec<StreamType>,
     chapters: Vec<Chapter>,
@@ -484,14 +494,18 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
     }
 }
 
+static SEMAPHORE: Semaphore = Semaphore::const_new(5);
+
 pub async fn get_metadata(path: impl AsRef<Path>) -> anyhow::Result<ProbeOutput> {
     let path = path.as_ref().to_path_buf();
     tracing::trace!(
         "Getting metadata for a file: {}",
         Path::new(path.file_name().unwrap()).display()
     );
+    let permit = SEMAPHORE.acquire().await.unwrap();
     tokio::task::spawn_blocking(move || {
         let format = ffmpeg_next::format::input(&path)?;
+        drop(permit);
         ProbeOutput::try_from(format)
     })
     .await
