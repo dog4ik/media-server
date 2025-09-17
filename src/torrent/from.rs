@@ -259,7 +259,9 @@ impl From<events::PeerEventKind> for super::PeerEventKind {
                 Self::StatUpdate(peer_state_change.into())
             }
             events::PeerEventKind::Disconnect => Self::Disconnect,
-            events::PeerEventKind::Connect { client_name } => Self::Connect { client_name },
+            events::PeerEventKind::Connect { state } => Self::Connect {
+                state: (*state).into(),
+            },
         }
     }
 }
@@ -330,9 +332,9 @@ impl From<events::StorageFileEvent> for super::StorageFileEvent {
 impl From<events::StorageFileEventKind> for super::StorageFileEventKind {
     fn from(value: events::StorageFileEventKind) -> Self {
         match value {
-            events::StorageFileEventKind::PriorityChange(priority) => {
-                Self::PriorityChange(priority.into())
-            }
+            events::StorageFileEventKind::PriorityChange(priority) => Self::PriorityChange {
+                priority: priority.into(),
+            },
         }
     }
 }

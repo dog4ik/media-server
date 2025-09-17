@@ -22,6 +22,7 @@ use crate::{
         ut_metadata::UtMessage,
     },
     scheduler,
+    session::tick_context::TickContext,
 };
 
 #[derive(Debug, Clone, Copy, Default, serde::Serialize)]
@@ -380,6 +381,25 @@ impl ActivePeer {
             in_interested: self.in_status.is_interested(),
             out_choked: self.out_status.is_choked(),
             out_interested: self.out_status.is_interested(),
+        }
+    }
+
+    pub fn state(&self, ctx: &TickContext) -> crate::FullStatePeer {
+        crate::FullStatePeer {
+            addr: self.ip,
+            uploaded: self.uploaded,
+            downloaded: self.downloaded,
+            upload_speed: self
+                .performance_history
+                .avg_up_speed_sec(&ctx.tick_interval),
+            download_speed: self
+                .performance_history
+                .avg_down_speed_sec(&ctx.tick_interval),
+            in_status: self.in_status,
+            out_status: self.out_status,
+            interested_amount: self.interested_pieces.amount(),
+            pending_blocks_amount: self.pending_blocks,
+            client_name: self.client_name().to_string(),
         }
     }
 }

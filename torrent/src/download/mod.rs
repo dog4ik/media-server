@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::{
-    DownloadParams, FullState, FullStateFile, FullStatePeer, FullStateTracker,
+    DownloadParams, FullState, FullStateFile, FullStateTracker,
     bitfield::BitField,
     metric,
     peer_listener::NewPeer,
@@ -781,7 +781,7 @@ impl Download {
         ctx.events.emit_peer(
             active_peer.ip,
             events::PeerEventKind::Connect {
-                client_name: active_peer.client_name().to_owned(),
+                state: Box::new(active_peer.state(&ctx)),
             },
         );
         // self.session.add_peer();
@@ -945,23 +945,7 @@ impl Download {
             })
             .collect();
 
-        let peers = self
-            .scheduler
-            .peers
-            .iter()
-            .map(|p| FullStatePeer {
-                addr: p.ip,
-                uploaded: p.uploaded,
-                downloaded: p.downloaded,
-                upload_speed: p.performance_history.avg_up_speed_sec(&ctx.tick_interval),
-                download_speed: p.performance_history.avg_down_speed_sec(&ctx.tick_interval),
-                in_status: p.in_status,
-                out_status: p.out_status,
-                interested_amount: p.interested_pieces.amount(),
-                pending_blocks_amount: p.pending_blocks,
-                client_name: p.client_name().to_string(),
-            })
-            .collect();
+        let peers = self.scheduler.peers.iter().map(|p| p.state(&ctx)).collect();
         let output_files = self.info.output_files("");
         let files = self
             .scheduler

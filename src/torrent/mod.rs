@@ -225,7 +225,7 @@ pub struct PeerEvent {
 pub enum PeerEventKind {
     StatUpdate(PeerStateChange),
     Disconnect,
-    Connect { client_name: String },
+    Connect { state: StatePeer },
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -270,7 +270,7 @@ pub struct StorageFileEvent {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "kind")]
 pub enum StorageFileEventKind {
-    PriorityChange(Priority),
+    PriorityChange { priority: Priority },
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]

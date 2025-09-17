@@ -1,5 +1,7 @@
 use std::net::SocketAddr;
 
+use crate::FullStatePeer;
+
 #[derive(Debug)]
 pub struct PeerEvent {
     pub ip: SocketAddr,
@@ -12,7 +14,7 @@ pub enum PeerEventKind {
     /// Peer disconnected from the download
     Disconnect,
     Connect {
-        client_name: String,
+        state: Box<FullStatePeer>,
     },
 }
 
