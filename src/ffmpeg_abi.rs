@@ -33,13 +33,13 @@ impl TryFrom<ffmpeg_next::Chapter<'_>> for Chapter {
                 _ => {}
             }
         }
-        let start = Duration::from_millis(
+        let start = Duration::from_nanos(
             chapter
                 .start()
                 .try_into()
                 .context("convert start duration to u64")?,
         );
-        let end = Duration::from_millis(
+        let end = Duration::from_nanos(
             chapter
                 .end()
                 .try_into()

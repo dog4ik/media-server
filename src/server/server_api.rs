@@ -149,7 +149,9 @@ pub struct Intro {
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedChapter {
+    #[schema(value_type = crate::server::SerdeDuration)]
     pub start: std::time::Duration,
+    #[schema(value_type = crate::server::SerdeDuration)]
     pub end: std::time::Duration,
     pub title: Option<String>,
 }
