@@ -292,16 +292,20 @@ impl TorrentStorage {
     async fn handle_hasher_result(&mut self, result: WorkResult) {
         let piece_i = result.piece_i;
         if result.is_verified {
+            let is_old = self.bitfield.has(piece_i);
             self.bitfield.add(piece_i).unwrap();
             let start = Instant::now();
             let save_result = self.save_piece(piece_i, ReadyPiece(result.blocks)).await;
             tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
             match save_result {
                 Ok(_) => {
-                    let _ = self
-                        .feedback_tx
-                        .send(Ok(StorageFeedback::Saved { piece_i }))
-                        .await;
+                    // Stupid hack to avoid sending saved message when the file gets enabled.
+                    if !is_old {
+                        let _ = self
+                            .feedback_tx
+                            .send(Ok(StorageFeedback::Saved { piece_i }))
+                            .await;
+                    }
                 }
                 Err(kind) => {
                     let e = StorageError {
