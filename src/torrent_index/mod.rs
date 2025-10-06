@@ -54,6 +54,7 @@ pub struct Torrent {
     pub leechers: usize,
     pub seeders: usize,
     pub size: u64,
+    #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     pub imdb_id: Option<String>,
     pub provider: TorrentIndexIdentifier,

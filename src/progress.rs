@@ -381,6 +381,7 @@ pub struct Task<T: TaskTrait> {
     pub id: Uuid,
     pub kind: T,
     pub latest_progress: ProgressChunk<T>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
     #[schema(value_type = bool)]
