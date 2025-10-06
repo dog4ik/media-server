@@ -975,71 +975,37 @@ impl Codec {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct Capabilities {
-    pub codecs: Vec<Codec>,
-    pub ffmpeg_version: String,
     pub chromaprint_enabled: bool,
 }
 
 impl Capabilities {
-    pub async fn parse() -> Result<Self, anyhow::Error> {
-        let ffmpeg: FFmpegPath = CONFIG.get_value();
+    pub async fn parse() -> Self {
         let chromaprint_ffmpeg: IntroDetectionFfmpegBuild = CONFIG.get_value();
-        let mut cmd = Command::new(ffmpeg.as_ref());
+        let chromaprint_enabled = Self::check_chromaprint_support(&chromaprint_ffmpeg.0)
+            .await
+            .inspect_err(|e| tracing::error!("Unable to fetch chromaprint support: {e}"))
+            .unwrap_or(false);
+        Self {
+            chromaprint_enabled,
+        }
+    }
+
+    async fn check_chromaprint_support(ffmpeg_path: &Path) -> anyhow::Result<bool> {
+        let mut cmd = Command::new(ffmpeg_path);
 
         #[cfg(windows)]
         {
             cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
         }
-        let output = cmd.args(["-codecs"]).output().await?;
-        if !output.status.success() {
-            return Err(anyhow::anyhow!("ffmpeg -codces command failed"));
-        }
-
-        let lines = output.stdout.lines();
-
-        // skip description header
-        let mut lines =
-            lines.skip_while(|line| !line.as_ref().is_ok_and(|l| l.starts_with(" ---")));
-        lines.next();
-
-        let mut codecs = Vec::new();
-        while let Some(Ok(line)) = lines.next() {
-            codecs.push(Codec::from_capability_line(line));
-        }
-
-        let mut lines = output.stderr.lines();
-        let version_line = lines.next().context("version line")??;
-        let _build_line = lines.next();
+        let out = cmd.arg("-version").output().await?;
+        let mut lines = out.stdout.lines();
+        let _ = lines.next().context("version line")??;
+        let _ = lines.next();
         let configuration_line = lines.next().context("configuration line")??;
-
-        let version = version_line.split_ascii_whitespace().nth(2).unwrap();
-        let chromaprint_enabled = if ffmpeg.0 == chromaprint_ffmpeg.0 {
-            configuration_line
-                .split_ascii_whitespace()
-                .skip(1)
-                .any(|flag| flag == "--enable-chromaprint")
-        } else {
-            let mut cmd = Command::new(chromaprint_ffmpeg.0);
-
-            #[cfg(windows)]
-            {
-                cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
-            }
-            let out = cmd.arg("-version").output().await?;
-            let mut lines = out.stdout.lines();
-            let _ = lines.next().context("version line")??;
-            let _ = lines.next();
-            let configuration_line = lines.next().context("configuration line")??;
-            configuration_line
-                .split_ascii_whitespace()
-                .skip(1)
-                .any(|flag| flag == "--enable-chromaprint")
-        };
-        Ok(Self {
-            codecs,
-            ffmpeg_version: version.to_string(),
-            chromaprint_enabled,
-        })
+        Ok(configuration_line
+            .split_ascii_whitespace()
+            .skip(1)
+            .any(|flag| flag == "--enable-chromaprint"))
     }
 }
 
