@@ -25,7 +25,9 @@ use tracker::{DownloadTracker, TrackerResponse, TrackerType, UdpTrackerChannel, 
 use crate::{
     download::Download,
     session::{Session, session_message::SessionHandle},
+    storage::{hash_verification::Hasher, parts::PartsPath, revalidation::TorrentValidator},
     tracker::{DownloadStat, Tracker},
+    utils::LengthCalculator,
 };
 
 /// Data structure that holds list of banned peers
@@ -86,10 +88,10 @@ pub use progress::full::FullStatePeer;
 pub use progress::full::FullStateTracker;
 pub use protocol::Info;
 pub use protocol::OutputFile;
+pub use session::session_message::Action;
 pub use session::session_message::SessionMessage;
 pub use session::session_message::TorrentStateRequest;
 pub use storage::StorageError;
-pub use storage::StorageErrorKind;
 pub use tracker::TrackerStatus;
 
 pub(crate) const CLIENT_NAME: &str = "SkibidiTorrent";
@@ -199,9 +201,14 @@ impl Client {
         );
 
         self.peer_listener.subscribe(hash, peers_tx).await;
-        let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
-        let storage = TorrentStorage::new(feedback_tx, parts_file, params.clone());
-        let storage_handle = storage.spawn(&self.task_tracker).await?;
+        let measurer = LengthCalculator::new(params.info.total_size(), params.info.piece_length);
+        let parts_file = PartsFile::init(
+            measurer,
+            PartsPath::new(&params.save_location, &params.info.hex_hash()),
+        )
+        .await?;
+        let storage_handle =
+            storage::spawn(&params, &self.task_tracker, feedback_tx, parts_file).await?;
 
         let download = Download::new(
             feedback_rx,
@@ -218,10 +225,19 @@ impl Client {
     }
 
     pub async fn validate(&self, params: DownloadParams) -> anyhow::Result<BitField> {
-        let (feedback_tx, _) = mpsc::channel(100);
-        let parts_file = PartsFile::init(&params.info, &params.save_location).await?;
-        let mut storage = TorrentStorage::new(feedback_tx, parts_file, params);
-        storage.revalidate().await;
+        let measurer = LengthCalculator::new(params.info.total_size(), params.info.piece_length);
+        let parts_file = PartsFile::init(
+            measurer,
+            PartsPath::new(&params.save_location, &params.info.hex_hash()),
+        )
+        .await?;
+        let mut storage = TorrentStorage::new(storage::FileHandles::new(), parts_file, &params);
+        let mut hasher = Hasher::new(params.info.pieces.clone());
+        let mut validator = TorrentValidator {
+            hasher: &mut hasher,
+            storage: &mut storage,
+        };
+        validator.revalidate(async |_, _| Ok(())).await;
         Ok(storage.bitfield().to_owned())
     }
 

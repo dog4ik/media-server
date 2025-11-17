@@ -151,7 +151,7 @@ mod tests {
             err_response.payload,
             KRPCPayload::Error {
                 error: (status, msg)
-            } if status == 201 && msg == "A Generic Error Occurred"
+            } if status == 201 && msg == "A Generic Error Ocurred"
         ));
     }
 

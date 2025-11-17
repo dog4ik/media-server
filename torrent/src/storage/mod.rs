@@ -1,8 +1,8 @@
-use std::{fmt::Display, io::SeekFrom, ops::Range, path::PathBuf, time::Instant};
+use std::{io::SeekFrom, ops::Range, path::PathBuf, time::Instant};
 
 use anyhow::Context;
 use bytes::{Bytes, BytesMut};
-use hash_verification::{Hasher, Payload, WorkResult};
+use hash_verification::Hasher;
 use parts::PartsFile;
 use tokio::{
     fs,
@@ -12,59 +12,21 @@ use tokio::{
 use tokio_util::task::TaskTracker;
 
 use crate::{
-    DownloadParams, Priority,
-    bitfield::BitField,
-    protocol::{Hashes, OutputFile},
-    scheduler::BLOCK_LENGTH,
-    utils::LengthCalculator,
+    DownloadParams, Priority, bitfield::BitField, protocol::OutputFile, scheduler::BLOCK_LENGTH,
+    storage::revalidation::TorrentValidator, utils::LengthCalculator,
 };
 
-mod hash_verification;
+mod error;
+pub mod hash_verification;
+#[cfg(test)]
+mod memory_store;
 pub mod parts;
+pub mod revalidation;
+mod sink;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum StorageErrorKind {
-    Fs(std::io::ErrorKind),
-    Hash,
-    Bounds,
-    MissingPiece,
-}
+pub use error::StorageError;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub struct StorageError {
-    pub kind: StorageErrorKind,
-    pub piece: usize,
-}
-
-impl std::error::Error for StorageError {}
-
-impl Display for StorageError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "failed to save piece {}: ", self.piece)?;
-        match &self.kind {
-            StorageErrorKind::Fs(e) => {
-                write!(f, "fs error ({e})")
-            }
-            StorageErrorKind::Hash => {
-                write!(f, "hash validation error")
-            }
-            StorageErrorKind::Bounds => {
-                write!(f, "piece bounds error")
-            }
-            StorageErrorKind::MissingPiece => {
-                write!(f, "missing pieces error")
-            }
-        }
-    }
-}
-
-impl From<std::io::Error> for StorageErrorKind {
-    fn from(value: std::io::Error) -> Self {
-        Self::Fs(value.kind())
-    }
-}
-
-pub type StorageResult<T> = Result<T, StorageError>;
+pub type Result<T> = std::result::Result<T, error::StorageError>;
 
 pub struct ReadyPiece(Vec<Bytes>);
 
@@ -80,6 +42,7 @@ impl ReadyPiece {
         let start_idx = start / block_length;
         let end_idx = end.div_ceil(block_length);
         for i in start_idx..end_idx {
+            // This one panics when file gets enabled
             let bytes = &self.0[i];
             let block_start = i * block_length;
 
@@ -105,17 +68,14 @@ impl ReadyPiece {
     }
 }
 
+/// Lru cache of file handles
 #[derive(Debug)]
-struct FileHandles {
-    opened_files: lru::LruCache<usize, fs::File>,
-}
+pub struct FileHandles(lru::LruCache<usize, fs::File>);
 
 impl FileHandles {
     pub fn new() -> Self {
         use std::num::NonZeroUsize;
-        Self {
-            opened_files: lru::LruCache::new(NonZeroUsize::new(10).unwrap()),
-        }
+        Self(lru::LruCache::new(NonZeroUsize::new(3).unwrap()))
     }
 }
 
@@ -159,18 +119,13 @@ impl StorageFile {
 }
 
 #[derive(Debug)]
-pub struct TorrentStorage {
-    output_dir: PathBuf,
+pub struct TorrentStorage<T, P> {
     files: Box<[StorageFile]>,
-    piece_length: u64,
     piece_length_measurer: LengthCalculator,
-    pieces: Hashes,
     bitfield: BitField,
     // Cache of opened file handles
-    file_handles: FileHandles,
-    feedback_tx: mpsc::Sender<StorageResult<StorageFeedback>>,
-    hasher: hash_verification::Hasher,
-    parts_file: PartsFile,
+    sinks: T,
+    parts_file: PartsFile<P>,
 }
 
 #[derive(Debug, Clone)]
@@ -227,32 +182,23 @@ pub enum StorageFeedback {
     ValidationProgress { piece: usize, is_valid: bool },
     Saved { piece_i: usize },
     Data { piece_i: usize, bytes: Bytes },
+    Error { piece_i: usize, error: StorageError },
 }
 
-impl TorrentStorage {
-    pub fn new(
-        feedback_tx: mpsc::Sender<StorageResult<StorageFeedback>>,
-        parts_file: PartsFile,
-        torrent_params: DownloadParams,
-    ) -> Self {
-        let info = torrent_params.info;
-        let output_dir = torrent_params.save_location;
-        let bitfield = torrent_params.bitfield;
+impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
+    pub fn new(sinks: T, parts_file: PartsFile<P>, torrent_params: &DownloadParams) -> Self {
+        let info = &torrent_params.info;
+        let output_dir = torrent_params.save_location.clone();
+        let bitfield = torrent_params.bitfield.clone();
         let output_files = info.output_files(&output_dir);
         let files = StorageFile::new_files(&output_files, &torrent_params.files);
-        let hasher = Hasher::new();
         let piece_length_measurer = LengthCalculator::new(info.total_size(), info.piece_length);
 
         Self {
-            feedback_tx,
-            output_dir,
             files,
-            piece_length: info.piece_length as u64,
-            pieces: info.pieces.clone(),
             bitfield,
-            file_handles: FileHandles::new(),
+            sinks,
             parts_file,
-            hasher,
             piece_length_measurer,
         }
     }
@@ -261,99 +207,8 @@ impl TorrentStorage {
         &self.bitfield
     }
 
-    pub async fn spawn(mut self, tracker: &TaskTracker) -> anyhow::Result<StorageHandle> {
-        let save_location_metadata = fs::metadata(&self.output_dir)
-            .await
-            .context("save directory metadata")?;
-        if !save_location_metadata.is_dir() {
-            return Err(anyhow::anyhow!(
-                "Save directory must be a directory, got {:?}",
-                save_location_metadata.file_type()
-            ));
-        }
-        let (message_tx, mut message_rx) = mpsc::channel(1800);
-        tracker.spawn(async move {
-            loop {
-                tokio::select! {
-                    message = message_rx.recv() => match message {
-                        Some(message) => self.handle_message(message).await,
-                        None => {
-                            tracing::debug!("Stopping storage worker (download channel closed)");
-                            break;
-                        }
-                    },
-                    Some(work_result) = self.hasher.join_next() => self.handle_hasher_result(work_result).await,
-                }
-            }
-        });
-        Ok(StorageHandle { message_tx })
-    }
-
-    async fn handle_hasher_result(&mut self, result: WorkResult) {
-        let piece_i = result.piece_i;
-        if result.is_verified {
-            let is_old = self.bitfield.has(piece_i);
-            self.bitfield.add(piece_i).unwrap();
-            let start = Instant::now();
-            let save_result = self.save_piece(piece_i, ReadyPiece(result.blocks)).await;
-            tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
-            match save_result {
-                Ok(_) => {
-                    // Stupid hack to avoid sending saved message when the file gets enabled.
-                    if !is_old {
-                        let _ = self
-                            .feedback_tx
-                            .send(Ok(StorageFeedback::Saved { piece_i }))
-                            .await;
-                    }
-                }
-                Err(kind) => {
-                    let e = StorageError {
-                        kind,
-                        piece: piece_i,
-                    };
-                    tracing::warn!("Failed to save piece {piece_i}: {e}");
-                    let _ = self.feedback_tx.send(Err(e)).await;
-                }
-            }
-        } else {
-            let _ = self
-                .feedback_tx
-                .send(Err(StorageError {
-                    kind: StorageErrorKind::Hash,
-                    piece: piece_i,
-                }))
-                .await;
-        }
-    }
-
-    async fn handle_message(&mut self, message: StorageMessage) {
-        match message {
-            StorageMessage::Save { piece_i, blocks } => {
-                self.pend_hash_validation(piece_i, ReadyPiece(blocks)).await;
-            }
-            StorageMessage::RetrievePiece { piece_i } => {
-                let bytes = self
-                    .retrieve_piece(piece_i)
-                    .await
-                    .map_err(|kind| StorageError {
-                        piece: piece_i,
-                        kind,
-                    });
-                let _ = self
-                    .feedback_tx
-                    .send(bytes.map(|bytes| StorageFeedback::Data { piece_i, bytes }))
-                    .await;
-            }
-            StorageMessage::EnableFile { file_idx } => self.enable_file(file_idx).await,
-            StorageMessage::DisableFile { file_idx } => {
-                self.files[file_idx].is_enabled = false;
-            }
-            StorageMessage::Validate => {
-                tracing::trace!("Received validation command");
-                self.revalidate().await;
-            }
-        };
+    pub fn base_piece_length(&self) -> u64 {
+        self.piece_length_measurer.piece_length as u64
     }
 
     pub async fn enable_file(&mut self, file_idx: usize) {
@@ -361,15 +216,17 @@ impl TorrentStorage {
         file.is_enabled = true;
         let file = file.clone();
         let file_offset = file.offset;
-        let start_piece = (file_offset / self.piece_length) as usize;
+        let start_piece = (file_offset / self.base_piece_length()) as usize;
         if let Ok(bytes) = self.parts_file.read_piece(start_piece).await {
-            self.pend_hash_validation(start_piece, ReadyPiece(split_bytes(bytes)))
+            let _ = self
+                .save_piece(start_piece, ReadyPiece(split_bytes(bytes)))
                 .await;
         }
 
-        let end_piece = ((file.end() - 1) / self.piece_length) as usize;
+        let end_piece = ((file.end() - 1) / self.base_piece_length()) as usize;
         if let Ok(bytes) = self.parts_file.read_piece(end_piece).await {
-            self.pend_hash_validation(end_piece, ReadyPiece(split_bytes(bytes)))
+            let _ = self
+                .save_piece(end_piece, ReadyPiece(split_bytes(bytes)))
                 .await;
         }
     }
@@ -380,34 +237,37 @@ impl TorrentStorage {
         &mut self,
         piece_i: usize,
         blocks: ReadyPiece,
-    ) -> Result<(), StorageErrorKind> {
+    ) -> std::result::Result<(), error::StorageError> {
         let piece_length = blocks.len() as u64;
         debug_assert_eq!(
             piece_length as u32,
             self.piece_length_measurer.piece_length(piece_i)
         );
 
-        let piece_start = piece_i as u64 * self.piece_length;
+        let piece_start = piece_i as u64 * self.piece_length_measurer.piece_length as u64;
         let piece_end = piece_start + piece_length;
 
         for (file_idx, file) in self.files.iter().enumerate() {
             let file_start = file.offset;
             let file_end = file.end();
-            if file_start > piece_end || file_end < piece_start {
+            if dbg!(file_start) >= dbg!(piece_end) || dbg!(file_end) <= dbg!(piece_start) {
+                println!("skipping file handle {file_idx}\n");
                 continue;
             }
+            println!("creating file handle for index {file_idx}\n");
 
-            let file_end_piece = file.end_piece(self.piece_length);
-            let file_start_piece = file.start_piece(self.piece_length);
+            let file_end_piece = file.end_piece(self.base_piece_length());
+            let file_start_piece = file.start_piece(self.base_piece_length());
             if !file.is_enabled && (piece_i == file_end_piece || piece_i == file_start_piece) {
-                let border_next = self
-                    .files
-                    .get(file_idx + 1)
-                    .is_some_and(|next| next.start_piece(self.piece_length) == file_end_piece);
+                let border_next = self.files.get(file_idx + 1).is_some_and(|next| {
+                    next.start_piece(self.base_piece_length()) == file_end_piece
+                });
                 let border_prev = file_idx
                     .checked_sub(1)
                     .and_then(|i| self.files.get(i))
-                    .is_some_and(|prev| prev.end_piece(self.piece_length) == file_start_piece);
+                    .is_some_and(|prev| {
+                        prev.end_piece(self.base_piece_length()) == file_start_piece
+                    });
                 if border_next || border_prev {
                     if let Err(e) = self.parts_file.write_piece(piece_i, &blocks.0).await {
                         tracing::error!("Failed to write piece {piece_i} to the parts file: {e}");
@@ -416,24 +276,7 @@ impl TorrentStorage {
                 continue;
             }
 
-            let f = match self.file_handles.opened_files.get_mut(&file_idx) {
-                Some(f) => f,
-                None => {
-                    if let Some(parent) = file.path.parent() {
-                        fs::create_dir_all(parent).await?;
-                    }
-                    tracing::debug!("Creating file handle: {}", file.path.display());
-                    let file_handle = fs::OpenOptions::new()
-                        .create(true)
-                        .read(true)
-                        .write(true)
-                        .open(&file.path)
-                        .await?;
-                    file_handle.set_len(file.length).await?;
-                    self.file_handles.opened_files.put(file_idx, file_handle);
-                    self.file_handles.opened_files.get_mut(&file_idx).unwrap()
-                }
-            };
+            let f = self.sinks.open(file_idx, &file).await?;
             let insert_offset = piece_start.saturating_sub(file_start);
             f.seek(SeekFrom::Start(insert_offset)).await?;
 
@@ -450,13 +293,18 @@ impl TorrentStorage {
 
             blocks.write_to(f, start..end).await?;
         }
+
+        self.bitfield.add(piece_i).unwrap();
         Ok(())
     }
 
     /// retrieve piece from preallocated file
-    pub async fn retrieve_piece(&mut self, piece_i: usize) -> Result<Bytes, StorageErrorKind> {
+    pub async fn retrieve_piece(
+        &mut self,
+        piece_i: usize,
+    ) -> std::result::Result<Bytes, error::StorageError> {
         if !self.bitfield.has(piece_i) {
-            return Err(StorageErrorKind::MissingPiece);
+            return Err(error::StorageError::MissingPiece);
         };
         if let Ok(piece) = self.parts_file.read_piece(piece_i).await {
             return Ok(piece);
@@ -465,30 +313,18 @@ impl TorrentStorage {
         let piece_length = self.piece_length_measurer.piece_length(piece_i) as u64;
         let mut bytes = BytesMut::zeroed(piece_length as usize);
 
-        let piece_start = piece_i as u64 * self.piece_length;
+        let piece_start = piece_i as u64 * self.base_piece_length();
         let piece_end = piece_start + piece_length;
 
         for (file_idx, file) in self.files.iter().enumerate() {
             let file_start = file.offset;
             let file_end = file.end();
-            if file_start > piece_end || file_end < piece_start {
+            if file_start >= piece_end || file_end <= piece_start {
                 continue;
             }
 
             let read_offset = piece_start.saturating_sub(file_start);
-            let f = match self.file_handles.opened_files.get_mut(&file_idx) {
-                Some(f) => f,
-                None => {
-                    tracing::debug!("Creating file handle: {}", file.path.display());
-                    let file_handle = fs::OpenOptions::new()
-                        .read(true)
-                        .write(true)
-                        .open(&file.path)
-                        .await?;
-                    self.file_handles.opened_files.put(file_idx, file_handle);
-                    self.file_handles.opened_files.get_mut(&file_idx).unwrap()
-                }
-            };
+            let f = self.sinks.open(file_idx, &file).await?;
             f.seek(SeekFrom::Start(read_offset)).await?;
             let range_start = if piece_start < file_start {
                 (file_start - piece_start) as usize
@@ -505,83 +341,92 @@ impl TorrentStorage {
         let bytes = bytes.freeze();
         Ok(bytes)
     }
+}
 
-    /// Validate torrent contents and correct storage bitfield
-    pub async fn revalidate(&mut self) {
-        let mut current_piece = 0;
-        let total_pieces = self.pieces.len();
-        let mut hasher = Hasher::new();
-        const CONCURRENCY: usize = 10;
-        tracing::debug!(
-            total_pieces,
-            concurrency = CONCURRENCY,
-            "Started torrent validation"
-        );
-
-        while current_piece < total_pieces {
-            if hasher.len() < CONCURRENCY {
-                if let Ok(bytes) = self.retrieve_piece(current_piece).await {
-                    let payload = Payload {
-                        hash: self.pieces[current_piece],
-                        piece_i: current_piece,
-                        data: vec![bytes],
-                    };
-                    hasher.pend_job(payload);
-                } else {
-                    self.bitfield.remove(current_piece).unwrap();
-                    if self
-                        .feedback_tx
-                        .send(Ok(StorageFeedback::ValidationProgress {
-                            piece: current_piece,
-                            is_valid: false,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("Download disconnected during validation");
-                        return;
-                    };
-                    current_piece += 1;
-                };
-            } else {
-                while let Some(res) = hasher.join_next().await {
-                    if res.is_verified {
-                        self.bitfield.add(res.piece_i).unwrap();
-                    } else {
-                        self.bitfield.remove(res.piece_i).unwrap();
+pub async fn spawn(
+    download_params: &DownloadParams,
+    tracker: &TaskTracker,
+    tx: mpsc::Sender<StorageFeedback>,
+    parts: PartsFile<parts::PartsPath>,
+) -> anyhow::Result<StorageHandle> {
+    let (message_tx, mut message_rx) = mpsc::channel(1800);
+    let mut hasher = Hasher::new(download_params.info.pieces.clone());
+    let file_handles = FileHandles::new();
+    let mut storage = TorrentStorage::new(file_handles, parts, download_params);
+    tracker.spawn(async move {
+        loop {
+            tokio::select! {
+                message = message_rx.recv() => match message {
+                    Some(message) => {
+                        match message {
+                            StorageMessage::Save { piece_i, blocks } => {
+                                hasher.pend_job(piece_i, blocks);
+                            }
+                            StorageMessage::RetrievePiece { piece_i } => {
+                                match storage.retrieve_piece(piece_i).await {
+                                    Ok(bytes) => {
+                                        let _ = tx.send(StorageFeedback::Data { piece_i, bytes }).await;
+                                    },
+                                    Err(error)  => {
+                                        let _ = tx.send(StorageFeedback::Error { piece_i, error }).await;
+                                    },
+                                };
+                            }
+                            StorageMessage::EnableFile { file_idx } => storage.enable_file(file_idx).await,
+                            StorageMessage::DisableFile { file_idx } => {
+                                storage.files[file_idx].is_enabled = false;
+                            }
+                            StorageMessage::Validate => {
+                                tracing::trace!("Received validation command");
+                                let mut revalidator = TorrentValidator { storage: &mut storage, hasher: &mut hasher };
+                                {
+                                    let tx = tx.clone();
+                                    revalidator.revalidate(async move |piece, is_valid| tx.send(StorageFeedback::ValidationProgress { piece,  is_valid }).await.context("download is available")).await;
+                                }
+                            }
+                        };
+                    },
+                    None => {
+                        tracing::debug!("Stopping storage worker (download channel closed)");
+                        break;
                     }
-                    if self
-                        .feedback_tx
-                        .send(Ok(StorageFeedback::ValidationProgress {
-                            piece: res.piece_i,
-                            is_valid: res.is_verified,
-                        }))
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("Download disconnected during validation");
-                        return;
-                    };
-                    current_piece += 1;
-                }
+                },
+                Some(result) = hasher.join_next() => {
+                    let piece_i = result.piece_i;
+                    if result.is_verified {
+                        let is_old = storage.bitfield.has(piece_i);
+                        let start = Instant::now();
+                        let save_result = storage.save_piece(piece_i, ReadyPiece(result.blocks)).await;
+                        tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
+                        match save_result {
+                            Ok(_) => {
+                                // Stupid hack to avoid sending saved message when the file gets enabled.
+                                if !is_old {
+                                    let _ = tx.send(StorageFeedback::Saved { piece_i }).await;
+                                }
+                            }
+                            Err(error) => {
+                                tracing::warn!("Failed to save piece {piece_i}: {error}");
+                                let _ = tx.send(StorageFeedback::Error { piece_i, error }).await;
+                            }
+                        }
+                    } else {
+                        let _ = tx.send(StorageFeedback::Error {
+                            piece_i,
+                            error: error::StorageError::Hash,
+                        })
+                        .await;
+                    }
+            },
             }
         }
-    }
-
-    async fn pend_hash_validation(&mut self, piece_i: usize, data: ReadyPiece) {
-        let hash = self.pieces.0[piece_i];
-        let payload = Payload {
-            hash,
-            piece_i,
-            data: data.0,
-        };
-        self.hasher.pend_job(payload)
-    }
+    });
+    Ok(StorageHandle { message_tx })
 }
 
 fn split_bytes(bytes: Bytes) -> Vec<Bytes> {
     let block_length = BLOCK_LENGTH as usize;
-    let amount = bytes.len() / block_length;
+    let amount = bytes.len().div_ceil(block_length);
     let mut parts = Vec::with_capacity(amount);
     for i in 0..amount {
         let start = i * block_length;
@@ -593,4 +438,183 @@ fn split_bytes(bytes: Bytes) -> Vec<Bytes> {
         parts.push(bytes.slice(start..end));
     }
     parts
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_bytes;
+    use crate::{
+        scheduler::BLOCK_LENGTH,
+        storage::{
+            StorageFile, TorrentStorage, memory_store::AsyncInMemoryBlock, parts::PartsFile,
+        },
+        utils::LengthCalculator,
+    };
+    use bytes::Bytes;
+
+    #[derive(Debug)]
+    struct StorageTester<'a> {
+        piece_length: u32,
+        content: &'a [u8],
+        storage: TorrentStorage<Vec<AsyncInMemoryBlock>, AsyncInMemoryBlock>,
+    }
+
+    #[derive(Debug)]
+    struct TestBuilder<'a> {
+        piece_length: u32,
+        target_content: &'a [u8],
+        files: Vec<StorageFile>,
+    }
+
+    impl<'a> TestBuilder<'a> {
+        pub fn new(piece_length: u32, target_content: &'a [u8]) -> Self {
+            Self {
+                piece_length,
+                target_content,
+                files: Vec::new(),
+            }
+        }
+
+        pub fn add_file(self, length: u64) -> Self {
+            self.file(length, true)
+        }
+
+        pub fn add_disabled_file(self, length: u64) -> Self {
+            self.file(length, false)
+        }
+
+        fn file(mut self, length: u64, is_enabled: bool) -> Self {
+            let offset = self.files.iter().map(|f| f.length).sum();
+            self.files.push(StorageFile {
+                offset,
+                length,
+                path: Default::default(),
+                is_enabled,
+            });
+            self
+        }
+
+        pub async fn build(self) -> StorageTester<'a> {
+            assert_eq!(
+                self.files.iter().map(|f| f.length as usize).sum::<usize>(),
+                self.target_content.len(),
+                "files do not match content"
+            );
+            let measurer =
+                LengthCalculator::new(self.target_content.len() as u64, self.piece_length);
+            let parts_file = PartsFile::init(measurer.clone(), AsyncInMemoryBlock::default())
+                .await
+                .unwrap();
+            let bitfield = crate::BitField::empty(
+                self.target_content
+                    .len()
+                    .div_ceil(self.piece_length as usize),
+            );
+            let internal_files = (0..self.files.len())
+                .map(|_| AsyncInMemoryBlock::default())
+                .collect();
+            let storage = TorrentStorage {
+                files: self.files.into_boxed_slice(),
+                piece_length_measurer: measurer.clone(),
+                bitfield,
+                sinks: internal_files,
+                parts_file,
+            };
+            StorageTester {
+                piece_length: self.piece_length,
+                content: self.target_content,
+                storage,
+            }
+        }
+    }
+
+    impl<'a> StorageTester<'a> {
+        pub async fn checked_insert(&mut self, piece: usize) -> super::Result<()> {
+            let start = piece * self.piece_length as usize;
+            let end = start + self.storage.piece_length_measurer.piece_length(piece) as usize;
+            let data_slice = &self.content[start..end];
+            self.storage
+                .save_piece(
+                    piece,
+                    super::ReadyPiece(split_bytes(Bytes::copy_from_slice(data_slice))),
+                )
+                .await?;
+            self.storage.bitfield.add(piece).unwrap();
+
+            let data = self.storage.retrieve_piece(piece).await?;
+
+            assert_eq!(
+                data_slice, data,
+                "inserted and retrieved data is not the same"
+            );
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn each_piece_is_file() {
+        let contents: Vec<_> = (0..8).map(|v| v).collect();
+
+        let mut t = TestBuilder::new(2, &contents)
+            .add_file(2)
+            .add_file(2)
+            .add_file(2)
+            .add_file(2)
+            .build()
+            .await;
+
+        t.checked_insert(0).await.unwrap();
+        t.checked_insert(2).await.unwrap();
+
+        assert_eq!(t.storage.sinks[0], [0, 1]);
+        assert_eq!(t.storage.sinks[1], []);
+        assert_eq!(t.storage.sinks[2], [4, 5]);
+        assert_eq!(t.storage.sinks[3], &[]);
+        assert_eq!(t.storage.parts_file.get_ref().len(), 0)
+    }
+
+    #[tokio::test]
+    async fn parts_file_populates_file() {
+        let contents: Vec<_> = (0..5).map(|v| v).collect();
+
+        let mut t = TestBuilder::new(3, &contents)
+            .add_file(2)
+            .add_disabled_file(2)
+            .add_file(1)
+            .build()
+            .await;
+
+        t.checked_insert(0).await.unwrap();
+        let expected_parts: Vec<_> = 0_u32.to_be_bytes().into_iter().chain([0, 1, 2]).collect();
+        assert_eq!(*t.storage.parts_file.get_ref(), expected_parts);
+
+        t.storage.enable_file(1).await;
+        assert_eq!(t.storage.sinks[1], [2, 0]);
+    }
+
+    #[tokio::test]
+    async fn out_of_bounds_access_errors() {
+        todo!()
+    }
+
+    #[test]
+    fn test_bytes_splitting_one() {
+        let arr = [0, 1, 2];
+        let bytes = Bytes::copy_from_slice(&arr);
+        let split = split_bytes(bytes);
+        assert_eq!(split.len(), 1);
+        assert_eq!(split[0], arr.as_slice());
+    }
+
+    #[test]
+    fn test_bytes_splitting_common() {
+        let bytes = [0; BLOCK_LENGTH as usize * 3 + 778];
+        let split = split_bytes(Bytes::copy_from_slice(&bytes));
+        assert_eq!(split.len(), 4);
+        for block in &split[..3] {
+            assert_eq!(block.len(), BLOCK_LENGTH as usize);
+        }
+        assert_eq!(split[3].len(), 778);
+    }
 }

@@ -28,7 +28,7 @@ pub struct LengthCalculator {
 }
 
 impl LengthCalculator {
-    pub fn new(total_size: u64, piece_length: u32) -> Self {
+    pub const fn new(total_size: u64, piece_length: u32) -> Self {
         let total_pieces = total_size.div_ceil(piece_length as u64) as usize;
         let last_length = (total_size % piece_length as u64) as u32;
 

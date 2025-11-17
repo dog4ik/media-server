@@ -147,6 +147,7 @@ impl PeerStorage {
         let peer_status = self
             .peer_statuses
             .get_mut(&best.ip)
+            // FIX: this panics
             .expect("all peers are tracked");
         *peer_status = PeerStatus::Connecting;
         self.peer_connector.connect(best.ip, *info_hash);

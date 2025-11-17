@@ -1,30 +1,34 @@
-use std::time::Instant;
-
 use bytes::Bytes;
 use tokio::task::JoinSet;
 
-use crate::utils;
+use crate::{protocol::Hashes, utils};
 
 /// Hash validation
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct Hasher {
+    pub hashes: Hashes,
     set: JoinSet<WorkResult>,
 }
 
 impl Hasher {
-    pub fn new() -> Self {
+    pub fn new(hashes: Hashes) -> Self {
         Self {
             set: JoinSet::new(),
+            hashes,
         }
     }
 
-    pub fn pend_job(&mut self, piece: Payload) {
-        self.set.spawn_blocking(|| {
-            let is_verified = piece.verify_hash();
+    pub fn pend_job(&mut self, piece: usize, data: Vec<Bytes>) {
+        let payload = Payload {
+            hash: self.hashes[piece],
+            data,
+        };
+        self.set.spawn_blocking(move || {
+            let is_verified = payload.verify_hash();
             WorkResult {
-                piece_i: piece.piece_i,
+                piece_i: piece,
                 is_verified,
-                blocks: piece.data,
+                blocks: payload.data,
             }
         });
     }
@@ -46,23 +50,12 @@ impl Hasher {
 pub struct Payload {
     // TODO: avoid hash copy
     pub hash: [u8; 20],
-    pub piece_i: usize,
     pub data: Vec<Bytes>,
 }
 
 impl Payload {
     pub fn verify_hash(&self) -> bool {
-        let start = Instant::now();
-        let result = utils::verify_iter_sha1(&self.hash, self.data.iter());
-        match result {
-            true => {
-                tracing::trace!(piece = self.piece_i, took = ?start.elapsed(), "Verified hash");
-            }
-            false => {
-                tracing::error!(piece = self.piece_i, took = ?start.elapsed(), "Failed to verify hash");
-            }
-        }
-        result
+        utils::verify_iter_sha1(&self.hash, self.data.iter())
     }
 }
 

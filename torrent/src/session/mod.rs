@@ -88,18 +88,20 @@ impl<T: ProgressConsumer> Session<T> {
                         .await
                 }
             }
-            SessionMessage::SetFilePriority {
+            SessionMessage::SetFilesPriority {
                 torrent,
-                file_idx,
+                file_indexes,
                 priority,
             } => {
                 if let Some(torrent) = self.torrent_list.find_mut(torrent) {
-                    torrent
-                        .handle_command(
-                            &mut tick_context,
-                            crate::DownloadMessage::SetFilePriority { file_idx, priority },
-                        )
-                        .await;
+                    for file_idx in file_indexes {
+                        torrent
+                            .handle_command(
+                                &mut tick_context,
+                                crate::DownloadMessage::SetFilePriority { file_idx, priority },
+                            )
+                            .await;
+                    }
                     changed_torrents.push(torrent.construct_torrent_update(tick_context.events));
                 }
             }

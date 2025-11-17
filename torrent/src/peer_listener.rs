@@ -44,11 +44,11 @@ impl PeerListener {
                                 if let Some(channel) = map.get_mut(&info_hash) {
                                     tracing::debug!("Peer connected via listener {}", ip);
                                     if channel.send(NewPeer::ListenerOrigin(peer)).await.is_err() {
-                                        tracing::warn!("Peer connected to outdated torrent");
+                                        tracing::trace!("Peer connected to outdated torrent");
                                         map.remove(&info_hash);
                                     };
                                 } else {
-                                    tracing::warn!("Peer {ip} connected but torrent does not exist", );
+                                    tracing::trace!("Peer {ip} connected but torrent does not exist", );
                                 }
                             }
                             Ok(Err(e)) => {

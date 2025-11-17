@@ -852,7 +852,7 @@ impl Scheduler {
             && self
                 .piece_table
                 .iter()
-                .all(|p| p.is_finished && !p.priority.is_disabled())
+                .all(|p| p.is_finished || p.priority.is_disabled())
     }
 
     pub fn torrent_state(&self) -> DownloadState {

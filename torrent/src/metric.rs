@@ -14,11 +14,9 @@ pub struct RollingSpeedMeter {
 impl RollingSpeedMeter {
     const WINDOW: Duration = Duration::from_secs(5);
     pub fn new() -> Self {
-        let mut history = VecDeque::new();
-        let now = Instant::now();
-        history.push_back((now, Performance::default()));
-
-        Self { history }
+        Self {
+            history: VecDeque::new(),
+        }
     }
 
     // Update with current total downloaded bytes and get the average speed over the window.
@@ -34,21 +32,15 @@ impl RollingSpeedMeter {
             }
         }
 
-        // Add new entry (assuming current_bytes is cumulative and non-decreasing)
-        if let Some(&(_, last)) = self.history.back() {
-            debug_assert!(current.downloaded >= last.downloaded);
-            debug_assert!(current.uploaded >= last.uploaded);
-            self.history.push_back((now, current));
-        } else {
-            // Shouldn't happen, but reset if empty
-            self.history.push_back((now, current));
-        }
+        self.history.push_back((now, current));
 
         // Compute speed: (latest_bytes - oldest_bytes) / window_duration
         if self.history.len() >= 2 {
             if let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
                 (self.history.front(), self.history.back())
             {
+                debug_assert!(current.downloaded >= latest_bytes.downloaded);
+                debug_assert!(current.uploaded >= latest_bytes.uploaded);
                 let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
                 let delta_uploaded = latest_bytes.uploaded.saturating_sub(oldest_bytes.uploaded);
                 let delta_downloaded = latest_bytes
@@ -115,11 +107,9 @@ mod capacity_speed_meter {
     impl CapacityRollingSpeedMeter {
         const CAPACITY: usize = 20;
         pub fn new() -> Self {
-            let mut history = VecDeque::with_capacity(Self::CAPACITY);
-            let now = Instant::now();
-            history.push_back((now, 0));
-
-            Self { history }
+            Self {
+                history: VecDeque::with_capacity(Self::CAPACITY),
+            }
         }
 
         // Update with current total downloaded bytes and get the average speed over the last N ticks.

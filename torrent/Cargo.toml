@@ -10,6 +10,7 @@ clap = { workspace = true, features = ["derive"] }
 
 [dependencies]
 lru = { workspace = true }
+async-trait = { workspace = true }
 serde_bencode = "0.2.4"
 serde_urlencoded = "0.7.1"
 serde = { workspace = true }

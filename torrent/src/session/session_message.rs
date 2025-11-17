@@ -25,9 +25,9 @@ pub enum SessionMessage {
         torrent: [u8; 20],
         strategy: ScheduleStrategy,
     },
-    SetFilePriority {
+    SetFilesPriority {
         torrent: [u8; 20],
-        file_idx: usize,
+        file_indexes: Vec<usize>,
         priority: Priority,
     },
     PostFullState {
@@ -70,6 +70,25 @@ impl SessionHandle {
             action: Action::Abort,
         })
         .await;
+    }
+
+    pub async fn change_files_priority(
+        &self,
+        torrent: [u8; 20],
+        file_indexes: Vec<usize>,
+        priority: Priority,
+    ) {
+        self.send(SessionMessage::SetFilesPriority {
+            torrent,
+            file_indexes,
+            priority,
+        })
+        .await;
+    }
+
+    pub async fn batch_action(&self, torrents: Vec<[u8; 20]>, action: Action) {
+        self.send(SessionMessage::PerformAction { torrents, action })
+            .await;
     }
 
     pub async fn fetch_progress(&self, request: TorrentStateRequest) -> FullSessionState {

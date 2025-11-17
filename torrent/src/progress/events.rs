@@ -31,11 +31,7 @@ pub struct PeerStateChange {
 }
 
 #[derive(Debug)]
-pub struct TorrentStateChange {
-    pub downloaded: u64,
-    pub uploaded: u64,
-    pub state: crate::DownloadState,
-}
+pub struct TorrentStateChange(pub crate::DownloadState);
 
 #[derive(Debug)]
 pub struct TorrentTickEvents {

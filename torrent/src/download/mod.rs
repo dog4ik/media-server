@@ -29,7 +29,7 @@ use crate::{
     scheduler::{PendingFiles, Scheduler},
     seeder::Seeder,
     session::tick_context::TickContext,
-    storage::{StorageError, StorageFeedback, StorageHandle, StorageResult},
+    storage::{StorageError, StorageFeedback, StorageHandle},
     tracker::{DownloadStat, DownloadTracker},
 };
 
@@ -303,7 +303,7 @@ pub struct Download {
         mpsc::Sender<DownloadMessage>,
         mpsc::Receiver<DownloadMessage>,
     ),
-    storage_rx: mpsc::Receiver<Result<StorageFeedback, StorageError>>,
+    storage_rx: mpsc::Receiver<StorageFeedback>,
     new_peers: mpsc::Receiver<NewPeer>,
     trackers: Vec<DownloadTracker>,
     scheduler: Scheduler,
@@ -344,7 +344,7 @@ impl Download {
 
 impl Download {
     pub fn new(
-        storage_feedback: mpsc::Receiver<StorageResult<StorageFeedback>>,
+        storage_feedback: mpsc::Receiver<StorageFeedback>,
         storage: StorageHandle,
         download_params: DownloadParams,
         new_peers: mpsc::Receiver<NewPeer>,
@@ -604,11 +604,7 @@ impl Download {
             }
         }
 
-        ctx.events.emit_state(events::TorrentStateChange {
-            downloaded: 0,
-            uploaded: 0,
-            state: new_state,
-        });
+        ctx.events.emit_state(events::TorrentStateChange(new_state));
         self.state = new_state;
     }
 
@@ -820,15 +816,13 @@ impl Download {
         };
     }
 
-    fn handle_storage_feedback(
-        &mut self,
-        ctx: &mut TickContext,
-        storage_update: Result<StorageFeedback, StorageError>,
-    ) {
+    fn handle_storage_feedback(&mut self, ctx: &mut TickContext, storage_update: StorageFeedback) {
         match storage_update {
-            Ok(StorageFeedback::Saved { piece_i }) => {
-                self.stat.downloaded +=
+            StorageFeedback::Saved { piece_i } => {
+                let piece_length =
                     self.scheduler.piece_length_measurer.piece_length(piece_i) as u64;
+                self.stat.downloaded += piece_length;
+                self.stat.left -= piece_length;
                 self.scheduler.add_piece(piece_i);
                 ctx.events
                     .emit_piece(piece_i, events::StoragePieceEventKind::Finished);
@@ -839,24 +833,24 @@ impl Download {
                     }
                 };
             }
-            Err(StorageError { piece, kind }) => {
-                self.scheduler.fail_piece(piece);
-                match kind {
-                    crate::storage::StorageErrorKind::Fs(_) => self.set_download_state(
+            StorageFeedback::Error { piece_i, error } => {
+                self.scheduler.fail_piece(piece_i);
+                match error {
+                    crate::storage::StorageError::Fs(_) => self.set_download_state(
                         ctx,
-                        DownloadState::Error(DownloadError::Storage(StorageError { kind, piece })),
+                        DownloadState::Error(DownloadError::Storage(error)),
                     ),
-                    crate::storage::StorageErrorKind::Hash => {}
-                    crate::storage::StorageErrorKind::Bounds => unreachable!(),
-                    crate::storage::StorageErrorKind::MissingPiece => {
-                        self.seeder.handle_retrieve_error(piece)
+                    crate::storage::StorageError::Hash => {}
+                    crate::storage::StorageError::Bounds => unreachable!(),
+                    crate::storage::StorageError::MissingPiece => {
+                        self.seeder.handle_retrieve_error(piece_i)
                     }
                 }
             }
-            Ok(StorageFeedback::Data { piece_i, bytes }) => {
+            StorageFeedback::Data { piece_i, bytes } => {
                 self.seeder.handle_retrieve(piece_i, bytes);
             }
-            Ok(StorageFeedback::ValidationProgress { piece, is_valid }) => {
+            StorageFeedback::ValidationProgress { piece, is_valid } => {
                 tracing::debug!(piece, is_valid, "Validation progress");
                 if let DownloadState::Validation { validated_amount } = &mut self.state {
                     tracing::trace!(
@@ -887,11 +881,11 @@ impl Download {
         match command {
             DownloadMessage::SetStrategy(strategy) => self.scheduler.set_strategy(strategy),
             DownloadMessage::SetFilePriority { file_idx, priority } => {
+                ctx.events.emit_file(
+                    file_idx,
+                    events::StorageFileEventKind::PriorityChange(priority),
+                );
                 if self.scheduler.change_file_priority(file_idx, priority) {
-                    ctx.events.emit_file(
-                        file_idx,
-                        events::StorageFileEventKind::PriorityChange(priority),
-                    );
                     if priority == Priority::Disabled {
                         self.storage.disable_file(file_idx).await;
                     } else {
@@ -947,7 +941,7 @@ impl Download {
 
         let peers = self.scheduler.peers.iter().map(|p| p.state(&ctx)).collect();
         let output_files = self.info.output_files("");
-        let files = self
+        let mut files: Vec<_> = self
             .scheduler
             .pending_files
             .files
@@ -961,6 +955,7 @@ impl Download {
                 priority: p.priority,
             })
             .collect();
+        files.sort_by_key(|f| f.index);
 
         let mut bitfield = BitField::empty(self.scheduler.piece_table.len());
         self.scheduler
