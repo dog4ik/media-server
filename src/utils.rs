@@ -24,6 +24,9 @@ pub async fn file_hash(file: &mut tokio::fs::File) -> Result<u32, std::io::Error
     Ok(result)
 }
 
+pub fn assert_send<T: Send>(_t: T) {}
+pub fn assert_sync<T: Sync>(_t: T) {}
+
 pub fn walk_recursive<F>(
     folder: impl AsRef<Path>,
     filter_fn: Option<F>,

@@ -66,6 +66,15 @@ impl TryFrom<usize> for Priority {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum Action {
+    Validate,
+    Abort,
+    Resume,
+    Pause,
+}
+
 #[derive(Debug, Serialize, Clone, utoipa::ToSchema)]
 pub struct StateFile {
     pub path: Vec<String>,
@@ -176,8 +185,6 @@ pub struct PeerStateChange {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TorrentStateChange {
-    pub downloaded: u64,
-    pub uploaded: u64,
     pub state: DownloadState,
 }
 
@@ -379,10 +386,10 @@ pub trait TorrentManager {
     async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()>;
     async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()>;
     async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()>;
-    async fn update_file_priority(
+    async fn update_files_priority(
         &self,
         hash: &[u8; 20],
-        file_idx: usize,
+        file_idx: &[usize],
         priority: torrent::Priority,
     ) -> anyhow::Result<()>;
 }
@@ -457,10 +464,10 @@ impl TorrentManager for Db {
         Ok(())
     }
 
-    async fn update_file_priority(
+    async fn update_files_priority(
         &self,
         hash: &[u8; 20],
-        file_idx: usize,
+        file_indexes: &[usize],
         priority: torrent::Priority,
     ) -> anyhow::Result<()> {
         let hash = &hash[..];
@@ -469,15 +476,19 @@ impl TorrentManager for Db {
             .await?
             .id;
         let priority = priority as usize as i64;
-        let idx = file_idx as i64;
-        sqlx::query!(
-            "UPDATE torrent_files SET priority = ? WHERE torrent_id = ? AND idx = ?",
-            priority,
-            torrent_id,
-            idx,
-        )
-        .execute(&self.pool)
-        .await?;
+        let mut tx = self.pool.begin().await?;
+        for &idx in file_indexes {
+            let idx = idx as i64;
+            sqlx::query!(
+                "UPDATE torrent_files SET priority = ? WHERE torrent_id = ? AND idx = ?",
+                priority,
+                torrent_id,
+                idx,
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 }
@@ -748,28 +759,31 @@ impl TorrentClient {
             .cloned()
     }
 
-    pub async fn update_file_priority(
+    pub async fn update_files_priority(
         &self,
         info_hash: &[u8; 20],
-        idx: usize,
+        file_indexes: Vec<usize>,
         priority: torrent::Priority,
     ) -> anyhow::Result<()> {
         self.manager
-            .update_file_priority(info_hash, idx, priority)
+            .update_files_priority(info_hash, &file_indexes, priority)
             .await?;
-        let mut torrents = self.torrents.lock().unwrap();
-        let torrent = torrents
-            .iter_mut()
-            .find(|x| x.info_hash == *info_hash)
-            .context("get torrent")?;
+        {
+            let mut torrents = self.torrents.lock().unwrap();
+            let torrent = torrents
+                .iter_mut()
+                .find(|x| x.info_hash == *info_hash)
+                .context("get torrent")?;
 
-        let file = torrent
-            .torrent_info
-            .contents
-            .files
-            .get_mut(idx)
-            .context("get torrent file")?;
-        file.priority = priority.into();
+            let files = &mut torrent.torrent_info.contents.files;
+            for &index in &file_indexes {
+                files[index].priority = priority.into();
+            }
+        }
+        self.client
+            .handle()
+            .change_files_priority(*info_hash, file_indexes, priority)
+            .await;
         Ok(())
     }
 

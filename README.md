@@ -55,6 +55,15 @@ Feel free to try out demo [here](https://demo.provod.rs)
 - TPB
 - RuTracker
 
+
+# Installation
+
+## Pacman
+
+### Install PKGBUILD manually
+
+`OUT="$HOME/msbuild" SRCDEST="$OUT/src" SRCPKGDEST="$OUT" PKGDEST="$OUT" LOGDEST="$OUT" BUILDDIR="$OUT" makepkg -si`
+
 ## Build from source
 
 #### Required dependencies

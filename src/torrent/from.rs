@@ -4,11 +4,11 @@ use crate::utils;
 
 impl From<torrent::StorageError> for super::StorageError {
     fn from(value: torrent::StorageError) -> Self {
-        match value.kind {
-            torrent::StorageErrorKind::Fs(e) => Self::Fs(e.to_string()),
-            torrent::StorageErrorKind::Hash => Self::Hash,
-            torrent::StorageErrorKind::Bounds => Self::Bounds,
-            torrent::StorageErrorKind::MissingPiece => {
+        match value {
+            torrent::StorageError::Fs(e) => Self::Fs(e.to_string()),
+            torrent::StorageError::Hash => Self::Hash,
+            torrent::StorageError::Bounds => Self::Bounds,
+            torrent::StorageError::MissingPiece => {
                 unreachable!("missing piece can't be the reason why storage failed")
             }
         }
@@ -267,16 +267,8 @@ impl From<events::PeerEventKind> for super::PeerEventKind {
 }
 
 impl From<events::TorrentStateChange> for super::TorrentStateChange {
-    fn from(
-        events::TorrentStateChange {
-            downloaded,
-            uploaded,
-            state,
-        }: events::TorrentStateChange,
-    ) -> Self {
+    fn from(events::TorrentStateChange(state): events::TorrentStateChange) -> Self {
         Self {
-            downloaded,
-            uploaded,
             state: state.into(),
         }
     }
@@ -370,6 +362,17 @@ impl From<super::Priority> for torrent::Priority {
             super::Priority::Low => torrent::Priority::Low,
             super::Priority::Medium => torrent::Priority::Medium,
             super::Priority::High => torrent::Priority::High,
+        }
+    }
+}
+
+impl From<super::Action> for torrent::Action {
+    fn from(value: super::Action) -> Self {
+        match value {
+            super::Action::Validate => Self::Validate,
+            super::Action::Abort => Self::Abort,
+            super::Action::Resume => Self::Resume,
+            super::Action::Pause => Self::Pause,
         }
     }
 }

@@ -131,7 +131,7 @@ pub struct SerdeDuration {
         server_api::delete_movie,
         torrent_api::all_torrents,
         torrent_api::session_state,
-        torrent_api::set_file_priority,
+        torrent_api::set_files_priority,
         torrent_api::resolve_magnet_link,
         torrent_api::parse_torrent_file,
         torrent_api::open_torrent,
@@ -142,6 +142,7 @@ pub struct SerdeDuration {
         torrent_api::delete_torrent,
         torrent_api::validate_torrent,
         torrent_api::output_location,
+        torrent_api::batch_action,
         ws::ws,
     ),
     components(

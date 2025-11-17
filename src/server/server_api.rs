@@ -2429,7 +2429,7 @@ pub async fn server_version() -> &'static str {
     }
 }
 
-/// Server capabalities
+/// Server capabilities
 #[utoipa::path(
     get,
     path = "/api/configuration/capabilities",
@@ -2438,9 +2438,8 @@ pub async fn server_version() -> &'static str {
     ),
     tag = "Configuration",
 )]
-pub async fn server_capabilities() -> Result<Json<Capabilities>, AppError> {
-    let capabilities = Capabilities::parse().await?;
-    Ok(Json(capabilities))
+pub async fn server_capabilities() -> Json<Capabilities> {
+    Json(Capabilities::parse().await)
 }
 
 /// Update server configuration

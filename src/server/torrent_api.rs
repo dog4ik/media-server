@@ -20,14 +20,15 @@ use crate::{
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
     server::{OptionalContentTypeQuery, Path, Query},
     torrent::{
-        DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState, TorrentClient,
-        TorrentDownloadPayload, TorrentInfo, TorrentState,
+        Action, DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState,
+        TorrentClient, TorrentDownloadPayload, TorrentInfo, TorrentState,
     },
 };
 
 use super::{StringIdQuery, TorrentIndexQuery};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, utoipa::ToSchema)]
+#[schema(value_type = String)]
 pub struct InfoHash(pub [u8; 20]);
 
 impl<'de> Deserialize<'de> for InfoHash {
@@ -87,6 +88,12 @@ impl AsRef<[u8; 20]> for InfoHash {
     }
 }
 
+impl Into<[u8; 20]> for InfoHash {
+    fn into(self) -> [u8; 20] {
+        self.0
+    }
+}
+
 impl std::fmt::Display for InfoHash {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:x}", bytes::Bytes::copy_from_slice(&self.0))
@@ -95,7 +102,7 @@ impl std::fmt::Display for InfoHash {
 
 #[derive(Debug, Clone, Deserialize, utoipa::ToSchema)]
 pub struct PriorityPayload {
-    file: usize,
+    files: Vec<usize>,
     priority: Priority,
 }
 
@@ -171,7 +178,7 @@ pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json
 /// Set file priority
 #[utoipa::path(
     post,
-    path = "/api/torrent/{info_hash}/file_priority",
+    path = "/api/torrent/{info_hash}/files_priority",
     params(
         ("info_hash", description = "Hex encoded info_hash of the torrent"),
     ),
@@ -181,7 +188,7 @@ pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json
     ),
     tag = "Torrent",
 )]
-pub async fn set_file_priority(
+pub async fn set_files_priority(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
     Json(payload): Json<PriorityPayload>,
@@ -190,15 +197,15 @@ pub async fn set_file_priority(
         .get_download(info_hash.as_ref())
         .ok_or(AppError::not_found("Torrent is not found"))?;
     let priority: torrent::Priority = payload.priority.into();
-    if payload.file > torrent.torrent_info.contents.files.len() - 1 {
-        return Err(AppError::bad_request("File is out of bounds"));
+    if payload
+        .files
+        .iter()
+        .any(|&file| file >= torrent.torrent_info.contents.files.len())
+    {
+        return Err(AppError::bad_request("File index is out of bounds"));
     }
-    torrent
-        .download_handle
-        .set_file_priority(payload.file, priority)
-        .await?;
     client
-        .update_file_priority(info_hash.as_ref(), payload.file, priority)
+        .update_files_priority(info_hash.as_ref(), payload.files, priority)
         .await?;
 
     Ok(())
@@ -481,6 +488,34 @@ pub async fn validate_torrent(
         .await
         // Fails only when download finished
         .map_err(|_| AppError::not_found("Torrent is not found"))?;
+    Ok(StatusCode::ACCEPTED)
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct BatchActionPayload {
+    hashes: Vec<InfoHash>,
+    action: Action,
+}
+
+/// Validate torrent by info hash
+#[utoipa::path(
+    post,
+    path = "/api/torrent/batch_action",
+    responses(
+        (status = 202),
+        (status = 404, description = "Torrent is not found", body = AppError),
+    ),
+    tag = "Torrent",
+)]
+pub async fn batch_action(
+    State(client): State<&'static TorrentClient>,
+    Json(BatchActionPayload { hashes, action }): Json<BatchActionPayload>,
+) -> Result<StatusCode, AppError> {
+    client
+        .client
+        .handle()
+        .batch_action(hashes.into_iter().map(Into::into).collect(), action.into())
+        .await;
     Ok(StatusCode::ACCEPTED)
 }
 

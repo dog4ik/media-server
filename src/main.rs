@@ -282,8 +282,8 @@ async fn main() {
             get(torrent_api::torrent_state),
         )
         .route(
-            "/torrent/{info_hash}/file_priority",
-            post(torrent_api::set_file_priority),
+            "/torrent/{info_hash}/files_priority",
+            post(torrent_api::set_files_priority),
         )
         .route("/torrent/updates", get(torrent_api::updates))
         .route("/torrent/{info_hash}", delete(torrent_api::delete_torrent))
@@ -299,6 +299,7 @@ async fn main() {
             "/torrent/index_magnet_link",
             get(torrent_api::index_magnet_link),
         )
+        .route("/torrent/batch_action", post(torrent_api::batch_action))
         .route("/search/content", get(server_api::search_content))
         .route(
             "/search/trending_shows",
