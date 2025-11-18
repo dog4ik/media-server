@@ -4,7 +4,6 @@ use std::{
     ffi::OsStr,
     fmt::Display,
     io::SeekFrom,
-    os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -1313,6 +1312,7 @@ pub enum VideoContainer {
 impl<'a> TryFrom<&'a OsStr> for VideoContainer {
     type Error = anyhow::Error;
     fn try_from(value: &'a OsStr) -> Result<Self, Self::Error> {
+        let value = value.to_string_lossy();
         match value.as_bytes() {
             b"avi" => Ok(Self::Avi),
             b"mkv" => Ok(Self::Mkv),
@@ -1320,10 +1320,7 @@ impl<'a> TryFrom<&'a OsStr> for VideoContainer {
             b"mp4" => Ok(Self::Mp4),
             b"ogg" => Ok(Self::Ogg),
             b"webm" => Ok(Self::Webm),
-            _ => Err(anyhow::format_err!(
-                "unsupported container type: {}",
-                value.to_string_lossy()
-            )),
+            _ => Err(anyhow::format_err!("unsupported container type: {}", value)),
         }
     }
 }
