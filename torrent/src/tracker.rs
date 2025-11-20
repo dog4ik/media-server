@@ -88,8 +88,7 @@ impl AnnouncePayload {
         channel: &UdpTrackerChannel,
         connection_id: u64,
     ) -> anyhow::Result<AnnounceResult> {
-        let addrs = self.announce.socket_addrs(|| None)?;
-        let addr = addrs.first().context("domain resoved in 0 addrs")?;
+        let addr = lookup_host(&self.announce).await?;
 
         let res = channel
             .send(
@@ -106,7 +105,7 @@ impl AnnouncePayload {
                     num_want: -1,
                     port: self.port,
                 },
-                *addr,
+                addr,
             )
             .await?;
 
@@ -480,9 +479,8 @@ impl Tracker {
                 let conn_id = match &mut self.udp_connection_state {
                     Some(state) if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION => {
                         tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
-                        let addrs = self.url.socket_addrs(|| None)?;
-                        let addr = addrs.first().context("could not resove url hostname")?;
-                        state.set_id(chan.connect(*addr).await?);
+                        let addr = lookup_host(&self.url).await?;
+                        state.set_id(chan.connect(addr).await?);
                         state.id()
                     }
                     Some(state) => state.id(),
@@ -490,9 +488,8 @@ impl Tracker {
                         tracing::debug!(
                             url = %self.url, "Trying to get connection id from udp tracker",
                         );
-                        let addrs = self.url.socket_addrs(|| None)?;
-                        let addr = addrs.first().context("could not resove url hostname")?;
-                        let id = chan.connect(*addr).await?;
+                        let addr = lookup_host(&self.url).await?;
+                        let id = chan.connect(addr).await?;
                         self.udp_connection_state = Some(UdpConnectionState::new(id));
                         id
                     }
@@ -517,10 +514,8 @@ impl Tracker {
                                 if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION =>
                             {
                                 tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
-                                let addrs = self.url.socket_addrs(|| None)?;
-                                let addr =
-                                    addrs.first().context("could not resove url hostname")?;
-                                state.set_id(chan.connect(*addr).await?);
+                                let addr = lookup_host(&self.url).await?;
+                                state.set_id(chan.connect(addr).await?);
                                 state.id()
                             }
                             Some(state) => state.id,
@@ -529,10 +524,8 @@ impl Tracker {
                                     "Trying to get connection id from udp tracker {}",
                                     self.url
                                 );
-                                let addrs = self.url.socket_addrs(|| None)?;
-                                let addr =
-                                    addrs.first().context("could not resove url hostname")?;
-                                let id = chan.connect(*addr).await?;
+                                let addr = lookup_host(&self.url).await?;
+                                let id = chan.connect(addr).await?;
                                 self.udp_connection_state = Some(UdpConnectionState::new(id));
                                 id
                             }
@@ -692,4 +685,13 @@ impl UdpTrackerWorker {
             }
         }
     }
+}
+
+pub async fn lookup_host(url: &Url) -> anyhow::Result<SocketAddr> {
+    let host = url.host_str().context("url does have host")?;
+    let port = url
+        .port_or_known_default()
+        .context("url does not have a port or known default")?;
+    let mut addrs = tokio::net::lookup_host((host, port)).await?;
+    addrs.next().context("dns resolved 0 addrs")
 }
