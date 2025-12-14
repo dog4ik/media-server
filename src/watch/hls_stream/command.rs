@@ -4,7 +4,7 @@ use std::{
     process::Stdio,
 };
 
-use tokio::process::{self, Command};
+use std::process::Command;
 
 pub const DEFAULT_SEGMENT_LENGTH: usize = 6;
 
@@ -120,8 +120,8 @@ pub(super) fn run(
         audio_codec,
         copy_video,
     }: &CommandArgumentsParams,
-) -> anyhow::Result<process::Child> {
-    let mut c = tokio::process::Command::new(ffmpeg_path);
+) -> anyhow::Result<tokio::process::Child> {
+    let mut c = Command::new(ffmpeg_path);
     let segment_file_name = format!("{}/%d.mp4", temp_path.display());
 
     c.arg("-ss");
@@ -187,13 +187,18 @@ pub(super) fn run(
 
     c.arg(temp_path);
 
+    let dbg_args: Vec<_> = c.get_args().map(|v| v.to_string_lossy()).collect();
+
     tracing::debug!(
+        full_args = %dbg_args.join(" "),
         audio_codec,
         video_encoder,
         seek_offset = seek_time,
         start_segment = start,
         "Started hls ffmpeg command"
     );
+
+    let mut c = tokio::process::Command::from(c);
 
     let child = c
         .stderr(Stdio::null())
