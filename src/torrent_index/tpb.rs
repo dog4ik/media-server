@@ -170,12 +170,9 @@ pub struct TpbTorrent {
     info_hash: String,
     leechers: String,
     seeders: String,
-    num_files: String,
     size: String,
     username: String,
     added: String,
-    status: String,
-    category: String,
     imdb: String,
 }
 
