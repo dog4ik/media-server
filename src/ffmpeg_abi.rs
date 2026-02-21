@@ -206,6 +206,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             (codec::Id::AC3, _) => AudioCodec::AC3,
             (codec::Id::DTS, codec::Profile::DTS(_)) => AudioCodec::DTS,
             (codec::Id::DTS, codec::Profile::Unknown) => AudioCodec::DTS,
+            (codec::Id::FLAC, codec::Profile::Unknown) => AudioCodec::FLAC,
             (c, p) => {
                 tracing::warn!("Unrecognized audio codec/profile: {:?}/{:?}", c, p);
                 return Err(anyhow::anyhow!("Unregonized audio codec {:?}/{:?}", c, p));
