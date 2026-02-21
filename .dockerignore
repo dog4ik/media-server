@@ -1,0 +1,10 @@
+/target
+/resources
+/test
+/db
+/dist
+/test-dir
+/tmp
+.env
+configuration.toml
+/*.log
