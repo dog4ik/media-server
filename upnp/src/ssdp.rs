@@ -38,6 +38,7 @@ async fn sleep_rand_millis_duration(range: &Range<u64>) {
     tokio::time::sleep(Duration::from_millis(range)).await;
 }
 
+#[tracing::instrument(level = "debug")]
 fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     let local_ip = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 1900);
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
@@ -53,6 +54,7 @@ fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     Ok(socket)
 }
 
+#[tracing::instrument(level = "debug")]
 async fn resolve_local_addr() -> anyhow::Result<SocketAddr> {
     let google = Ipv4Addr::new(8, 8, 8, 8);
     // NOTE: this feels wrong. Find the better solution
@@ -281,7 +283,9 @@ impl<T: AnnounceHandler> Announcer<T> {
         Ok(())
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn announce_all(&mut self) -> anyhow::Result<()> {
+        tracing::debug!("Announcing all upnp services");
         let udn = Udn::new(self.server_uuid);
         self.default_announce.notification_type = NotificationType::RootDevice;
         self.default_announce.usn = USN::root_device(udn.clone());

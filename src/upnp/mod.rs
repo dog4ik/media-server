@@ -32,6 +32,7 @@ async fn sleep_with_cancel(sleep_duration: Duration, cancellation_token: &Cancel
     }
 }
 
+#[tracing::instrument(level = "debug", fields(ssdp_config))]
 async fn run_retry_ssdp(
     mut ssdp_config: SsdpListenerConfig,
     cancellation_token: CancellationToken,

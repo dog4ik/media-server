@@ -323,12 +323,8 @@ pub struct TrackerHandle {
 
 impl TrackerHandle {
     pub fn announce(&self, stat: DownloadStat) {
-        self.command_tx
-            .try_send(TrackerCommand::Reannounce(stat))
-            .unwrap();
+        let _ = self.command_tx.try_send(TrackerCommand::Reannounce(stat));
     }
-    #[allow(unused)]
-    pub fn close(self) {}
 
     pub fn url(&self) -> &str {
         self.url.as_ref()
@@ -675,7 +671,11 @@ impl UdpTrackerWorker {
                     }
                 },
                 Some(request) = data_rx.recv() => {
-                    let _ = self.socket.send_to(&request.as_bytes(), request.tracker_addr).await;
+                    let data = request.as_bytes();
+                    tracing::trace!("Sending {} bytes to {}", data.len(), request.tracker_addr);
+                    if let Err(e) = self.socket.send_to(&data, request.tracker_addr).await {
+                        tracing::warn!("Failed to send data to {}: {e}", request.tracker_addr);
+                    };
                     pending_transactions.insert(request.transaction_id, request.response);
                 }
                 else => {

@@ -497,13 +497,13 @@ pub struct BatchActionPayload {
     action: Action,
 }
 
-/// Validate torrent by info hash
+/// Run action on a list of torrents
 #[utoipa::path(
     post,
     path = "/api/torrent/batch_action",
+    request_body = BatchActionPayload,
     responses(
         (status = 202),
-        (status = 404, description = "Torrent is not found", body = AppError),
     ),
     tag = "Torrent",
 )]

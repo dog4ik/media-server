@@ -142,7 +142,6 @@ impl Client {
             true => utils::search_upnp_gateway().await.ok(),
             false => None,
         };
-        // WARN: handle case where we can't resolve client's external ip
         let external_ip = utils::external_ip(upnp_client.as_ref()).await.ok();
         let peer_listener = if let Some(upnp_client) = upnp_client {
             PeerListener::spawn_with_upnp(
@@ -271,7 +270,7 @@ impl Client {
             }
         }
         let peer_semaphore = Arc::new(Semaphore::new(100));
-        let duration = Duration::from_secs(2);
+        let duration = Duration::from_secs(5);
         let mut pending_peers = HashSet::new();
         loop {
             let peer_semaphore = peer_semaphore.clone();
@@ -284,7 +283,7 @@ impl Client {
                                 let _lock = peer_semaphore.acquire().await;
                                 let socket = timeout(duration, TcpStream::connect(peer)).await??;
                                 let mut peer = timeout(duration, Peer::new(socket, info_hash)).await??;
-                                let metadata = timeout(Duration::from_secs(5), peer.fetch_ut_metadata()).await??;
+                                let metadata = timeout(Duration::from_secs(30), peer.fetch_ut_metadata()).await??;
                                 Ok(metadata)
                             });
                         }

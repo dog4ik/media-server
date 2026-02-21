@@ -639,8 +639,9 @@ impl Download {
             }
         }
         tracing::trace!(
-            "Handled peer's messages in {:?}",
-            handle_peer_messages.elapsed()
+            peers_count = self.scheduler.peers.len(),
+            took = ?handle_peer_messages.elapsed(),
+            "Handled peer's messages",
         );
 
         if min_pex_tip != usize::MAX

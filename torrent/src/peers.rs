@@ -372,6 +372,7 @@ impl Peer {
         Ok(peer)
     }
 
+    #[tracing::instrument(skip_all, fields(self.peer_ip))]
     pub async fn fetch_ut_metadata(&mut self) -> anyhow::Result<Info> {
         let handshake = self
             .extension_handshake
@@ -385,6 +386,7 @@ impl Peer {
                 payload: msg.as_bytes().into(),
             })
             .await?;
+            tracing::trace!(?msg, "Requested ut_metadata block");
             loop {
                 let response = self.stream.next().await.context("stream to be open")??;
                 let PeerMessage::Extension {
@@ -401,6 +403,7 @@ impl Peer {
                         // reject it
                     }
                     UtMessage::Data { piece, total_size } => {
+                        tracing::trace!(%piece, %total_size, "Recieved ut metadata");
                         ensure!(total_size == ut_metadata.size);
                         let piece_len = ut_metadata.piece_len(piece);
                         let data_slice = payload.slice(payload.len() - piece_len..);
