@@ -13,6 +13,7 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::Subscriber;
 use tracing::field::{Field, Visit};
 use tracing_subscriber::EnvFilter;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::AppResources;
@@ -200,6 +201,7 @@ pub fn init_tracer() -> LogChannel {
     let log_channel = LogChannel(pub_tracer.channel.clone());
     let sub = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .finish();
     sub.with(pub_tracer).with(file_logger).init();
     log_channel
