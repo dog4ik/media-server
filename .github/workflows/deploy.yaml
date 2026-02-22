@@ -59,4 +59,4 @@ jobs:
         username: deploy
         key: ${{ secrets.SSH_DEPLOY_PRIVATE_KEY }}
         port: ${{ secrets.DEPLOY_SSH_PORT }}
-        script: docker stack deploy -c docker.stack.yaml support-bot-stack
+        script: docker stack deploy -c demo.docker.stack.yaml provod-demo-stack
