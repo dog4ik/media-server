@@ -109,7 +109,8 @@ impl bendy::decoding::FromBencode for Info {
         let dict_dec = object.try_into_dictionary()?;
         let raw = bytes::Bytes::copy_from_slice(dict_dec.into_raw()?);
 
-        let mut info: Info = serde_bencode::from_bytes(&raw)?;
+        let mut info: Info =
+            serde_bencode::from_bytes(&raw).map_err(bendy::decoding::Error::malformed_content)?;
         info.raw = raw;
         Ok(info)
     }
@@ -229,7 +230,9 @@ impl Visitor<'_> for HashesVisitor {
             ));
         }
         Ok(Hashes(
-            v.into_iter().copied().array_chunks::<20>().collect(),
+            v.chunks_exact(20)
+                .map(|c| <[u8; 20]>::try_from(c).unwrap())
+                .collect(),
         ))
     }
 
@@ -241,7 +244,9 @@ impl Visitor<'_> for HashesVisitor {
             return Err(serde::de::Error::custom("payload is not 20 bytes long"));
         }
         Ok(Hashes(
-            v.into_iter().copied().array_chunks::<20>().collect(),
+            v.chunks_exact(20)
+                .map(|c| <[u8; 20]>::try_from(c).unwrap())
+                .collect(),
         ))
     }
 }

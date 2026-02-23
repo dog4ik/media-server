@@ -216,7 +216,7 @@ impl HttpAnnounceResponse {
                 }
             }
             HttpPeerList::Compact(bytes) => {
-                for slice in bytes.into_iter().copied().array_chunks::<6>() {
+                for slice in bytes.chunks_exact(6) {
                     let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
                     let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
                     let ip = Ipv4Addr::from_bits(ip);

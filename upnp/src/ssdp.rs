@@ -11,7 +11,7 @@ use std::{
 };
 
 use anyhow::Context;
-use rand::Rng;
+use rand::RngExt;
 use socket2::{Domain, Protocol, Type};
 use tokio::net::UdpSocket;
 use tokio_util::sync::CancellationToken;
@@ -42,7 +42,7 @@ async fn sleep_rand_millis_duration(range: &Range<u64>) {
 fn bind_ssdp_socket(ttl: Option<u32>) -> anyhow::Result<UdpSocket> {
     let local_ip = SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 1900);
     let socket = socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::UDP))?;
-    socket.set_ttl(ttl.unwrap_or(DEFAULT_SSDP_TTL))?;
+    socket.set_ttl_v4(ttl.unwrap_or(DEFAULT_SSDP_TTL))?;
     socket.set_reuse_address(true)?;
     #[cfg(target_os = "linux")]
     socket.set_reuse_port(false)?;

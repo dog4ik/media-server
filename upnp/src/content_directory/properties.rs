@@ -202,7 +202,7 @@ impl_basic_property!("dc:long_description" for LongDescription);
 /// - `2004-05-14T14:30:05+09:00`
 #[derive(Debug)]
 pub struct Date {
-    date: time::PrimitiveDateTime,
+    date: time::OffsetDateTime,
 }
 impl Date {
     pub const FORMAT: time::format_description::well_known::Rfc3339 =
@@ -214,7 +214,7 @@ impl std::str::FromStr for Date {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Date {
-            date: time::PrimitiveDateTime::parse(s, &Self::FORMAT)?,
+            date: time::OffsetDateTime::parse(s, &Self::FORMAT)?,
         })
     }
 }

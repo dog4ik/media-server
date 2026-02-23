@@ -1,5 +1,3 @@
-#![feature(iter_array_chunks)]
-
 use std::{
     collections::HashSet,
     net::{Ipv4Addr, SocketAddrV4},
