@@ -55,7 +55,6 @@ Feel free to try out demo [here](https://demo.provod.rs)
 - TPB
 - RuTracker
 
-
 # Installation
 
 ## Pacman
@@ -65,6 +64,8 @@ Feel free to try out demo [here](https://demo.provod.rs)
 `OUT="$HOME/msbuild" SRCDEST="$OUT/src" SRCPKGDEST="$OUT" PKGDEST="$OUT" LOGDEST="$OUT" BUILDDIR="$OUT" makepkg -si`
 
 ## Build from source
+
+#### MSRV: 1.88.0
 
 #### Required dependencies
 
@@ -77,8 +78,6 @@ Feel free to try out demo [here](https://demo.provod.rs)
 ##### Ubuntu
 
 `apt install pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev clang`
-
-Nightly version of rust is required
 
 1. Install sqlx-cli with `cargo install sqlx-cli`
 2. Set `DATABASE_URL` environment variable to `sqlite://db/database.sqlite`.
@@ -98,7 +97,6 @@ or try using a different browser.
 
 You can download [Electron Client](https://github.com/dog4ik/media-server-electron/releases), built with flag `enable_platform_ac3_eac3_audio` enabled.
 It supports a wider range of formats natively, eliminating the need for transcoding / remuxing.
-
 
 ## API Documentation
 
