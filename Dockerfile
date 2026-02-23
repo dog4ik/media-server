@@ -38,7 +38,7 @@ RUN cargo build --release --bin media-server
 FROM debian:trixie-slim AS runtime
 RUN apt-get update && apt-get install -y \
       pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev clang \
-      libssl3 ca-certificates \
+      libssl3 ca-certificates curl \
       && rm -rf /var/lib/apt/lists/*
 WORKDIR app
 COPY --from=builder /app/target/release/media-server /usr/local/bin
