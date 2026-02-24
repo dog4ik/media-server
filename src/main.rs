@@ -382,6 +382,7 @@ async fn main() {
 
     let upnp = Upnp::init(app_state.clone()).await;
 
+    let http_trace = tower_http::trace::TraceLayer::new_for_http();
     let app = Router::new()
         .route("/api/log", get(LogChannel::into_sse_stream))
         .layer(Extension(log_channel))
@@ -390,6 +391,7 @@ async fn main() {
         .merge(SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()))
         .merge(upnp)
         .layer(CorsLayer::permissive())
+        .layer(http_trace)
         .fallback_service(assets_service)
         .with_state(app_state);
 
@@ -406,10 +408,13 @@ async fn main() {
     {
         let cancellation_token = cancellation_token.clone();
         tokio::spawn(async move {
-            axum::serve(listener, app)
-                .with_graceful_shutdown(cancellation_token.cancelled_owned())
-                .await
-                .unwrap();
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(cancellation_token.cancelled_owned())
+            .await
+            .unwrap();
         });
     }
 

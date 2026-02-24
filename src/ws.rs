@@ -1,14 +1,15 @@
-use std::{sync::Arc, time::Duration};
+use std::{net::SocketAddr, sync::Arc, time::Duration};
 
 use crate::{app_state::AppState, progress::Notification, torrent::TorrentProgress};
 use anyhow::Context;
 use axum::{
     extract::{
-        State, WebSocketUpgrade,
+        ConnectInfo, State, WebSocketUpgrade,
         ws::{self, WebSocket},
     },
     response::Response,
 };
+use axum_extra::{TypedHeader, headers};
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -87,12 +88,17 @@ impl Connection {
     ),
     tag = "Tasks",
 )]
-pub async fn ws(ws: WebSocketUpgrade, State(app_state): State<AppState>) -> Response {
+pub async fn ws(
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(app_state): State<AppState>,
+) -> Response {
+    tracing::debug!(?user_agent, %addr, "Upgrading ws connection");
     ws.on_upgrade(|socket| ws_handler(socket, app_state))
 }
 
 async fn ws_handler(socket: WebSocket, app_state: AppState) {
-    tracing::debug!("Opened ws connection");
     let mut connection = Connection::new(socket);
     let watch_sessions = &app_state.tasks.watch_sessions;
     if let Err(e) = ws_handler_inner(&mut connection, app_state).await {
