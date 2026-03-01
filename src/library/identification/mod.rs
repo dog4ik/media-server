@@ -465,7 +465,10 @@ pub async fn walk_movie_dirs(mut dirs: Vec<PathBuf>) -> Vec<(Video, MovieIdentif
                 .extension()
                 .is_some_and(|e| VideoContainer::try_from(e).is_ok())
             {
-                tracing::trace!("Ignoring file without extension: {}", path.display());
+                tracing::trace!(
+                    path = %path.display(),
+                    "Ignoring file without proper video extension",
+                );
                 continue;
             };
             if path.is_file() {
