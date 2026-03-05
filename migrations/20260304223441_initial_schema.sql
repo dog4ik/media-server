@@ -1,0 +1,129 @@
+CREATE TABLE IF NOT EXISTS content (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  content_type TEXT NOT NULL,
+  title TEXT NOT NULL, 
+  release_date TEXT,
+  original_title TEXT,
+  original_language TEXT,
+  poster TEXT,
+  plot TEXT);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS content_fts USING fts5(title, plot, content='content', content_rowid='id');
+CREATE TRIGGER IF NOT EXISTS content_ai AFTER INSERT ON content BEGIN
+  INSERT INTO content_fts(rowid, title, plot) VALUES (new.id, new.title, new.plot);
+END;
+CREATE TRIGGER IF NOT EXISTS content_ad AFTER DELETE ON content BEGIN
+  INSERT INTO content_fts(content_fts, rowid, title, plot) VALUES('delete', old.id, old.title, old.plot);
+END;
+CREATE TRIGGER IF NOT EXISTS content_au AFTER UPDATE ON content BEGIN
+  INSERT INTO content_fts(content_fts, rowid, title, plot) VALUES('delete', old.id, old.title, old.plot);
+  INSERT INTO content_fts(rowid, title, plot) VALUES (new.id, new.title, new.plot);
+END;
+
+CREATE TABLE IF NOT EXISTS shows (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  content_id NOT NULL,
+  backdrop TEXT,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS seasons (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  show_id INTEGER NOT NULL,
+  content_id INTEGER NOT NULL,
+  number INTEGER NOT NULL,
+  FOREIGN KEY (show_id) REFERENCES shows (id) ON DELETE CASCADE,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS episodes (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  season_id INTEGER NOT NULL,
+  content_id INTEGER NOT NULL,
+  number INTEGER NOT NULL,
+  duration INTEGER NOT NULL,
+  FOREIGN KEY (season_id) REFERENCES seasons (id) ON DELETE CASCADE,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS movies (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  content_id INTEGER NOT NULL,
+  backdrop TEXT,
+  duration INTEGER NOT NULL,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS videos (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  path TEXT NOT NULL UNIQUE,
+  size INTEGER NOT NULL,
+  content_id INTEGER,
+  is_prime BOOL NOT NULL,
+  scan_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE SET NULL);
+
+CREATE TABLE IF NOT EXISTS subtitles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  language TEXT,
+  external_path TEXT,
+  video_id INTEGER NOT NULL,
+  FOREIGN KEY (video_id) REFERENCES videos (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS history (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  time INTEGER NOT NULL,
+  is_finished BOOL NOT NULL,
+  content_id INTEGER NOT NULL UNIQUE,
+  update_time DATETIME DEFAULT CURRENT_TIMESTAMP NOT NULL,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS external_ids (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  metadata_provider TEXT NOT NULL,
+  metadata_id TEXT NOT NULL,
+  content_id INTEGER,
+  is_prime INTEGER NOT NULL,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
+  UNIQUE(metadata_provider, metadata_id));
+
+CREATE TABLE IF NOT EXISTS intros (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  episode_id INTEGER NOT NULL UNIQUE,
+  start_sec INTEGER NOT NULL,
+  end_sec INTEGER NOT NULL,
+  FOREIGN KEY (episode_id) REFERENCES episodes (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS actors (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  external_id INTEGER NOT NULL,
+  metadata_provider TEXT NOT NULL,
+  poster TEXT,
+  FOREIGN KEY (external_id) REFERENCES external_ids (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS roles (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  actor_id INTEGER NOT NULL,
+  content_id INTEGER NOT NULL,
+  role TEXT NOT NULL,
+  character TEXT,
+  poster TEXT,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
+  FOREIGN KEY (actor_id) REFERENCES actors (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS genres (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS content_genres (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  genre_id INTEGER NOT NULL,
+  content_id INTEGER NOT NULL,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
+  FOREIGN KEY (genre_id) REFERENCES genres (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS torrents(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  bencoded_info BLOB NOT NULL,
+  bitfield BLOB NOT NULL, 
+  save_location TEXT NOT NULL, 
+  trackers TEXT NOT NULL,
+  info_hash BLOB NOT NULL UNIQUE,
+  added_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS content_downloads (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  torrent_id INTEGER NOT NULL,
+  content_id INTEGER NOT NULL,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
+  FOREIGN KEY (torrent_id) REFERENCES torrents (id) ON DELETE CASCADE);
+
+CREATE TABLE IF NOT EXISTS torrent_files(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+  torrent_id INTEGER NOT NULL,
+  content_id INTEGER,
+  priority INTEGER NOT NULL,
+  idx INTEGER NOT NULL,
+  relative_path TEXT NOT NULL,
+  FOREIGN KEY (torrent_id) REFERENCES torrents (id) ON DELETE CASCADE,
+  FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE SET NULL);

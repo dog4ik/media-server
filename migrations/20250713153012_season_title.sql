@@ -1,1 +1,0 @@
-ALTER TABLE seasons ADD COLUMN title TEXT;

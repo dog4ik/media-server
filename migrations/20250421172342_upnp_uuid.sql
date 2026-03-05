@@ -1,4 +1,0 @@
-CREATE TABLE IF NOT EXISTS upnp_uuid (
-    id INTEGER PRIMARY KEY CHECK (id = 0),
-    uuid BLOB NOT NULL
-);
