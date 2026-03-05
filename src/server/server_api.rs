@@ -56,6 +56,9 @@ use crate::metadata::{
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
+use crate::server::api_data::LocalDataLookup;
+use crate::server::api_data::local_movie::Movie;
+use crate::server::api_data::local_show::{Episode, Season, Show};
 use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::watch::hls_stream::HlsStreamConfiguration;
@@ -143,8 +146,8 @@ pub struct DetailedVideoTrack {
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Intro {
-    start_sec: i64,
-    end_sec: i64,
+    pub start_sec: i64,
+    pub end_sec: i64,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -402,13 +405,8 @@ impl DetailedVariant {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(tag = "content_type", rename_all = "lowercase")]
 pub enum VideoContentMetadata {
-    Episode {
-        show: ShowMetadata,
-        episode: EpisodeMetadata,
-    },
-    Movie {
-        movie: MovieMetadata,
-    },
+    Episode { show: Show, episode: Episode },
+    Movie { movie: MovieMetadata },
 }
 
 /// Get metadata related to the video
@@ -828,12 +826,12 @@ pub async fn watch_movie(
     get,
     path = "/api/local_shows",
     responses(
-        (status = 200, description = "All local shows", body = Vec<ShowMetadata>),
+        (status = 200, description = "All local shows", body = Vec<Show>),
     ),
     tag = "Shows",
 )]
 /// All local shows
-pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetadata>>, AppError> {
+pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<Show>>, AppError> {
     Ok(Json(db.pool.all_shows(None).await?))
 }
 
@@ -853,7 +851,7 @@ pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<ShowMetada
 pub async fn local_episode(
     Path(id): Path<i64>,
     State(db): State<Db>,
-) -> Result<Json<EpisodeMetadata>, AppError> {
+) -> Result<Json<Episode>, AppError> {
     Ok(Json(db.get_episode_by_id(id).await?))
 }
 
@@ -864,7 +862,7 @@ pub async fn local_episode(
         IdQuery,
     ),
     responses(
-        (status = 200, description = "Local episode", body = EpisodeMetadata),
+        (status = 200, description = "Local episode", body = Episode),
     ),
     tag = "Shows",
 )]
@@ -872,7 +870,7 @@ pub async fn local_episode(
 pub async fn local_episode_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
-) -> Result<Json<EpisodeMetadata>, AppError> {
+) -> Result<Json<Episode>, AppError> {
     let episode_id = sqlx::query!(
         r#"SELECT videos.episode_id as "episode_id!: i64"
     FROM videos WHERE id = ? AND videos.episode_id NOT NULL"#,
@@ -1095,17 +1093,23 @@ pub async fn get_video_by_id(
         ProviderQuery,
     ),
     responses(
-        (status = 200, description = "Requested show", body = ShowMetadata),
+        (status = 200, description = "Requested show", body = Show),
         (status = 404, body = AppError)
     ),
     tag = "Shows",
 )]
 pub async fn get_show(
     State(providers): State<&'static MetadataProvidersStack>,
+    State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
-) -> Result<Json<ShowMetadata>, AppError> {
-    let res = providers.get_show(&id, provider).await?;
+) -> Result<Json<Show>, AppError> {
+    let res = if provider.is_local() {
+        db.get_show(id.parse()?).await?
+    } else {
+        let meta = providers.get_show(&id, provider).await?;
+        Show::extend_with_lookup(meta, LocalDataLookup::new(db)).await?
+    };
     Ok(Json(res))
 }
 
@@ -1292,17 +1296,23 @@ pub async fn episode_poster(
         ProviderQuery,
     ),
     responses(
-        (status = 200, description = "Desired season metadata", body = SeasonMetadata),
+        (status = 200, description = "Desired season metadata", body = Season),
         (status = 404, body = AppError)
     ),
     tag = "Shows",
 )]
 pub async fn get_season(
     State(providers): State<&'static MetadataProvidersStack>,
+    State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path((show_id, season)): Path<(String, usize)>,
-) -> Result<Json<SeasonMetadata>, AppError> {
-    let res = providers.get_season(&show_id, season, provider).await?;
+) -> Result<Json<Season>, AppError> {
+    let res = if provider.is_local() {
+        db.get_season(show_id.parse()?, season).await?
+    } else {
+        let season = providers.get_season(&show_id, season, provider).await?;
+        Season::extend_from_metadata(season, LocalDataLookup::new(db)).await?
+    };
     Ok(Json(res))
 }
 
@@ -1317,19 +1327,25 @@ pub async fn get_season(
         ProviderQuery,
     ),
     responses(
-        (status = 200, description = "Desired episode metadata", body = EpisodeMetadata),
+        (status = 200, description = "Desired episode metadata", body = Episode),
         (status = 404, body = AppError)
     ),
     tag = "Shows",
 )]
 pub async fn get_episode(
     State(providers): State<&'static MetadataProvidersStack>,
+    State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path((show_id, season, episode)): Path<(String, usize, usize)>,
-) -> Result<Json<EpisodeMetadata>, AppError> {
-    let res = providers
-        .get_episode(&show_id, season, episode, provider)
-        .await?;
+) -> Result<Json<Episode>, AppError> {
+    let res = if provider.is_local() {
+        db.get_episode(show_id.parse()?, season, episode).await?
+    } else {
+        let metadata = providers
+            .get_episode(&show_id, season, episode, provider)
+            .await?;
+        Episode::extend_from_metadata(metadata, LocalDataLookup::new(db)).await?
+    };
     Ok(Json(res))
 }
 
@@ -1388,19 +1404,24 @@ pub async fn search_torrent(
     get,
     path = "/api/search/trending_shows",
     responses(
-        (status = 200, description = "List of trending movies", body = Vec<ShowMetadata>),
+        (status = 200, description = "List of trending shows", body = Vec<Show>),
     ),
     tag = "Search",
 )]
 pub async fn get_trending_shows(
     State(providers): State<&'static MetadataProvidersStack>,
-) -> Result<Json<Vec<ShowMetadata>>, AppError> {
+    State(db): State<Db>,
+) -> Result<Json<Vec<Show>>, AppError> {
     let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
         .ok_or(AppError::bad_request("tmdb provider is not available"))?;
-    let res = tmdb_api.trending_shows(language.0).await?;
-    Ok(Json(res.results.into_iter().map(Into::into).collect()))
+    let trending_shows = tmdb_api.trending_shows(language.0).await?;
+    let lookup = LocalDataLookup::new(db);
+    let res = lookup
+        .extend_shows_with_local_data(trending_shows.results.into_iter().map(Into::into).collect())
+        .await?;
+    Ok(Json(res))
 }
 
 /// Get trending movies
@@ -1408,19 +1429,24 @@ pub async fn get_trending_shows(
     get,
     path = "/api/search/trending_movies",
     responses(
-        (status = 200, description = "List of trending shows", body = Vec<MovieMetadata>),
+        (status = 200, description = "List of trending shows", body = Vec<Movie>),
     ),
     tag = "Search",
 )]
 pub async fn get_trending_movies(
     State(providers): State<&'static MetadataProvidersStack>,
-) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+    State(db): State<Db>,
+) -> Result<Json<Vec<Movie>>, AppError> {
     let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
         .ok_or(AppError::bad_request("tmdb provider is not available"))?;
     let res = tmdb_api.trending_movies(language.0).await?;
-    Ok(Json(res.results.into_iter().map(Into::into).collect()))
+    let lookup = LocalDataLookup::new(db);
+    let res = lookup
+        .extend_movies_with_local_data(res.results.into_iter().map(Into::into).collect())
+        .await?;
+    Ok(Json(res))
 }
 
 /// Search for content. Allows to search for all types of content at once
@@ -1549,10 +1575,10 @@ pub enum HistoryEntry {
     Movie { movie: MovieHistory },
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ShowSuggestion {
     pub show_id: i64,
-    pub episode: EpisodeMetadata,
+    pub episode: Episode,
     pub history: Option<DbHistory>,
 }
 

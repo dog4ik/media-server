@@ -11,32 +11,15 @@ use serde::{
     de::{self},
 };
 
-#[allow(unused)]
-pub mod local_provider;
 pub mod metadata_stack;
 /// Fallback service for different metadata providers.
-/// This service is intended to be the authorization middleware.
 ///
-/// Currently implemented metadata providers:
-/// - TMDB
-/// - TVDB
-///
-///
-/// In case of content metadata providers this service will mimic all responses.
-///
-/// Currently implemented torrent indexes:
-/// - Rutracker
-///
-/// Allows to access metadata providers and torrent indexes with a single authorization.
-///
+/// Allows to access metadata providers and torrent indexes with using user authorization.
 /// Some providers are available only with this agent.
 ///
 /// ### Performance
 /// Since all user requests go to this service it will share provider limitation (e.g. rate limit)
 /// between all users.
-///
-/// To prevent slow response times, it is recommended to use personal metadata providers
-/// authorization tokens.
 pub mod provod_agent;
 /// Rate limited request client
 pub mod request_client;
@@ -273,15 +256,32 @@ pub trait DiscoverMetadataProvider {
 // types
 
 #[derive(
-    Debug, Serialize, Deserialize, Clone, Copy, Hash, Default, PartialEq, Eq, utoipa::ToSchema,
+    Debug,
+    Serialize,
+    Deserialize,
+    Clone,
+    Copy,
+    Hash,
+    Default,
+    PartialEq,
+    Eq,
+    utoipa::ToSchema,
+    sqlx::Type,
 )]
 #[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
 pub enum MetadataProvider {
     #[default]
     Local,
     Tmdb,
     Tvdb,
     Imdb,
+}
+
+impl MetadataProvider {
+    pub fn is_local(&self) -> bool {
+        *self == Self::Local
+    }
 }
 
 impl FromStr for MetadataProvider {
@@ -329,6 +329,7 @@ pub struct MetadataSearchResult {
     pub locale_metadata: Option<LocaleMetadata>,
 }
 
+/// The unified movie data structure from any movie provider
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct MovieMetadata {
     pub metadata_id: String,
@@ -337,12 +338,12 @@ pub struct MovieMetadata {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
-    #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
 }
 
+/// The unified show data structure from any show provider
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToResponse, utoipa::ToSchema)]
 pub struct ShowMetadata {
     pub metadata_id: String,
@@ -358,6 +359,7 @@ pub struct ShowMetadata {
     pub locale_metadata: Option<LocaleMetadata>,
 }
 
+/// The unified season data structure from any show provider
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct SeasonMetadata {
     pub metadata_id: String,
@@ -370,6 +372,7 @@ pub struct SeasonMetadata {
     pub number: usize,
 }
 
+/// The unified episode data structure from any show provider
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct EpisodeMetadata {
     pub metadata_id: String,
@@ -379,11 +382,11 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
-    #[schema(value_type = Option<crate::server::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
 }
 
+/// Localization specific data
 #[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
 pub struct LocaleMetadata {
     pub original_title: String,

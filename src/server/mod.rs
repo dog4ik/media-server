@@ -23,7 +23,12 @@ use serde::de::DeserializeOwned;
 use serde::de::Visitor;
 use utoipa::OpenApi;
 
+/// API data types
+///
+/// This module defines the data types used by the API, as well as the methods required for their construction.
+pub mod api_data;
 pub mod server_api;
+/// Torrent client specific endpoints
 pub mod torrent_api;
 
 #[derive(Debug, serde::Serialize, utoipa::ToSchema)]

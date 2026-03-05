@@ -17,6 +17,13 @@ use crate::{
         LocaleMetadata, MetadataImage, MetadataProvider, MovieMetadata, MovieMetadataProvider,
         SeasonMetadata, ShowMetadata, ShowMetadataProvider,
     },
+    server::{
+        api_data::{
+            api_types,
+            local_show::{Episode, LocalEpisodeData, LocalSeasonData, LocalShowData, Season, Show},
+        },
+        server_api::Intro,
+    },
 };
 
 fn path_to_url(path: &Path) -> String {
@@ -709,7 +716,7 @@ where
     fn all_shows(
         self,
         limit: impl Into<Option<i64>>,
-    ) -> impl std::future::Future<Output = anyhow::Result<Vec<ShowMetadata>>> + Send {
+    ) -> impl std::future::Future<Output = anyhow::Result<Vec<Show>>> + Send {
         let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
         async move {
             let mut conn = self.acquire().await?;
@@ -737,7 +744,7 @@ where
                             original_title,
                         },
                     );
-                    ShowMetadata {
+                    Show {
                         metadata_id: show.id.to_string(),
                         metadata_provider: MetadataProvider::Local,
                         poster,
@@ -748,6 +755,7 @@ where
                         release_date: show.release_date,
                         title: show.title,
                         locale_metadata,
+                        local: Some(LocalShowData { local_id: show.id }),
                     }
                 })
                 .collect())
@@ -770,7 +778,7 @@ where
     fn get_show(
         self,
         show_id: i64,
-    ) -> impl std::future::Future<Output = Result<ShowMetadata, AppError>> + Send {
+    ) -> impl std::future::Future<Output = Result<Show, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let show = sqlx::query!(r#"SELECT shows.*,
@@ -795,7 +803,7 @@ where
                     original_title,
                 },
             );
-            Ok(ShowMetadata {
+            Ok(Show {
                 metadata_id: show.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
                 poster,
@@ -806,6 +814,7 @@ where
                 release_date: show.release_date,
                 title: show.title,
                 locale_metadata,
+                local: Some(LocalShowData { local_id: show.id }),
             })
         }
     }
@@ -838,7 +847,7 @@ where
         self,
         show_id: i64,
         season: usize,
-    ) -> impl std::future::Future<Output = Result<SeasonMetadata, AppError>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<Season>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
@@ -851,24 +860,48 @@ where
             .await?;
 
             let episodes: Vec<_> = sqlx::query!(
-                "SELECT * FROM episodes WHERE season_id = ? ORDER BY number ASC",
+                r#"SELECT episodes.*, seasons.number AS season_number,
+            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
+            FROM episodes 
+            JOIN seasons ON seasons.id = episodes.season_id
+            join videos on videos.episode_id = episodes.id
+            left join episode_intro on episode_intro.video_id = videos.id
+            left join history on history.video_id = videos.id
+            WHERE season_id = ? ORDER BY number ASC"#,
                 season.id
             )
             .fetch_all(&mut *conn)
             .await?
             .into_iter()
-            .map(|db_episode| EpisodeMetadata {
-                metadata_id: db_episode.id.to_string(),
-                metadata_provider: MetadataProvider::Local,
-                release_date: db_episode.release_date,
-                number: db_episode.number as usize,
-                title: db_episode.title,
-                plot: db_episode.plot,
-                season_number: season.number as usize,
-                runtime: Some(Duration::from_secs(db_episode.duration as u64)),
-                poster: db_episode
-                    .poster
-                    .map(|x| MetadataImage::new(x.parse().unwrap())),
+            .map(|db_episode| {
+                let local = LocalEpisodeData {
+                    local_id: db_episode.id,
+                    history: db_episode.history_id.map(|id| api_types::History {
+                        id,
+                        time: db_episode.history_time.unwrap(),
+                        is_finished: db_episode.is_finished.unwrap(),
+                        update_time: db_episode.history_update_time.unwrap(),
+                    }),
+                    intro: db_episode
+                        .intro_start
+                        .zip(db_episode.intro_end)
+                        .map(|(start_sec, end_sec)| Intro { start_sec, end_sec }),
+                };
+                Episode {
+                    metadata_id: db_episode.id.to_string(),
+                    metadata_provider: MetadataProvider::Local,
+                    release_date: db_episode.release_date,
+                    number: db_episode.number as usize,
+                    title: db_episode.title,
+                    plot: db_episode.plot,
+                    season_number: season.number as usize,
+                    runtime: Some(Duration::from_secs(db_episode.duration as u64)),
+                    poster: db_episode
+                        .poster
+                        .map(|x| MetadataImage::new(x.parse().unwrap())),
+                        local: Some(local),
+                }
             })
             .collect();
 
@@ -876,7 +909,7 @@ where
                 .poster
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
-            Ok(SeasonMetadata {
+            Ok(Season {
                 metadata_id: season.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
                 release_date: season.release_date,
@@ -885,6 +918,9 @@ where
                 poster,
                 title: season.title,
                 number: season.number as usize,
+                local: Some(LocalSeasonData {
+                    local_id: season.id,
+                }),
             })
         }
     }
@@ -915,16 +951,21 @@ where
         show_id: i64,
         season: usize,
         episode: usize,
-    ) -> impl std::future::Future<Output = Result<EpisodeMetadata, AppError>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<Episode>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
             let episode = episode as i64;
             let episode = sqlx::query!(
-                "SELECT episodes.*, seasons.number as season_number FROM episodes
+                r#"SELECT episodes.*, seasons.number AS season_number,
+            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
+            FROM episodes 
             JOIN seasons ON seasons.id = episodes.season_id
-            JOIN shows ON shows.id = seasons.show_id
-            WHERE shows.id = ? AND seasons.number = ? AND episodes.number = ?;",
+            join videos on videos.episode_id = episodes.id
+            left join episode_intro on episode_intro.video_id = videos.id
+            left join history on history.video_id = videos.id
+            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
                 show_id,
                 season,
                 episode
@@ -936,7 +977,21 @@ where
                 .poster
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
-            Ok(EpisodeMetadata {
+            let local = LocalEpisodeData {
+                local_id: episode.id,
+                history: episode.history_id.map(|id| api_types::History {
+                    id,
+                    time: episode.history_time.unwrap(),
+                    is_finished: episode.is_finished.unwrap(),
+                    update_time: episode.history_update_time.unwrap(),
+                }),
+                intro: episode
+                    .intro_start
+                    .zip(episode.intro_end)
+                    .map(|(start_sec, end_sec)| Intro { start_sec, end_sec }),
+            };
+
+            Ok(Episode {
                 metadata_id: episode.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
                 release_date: episode.release_date,
@@ -946,6 +1001,7 @@ where
                 title: episode.title,
                 runtime: Some(Duration::from_secs(episode.duration as u64)),
                 season_number: episode.season_number as usize,
+                local: Some(local),
             })
         }
     }
@@ -978,12 +1034,18 @@ where
     fn get_episode_by_id(
         self,
         episode_id: i64,
-    ) -> impl std::future::Future<Output = Result<EpisodeMetadata, AppError>> + Send {
+    ) -> impl std::future::Future<Output = Result<Episode, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let episode = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number FROM episodes 
+                r#"SELECT episodes.*, seasons.number AS season_number,
+            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
+            FROM episodes 
             JOIN seasons ON seasons.id = episodes.season_id
+            join videos on videos.episode_id = episodes.id
+            left join episode_intro on episode_intro.video_id = videos.id
+            left join history on history.video_id = videos.id
             WHERE episodes.id = ?;"#,
                 episode_id,
             )
@@ -994,7 +1056,21 @@ where
                 .poster
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
-            Ok(EpisodeMetadata {
+            let local = LocalEpisodeData {
+                local_id: episode.id,
+                history: episode.history_id.map(|id| api_types::History {
+                    id,
+                    time: episode.history_time.unwrap(),
+                    is_finished: episode.is_finished.unwrap(),
+                    update_time: episode.history_update_time.unwrap(),
+                }),
+                intro: episode
+                    .intro_start
+                    .zip(episode.intro_end)
+                    .map(|(start_sec, end_sec)| Intro { start_sec, end_sec }),
+            };
+
+            Ok(Episode {
                 metadata_id: episode.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
                 release_date: episode.release_date,
@@ -1004,6 +1080,7 @@ where
                 title: episode.title,
                 runtime: None,
                 season_number: episode.season_number as usize,
+                local: Some(local),
             })
         }
     }
@@ -1184,6 +1261,48 @@ where
                 .collect())
         }
     }
+
+    /// external to local show id
+    fn crossreference_show(
+        self,
+        provider: MetadataProvider,
+        metadata_id: &str,
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<i64>>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let provider = provider.to_string();
+            let show_id = sqlx::query!(
+                r#"SELECT show_id as "show_id!" FROM external_ids WHERE show_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+                provider,
+                metadata_id
+            )
+                .fetch_optional(&mut *conn)
+                .await?
+                .map(|r| r.show_id);
+            Ok(show_id)
+        }
+    }
+
+    /// external to local movie id
+    fn crossreference_movie(
+        self,
+        provider: MetadataProvider,
+        metadata_id: &str,
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<i64>>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let provider = provider.to_string();
+            let movie_id = sqlx::query!(
+                r#"SELECT movie_id as "movie_id!" FROM external_ids WHERE movie_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+                provider,
+                metadata_id
+            )
+                .fetch_optional(&mut *conn)
+                .await?
+                .map(|r| r.movie_id);
+            Ok(movie_id)
+        }
+    }
 }
 
 impl<'a> DbActions<'a> for &'a mut Transaction<'static, Sqlite> {}
@@ -1255,7 +1374,19 @@ impl ShowMetadataProvider for Db {
         show_id: &str,
         _fetch_params: FetchParams,
     ) -> Result<ShowMetadata, AppError> {
-        self.pool.get_show(show_id.parse()?).await
+        let show = self.pool.get_show(show_id.parse()?).await?;
+        Ok(ShowMetadata {
+            metadata_id: show.metadata_id,
+            metadata_provider: show.metadata_provider,
+            poster: show.poster,
+            backdrop: show.backdrop,
+            plot: show.plot,
+            seasons: show.seasons,
+            episodes_amount: show.episodes_amount,
+            release_date: show.release_date,
+            title: show.title,
+            locale_metadata: show.locale_metadata,
+        })
     }
 
     async fn season(
@@ -1264,7 +1395,31 @@ impl ShowMetadataProvider for Db {
         season: usize,
         _fetch_params: FetchParams,
     ) -> Result<SeasonMetadata, AppError> {
-        self.pool.get_season(show_id.parse()?, season).await
+        let season = self.pool.get_season(show_id.parse()?, season).await?;
+        Ok(SeasonMetadata {
+            metadata_id: season.metadata_id,
+            metadata_provider: season.metadata_provider,
+            release_date: season.release_date,
+            title: season.title,
+            episodes: season
+                .episodes
+                .into_iter()
+                .map(|ep| EpisodeMetadata {
+                    metadata_id: ep.metadata_id,
+                    metadata_provider: ep.metadata_provider,
+                    release_date: ep.release_date,
+                    number: ep.number,
+                    title: ep.title,
+                    plot: ep.plot,
+                    season_number: ep.season_number,
+                    runtime: ep.runtime,
+                    poster: ep.poster,
+                })
+                .collect(),
+            plot: season.plot,
+            poster: season.poster,
+            number: season.number,
+        })
     }
 
     async fn episode(
@@ -1274,9 +1429,21 @@ impl ShowMetadataProvider for Db {
         episode: usize,
         _fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError> {
-        self.pool
+        let episode = self
+            .pool
             .get_episode(show_id.parse()?, season, episode)
-            .await
+            .await?;
+        Ok(EpisodeMetadata {
+            metadata_id: episode.metadata_id,
+            metadata_provider: episode.metadata_provider,
+            release_date: episode.release_date,
+            number: episode.number,
+            title: episode.title,
+            plot: episode.plot,
+            season_number: episode.season_number,
+            runtime: episode.runtime,
+            poster: episode.poster,
+        })
     }
 
     fn provider_identifier(&self) -> MetadataProvider {
@@ -1383,7 +1550,7 @@ impl From<DbExternalId> for ExternalIdMetadata {
 
 // Types for each table in the local database
 
-/// `shows` table simply holds information for specific tv show
+/// `shows` table holds information for specific tv show
 ///
 /// Note that it will not be deleted ucascade because related assets must be cleaned up
 /// manually.
@@ -1407,7 +1574,7 @@ pub struct DbShow {
     pub plot: Option<String>,
 }
 
-/// `seasons` table simply holds information for specific season.
+/// `seasons` table holds information for specific season.
 ///
 /// Note that it will not be deleted using cascade because related assets must be cleaned up
 /// manually.
@@ -1426,7 +1593,7 @@ pub struct DbSeason {
     pub poster: Option<String>,
 }
 
-/// `movies` table simply holds information for specific movie
+/// `movies` table holds information for specific movie
 ///
 /// Note that it will not be removed using cascade because related assets must be cleaned up
 /// manually.
@@ -1445,7 +1612,7 @@ pub struct DbMovie {
     pub backdrop: Option<String>,
 }
 
-/// `episodes` table simply holds information for specific episode
+/// `episodes` table holds information for specific episode
 ///
 /// Note that it will not be removed using cascade because related assets must be cleaned up
 /// manually.
@@ -1501,7 +1668,7 @@ pub struct DbSubtitles {
     pub video_id: i64,
 }
 
-/// `history` table simply holds history for each video file in the library
+/// `history` table holds watch history for each video file in the library
 ///
 /// Usually removed with video using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema)]
@@ -1533,7 +1700,7 @@ pub struct DbExternalId {
     pub is_prime: i64,
 }
 
-/// `episode_intros` table simply stores detected intros for a specific video
+/// `episode_intros` table stores detected intros for a specific video
 ///
 /// Usually removed with the video using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
