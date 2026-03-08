@@ -203,6 +203,7 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
             }
             (codec::Id::AAC, codec::Profile::Unknown) => AudioCodec::AAC,
             (codec::Id::EAC3, _) => AudioCodec::EAC3,
+            (codec::Id::OPUS, _) => AudioCodec::Opus,
             (codec::Id::AC3, _) => AudioCodec::AC3,
             (codec::Id::DTS, codec::Profile::DTS(_)) => AudioCodec::DTS,
             (codec::Id::DTS, codec::Profile::Unknown) => AudioCodec::DTS,

@@ -706,6 +706,7 @@ pub enum AudioCodec {
     EAC3,
     DTS,
     FLAC,
+    Opus,
     Other(String),
 }
 
@@ -717,6 +718,7 @@ impl Display for AudioCodec {
             Self::EAC3 => write!(f, "eac3"),
             Self::DTS => write!(f, "dts"),
             Self::FLAC => write!(f, "flack"),
+            Self::Opus => write!(f, "opus"),
             Self::Other(codec) => write!(f, "{codec}"),
         }
     }
@@ -732,6 +734,7 @@ impl FromStr for AudioCodec {
             "eac3" => AudioCodec::EAC3,
             "dts" => AudioCodec::DTS,
             "flack" => AudioCodec::FLAC,
+            "opus" => AudioCodec::Opus,
             _ => AudioCodec::Other(s.to_string()),
         };
         Ok(parsed)
