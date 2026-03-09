@@ -458,6 +458,16 @@ pub async fn walk_movie_dirs(mut dirs: Vec<PathBuf>) -> Vec<(Video, MovieIdentif
         while let Ok(Some(entry)) = read_dir.next_entry().await {
             let path = entry.path();
             if path.is_dir() {
+                let Some(dir_name) = path.file_name() else {
+                    continue;
+                };
+                if dir_name
+                    .to_str()
+                    .is_some_and(|f| EXTRAS_FOLDERS.iter().any(|e| f.eq_ignore_ascii_case(e)))
+                {
+                    tracing::trace!("Skipping extras directory: {}", path.display());
+                    continue;
+                }
                 dirs.push(path);
                 continue;
             }
