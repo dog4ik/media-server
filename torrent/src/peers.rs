@@ -403,7 +403,7 @@ impl Peer {
                         // reject it
                     }
                     UtMessage::Data { piece, total_size } => {
-                        tracing::trace!(%piece, %total_size, "Recieved ut metadata");
+                        tracing::trace!(%piece, %total_size, "Received ut metadata");
                         ensure!(total_size == ut_metadata.size);
                         let piece_len = ut_metadata.piece_len(piece);
                         let data_slice = payload.slice(payload.len() - piece_len..);

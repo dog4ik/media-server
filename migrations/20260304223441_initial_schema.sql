@@ -19,8 +19,8 @@ CREATE TRIGGER IF NOT EXISTS content_au AFTER UPDATE ON content BEGIN
   INSERT INTO content_fts(rowid, title, plot) VALUES (new.id, new.title, new.plot);
 END;
 
-CREATE TABLE IF NOT EXISTS shows (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
-  content_id NOT NULL,
+CREATE TABLE IF NOT EXISTS shows (id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+  content_id INTEGER NOT NULL,
   backdrop TEXT,
   FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE);
 
@@ -119,7 +119,7 @@ CREATE TABLE IF NOT EXISTS content_downloads (id INTEGER NOT NULL PRIMARY KEY AU
   FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE CASCADE,
   FOREIGN KEY (torrent_id) REFERENCES torrents (id) ON DELETE CASCADE);
 
-CREATE TABLE IF NOT EXISTS torrent_files(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT, 
+CREATE TABLE IF NOT EXISTS torrent_files(id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
   torrent_id INTEGER NOT NULL,
   content_id INTEGER,
   priority INTEGER NOT NULL,
@@ -127,3 +127,53 @@ CREATE TABLE IF NOT EXISTS torrent_files(id INTEGER NOT NULL PRIMARY KEY AUTOINC
   relative_path TEXT NOT NULL,
   FOREIGN KEY (torrent_id) REFERENCES torrents (id) ON DELETE CASCADE,
   FOREIGN KEY (content_id) REFERENCES content (id) ON DELETE SET NULL);
+
+CREATE TABLE IF NOT EXISTS system_id(
+  id INTEGER NOT NULL DEFAULT 0
+);
+INSERT OR IGNORE INTO system_id (id) VALUES (0);
+
+CREATE TRIGGER IF NOT EXISTS system_id_movies_insert AFTER INSERT ON movies BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_movies_update AFTER UPDATE ON movies BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_movies_delete AFTER DELETE ON movies BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS system_id_shows_insert AFTER INSERT ON shows BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_shows_update AFTER UPDATE ON shows BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_shows_delete AFTER DELETE ON shows BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS system_id_seasons_insert AFTER INSERT ON seasons BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_seasons_update AFTER UPDATE ON seasons BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_seasons_delete AFTER DELETE ON seasons BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+
+CREATE TRIGGER IF NOT EXISTS system_id_episodes_insert AFTER INSERT ON episodes BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_episodes_update AFTER UPDATE ON episodes BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS system_id_episodes_delete AFTER DELETE ON episodes BEGIN
+  UPDATE system_id SET id = id + 1;
+END;
+
+CREATE TABLE IF NOT EXISTS upnp_uuid (
+  id INTEGER PRIMARY KEY CHECK (id = 0),
+  uuid BLOB NOT NULL
+);

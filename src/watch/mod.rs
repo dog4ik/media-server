@@ -39,7 +39,7 @@ pub enum Stream {
 
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
 pub struct WatchProgress {
-    #[schema(value_type = crate::server::SerdeDuration)]
+    #[schema(value_type = crate::api::SerdeDuration)]
     pub current_time: Duration,
 }
 
@@ -55,7 +55,7 @@ pub struct WatchIdentifier {
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize)]
 pub struct WatchTask {
     pub video_id: i64,
-    #[schema(value_type = crate::server::SerdeDuration)]
+    #[schema(value_type = crate::api::SerdeDuration)]
     pub total_duration: Duration,
     pub variant_id: Option<uuid::Uuid>,
     pub method: StreamMethod,

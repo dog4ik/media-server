@@ -14,7 +14,10 @@ use tracing::instrument;
 
 use crate::{
     app_state::AppError,
-    db::{Db, DbActions, DbEpisode, DbExternalId, DbSeason, DbShow, DbTransaction},
+    db::{
+        Db, DbActions, DbContent, DbContentType, DbEpisode, DbExternalId, DbSeason, DbShow,
+        DbTransaction,
+    },
     ffmpeg,
     library::{
         LibraryItem,
@@ -266,15 +269,16 @@ async fn handle_new_series(
 ) -> anyhow::Result<i64> {
     let poster = show.poster.clone();
     let backdrop = show.backdrop.clone();
-    let db_show = DbShow::from(show);
-    let local_id = tx.insert_show(&db_show).await?;
+    let content_id = tx.insert_content(&show.into_db_content()).await?;
+    let db_show = show.into_db_show(content_id);
+    let id = tx.insert_show(&db_show).await?;
 
     for id in external_ids.iter() {
         if let Err(e) = tx
             .insert_external_id(DbExternalId {
-                metadata_provider: id.provider.to_string(),
+                metadata_provider: id.provider,
                 metadata_id: id.id.clone(),
-                show_id: Some(local_id),
+                content_id: Some(content_id),
                 ..Default::default()
             })
             .await
@@ -285,20 +289,20 @@ async fn handle_new_series(
 
     assets_save_tracker.spawn(async move {
         if let Some(url) = poster {
-            let poster_asset = PosterAsset::new(local_id, PosterContentType::Show);
+            let poster_asset = PosterAsset::new(id, PosterContentType::Show);
             if let Err(e) = save_asset_from_url(url.into(), poster_asset).await {
-                tracing::warn!(local_id, "Failed to save show poster: {e}")
+                tracing::warn!(id, "Failed to save show poster: {e}")
             }
         }
         if let Some(url) = backdrop {
-            let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Show);
+            let backdrop_asset = BackdropAsset::new(id, BackdropContentType::Show);
             if let Err(e) = save_asset_from_url(url.into(), backdrop_asset).await {
-                tracing::warn!(local_id, "Failed to save show backdrop: {e}")
+                tracing::warn!(id, "Failed to save show backdrop: {e}")
             }
         }
     });
 
-    Ok(local_id)
+    Ok(id)
 }
 
 async fn handle_seasons_and_episodes(
@@ -370,12 +374,21 @@ async fn handle_seasons_and_episodes(
 
             let mut tx = db.begin().await?;
             for (result, episodes) in results {
-                let id = match result {
+                let content_id: i64 = match result {
                     MetadataLookup::New { metadata } => {
                         let poster = metadata.poster.clone();
                         let first = episodes[0].source.clone();
                         let runtime = metadata.runtime.clone();
+                        let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                        tx.insert_external_id(DbExternalId {
+                            metadata_provider: metadata.metadata_provider,
+                            metadata_id: metadata.metadata_id.clone(),
+                            content_id: Some(content_id),
+                            ..Default::default()
+                        })
+                        .await?;
                         let db_episode = metadata.into_db_episode(
+                            content_id,
                             local_season_id,
                             first
                                 .video
@@ -400,13 +413,19 @@ async fn handle_seasons_and_episodes(
                                 };
                             }
                         });
-                        id
+                        content_id
                     }
-                    MetadataLookup::Local(id) => id,
+                    MetadataLookup::Local(id) => {
+                        sqlx::query!("SELECT content_id FROM episodes WHERE id = ?", id)
+                            .fetch_one(&mut *tx)
+                            .await?
+                            .content_id
+                    }
                 };
                 // connect new videos to existing episode
                 for video in episodes {
-                    tx.update_video_episode_id(video.source.id, id).await?;
+                    tx.update_video_content_id(video.source.id, content_id)
+                        .await?;
                 }
             }
             tx.commit().await?;
@@ -447,10 +466,12 @@ async fn fetch_save_season(
                 continue;
             };
             let poster = season.poster.clone();
-            let id = db
-                .insert_season(season.into_db_season(local_show_id))
-                .await
-                .unwrap();
+            let mut tx = db.pool.begin().await?;
+            let content_id = tx.insert_content(&season.into_db_content()).await?;
+            let id = tx
+                .insert_season(season.into_db_season(content_id, local_show_id))
+                .await?;
+            tx.commit().await?;
             assets_save_tracker.spawn(async move {
                 if let Some(poster) = poster {
                     let poster_asset = PosterAsset::new(id, PosterContentType::Season);
@@ -509,18 +530,26 @@ async fn series_metadata_fallback(
     db: &Db,
     file: &LibraryItem<ShowIdentifier>,
 ) -> anyhow::Result<i64> {
-    let show_fallback = DbShow {
+    let mut tx = db.begin().await?;
+    let content_fallback = DbContent {
         id: None,
+        content_type: DbContentType::Show,
         poster: None,
-        backdrop: None,
         plot: None,
         release_date: None,
         title: file.identifier.title.to_string(),
         original_language: None,
         original_title: None,
     };
+    let content_id = tx.insert_content(&content_fallback).await?;
+    let show_fallback = DbShow {
+        id: None,
+        content_id,
+        backdrop: None,
+    };
     let video_metadata = file.source.video.metadata().await?;
-    let id = db.insert_show(&show_fallback).await.unwrap();
+    let id = tx.insert_show(&show_fallback).await?;
+    tx.commit().await?;
     let poster_asset = PosterAsset::new(id, PosterContentType::Show);
     tokio::fs::create_dir_all(poster_asset.path().parent().unwrap())
         .await
@@ -539,16 +568,27 @@ async fn season_metadata_fallback(
     file: &LibraryItem<ShowIdentifier>,
     show_id: i64,
 ) -> anyhow::Result<i64> {
-    let fallback_season = DbSeason {
-        number: file.identifier.season.into(),
-        show_id,
+    let mut tx = db.pool.begin().await?;
+    let fallback_content = DbContent {
         id: None,
+        content_type: DbContentType::Season,
+        original_language: None,
+        original_title: None,
         release_date: None,
         plot: None,
         poster: None,
-        title: None,
+        title: format!("Season: {}", file.identifier.season),
     };
-    let id = db.insert_season(fallback_season).await?;
+    let content_id = tx.insert_content(&fallback_content).await?;
+    let fallback_season = DbSeason {
+        number: i64::from(file.identifier.season),
+        show_id,
+        id: None,
+        content_id,
+    };
+    let id = tx.insert_season(fallback_season).await?;
+    tx.commit().await?;
+
     Ok(id)
 }
 
@@ -559,19 +599,28 @@ async fn episode_metadata_fallback(
     duration: Duration,
 ) -> anyhow::Result<i64> {
     let mut tx = db.begin().await?;
-    let fallback_episode = DbEpisode {
+    let fallback_content = DbContent {
         release_date: None,
+        content_type: DbContentType::Episode,
+        original_language: None,
+        original_title: None,
         plot: None,
         poster: None,
-        number: file.identifier.episode.into(),
         title: format!("Episode {}", file.identifier.episode),
         id: None,
+    };
+    let content_id = tx.insert_content(&fallback_content).await?;
+    let fallback_episode = DbEpisode {
+        number: file.identifier.episode.into(),
+        id: None,
+        content_id,
         duration: duration.as_secs() as i64,
         season_id,
     };
     let video_metadata = file.source.video.metadata().await?;
     let id = tx.insert_episode(&fallback_episode).await?;
-    tx.update_video_episode_id(file.source.id, id).await?;
+    tx.update_video_content_id(file.source.id, content_id)
+        .await?;
     tx.commit().await?;
     let poster_asset = PosterAsset::new(id, PosterContentType::Episode);
     tokio::fs::create_dir_all(poster_asset.path().parent().unwrap())
@@ -591,14 +640,10 @@ async fn crossreference_show(
     db: &Db,
     external_metadata: &ShowMetadata,
 ) -> anyhow::Result<Option<i64>> {
-    let provider = external_metadata.metadata_provider.to_string();
-    let show_id = sqlx::query!(
-        r#"SELECT show_id as "show_id!" FROM external_ids WHERE show_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
-        provider,
-        external_metadata.metadata_id
+    db.crossreference_show(
+        external_metadata.metadata_provider,
+        &external_metadata.metadata_id,
     )
-    .fetch_optional(&db.pool)
-    .await?
-    .map(|r| r.show_id);
-    Ok(show_id)
+    .await
+    .map_err(Into::into)
 }

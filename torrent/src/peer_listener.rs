@@ -232,7 +232,7 @@ impl UpnpPortManager {
         self.client
             .delete_port_mapping(PortMappingProtocol::TCP, self.local_addr.port())
             .await?;
-        tracing::info!("Succsessfully cleaned up port mapping");
+        tracing::info!("Successfully cleaned up port mapping");
         Ok(())
     }
 }

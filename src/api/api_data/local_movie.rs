@@ -3,8 +3,8 @@ use std::time::Duration;
 use serde::Serialize;
 
 use crate::{
+    api::api_data::{LocalDataLookup, api_types::History},
     metadata::{LocaleMetadata, MetadataImage, MetadataProvider, MovieMetadata},
-    server::api_data::{LocalDataLookup, api_types::History},
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -15,15 +15,32 @@ pub struct Movie {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
+    #[schema(value_type = Option<crate::api::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub local: Option<LocalMovieData>,
 }
 
+impl From<Movie> for MovieMetadata {
+    fn from(value: Movie) -> Self {
+        Self {
+            metadata_id: value.metadata_id,
+            metadata_provider: value.metadata_provider,
+            poster: value.poster,
+            backdrop: value.backdrop,
+            plot: value.plot,
+            release_date: value.release_date,
+            runtime: value.runtime,
+            title: value.title,
+            locale_metadata: value.locale_metadata,
+        }
+    }
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalMovieData {
-    pub local_id: i64,
+    pub id: i64,
     pub history: Option<History>,
 }
 

@@ -3,6 +3,7 @@ use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
+use media_server::api::{self, OpenApiDoc};
 use media_server::app_state::AppState;
 use media_server::config::{self, APP_RESOURCES, AppResources, Args, ConfigFile};
 use media_server::db::Db;
@@ -11,7 +12,6 @@ use media_server::metadata::metadata_stack::MetadataProvidersStack;
 use media_server::metadata::tmdb_api::TmdbApi;
 use media_server::metadata::tvdb_api::TvdbApi;
 use media_server::progress::TaskResource;
-use media_server::server::{OpenApiDoc, server_api, torrent_api};
 use media_server::torrent::TorrentClient;
 use media_server::torrent_index::rutracker::ProvodRuTrackerAdapter;
 use media_server::torrent_index::tpb::TpbApi;
@@ -121,259 +121,252 @@ async fn main() {
     // tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
     let server_api = Router::new()
-        .route("/local_shows", get(server_api::all_local_shows))
-        .route("/local_episode/{id}", get(server_api::local_episode))
-        .route("/local_episode/{id}", delete(server_api::delete_episode))
+        .route("/local_shows", get(api::server::all_local_shows))
+        .route("/local_episode/{id}", get(api::server::local_episode))
+        .route("/local_episode/{id}", delete(api::server::delete_episode))
         .route(
             "/local_episode/by_video",
-            get(server_api::local_episode_by_video_id),
+            get(api::server::local_episode_by_video_id),
         )
         .route(
             "/local_episode/{episode_id}/watch",
-            get(server_api::watch_episode),
+            get(api::server::watch_episode),
         )
         .route(
             "/local_movie/by_video",
-            get(server_api::local_movie_by_video_id),
+            get(api::server::local_movie_by_video_id),
         )
-        .route("/local_movie/{id}", delete(server_api::delete_movie))
+        .route("/local_movie/{id}", delete(api::server::delete_movie))
         .route(
             "/local_movie/{movie_id}/watch",
-            get(server_api::watch_movie),
+            get(api::server::watch_movie),
         )
-        .route("/local_movies", get(server_api::all_local_movies))
-        .route("/local_season/{id}", delete(server_api::delete_season))
-        .route("/local_show/{id}", delete(server_api::delete_show))
+        .route("/local_movies", get(api::server::all_local_movies))
+        .route("/local_season/{id}", delete(api::server::delete_season))
+        .route("/local_show/{id}", delete(api::server::delete_show))
         .route(
             "/external_to_local/{id}",
-            get(server_api::external_to_local_id),
+            get(api::server::external_to_local_id),
         )
-        .route("/external_ids/{id}", get(server_api::external_ids))
-        .route("/movie/{movie_id}", get(server_api::get_movie))
-        .route("/movie/{movie_id}", put(server_api::alter_movie_metadata))
+        .route("/external_ids/{id}", get(api::server::external_ids))
+        .route("/movie/{movie_id}", get(api::server::get_movie))
+        .route("/movie/{movie_id}", put(api::server::alter_movie_metadata))
         .route(
             "/movie/{movie_id}/fix_metadata",
-            post(server_api::fix_movie_metadata),
+            post(api::server::fix_movie_metadata),
         )
         .route(
             "/movie/{movie_id}/reset_metadata",
-            post(server_api::reset_movie_metadata),
+            post(api::server::reset_movie_metadata),
         )
-        .route("/movie/{movie_id}/poster", get(server_api::movie_poster))
+        .route("/movie/{movie_id}/poster", get(api::server::movie_poster))
         .route(
             "/movie/{movie_id}/backdrop",
-            get(server_api::movie_backdrop),
+            get(api::server::movie_backdrop),
         )
-        .route("/show/{show_id}", get(server_api::get_show))
-        .route("/show/{show_id}", put(server_api::alter_show_metadata))
+        .route("/show/{show_id}", get(api::server::get_show))
+        .route("/show/{show_id}", put(api::server::alter_show_metadata))
         .route(
             "/show/{show_id}/fix_metadata",
-            post(server_api::fix_show_metadata),
+            post(api::server::fix_show_metadata),
         )
         .route(
             "/show/{show_id}/reset_metadata",
-            post(server_api::reset_show_metadata),
+            post(api::server::reset_show_metadata),
         )
-        .route("/show/{show_id}/poster", get(server_api::show_poster))
-        .route("/show/{show_id}/backdrop", get(server_api::show_backdrop))
-        .route("/show/{show_id}/{season}", get(server_api::get_season))
+        .route("/show/{show_id}/poster", get(api::server::show_poster))
+        .route("/show/{show_id}/backdrop", get(api::server::show_backdrop))
+        .route("/show/{show_id}/{season}", get(api::server::get_season))
         .route(
             "/show/{show_id}/{season}/detect_intros",
-            post(server_api::detect_intros),
+            post(api::server::detect_intros),
         )
-        .route("/season/{season_id}/poster", get(server_api::season_poster))
+        .route("/season/{season_id}/poster", get(api::server::season_poster))
         .route(
             "/season/{season_id}/intros",
-            delete(server_api::delete_season_intros),
+            delete(api::server::delete_season_intros),
         )
         .route(
             "/show/{show_id}/{season}",
-            put(server_api::alter_season_metadata),
+            put(api::server::alter_season_metadata),
         )
         .route(
             "/episode/{episode_id}/poster",
-            get(server_api::episode_poster),
+            get(api::server::episode_poster),
         )
         .route(
             "/episode/{episode_id}/intros",
-            delete(server_api::delete_episode_intros),
+            delete(api::server::delete_episode_intros),
         )
         .route(
             "/show/{show_id}/{season}/{episode}",
-            get(server_api::get_episode),
+            get(api::server::get_episode),
         )
         .route(
             "/show/{show_id}/{season}/{episode}",
-            put(server_api::alter_episode_metadata),
+            put(api::server::alter_episode_metadata),
         )
         .route(
             "/show/{show_id}/{season}/{episode}/poster",
-            get(server_api::episode_poster),
+            get(api::server::episode_poster),
         )
-        .route("/variants", get(server_api::get_all_variants))
-        .route("/video/by_content", get(server_api::contents_video))
-        .route("/video/{id}", get(server_api::get_video_by_id))
-        .route("/video/{id}", delete(server_api::remove_video))
-        .route("/video/{id}/intro", put(server_api::update_video_intro))
-        .route("/video/{id}/intro", get(server_api::video_intro))
-        .route("/video/{id}/intro", delete(server_api::delete_video_intro))
+        .route("/variants", get(api::server::get_all_variants))
+        .route("/video/by_content", get(api::server::contents_video))
+        .route("/video/{id}", get(api::server::get_video_by_id))
+        .route("/video/{id}", delete(api::server::remove_video))
+        .route("/video/{id}/intro", put(api::server::update_video_intro))
+        .route("/video/{id}/intro", get(api::server::video_intro))
+        .route("/video/{id}/intro", delete(api::server::delete_video_intro))
         .route(
             "/video/{id}/metadata",
-            get(server_api::video_content_metadata),
+            get(api::server::video_content_metadata),
         )
         .route(
             "/video/{id}/pull_subtitle",
-            get(server_api::pull_video_subtitle),
+            get(api::server::pull_video_subtitle),
         )
-        .route("/video/{id}/previews/{number}", get(server_api::previews))
-        .route("/video/{id}/previews", post(server_api::generate_previews))
-        .route("/video/{id}/previews", delete(server_api::delete_previews))
+        .route("/video/{id}/previews/{number}", get(api::server::previews))
+        .route("/video/{id}/previews", post(api::server::generate_previews))
+        .route("/video/{id}/previews", delete(api::server::delete_previews))
         .route(
             "/video/{id}/history",
-            delete(server_api::remove_video_history),
+            delete(api::history::remove_video_history),
         )
-        .route("/video/{id}/history", put(server_api::update_video_history))
-        .route("/video/{id}/transcode", post(server_api::transcode_video))
+        .route("/video/{id}/history", put(api::history::update_video_history))
+        .route("/video/{id}/transcode", post(api::server::transcode_video))
         .route(
             "/watch/direct/start/{id}",
-            post(server_api::start_direct_stream),
+            post(api::server::start_direct_stream),
         )
-        .route("/watch/hls/start/{id}", post(server_api::start_hls_stream))
-        .route("/video/{id}/watch", get(server_api::watch))
+        .route("/watch/hls/start/{id}", post(api::server::start_hls_stream))
+        .route("/video/{id}/watch", get(api::server::watch))
         .route(
             "/video/{id}/upload_subtitles",
-            post(server_api::upload_subtitles),
+            post(api::server::upload_subtitles),
         )
         .route(
             "/video/{id}/reference_subtitles",
-            post(server_api::reference_external_subtitles),
+            post(api::server::reference_external_subtitles),
         )
         .route(
             "/video/{id}/variant/{variant_id}",
-            delete(server_api::remove_variant),
+            delete(api::server::remove_variant),
         )
-        .route("/history", get(server_api::all_history))
-        .route("/history", delete(server_api::clear_history))
-        .route("/history/suggest/movies", get(server_api::suggest_movies))
-        .route("/history/suggest/shows", get(server_api::suggest_shows))
-        .route("/history/{id}", get(server_api::video_history))
-        .route("/history/{id}", delete(server_api::remove_history_item))
-        .route("/history/{id}", put(server_api::update_history))
-        .route("/subtitles/{id}", delete(server_api::delete_subtitles))
-        .route("/subtitles/{id}", get(server_api::get_subtitles))
-        .route("/torrent/search", get(server_api::search_torrent))
+        .route("/history", get(api::history::all_history))
+        .route("/history", delete(api::history::clear_history))
+        .route("/history/suggest/movies", get(api::history::suggest_movies))
+        .route("/history/suggest/shows", get(api::history::suggest_shows))
+        .route("/history/{id}", delete(api::history::remove_history_item))
+        .route("/history/{id}", put(api::history::update_history))
+        .route("/subtitles/{id}", delete(api::server::delete_subtitles))
+        .route("/subtitles/{id}", get(api::server::get_subtitles))
+        .route("/torrent/search", get(api::server::search_torrent))
         .route(
             "/torrent/resolve_magnet_link",
-            get(torrent_api::resolve_magnet_link),
+            get(api::torrent::resolve_magnet_link),
         )
         .route(
             "/torrent/parse_torrent_file",
-            post(torrent_api::parse_torrent_file),
+            post(api::torrent::parse_torrent_file),
         )
-        .route("/torrent/open", post(torrent_api::open_torrent))
-        .route("/torrent/all", get(torrent_api::all_torrents))
-        .route("/torrent/session_state", get(torrent_api::session_state))
+        .route("/torrent/open", post(api::torrent::open_torrent))
+        .route("/torrent/all", get(api::torrent::all_torrents))
+        .route("/torrent/session_state", get(api::torrent::session_state))
         .route(
             "/torrent/open_torrent_file",
-            post(torrent_api::open_torrent_file),
+            post(api::torrent::open_torrent_file),
         )
-        .route(
-            "/torrent/{info_hash}/state",
-            get(torrent_api::torrent_state),
-        )
+        .route("/torrent/{info_hash}/state", get(api::torrent::torrent_state))
         .route(
             "/torrent/{info_hash}/files_priority",
-            post(torrent_api::set_files_priority),
+            post(api::torrent::set_files_priority),
         )
-        .route("/torrent/updates", get(torrent_api::updates))
-        .route("/torrent/{info_hash}", delete(torrent_api::delete_torrent))
+        .route("/torrent/updates", get(api::torrent::updates))
+        .route("/torrent/{info_hash}", delete(api::torrent::delete_torrent))
         .route(
             "/torrent/{info_hash}/validate",
-            post(torrent_api::validate_torrent),
+            post(api::torrent::validate_torrent),
         )
-        .route(
-            "/torrent/output_location",
-            get(torrent_api::output_location),
-        )
+        .route("/torrent/output_location", get(api::torrent::output_location))
         .route(
             "/torrent/index_magnet_link",
-            get(torrent_api::index_magnet_link),
+            get(api::torrent::index_magnet_link),
         )
-        .route("/torrent/batch_action", post(torrent_api::batch_action))
-        .route("/search/content", get(server_api::search_content))
+        .route("/torrent/batch_action", post(api::torrent::batch_action))
+        .route("/search/content", get(api::server::search_content))
         .route(
             "/search/trending_shows",
-            get(server_api::get_trending_shows),
+            get(api::server::get_trending_shows),
         )
         .route(
             "/search/trending_movies",
-            get(server_api::get_trending_movies),
+            get(api::server::get_trending_movies),
         )
-        .route("/configuration", get(server_api::server_configuration))
-        .route("/version", get(server_api::server_version))
+        .route("/configuration", get(api::server::server_configuration))
+        .route("/version", get(api::server::server_version))
         .route(
             "/configuration/capabilities",
-            get(server_api::server_capabilities),
+            get(api::server::server_capabilities),
         )
         .route(
             "/configuration",
-            patch(server_api::update_server_configuration),
+            patch(api::server::update_server_configuration),
         )
         .route(
             "/configuration/reset",
-            post(server_api::reset_server_configuration),
+            post(api::server::reset_server_configuration),
         )
-        .route("/configuration/providers", put(server_api::order_providers))
+        .route("/configuration/providers", put(api::server::order_providers))
         .route(
             "/configuration/providers",
-            get(server_api::get_providers_order),
+            get(api::server::get_providers_order),
         )
-        .route("/log/latest", get(server_api::latest_log))
-        .route("/tasks/transcode", get(server_api::transcode_tasks))
+        .route("/log/latest", get(api::server::latest_log))
+        .route("/tasks/transcode", get(api::server::transcode_tasks))
         .route(
             "/tasks/transcode/{id}",
-            delete(server_api::cancel_transcode_task),
+            delete(api::server::cancel_transcode_task),
         )
-        .route("/tasks/previews", get(server_api::previews_tasks))
+        .route("/tasks/previews", get(api::server::previews_tasks))
         .route(
             "/tasks/previews/{id}",
-            delete(server_api::cancel_previews_task),
+            delete(api::server::cancel_previews_task),
         )
-        .route("/tasks/watch_sessions", get(server_api::watch_sessions))
+        .route("/tasks/watch_sessions", get(api::server::watch_sessions))
         .route(
             "/tasks/watch_session/{id}",
-            delete(server_api::stop_watch_session),
+            delete(api::server::stop_watch_session),
         )
         .route(
             "/tasks/intro_detection",
-            get(server_api::intro_detection_tasks),
+            get(api::server::intro_detection_tasks),
         )
-        .route("/tasks/progress", get(server_api::progress))
+        .route("/tasks/progress", get(api::server::progress))
         .route("/ws", any(ws::ws))
-        .route("/scan", post(server_api::reconciliate_lib))
-        .route("/fix_metadata/{content_id}", post(server_api::fix_metadata))
+        .route("/scan", post(api::server::reconciliate_lib))
+        .route("/fix_metadata/{content_id}", post(api::server::fix_metadata))
         .route(
             "/reset_metadata/{content_id}",
-            post(server_api::reset_metadata),
+            post(api::server::reset_metadata),
         )
         .route(
             "/watch/hls/{id}/segment/{segment}",
-            get(server_api::hls_segment),
+            get(api::server::hls_segment),
         )
-        .route("/watch/hls/{id}/manifest", get(server_api::hls_manifest))
-        .route("/watch/hls/{id}/init", get(server_api::hls_init))
-        .route("/file_browser/root_dirs", get(server_api::root_dirs))
+        .route("/watch/hls/{id}/manifest", get(api::server::hls_manifest))
+        .route("/watch/hls/{id}/init", get(api::server::hls_init))
+        .route("/file_browser/root_dirs", get(api::file_browser::root_dirs))
         .route(
             "/file_browser/browse/{key}",
-            get(server_api::browse_directory),
+            get(api::file_browser::browse_directory),
         )
         .route(
             "/file_browser/parent/{key}",
-            get(server_api::parent_directory),
+            get(api::file_browser::parent_directory),
         )
-        .route("/clear_db", delete(server_api::clear_db));
+        .route("/clear_db", delete(api::server::clear_db));
 
-    let debug_api = Router::new().route("/library", get(server_api::library_state));
+    let debug_api = Router::new().route("/library", get(api::server::library_state));
 
     let web_ui_path: config::WebUiPath = config::CONFIG.get_value();
 

@@ -12,7 +12,7 @@ use tokio::task::JoinSet;
 
 use crate::{
     app_state::AppError,
-    db::{Db, DbActions, DbExternalId, DbMovie, DbTransaction},
+    db::{Db, DbActions, DbContent, DbContentType, DbExternalId, DbMovie, DbTransaction},
     ffmpeg,
     library::{
         LibraryItem,
@@ -20,8 +20,7 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MovieMetadata,
-        metadata_stack::MetadataProvidersStack,
+        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MovieMetadata, metadata_stack::MetadataProvidersStack
     },
 };
 
@@ -94,7 +93,7 @@ pub async fn scan_movies(
     let mut assets_save_tracker = JoinSet::new();
     let mut tx = db.begin().await?;
     for (lookup, items) in statuses.into_iter().zip(items) {
-        let local_id = match lookup {
+        let content_id = match lookup {
             MetadataLookupWithIds::New {
                 metadata,
                 external_ids,
@@ -108,10 +107,16 @@ pub async fn scan_movies(
                 )
                 .await?
             }
-            MetadataLookupWithIds::Local(local_id) => local_id,
+            MetadataLookupWithIds::Local(local_id) => {
+                sqlx::query!("SELECT content_id FROM movies WHERE id = ?", local_id)
+                    .fetch_one(&mut *tx)
+                    .await?
+                    .content_id
+            }
         };
         for item in items {
-            tx.update_video_movie_id(item.source.id, local_id).await?;
+            tx.update_video_content_id(item.source.id, content_id)
+                .await?;
         }
     }
     tx.commit().await?;
@@ -192,13 +197,15 @@ async fn handle_movie_metadata(
         .ok()
         .or(metadata.runtime)
         .unwrap_or_default();
-    let db_movie = metadata.into_db_movie(duration);
-    let local_id = tx.insert_movie(db_movie).await.unwrap();
+    let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+
+    let db_movie = metadata.into_db_movie(content_id, duration);
+    let id = tx.insert_movie(&db_movie).await.unwrap();
     for external_id in external_ids {
         let db_external_id = DbExternalId {
-            metadata_provider: external_id.provider.to_string(),
+            metadata_provider: external_id.provider,
             metadata_id: external_id.id,
-            movie_id: Some(local_id),
+            content_id: Some(content_id),
             is_prime: false.into(),
             ..Default::default()
         };
@@ -207,11 +214,11 @@ async fn handle_movie_metadata(
 
     task_tracker.spawn(async move {
         let poster_job = poster_url.map(|url| {
-            let poster_asset = PosterAsset::new(local_id, PosterContentType::Movie);
+            let poster_asset = PosterAsset::new(id, PosterContentType::Movie);
             save_asset_from_url_with_frame_fallback(url.into(), poster_asset, &first_movie)
         });
         let backdrop_job = backdrop_url.map(|url| {
-            let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Movie);
+            let backdrop_asset = BackdropAsset::new(id, BackdropContentType::Movie);
             save_asset_from_url(url.into(), backdrop_asset)
         });
         match (poster_job, backdrop_job) {
@@ -228,7 +235,7 @@ async fn handle_movie_metadata(
         }
     });
 
-    Ok(local_id)
+    Ok(content_id)
 }
 
 /// external to local movie id
@@ -236,16 +243,12 @@ async fn crossreference_movie(
     db: &Db,
     external_metadata: &MovieMetadata,
 ) -> anyhow::Result<Option<i64>> {
-    let provider = external_metadata.metadata_provider.to_string();
-    let movie_id = sqlx::query!(
-        r#"SELECT movie_id as "movie_id!" FROM external_ids WHERE movie_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
-        provider,
-        external_metadata.metadata_id,
+    db.crossreference_movie(
+        external_metadata.metadata_provider,
+        &external_metadata.metadata_id,
     )
-    .fetch_optional(&db.pool)
-    .await?
-    .map(|r| r.movie_id);
-    Ok(movie_id)
+    .await
+    .map_err(Into::into)
 }
 
 async fn movie_metadata_fallback(
@@ -256,19 +259,25 @@ async fn movie_metadata_fallback(
     let mut chars = file.identifier.title.chars();
     let first_letter = chars.next().and_then(|c| c.to_uppercase().next());
     let title = first_letter.into_iter().chain(chars).collect();
-    let fallback_movie = DbMovie {
+    let fallback_content = DbContent {
         id: None,
-        poster: None,
-        backdrop: None,
-        plot: None,
-        release_date: None,
-        duration: duration.as_secs() as i64,
+        content_type: DbContentType::Movie,
         title,
         original_language: None,
         original_title: None,
+        release_date: None,
+        poster: None,
+        plot: None,
     };
     let mut tx = db.begin().await?;
-    let id = tx.insert_movie(fallback_movie).await?;
+    let content_id = tx.insert_content(&fallback_content).await?;
+    let fallback_movie = DbMovie {
+        id: None,
+        content_id,
+        backdrop: None,
+        duration: duration.as_secs() as i64,
+    };
+    let id = tx.insert_movie(&fallback_movie).await?;
 
     let poster_asset = PosterAsset::new(id, PosterContentType::Movie);
     tokio::fs::create_dir_all(poster_asset.path().parent().unwrap()).await?;

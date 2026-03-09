@@ -18,7 +18,7 @@ use crate::{
     app_state::{AppError, AppState},
     config,
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
-    server::{OptionalContentTypeQuery, Path, Query},
+    api::{OptionalContentTypeQuery, Path, Query},
     torrent::{
         Action, DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState,
         TorrentClient, TorrentDownloadPayload, TorrentInfo, TorrentState,

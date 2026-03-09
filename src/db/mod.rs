@@ -2,29 +2,33 @@ use std::{ops::Deref, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
-    Acquire, Error, FromRow, Pool, Sqlite, SqliteConnection, SqlitePool, Transaction,
+    Acquire, Error, FromRow, Pool, QueryBuilder, Sqlite, SqliteConnection, SqlitePool, Transaction,
     migrate::{MigrateError, Migrator},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
 use torrent::DownloadParams;
 
 use crate::{
+    api::{
+        api_data::{
+            api_types::{self, History},
+            local_movie::{LocalMovieData, Movie},
+            local_show::{Episode, LocalEpisodeData, LocalSeasonData, LocalShowData, Season, Show},
+        },
+        server::Intro,
+    },
     app_state::AppError,
     config,
+    db::query_builders::DbShowData,
     library::assets::{self, AssetDir},
     metadata::{
         ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
         LocaleMetadata, MetadataImage, MetadataProvider, MovieMetadata, MovieMetadataProvider,
         SeasonMetadata, ShowMetadata, ShowMetadataProvider,
     },
-    server::{
-        api_data::{
-            api_types,
-            local_show::{Episode, LocalEpisodeData, LocalSeasonData, LocalShowData, Season, Show},
-        },
-        server_api::Intro,
-    },
 };
+
+pub mod query_builders;
 
 fn path_to_url(path: &Path) -> String {
     #[allow(unused_mut)]
@@ -54,15 +58,9 @@ where
             let mut conn = self.acquire().await?;
             sqlx::query!(
                 "
-        DELETE FROM shows;
-        DELETE FROM seasons;
-        DELETE FROM episodes;
-        DELETE FROM movies;
+        DELETE FROM content;
         DELETE FROM videos;
         DELETE FROM subtitles;
-        DELETE FROM history;
-        DELETE FROM external_ids;
-        DELETE FROM episode_intro;
         ",
             )
             .execute(&mut *conn)
@@ -71,95 +69,109 @@ where
         }
     }
 
+    /// Insert a movie.
     fn insert_movie(
         self,
-        movie: DbMovie,
+        movie: &DbMovie,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query!(
-                "INSERT OR IGNORE INTO movies 
-            (title, release_date, poster,
-            backdrop, plot, duration, original_language, original_title)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id;",
-                movie.title,
-                movie.release_date,
-                movie.poster,
+            let movie_id = sqlx::query!(
+                "INSERT OR IGNORE INTO movies (content_id, backdrop, duration) VALUES (?, ?, ?) RETURNING id;",
+                movie.content_id,
                 movie.backdrop,
-                movie.plot,
                 movie.duration,
-                movie.original_language,
-                movie.original_title,
-            );
-            query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .id;
+            Ok(movie_id)
         }
     }
 
+    /// Insert a show.
+    fn insert_content(
+        self,
+        content: &DbContent,
+    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let content_id = sqlx::query!(
+                "INSERT INTO content (content_type, title, release_date, poster, plot, original_language, original_title)
+                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+                content.content_type,
+                content.title,
+                content.release_date,
+                content.poster,
+                content.plot,
+                content.original_language,
+                content.original_title,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .id;
+            Ok(content_id)
+        }
+    }
+
+    /// Insert a show.
     fn insert_show(
         self,
         show: &DbShow,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query!(
-                "INSERT OR IGNORE INTO shows 
-            (title, release_date, poster, backdrop, plot, original_language, original_title)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
-                show.title,
-                show.release_date,
-                show.poster,
+            let show_id = sqlx::query!(
+                "INSERT OR IGNORE INTO shows (content_id, backdrop) VALUES (?, ?) RETURNING id;",
+                show.content_id,
                 show.backdrop,
-                show.plot,
-                show.original_language,
-                show.original_title,
-            );
-
-            query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .id;
+            Ok(show_id)
         }
     }
 
+    /// Insert a season.
     fn insert_season(
         self,
         season: DbSeason,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query!(
-                "INSERT OR IGNORE INTO seasons
-            (show_id, number, release_date, plot, poster, title)
-            VALUES (?, ?, ?, ?, ?, ?) RETURNING id;",
+            let season_id = sqlx::query!(
+                "INSERT OR IGNORE INTO seasons (show_id, number, content_id) VALUES (?, ?, ?) RETURNING id;",
                 season.show_id,
                 season.number,
-                season.release_date,
-                season.plot,
-                season.poster,
-                season.title,
-            );
-
-            query.fetch_one(&mut *conn).await.map(|x| x.id)
+                season.content_id,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .id;
+            Ok(season_id)
         }
     }
 
+    /// Insert an episode. Returns `(episode_id, content_id)`.
     fn insert_episode(
         self,
         episode: &DbEpisode,
-    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<i64>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let episode_query = sqlx::query!(
-                "INSERT OR IGNORE INTO episodes
-            (season_id, title, number, plot, release_date, poster, duration)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            let episode_id = sqlx::query!(
+                "INSERT OR IGNORE INTO episodes (season_id, number, duration, content_id)
+                VALUES (?, ?, ?, ?) RETURNING id;",
                 episode.season_id,
-                episode.title,
                 episode.number,
-                episode.plot,
-                episode.release_date,
-                episode.poster,
                 episode.duration,
-            );
-
-            episode_query.fetch_one(&mut *conn).await.map(|x| x.id)
+                episode.content_id,
+            )
+            .fetch_one(&mut *conn)
+            .await?
+            .id;
+            Ok(episode_id)
         }
     }
 
@@ -172,12 +184,11 @@ where
             tracing::debug!("Inserting new video: {}", db_video.path);
             let video_query = sqlx::query!(
                 "INSERT INTO videos
-            (path, size, movie_id, episode_id, is_prime)
-            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+            (path, size, content_id, is_prime)
+            VALUES (?, ?, ?, ?) RETURNING id;",
                 db_video.path,
                 db_video.size,
-                db_video.movie_id,
-                db_video.episode_id,
+                db_video.content_id,
                 db_video.is_prime,
             );
             video_query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -210,11 +221,12 @@ where
             let mut conn = self.acquire().await?;
             let history_query = sqlx::query!(
                 "INSERT INTO history
-            (time, is_finished, video_id)
-            VALUES (?, ?, ?) RETURNING id;",
+            (time, is_finished, content_id, update_time)
+            VALUES (?, ?, ?, ?) RETURNING id;",
                 db_history.time,
                 db_history.is_finished,
-                db_history.video_id
+                db_history.content_id,
+                db_history.update_time,
             );
             history_query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
@@ -226,38 +238,35 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let subtitles_query = sqlx::query!(
-                "INSERT INTO external_ids
-            (metadata_provider, metadata_id, show_id, season_id, episode_id, movie_id, is_prime)
-            VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+            let query = sqlx::query!(
+                "INSERT OR IGNORE INTO external_ids
+            (metadata_provider, metadata_id, content_id, is_prime)
+            VALUES (?, ?, ?, ?) RETURNING id;",
                 db_external_id.metadata_provider,
                 db_external_id.metadata_id,
-                db_external_id.show_id,
-                db_external_id.season_id,
-                db_external_id.episode_id,
-                db_external_id.movie_id,
+                db_external_id.content_id,
                 db_external_id.is_prime,
             );
-            subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
+            query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
     }
 
     fn insert_intro(
         self,
-        intro: DbEpisodeIntro,
+        intro: DbIntro,
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            tracing::trace!("Inserting intro for video {}", intro.video_id);
-            let subtitles_query = sqlx::query!(
-                "INSERT INTO episode_intro
-            (video_id, start_sec, end_sec)
+            tracing::trace!("Inserting intro for episode {}", intro.episode_id);
+            let query = sqlx::query!(
+                "INSERT OR REPLACE INTO intros
+            (episode_id, start_sec, end_sec)
             VALUES (?, ?, ?) RETURNING id;",
-                intro.video_id,
+                intro.episode_id,
                 intro.start_sec,
                 intro.end_sec,
             );
-            subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
+            query.fetch_one(&mut *conn).await.map(|x| x.id)
         }
     }
 
@@ -302,45 +311,6 @@ where
         }
     }
 
-    fn external_to_local_id(
-        self,
-        external_id: &str,
-        metadata_provider: MetadataProvider,
-    ) -> impl std::future::Future<Output = Result<DbExternalId, Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            let metadata_provider = metadata_provider.to_string();
-            let external_id = sqlx::query_as!(
-                DbExternalId,
-                "SELECT * from external_ids WHERE metadata_provider = ? AND metadata_id = ?;",
-                metadata_provider,
-                external_id,
-            )
-            .fetch_one(&mut *conn)
-            .await?;
-            Ok(external_id)
-        }
-    }
-
-    /// Get local id by external ids
-    fn external_to_local_ids(
-        self,
-        external_ids: &Vec<ExternalIdMetadata>,
-    ) -> impl std::future::Future<Output = Option<DbExternalId>> + Send {
-        async move {
-            let mut conn = self.acquire().await.ok()?;
-            for external_id in external_ids {
-                if let Ok(external_id) = conn
-                    .external_to_local_id(&external_id.id, external_id.provider)
-                    .await
-                {
-                    return Some(external_id);
-                }
-            }
-            None
-        }
-    }
-
     fn get_external_ids(
         self,
         content_id: i64,
@@ -353,7 +323,9 @@ where
                 ContentType::Movie => {
                     sqlx::query_as!(
                         DbExternalId,
-                        "SELECT * FROM external_ids WHERE movie_id = ?",
+                        "SELECT external_ids.* FROM external_ids
+                        JOIN movies ON movies.content_id = external_ids.content_id
+                        WHERE movies.id = ?",
                         content_id
                     )
                     .fetch_all(&mut *conn)
@@ -362,7 +334,9 @@ where
                 ContentType::Show => {
                     sqlx::query_as!(
                         DbExternalId,
-                        "SELECT * FROM external_ids WHERE show_id = ?",
+                        "SELECT external_ids.* FROM external_ids
+                        JOIN shows ON shows.content_id = external_ids.content_id
+                        WHERE shows.id = ?",
                         content_id
                     )
                     .fetch_all(&mut *conn)
@@ -377,34 +351,51 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing video");
-            let remove_query = sqlx::query!(
-                "DELETE FROM videos WHERE id = ? RETURNING episode_id, movie_id;",
-                id
-            );
-            let remove_result = remove_query.fetch_one(&mut *conn).await?;
+            let remove_result =
+                sqlx::query!("DELETE FROM videos WHERE id = ? RETURNING content_id;", id)
+                    .fetch_one(&mut *conn)
+                    .await?;
 
-            if let Some(episode_id) = remove_result.episode_id {
-                let sibling_videos = sqlx::query!(
-                    "SELECT COUNT(*) AS count FROM videos WHERE episode_id = ?",
-                    episode_id
+            let Some(content_id) = remove_result.content_id else {
+                return Ok(());
+            };
+
+            // Check if it was an episode
+            if let Some(episode_row) = sqlx::query!(
+                "SELECT id, season_id FROM episodes WHERE content_id = ?",
+                content_id
+            )
+            .fetch_optional(&mut *conn)
+            .await?
+            {
+                let sibling_count = sqlx::query!(
+                    "SELECT COUNT(*) AS count FROM videos WHERE content_id = ?",
+                    content_id
                 )
                 .fetch_one(&mut *conn)
-                .await?;
-                if sibling_videos.count == 0 {
-                    let _ = conn.remove_episode(episode_id).await;
+                .await?
+                .count;
+                if sibling_count == 0 {
+                    conn.remove_episode(episode_row.id).await?;
                 }
                 return Ok(());
             }
 
-            if let Some(movie_id) = remove_result.movie_id {
-                let sibling_videos = sqlx::query!(
-                    "SELECT COUNT(*) AS count FROM videos WHERE movie_id = ?",
-                    movie_id
+            // Check if it was a movie
+            if let Some(movie_row) =
+                sqlx::query!("SELECT id FROM movies WHERE content_id = ?", content_id)
+                    .fetch_optional(&mut *conn)
+                    .await?
+            {
+                let sibling_count = sqlx::query!(
+                    "SELECT COUNT(*) AS count FROM videos WHERE content_id = ?",
+                    content_id
                 )
                 .fetch_one(&mut *conn)
-                .await?;
-                if sibling_videos.count == 0 {
-                    let _ = conn.remove_movie(movie_id).await;
+                .await?
+                .count;
+                if sibling_count == 0 {
+                    conn.remove_movie(movie_row.id).await?;
                 }
                 return Ok(());
             }
@@ -420,23 +411,28 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing episode");
-            let delete_episode_result =
-                sqlx::query!("DELETE FROM episodes WHERE id = ? RETURNING season_id", id)
-                    .fetch_one(&mut *conn)
-                    .await?;
+            let episode = sqlx::query!(
+                "SELECT season_id, content_id FROM episodes WHERE id = ?",
+                id
+            )
+            .fetch_one(&mut *conn)
+            .await?;
 
-            let season_id = delete_episode_result.season_id;
+            // Deleting content cascades to episodes row + intros + sets videos.content_id to NULL
+            sqlx::query!("DELETE FROM content WHERE id = ?", episode.content_id)
+                .execute(&mut *conn)
+                .await?;
 
             let siblings_count = sqlx::query!(
                 "SELECT COUNT(*) AS count FROM episodes WHERE season_id = ?",
-                season_id
+                episode.season_id
             )
             .fetch_one(&mut *conn)
             .await?
             .count;
             tracing::debug!("Removed episode siblings count: {}", siblings_count);
             if siblings_count == 0 {
-                conn.remove_season(season_id).await?;
+                conn.remove_season(episode.season_id).await?;
             }
 
             let episode_assets = assets::EpisodeAssetsDir::new(id);
@@ -451,12 +447,31 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing season");
-            let delete_result =
-                sqlx::query!("DELETE FROM seasons WHERE id = ? RETURNING show_id", id)
-                    .fetch_one(&mut *conn)
-                    .await?;
+            let season = sqlx::query!("SELECT show_id, content_id FROM seasons WHERE id = ?", id)
+                .fetch_one(&mut *conn)
+                .await?;
 
-            let show_id = delete_result.show_id;
+            // Delete all episode content rows first (cascade: episodes + intros)
+            let episode_content_ids: Vec<i64> =
+                sqlx::query!("SELECT content_id FROM episodes WHERE season_id = ?", id)
+                    .fetch_all(&mut *conn)
+                    .await?
+                    .into_iter()
+                    .map(|r| r.content_id)
+                    .collect();
+
+            for content_id in episode_content_ids {
+                sqlx::query!("DELETE FROM content WHERE id = ?", content_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+
+            // Delete season's content row (cascades to seasons row)
+            sqlx::query!("DELETE FROM content WHERE id = ?", season.content_id)
+                .execute(&mut *conn)
+                .await?;
+
+            let show_id = season.show_id;
             let siblings_count = sqlx::query!(
                 "SELECT COUNT(*) AS count FROM seasons WHERE show_id = ?",
                 show_id
@@ -465,7 +480,7 @@ where
             .await?
             .count;
             if siblings_count == 0 {
-                conn.remove_show(delete_result.show_id).await?;
+                conn.remove_show(show_id).await?;
             }
 
             let season_assets = assets::SeasonAssetsDir::new(id);
@@ -476,15 +491,57 @@ where
         }
     }
 
-    /// Relies on `ON DELETE CASCADE` to remove show's seasons and episodes.
-    /// This causes seasons/episodes assets to become orphaned and not cleaned up
+    /// Deletes show and all its seasons/episodes by removing their content rows.
     fn remove_show(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing show");
-            let query = sqlx::query!("DELETE FROM shows WHERE id = ?", id);
 
-            query.execute(&mut *conn).await?;
+            let show_content_id = sqlx::query!("SELECT content_id FROM shows WHERE id = ?", id)
+                .fetch_one(&mut *conn)
+                .await?
+                .content_id;
+
+            // Collect all episode content_ids
+            let episode_content_ids: Vec<i64> = sqlx::query!(
+                "SELECT episodes.content_id FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                WHERE seasons.show_id = ?",
+                id
+            )
+            .fetch_all(&mut *conn)
+            .await?
+            .into_iter()
+            .map(|r| r.content_id)
+            .collect();
+
+            // Collect all season content_ids
+            let season_content_ids: Vec<i64> =
+                sqlx::query!("SELECT content_id FROM seasons WHERE show_id = ?", id)
+                    .fetch_all(&mut *conn)
+                    .await?
+                    .into_iter()
+                    .map(|r| r.content_id)
+                    .collect();
+
+            // Delete episode content rows first (cascade: episodes + intros)
+            for content_id in episode_content_ids {
+                sqlx::query!("DELETE FROM content WHERE id = ?", content_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+
+            // Delete season content rows (cascade: seasons)
+            for content_id in season_content_ids {
+                sqlx::query!("DELETE FROM content WHERE id = ?", content_id)
+                    .execute(&mut *conn)
+                    .await?;
+            }
+
+            // Delete show content row (cascade: shows)
+            sqlx::query!("DELETE FROM content WHERE id = ?", show_content_id)
+                .execute(&mut *conn)
+                .await?;
 
             let show_assets = assets::ShowAssetsDir::new(id);
             if let Err(e) = show_assets.delete_dir().await {
@@ -499,9 +556,13 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing movie");
-            let query = sqlx::query!("DELETE FROM movies WHERE id = ?", id);
-
-            query.execute(&mut *conn).await?;
+            // Delete via content_id - cascades to movies row
+            sqlx::query!(
+                "DELETE FROM content WHERE id = (SELECT content_id FROM movies WHERE id = ?)",
+                id
+            )
+            .execute(&mut *conn)
+            .await?;
 
             let movie_assets = assets::MovieAssetsDir::new(id);
             if let Err(e) = movie_assets.delete_dir().await {
@@ -516,7 +577,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing intro");
-            let query = sqlx::query!("DELETE FROM episode_intro WHERE id = ?", id);
+            let query = sqlx::query!("DELETE FROM intros WHERE id = ?", id);
 
             query.execute(&mut *conn).await?;
             Ok(())
@@ -531,97 +592,6 @@ where
             let mut conn = self.acquire().await?;
             let query = sqlx::query!("DELETE FROM torrents WHERE info_hash = ?", info_hash);
             query.execute(&mut *conn).await?;
-            Ok(())
-        }
-    }
-
-    fn update_show_metadata(
-        self,
-        id: i64,
-        metadata: ShowMetadata,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            let db_show = DbShow::from(metadata);
-            let q = sqlx::query!(
-                "UPDATE shows SET
-                            title = ?, 
-                            release_date = ?,
-                            poster = ?,
-                            backdrop = ?,
-                            plot = ?
-            WHERE id = ?",
-                db_show.title,
-                db_show.release_date,
-                db_show.poster,
-                db_show.backdrop,
-                db_show.plot,
-                id
-            );
-            q.execute(&mut *conn).await?;
-            Ok(())
-        }
-    }
-
-    fn update_season_metadata(
-        self,
-        id: i64,
-        show_id: i64,
-        metadata: SeasonMetadata,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            let db_season = metadata.into_db_season(show_id);
-            let q = sqlx::query!(
-                "UPDATE seasons SET
-                               show_id = ?,
-                               number = ?,
-                               release_date = ?,
-                               plot = ?,
-                               poster = ?,
-                               show_id = ?
-            WHERE id = ?",
-                db_season.show_id,
-                db_season.number,
-                db_season.release_date,
-                db_season.plot,
-                db_season.poster,
-                db_season.show_id,
-                id
-            );
-            q.execute(&mut *conn).await?;
-            Ok(())
-        }
-    }
-
-    fn update_episode_metadata(
-        self,
-        id: i64,
-        season_id: i32,
-        metadata: EpisodeMetadata,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            let number = metadata.number as i32;
-            let poster = metadata.poster.map(|p| p.as_str().to_string());
-            let q = sqlx::query!(
-                "UPDATE episodes SET
-                                season_id = ?,
-                                title = ?, 
-                                number = ?,
-                                plot = ?,
-                                poster = ?,
-                                release_date = ?
-            WHERE id = ?",
-                season_id,
-                metadata.title,
-                number,
-                metadata.plot,
-                poster,
-                metadata.release_date,
-                id
-            );
-            q.execute(&mut *conn).await?;
             Ok(())
         }
     }
@@ -663,34 +633,16 @@ where
         }
     }
 
-    fn update_video_episode_id(
+    fn update_video_content_id(
         self,
         video_id: i64,
-        episode_id: i64,
+        content_id: i64,
     ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             sqlx::query!(
-                "UPDATE videos SET episode_id = ? WHERE id = ?",
-                episode_id,
-                video_id,
-            )
-            .execute(&mut *conn)
-            .await?;
-            Ok(())
-        }
-    }
-
-    fn update_video_movie_id(
-        self,
-        video_id: i64,
-        movie_id: i64,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            sqlx::query!(
-                "UPDATE videos SET movie_id = ? WHERE id = ?",
-                movie_id,
+                "UPDATE videos SET content_id = ? WHERE id = ?",
+                content_id,
                 video_id,
             )
             .execute(&mut *conn)
@@ -706,10 +658,40 @@ where
         async move {
             let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
             let mut conn = self.acquire().await?;
-            let movies = sqlx::query_as!(DbMovie, "SELECT movies.* FROM movies LIMIT ?", limit)
-                .fetch_all(&mut *conn)
-                .await?;
-            Ok(movies.into_iter().map(Into::into).collect())
+            let movies = sqlx::query!(
+                r#"SELECT movies.id, movies.backdrop, movies.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                content.original_language, content.original_title
+                FROM movies JOIN content ON content.id = movies.content_id
+                LIMIT ?"#,
+                limit
+            )
+            .fetch_all(&mut *conn)
+            .await?;
+            Ok(movies
+                .into_iter()
+                .map(|m| {
+                    let poster = m.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
+                    let backdrop = m.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
+                    let locale_metadata = m.original_language.zip(m.original_title).map(
+                        |(original_language, original_title)| LocaleMetadata {
+                            original_language,
+                            original_title,
+                        },
+                    );
+                    MovieMetadata {
+                        metadata_id: m.id.to_string(),
+                        metadata_provider: MetadataProvider::Local,
+                        poster,
+                        backdrop,
+                        plot: m.plot,
+                        release_date: m.release_date,
+                        runtime: Some(Duration::from_secs(m.duration as u64)),
+                        title: m.title,
+                        locale_metadata,
+                    }
+                })
+                .collect())
         }
     }
 
@@ -720,10 +702,16 @@ where
         let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
         async move {
             let mut conn = self.acquire().await?;
-            let shows = sqlx::query!(r#"SELECT shows.*,
-            (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
-            (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
-            FROM shows LIMIT ?;"#, limit)
+            let shows = sqlx::query!(
+                r#"SELECT shows.id, shows.backdrop,
+                content.title, content.plot, content.poster, content.release_date,
+                content.original_language, content.original_title,
+                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
+                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
+                FROM shows JOIN content ON content.id = shows.content_id
+                LIMIT ?;"#,
+                limit
+            )
             .fetch_all(&mut *conn)
             .await?;
             Ok(shows
@@ -733,11 +721,12 @@ where
                     let backdrop = show
                         .backdrop
                         .map(|b| MetadataImage::new(b.parse().unwrap()));
-                    let seasons = show
+                    let mut seasons: Vec<usize> = show
                         .seasons
                         .split(',')
                         .filter_map(|x| x.parse().ok())
                         .collect();
+                    seasons.sort_unstable();
                     let locale_metadata = show.original_language.zip(show.original_title).map(
                         |(original_language, original_title)| LocaleMetadata {
                             original_language,
@@ -755,91 +744,72 @@ where
                         release_date: show.release_date,
                         title: show.title,
                         locale_metadata,
-                        local: Some(LocalShowData { local_id: show.id }),
+                        local: Some(LocalShowData { id: show.id }),
                     }
                 })
                 .collect())
         }
     }
 
-    fn get_movie(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<MovieMetadata, AppError>> + Send {
+    fn get_movie(self, id: i64) -> impl std::future::Future<Output = sqlx::Result<Movie>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let movie = sqlx::query_as!(DbMovie, "SELECT movies.* FROM movies WHERE id = ?", id)
-                .fetch_one(&mut *conn)
-                .await?;
-            Ok(movie.into())
+            let m = sqlx::query!(
+                r#"SELECT movies.id, movies.backdrop, movies.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                content.original_language, content.original_title,
+                history.id as "history_id?: i64", history.time, history.update_time, history.is_finished
+                FROM movies
+                JOIN content ON content.id = movies.content_id
+                LEFT JOIN history ON history.content_id = content.id
+                WHERE movies.id = ?"#,
+                id
+            )
+            .fetch_one(&mut *conn)
+            .await?;
+            let poster = m.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
+            let backdrop = m.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
+            let locale_metadata = m.original_language.zip(m.original_title).map(
+                |(original_language, original_title)| LocaleMetadata {
+                    original_language,
+                    original_title,
+                },
+            );
+            let history = m.history_id.map(|id| History {
+                id,
+                time: m.time.unwrap(),
+                is_finished: m.is_finished.unwrap(),
+                update_time: m.update_time.unwrap(),
+            });
+            Ok(Movie {
+                metadata_id: m.id.to_string(),
+                metadata_provider: MetadataProvider::Local,
+                poster,
+                backdrop,
+                plot: m.plot,
+                release_date: m.release_date,
+                runtime: Some(Duration::from_secs(m.duration as u64)),
+                title: m.title,
+                locale_metadata,
+                local: Some(LocalMovieData { id, history }),
+            })
         }
     }
 
     fn get_show(
         self,
         show_id: i64,
-    ) -> impl std::future::Future<Output = Result<Show, AppError>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<Show>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let show = sqlx::query!(r#"SELECT shows.*,
-            (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
-            (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
-            FROM shows WHERE id = ?"#, show_id)
-            .fetch_one(&mut *conn)
-            .await?;
-            let poster = show.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
-            let backdrop = show
-                .backdrop
-                .map(|b| MetadataImage::new(b.parse().unwrap()));
-            let mut seasons: Vec<_> = show
-                .seasons
-                .split(',')
-                .filter_map(|x| x.parse().ok())
-                .collect();
-            seasons.sort_unstable();
-            let locale_metadata = show.original_language.zip(show.original_title).map(
-                |(original_language, original_title)| LocaleMetadata {
-                    original_language,
-                    original_title,
-                },
-            );
-            Ok(Show {
-                metadata_id: show.id.to_string(),
-                metadata_provider: MetadataProvider::Local,
-                poster,
-                backdrop,
-                plot: show.plot,
-                episodes_amount: Some(show.episodes_count as usize),
-                seasons: Some(seasons),
-                release_date: show.release_date,
-                title: show.title,
-                locale_metadata,
-                local: Some(LocalShowData { local_id: show.id }),
-            })
-        }
-    }
-
-    /// Local season episodes with local video id
-    fn get_local_season_episodes(
-        self,
-        show_id: i64,
-        season: usize,
-    ) -> impl std::future::Future<Output = Result<Vec<DbEpisode>, AppError>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            let season = season as i64;
-            let episodes = sqlx::query_as!(
-                DbEpisode,
-                r#"SELECT episodes.* FROM episodes
-            JOIN seasons ON seasons.id = episodes.season_id
-            WHERE seasons.show_id = ? AND seasons.number = ? ORDER BY episodes.number;"#,
-                show_id,
-                season,
-            )
-            .fetch_all(&mut *conn)
-            .await?;
-
-            Ok(episodes)
+            QueryBuilder::new("SELECT")
+                .push(DbShowData::SQL_SELECT)
+                .push("from shows join content on content.id = shows.content_id where shows.id = ")
+                .push_bind(show_id)
+                .build_query_as::<DbShowData>()
+                .fetch_one(&mut *conn)
+                .await
+                .map(Into::into)
         }
     }
 
@@ -851,8 +821,12 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
-            let season = sqlx::query!(
-                r#"SELECT * FROM seasons WHERE seasons.show_id = ? AND seasons.number = ?"#,
+            let season_row = sqlx::query!(
+                r#"SELECT seasons.id, seasons.number, seasons.content_id,
+                content.title, content.plot, content.poster, content.release_date
+                FROM seasons
+                JOIN content ON content.id = seasons.content_id
+                WHERE seasons.show_id = ? AND seasons.number = ?"#,
                 show_id,
                 season
             )
@@ -860,23 +834,25 @@ where
             .await?;
 
             let episodes: Vec<_> = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number,
-            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
-            FROM episodes 
-            JOIN seasons ON seasons.id = episodes.season_id
-            join videos on videos.episode_id = episodes.id
-            left join episode_intro on episode_intro.video_id = videos.id
-            left join history on history.video_id = videos.id
-            WHERE season_id = ? ORDER BY number ASC"#,
-                season.id
+                r#"SELECT episodes.id, episodes.number, episodes.duration, episodes.season_id,
+                content.title, content.plot, content.poster, content.release_date,
+                seasons.number AS season_number,
+                history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
+                FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                JOIN content ON content.id = episodes.content_id
+                LEFT JOIN intros ON intros.episode_id = episodes.id
+                LEFT JOIN history ON history.content_id = episodes.content_id
+                WHERE episodes.season_id = ? ORDER BY episodes.number ASC"#,
+                season_row.id
             )
             .fetch_all(&mut *conn)
             .await?
             .into_iter()
             .map(|db_episode| {
                 let local = LocalEpisodeData {
-                    local_id: db_episode.id,
+                    id: db_episode.id,
                     history: db_episode.history_id.map(|id| api_types::History {
                         id,
                         time: db_episode.history_time.unwrap(),
@@ -895,32 +871,30 @@ where
                     number: db_episode.number as usize,
                     title: db_episode.title,
                     plot: db_episode.plot,
-                    season_number: season.number as usize,
+                    season_number: db_episode.season_number as usize,
                     runtime: Some(Duration::from_secs(db_episode.duration as u64)),
                     poster: db_episode
                         .poster
                         .map(|x| MetadataImage::new(x.parse().unwrap())),
-                        local: Some(local),
+                    local: Some(local),
                 }
             })
             .collect();
 
-            let poster = season
+            let poster = season_row
                 .poster
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
             Ok(Season {
-                metadata_id: season.id.to_string(),
+                metadata_id: season_row.id.to_string(),
                 metadata_provider: MetadataProvider::Local,
-                release_date: season.release_date,
-                plot: season.plot,
+                release_date: season_row.release_date,
+                plot: season_row.plot,
                 episodes,
                 poster,
-                title: season.title,
-                number: season.number as usize,
-                local: Some(LocalSeasonData {
-                    local_id: season.id,
-                }),
+                title: Some(season_row.title),
+                number: season_row.number as usize,
+                local: Some(LocalSeasonData { id: season_row.id }),
             })
         }
     }
@@ -957,15 +931,17 @@ where
             let season = season as i64;
             let episode = episode as i64;
             let episode = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number,
-            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
-            FROM episodes 
-            JOIN seasons ON seasons.id = episodes.season_id
-            join videos on videos.episode_id = episodes.id
-            left join episode_intro on episode_intro.video_id = videos.id
-            left join history on history.video_id = videos.id
-            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
+                r#"SELECT episodes.id, episodes.number, episodes.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                seasons.number AS season_number,
+                history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
+                FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                JOIN content ON content.id = episodes.content_id
+                LEFT JOIN intros ON intros.episode_id = episodes.id
+                LEFT JOIN history ON history.content_id = episodes.content_id
+                WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
                 show_id,
                 season,
                 episode
@@ -978,7 +954,7 @@ where
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
             let local = LocalEpisodeData {
-                local_id: episode.id,
+                id: episode.id,
                 history: episode.history_id.map(|id| api_types::History {
                     id,
                     time: episode.history_time.unwrap(),
@@ -1038,15 +1014,17 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let episode = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number,
-            history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
-            FROM episodes 
-            JOIN seasons ON seasons.id = episodes.season_id
-            join videos on videos.episode_id = episodes.id
-            left join episode_intro on episode_intro.video_id = videos.id
-            left join history on history.video_id = videos.id
-            WHERE episodes.id = ?;"#,
+                r#"SELECT episodes.id, episodes.number, episodes.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                seasons.number AS season_number,
+                history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
+                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
+                FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                JOIN content ON content.id = episodes.content_id
+                LEFT JOIN intros ON intros.episode_id = episodes.id
+                LEFT JOIN history ON history.content_id = episodes.content_id
+                WHERE episodes.id = ?;"#,
                 episode_id,
             )
             .fetch_one(&mut *conn)
@@ -1057,7 +1035,7 @@ where
                 .map(|p| MetadataImage::new(p.parse().unwrap()));
 
             let local = LocalEpisodeData {
-                local_id: episode.id,
+                id: episode.id,
                 history: episode.history_id.map(|id| api_types::History {
                     id,
                     time: episode.history_time.unwrap(),
@@ -1160,15 +1138,43 @@ where
     ) -> impl std::future::Future<Output = Result<Vec<MovieMetadata>, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = query.trim().to_lowercase();
-            let movies = sqlx::query_as!(
-            DbMovie,
-            "SELECT movies.* FROM movies_fts_idx JOIN movies ON movies.id = movies_fts_idx.rowid WHERE movies_fts_idx = ?",
-            query
-        )
-        .fetch_all(&mut *conn)
-        .await?;
-            Ok(movies.into_iter().map(Into::into).collect())
+            let query = format!("\"{}\"", query.trim().to_lowercase());
+            let movies = sqlx::query!(
+                r#"SELECT movies.id, movies.backdrop, movies.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                content.original_language, content.original_title
+                FROM content_fts
+                JOIN content ON content.rowid = content_fts.rowid
+                JOIN movies ON movies.content_id = content.id
+                WHERE content_fts MATCH ? AND content.content_type = 'movie'"#,
+                query
+            )
+            .fetch_all(&mut *conn)
+            .await?;
+            Ok(movies
+                .into_iter()
+                .map(|m| {
+                    let poster = m.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
+                    let backdrop = m.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
+                    let locale_metadata = m.original_language.zip(m.original_title).map(
+                        |(original_language, original_title)| LocaleMetadata {
+                            original_language,
+                            original_title,
+                        },
+                    );
+                    MovieMetadata {
+                        metadata_id: m.id.to_string(),
+                        metadata_provider: MetadataProvider::Local,
+                        poster,
+                        backdrop,
+                        plot: m.plot,
+                        release_date: m.release_date,
+                        runtime: Some(Duration::from_secs(m.duration as u64)),
+                        title: m.title,
+                        locale_metadata,
+                    }
+                })
+                .collect())
         }
     }
 
@@ -1180,15 +1186,19 @@ where
             let mut conn = self.acquire().await?;
             let query = format!("\"{}\"", query.trim().to_lowercase());
             let shows = sqlx::query!(
-            r#"SELECT shows.*,
-            (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
-            (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
-            FROM shows_fts_idx JOIN shows ON shows.id = shows_fts_idx.rowid 
-            WHERE shows_fts_idx MATCH ?"#,
-            query
-        )
-        .fetch_all(&mut *conn)
-        .await?;
+                r#"SELECT shows.id, shows.backdrop,
+                content.title, content.plot, content.poster, content.release_date,
+                content.original_language, content.original_title,
+                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
+                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
+                FROM content_fts
+                JOIN content ON content.rowid = content_fts.rowid
+                JOIN shows ON shows.content_id = content.id
+                WHERE content_fts MATCH ? AND content.content_type = 'show'"#,
+                query
+            )
+            .fetch_all(&mut *conn)
+            .await?;
             Ok(shows
                 .into_iter()
                 .map(|show| {
@@ -1232,10 +1242,13 @@ where
             let mut conn = self.acquire().await?;
             let query = query.trim().to_lowercase();
             let episodes = sqlx::query!(
-                r#"SELECT episodes.*, seasons.number AS season_number FROM episodes
-            JOIN seasons ON seasons.id = episodes.season_id
-            JOIN videos ON videos.episode_id = episodes.id
-            WHERE episodes.title = ? COLLATE NOCASE"#,
+                r#"SELECT episodes.id, episodes.season_id, episodes.number, episodes.duration,
+                content.title, content.plot, content.poster, content.release_date,
+                seasons.number AS season_number FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                JOIN content ON content.id = episodes.content_id
+                JOIN videos ON videos.content_id = episodes.content_id
+                WHERE content.title = ? COLLATE NOCASE"#,
                 query
             )
             .fetch_all(&mut *conn)
@@ -1272,13 +1285,15 @@ where
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
             let show_id = sqlx::query!(
-                r#"SELECT show_id as "show_id!" FROM external_ids WHERE show_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+                r#"SELECT shows.id as "show_id!" FROM external_ids
+                JOIN shows ON shows.content_id = external_ids.content_id
+                WHERE external_ids.metadata_provider = ? AND external_ids.metadata_id = ?"#,
                 provider,
                 metadata_id
             )
-                .fetch_optional(&mut *conn)
-                .await?
-                .map(|r| r.show_id);
+            .fetch_optional(&mut *conn)
+            .await?
+            .map(|r| r.show_id);
             Ok(show_id)
         }
     }
@@ -1293,13 +1308,15 @@ where
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
             let movie_id = sqlx::query!(
-                r#"SELECT movie_id as "movie_id!" FROM external_ids WHERE movie_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
+                r#"SELECT movies.id as "movie_id!" FROM external_ids
+                JOIN movies ON movies.content_id = external_ids.content_id
+                WHERE external_ids.metadata_provider = ? AND external_ids.metadata_id = ?"#,
                 provider,
                 metadata_id
             )
-                .fetch_optional(&mut *conn)
-                .await?
-                .map(|r| r.movie_id);
+            .fetch_optional(&mut *conn)
+            .await?
+            .map(|r| r.movie_id);
             Ok(movie_id)
         }
     }
@@ -1310,6 +1327,7 @@ impl<'a> DbActions<'a> for &'a Pool<Sqlite> {}
 impl<'a> DbActions<'a> for &'a mut SqliteConnection {}
 
 pub type DbTransaction = Transaction<'static, Sqlite>;
+pub type DbQueryBuilder<'a> = QueryBuilder<'a, Sqlite>;
 
 /// Database connection pool
 #[derive(Debug, Clone)]
@@ -1458,7 +1476,18 @@ impl MovieMetadataProvider for Db {
         movie_metadata_id: &str,
         _fetch_params: FetchParams,
     ) -> Result<crate::metadata::MovieMetadata, AppError> {
-        self.pool.get_movie(movie_metadata_id.parse()?).await
+        let movie = self.pool.get_movie(movie_metadata_id.parse()?).await?;
+        Ok(MovieMetadata {
+            metadata_id: movie.metadata_id,
+            metadata_provider: movie.metadata_provider,
+            poster: movie.poster,
+            backdrop: movie.backdrop,
+            plot: movie.plot,
+            release_date: movie.release_date,
+            runtime: movie.runtime,
+            title: movie.title,
+            locale_metadata: movie.locale_metadata,
+        })
     }
 
     fn provider_identifier(&self) -> MetadataProvider {
@@ -1514,35 +1543,10 @@ impl DiscoverMetadataProvider for Db {
     }
 }
 
-impl From<DbMovie> for MovieMetadata {
-    fn from(val: DbMovie) -> Self {
-        let poster = val.poster.map(|p| MetadataImage::new(p.parse().unwrap()));
-        let backdrop = val.backdrop.map(|b| MetadataImage::new(b.parse().unwrap()));
-        let locale_metadata = val.original_language.zip(val.original_title).map(
-            |(original_language, original_title)| LocaleMetadata {
-                original_language,
-                original_title,
-            },
-        );
-
-        MovieMetadata {
-            metadata_id: val.id.unwrap().to_string(),
-            metadata_provider: MetadataProvider::Local,
-            poster,
-            backdrop,
-            plot: val.plot,
-            release_date: val.release_date,
-            runtime: None,
-            title: val.title,
-            locale_metadata,
-        }
-    }
-}
-
 impl From<DbExternalId> for ExternalIdMetadata {
     fn from(val: DbExternalId) -> Self {
         ExternalIdMetadata {
-            provider: MetadataProvider::from_str(&val.metadata_provider).unwrap(),
+            provider: val.metadata_provider,
             id: val.metadata_id,
         }
     }
@@ -1550,13 +1554,22 @@ impl From<DbExternalId> for ExternalIdMetadata {
 
 // Types for each table in the local database
 
-/// `shows` table holds information for specific tv show
-///
-/// Note that it will not be deleted ucascade because related assets must be cleaned up
-/// manually.
+#[derive(sqlx::Type, Debug, Clone, Serialize)]
+#[sqlx(rename_all = "lowercase")]
+pub enum DbContentType {
+    Movie,
+    Show,
+    Season,
+    Episode,
+}
+
+/// `content` is a shared table that holds common information between movies, shows, seasons and
+/// episodes
 #[derive(Debug, Clone, FromRow, Serialize)]
-pub struct DbShow {
+pub struct DbContent {
+    #[sqlx(rename = "content_table_id")]
     pub id: Option<i64>,
+    pub content_type: DbContentType,
     pub title: String,
     pub original_language: Option<String>,
     pub original_title: Option<String>,
@@ -1565,70 +1578,85 @@ pub struct DbShow {
     ///
     /// Note that it is not local poster url.
     pub poster: Option<String>,
+    pub plot: Option<String>,
+}
+
+impl DbContent {
+    const SQL: &str =
+        "content.id as content_table_id, content.content_type, content.title, content.original_language,
+    content.original_title, content.release_date, content.poster, content.plot";
+}
+
+/// `shows` table holds information for specific tv show
+///
+/// Note that it will not be deleted using cascade because related assets must be cleaned up
+/// manually.
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
+pub struct DbShow {
+    pub id: Option<i64>,
+    pub content_id: i64,
     /// Url that we get from information provider.
     ///
     /// Backdrop is the 16/9 high canvas that can be used as the background
     ///
     /// Note that it is not local backdrop url.
     pub backdrop: Option<String>,
-    pub plot: Option<String>,
 }
 
 /// `seasons` table holds information for specific season.
 ///
 /// Note that it will not be deleted using cascade because related assets must be cleaned up
 /// manually.
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbSeason {
     pub id: Option<i64>,
+    pub content_id: i64,
     pub show_id: i64,
     pub number: i64,
-    pub release_date: Option<String>,
-    pub plot: Option<String>,
-    /// Some providers attach meaningful titles to the seasons
-    pub title: Option<String>,
-    /// Url that we get from information provider.
-    ///
-    /// Note that it is not local url.
-    pub poster: Option<String>,
 }
 
 /// `movies` table holds information for specific movie
 ///
 /// Note that it will not be removed using cascade because related assets must be cleaned up
 /// manually.
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbMovie {
+    #[sqlx(rename = "movie_table_id")]
     pub id: Option<i64>,
-    pub title: String,
-    pub original_language: Option<String>,
-    pub original_title: Option<String>,
-    pub plot: Option<String>,
-    /// Url that we get from information provider.
-    /// Note that it is not local poster url.
-    pub poster: Option<String>,
-    pub release_date: Option<String>,
+    #[sqlx(rename = "movie_content_id")]
+    pub content_id: i64,
+    #[sqlx(rename = "movie_duration")]
     pub duration: i64,
+    #[sqlx(rename = "movie_backdrop")]
     pub backdrop: Option<String>,
+}
+
+impl DbMovie {
+    const SQL: &str = "movies.id as movie_table_id, movies.content_id as movie_content_id,
+    movies.duration as movie_duration, movies.backdrop as movie_backdrop";
 }
 
 /// `episodes` table holds information for specific episode
 ///
 /// Note that it will not be removed using cascade because related assets must be cleaned up
 /// manually.
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbEpisode {
+    #[sqlx(rename = "episodes_table_id")]
     pub id: Option<i64>,
+    #[sqlx(rename = "episodes_content_id")]
+    pub content_id: i64,
     pub season_id: i64,
-    pub title: String,
+    #[sqlx(rename = "episodes_number")]
     pub number: i64,
-    pub plot: Option<String>,
-    pub release_date: Option<String>,
+    #[sqlx(rename = "episodes_duration")]
     pub duration: i64,
-    /// Url that we get from information provider.
-    ///
-    /// Note that it is not local poster url.
-    pub poster: Option<String>,
+}
+
+impl DbEpisode {
+    pub const SQL: &str =
+        "episodes.id as episodes_table_id, episodes.content_id as episodes_content_id,
+    season_id, episodes.number as episodes_number, episodes.duration as episodes_duration";
 }
 
 /// `videos` table tracks every local video we have in the library.
@@ -1637,14 +1665,13 @@ pub struct DbEpisode {
 ///
 /// Note that it will not be removed using cascade because related assets must be cleaned up
 /// manually.
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbVideo {
     pub id: Option<i64>,
     pub path: String,
     pub is_prime: bool,
     pub size: i64,
-    pub movie_id: Option<i64>,
-    pub episode_id: Option<i64>,
+    pub content_id: Option<i64>,
     pub scan_date: String,
 }
 
@@ -1658,7 +1685,7 @@ pub struct DbVideo {
 /// Note that subtitles inside the video containers are not tracked by the database
 ///
 /// Usually removed with video using delete cascade
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbSubtitles {
     pub id: Option<i64>,
     pub language: Option<String>,
@@ -1668,18 +1695,24 @@ pub struct DbSubtitles {
     pub video_id: i64,
 }
 
-/// `history` table holds watch history for each video file in the library
+/// `history` table holds watch history for each content item in the library
 ///
-/// Usually removed with video using cascade delete
-#[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema)]
+/// Usually removed with content using cascade delete
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct DbHistory {
-    #[schema(value_type = i64)]
+    #[sqlx(rename = "history_id")]
     pub id: Option<i64>,
     pub time: i64,
     pub is_finished: bool,
     #[serde(with = "time::serde::rfc3339")]
     pub update_time: time::OffsetDateTime,
-    pub video_id: i64,
+    #[sqlx(rename = "history_content_id")]
+    pub content_id: i64,
+}
+
+impl DbHistory {
+    pub const SQL: &str = r#" history.id as history_id, history.time, history.is_finished,
+    history.update_time, history.content_id as history_content_id "#;
 }
 
 /// `external_ids` table maps content to external movie/show metadata provider ids.
@@ -1687,26 +1720,23 @@ pub struct DbHistory {
 /// This is useful to crossmatch local library against different providers.
 ///
 /// Usually removed with it's _parent_ using cascade delete
-#[derive(Debug, Clone, FromRow, Serialize, Default, utoipa::ToSchema)]
+#[derive(Debug, Clone, FromRow, Serialize, utoipa::ToSchema, Default)]
 pub struct DbExternalId {
     #[schema(value_type = i64)]
     pub id: Option<i64>,
-    pub metadata_provider: String,
+    pub metadata_provider: MetadataProvider,
     pub metadata_id: String,
-    pub show_id: Option<i64>,
-    pub season_id: Option<i64>,
-    pub episode_id: Option<i64>,
-    pub movie_id: Option<i64>,
+    pub content_id: Option<i64>,
     pub is_prime: i64,
 }
 
-/// `episode_intros` table stores detected intros for a specific video
+/// `intros` table stores detected intros for a specific episode
 ///
-/// Usually removed with the video using cascade delete
+/// Usually removed with the episode using cascade delete
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
-pub struct DbEpisodeIntro {
+pub struct DbIntro {
     pub id: Option<i64>,
-    pub video_id: i64,
+    pub episode_id: i64,
     pub start_sec: i64,
     pub end_sec: i64,
 }
@@ -1715,7 +1745,7 @@ pub struct DbEpisodeIntro {
 ///
 /// Torrents can be in any state.
 /// This is used to resume torrents after server restart.
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbTorrent {
     pub id: Option<i64>,
     pub bencoded_info: Vec<u8>,
@@ -1752,10 +1782,11 @@ impl From<DownloadParams> for DbTorrent {
 /// `torrent_files` table stores information about every file inside particular torrent download.
 ///
 /// Usually removed with parent torrent using cascade deletes
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbTorrentFile {
     pub id: Option<i64>,
     pub torrent_id: i64,
+    pub content_id: Option<i64>,
     pub priority: i64,
     pub idx: i64,
     pub relative_path: String,
@@ -1765,14 +1796,14 @@ pub struct DbTorrentFile {
 /// It is incremented using SQL triggers every time any information in library (movies, shows, seasons,
 /// episodes) changes.
 /// This is only used in UPnP [content_directory service implementation](crate::upnp::content_directory)
-#[derive(Debug, Clone, FromRow, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbSystemId {
     pub id: i64,
 }
 
 /// `upnp_uuid` table stores the single row: `uuid`.
 /// This uuid created once during database initialization and used during UPnP announces.
-#[derive(Debug, Clone, FromRow)]
+#[derive(Debug, Clone, FromRow, Default)]
 pub struct DbUpnpUuid {
     pub uuid: uuid::Uuid,
 }

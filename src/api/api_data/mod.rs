@@ -5,7 +5,7 @@ use sqlx::QueryBuilder;
 use crate::{
     db::{Db, DbActions},
     metadata::{MetadataProvider, MovieMetadata, ShowMetadata},
-    server::{api_data::api_types::History, server_api::Intro},
+    api::{api_data::api_types::History, server::Intro},
 };
 
 pub mod api_types;
@@ -62,7 +62,7 @@ impl LocalDataLookup {
         }
         let mut local_map = QueryBuilder::new(
             r#"select shows.id, external_ids.metadata_provider, external_ids.metadata_id from external_ids
-            join shows on shows.id = external_ids.show_id
+            join shows on shows.content_id = external_ids.content_id
             where (external_ids.metadata_provider, external_ids.metadata_id) in"#,
         )
             .push_tuples(shows.iter(), |mut b, meta| {
@@ -72,7 +72,7 @@ impl LocalDataLookup {
             .build_query_as::<Record>()
             .fetch_all(&self.db.pool).await?
             .into_iter()
-            .map(|v| ((v.metadata_provider, v.metadata_id), local_show::LocalShowData { local_id: v.id }))
+            .map(|v| ((v.metadata_provider, v.metadata_id), local_show::LocalShowData { id: v.id }))
             .collect::<HashMap<_, _>>();
 
         Ok(shows
@@ -107,9 +107,8 @@ impl LocalDataLookup {
             external_ids.metadata_provider, external_ids.metadata_id,
             history.id as history_id, history.time, history.is_finished, history.update_time
             from external_ids
-            join movies on movies.id = external_ids.show_id
-            left join videos on videos.movie_id = movies.id
-            left join history on history.video_id = videos.id
+            join movies on movies.content_id = external_ids.content_id
+            left join history on history.content_id = movies.content_id
             where (external_ids.metadata_provider, external_ids.metadata_id) in"#,
         )
         .push_tuples(movies.iter(), |mut b, meta| {
@@ -124,7 +123,7 @@ impl LocalDataLookup {
             (
                 (v.metadata_provider, v.metadata_id),
                 local_movie::LocalMovieData {
-                    local_id: v.id,
+                    id: v.id,
                     history: v.history_id.map(|id| History {
                         id,
                         time: v.time.unwrap(),
@@ -160,12 +159,11 @@ impl LocalDataLookup {
         Ok(sqlx::query!(
                 r#"select movies.id,
             history.id as "history_id?", history.time, history.is_finished, history.update_time as history_update_time from movies
-            join videos on videos.movie_id = movies.id
-            left join history on history.video_id = videos.id
+            left join history on history.content_id = movies.content_id
             where movies.id = ? limit 1"#,
                   id
         ).fetch_optional(&self.db.pool).await?.map(|r| local_movie::LocalMovieData {
-            local_id: r.id,
+            id: r.id,
             history: r.history_id.map(|id| api_types::History { id,
                 time: r.time.unwrap(),
                 is_finished: r.is_finished.unwrap(),
@@ -181,7 +179,7 @@ impl LocalDataLookup {
     ) -> sqlx::Result<Option<local_show::LocalShowData>> {
         self.crossreference_show(external_provider, external_id)
             .await
-            .map(|v| v.map(|local_id| local_show::LocalShowData { local_id }))
+            .map(|v| v.map(|local_id| local_show::LocalShowData { id: local_id }))
     }
 
     async fn season_data(
@@ -205,7 +203,7 @@ impl LocalDataLookup {
         )
         .fetch_optional(&self.db.pool)
         .await?
-        .map(|v| local_show::LocalSeasonData { local_id: v.id }))
+        .map(|v| local_show::LocalSeasonData { id: v.id }))
     }
 
     async fn episode_data(
@@ -227,12 +225,11 @@ impl LocalDataLookup {
         Ok(sqlx::query!(
                 r#"select episodes.id as episode_id,
             history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-            episode_intro.id as "intro_id?", episode_intro.start_sec as intro_start, episode_intro.end_sec as intro_end
+            intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
             from episodes
             join seasons on seasons.id = episodes.season_id
-            join videos on videos.episode_id = episodes.id
-            left join episode_intro on episode_intro.video_id = videos.id
-            left join history on history.video_id = videos.id
+            left join intros on intros.episode_id = episodes.id
+            left join history on history.content_id = episodes.content_id
             WHERE seasons.show_id = ? and seasons.number = ? and episodes.number = ? limit 1"#,
             local_id,
             season,
@@ -242,7 +239,7 @@ impl LocalDataLookup {
             .await?
             .map(|r|
                 local_show::LocalEpisodeData {
-                    local_id: r.episode_id,
+                    id: r.episode_id,
                     history: r.history_id.map(|id| api_types::History {
                         id,
                         time: r.history_time.unwrap(),

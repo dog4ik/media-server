@@ -36,7 +36,7 @@ pub mod progress;
 /// 3. Library items should be linked to their metadata
 pub mod scan;
 /// Api surface of the media server
-pub mod server;
+pub mod api;
 /// Glue between torrent crate and media server
 pub mod torrent;
 /// Torrent providers

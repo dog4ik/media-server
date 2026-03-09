@@ -2,7 +2,7 @@ use std::{fmt::Display, num::NonZero, str::FromStr, time::Duration};
 
 use crate::{
     app_state::AppError,
-    db::{DbEpisode, DbMovie, DbSeason, DbShow},
+    db::{DbContent, DbContentType, DbEpisode, DbMovie, DbSeason, DbShow},
     ffmpeg,
 };
 use reqwest::Url;
@@ -284,6 +284,12 @@ impl MetadataProvider {
     }
 }
 
+impl From<String> for MetadataProvider {
+    fn from(value: String) -> Self {
+        Self::from_str(&value).expect("direct from conversion not fail")
+    }
+}
+
 impl FromStr for MetadataProvider {
     type Err = anyhow::Error;
 
@@ -338,6 +344,7 @@ pub struct MovieMetadata {
     pub backdrop: Option<MetadataImage>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
+    #[schema(value_type = Option<crate::api::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
@@ -382,6 +389,7 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
+    #[schema(value_type = Option<crate::api::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
 }
@@ -434,93 +442,132 @@ impl From<ShowMetadata> for MetadataSearchResult {
     }
 }
 
-impl From<ShowMetadata> for DbShow {
-    fn from(val: ShowMetadata) -> Self {
+impl ShowMetadata {
+    pub fn into_db_content(&self) -> DbContent {
         let poster;
-        if let Some(metadata_image) = val.poster {
+        if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
         } else {
             poster = None;
         };
-        let backdrop = val.backdrop.map(|p| p.as_str().to_owned());
-        let (original_language, original_title) = match val.locale_metadata {
+        let (original_language, original_title) = match self.locale_metadata.clone() {
             Some(m) => (Some(m.original_language), Some(m.original_title)),
             None => (None, None),
         };
 
-        DbShow {
+        DbContent {
             id: None,
-            title: val.title,
-            release_date: val.release_date,
+            content_type: DbContentType::Show,
+            title: self.title.clone(),
+            release_date: self.release_date.clone(),
             poster,
-            backdrop,
-            plot: val.plot,
+            plot: self.plot.clone(),
             original_language,
             original_title,
+        }
+    }
+
+    pub fn into_db_show(self, content_id: i64) -> DbShow {
+        let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
+
+        DbShow {
+            id: None,
+            content_id,
+            backdrop,
         }
     }
 }
 
 impl EpisodeMetadata {
-    pub fn into_db_episode(self, season_id: i64, duration: Duration) -> DbEpisode {
+    pub fn into_db_content(&self) -> DbContent {
+        DbContent {
+            id: None,
+            content_type: DbContentType::Episode,
+            original_title: None,
+            original_language: None,
+            title: self.title.clone(),
+            plot: self.plot.clone(),
+            release_date: self.release_date.clone(),
+            poster: self.poster.as_ref().map(|x| x.as_str().to_owned()),
+        }
+    }
+
+    pub fn into_db_episode(self, content_id: i64, season_id: i64, duration: Duration) -> DbEpisode {
         DbEpisode {
             id: None,
+            content_id,
             season_id,
-            title: self.title,
             number: self.number as i64,
-            plot: self.plot,
-            release_date: self.release_date,
             duration: duration.as_secs() as i64,
-            poster: self.poster.map(|x| x.as_str().to_owned()),
         }
     }
 }
 
 impl SeasonMetadata {
-    pub fn into_db_season(self, show_id: i64) -> DbSeason {
+    pub fn into_db_content(&self) -> DbContent {
         let poster;
-        if let Some(metadata_image) = self.poster {
+        if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
         } else {
             poster = None;
         }
+
+        DbContent {
+            id: None,
+            content_type: DbContentType::Season,
+            original_title: None,
+            original_language: None,
+            release_date: self.release_date.clone(),
+            plot: self.plot.clone(),
+            poster,
+            title: self
+                .title
+                .clone()
+                .unwrap_or_else(|| format!("Season {}", self.number)),
+        }
+    }
+
+    pub fn into_db_season(self, content_id: i64, show_id: i64) -> DbSeason {
         DbSeason {
             id: None,
+            content_id,
             show_id,
             number: self.number as i64,
-            release_date: self.release_date,
-            plot: self.plot,
-            poster,
-            title: self.title,
         }
     }
 }
 
 impl MovieMetadata {
-    pub fn into_db_movie(self, duration: Duration) -> DbMovie {
+    pub fn into_db_content(&self) -> DbContent {
         let poster;
-        if let Some(metadata_image) = self.poster {
+        if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
         } else {
             poster = None;
         };
-        let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
 
-        let (original_language, original_title) = match self.locale_metadata {
+        let (original_language, original_title) = match self.locale_metadata.clone() {
             Some(m) => (Some(m.original_language), Some(m.original_title)),
             None => (None, None),
         };
-
-        DbMovie {
+        DbContent {
             id: None,
-            title: self.title,
-            release_date: self.release_date,
+            content_type: DbContentType::Movie,
+            title: self.title.clone(),
+            release_date: self.release_date.clone(),
             poster,
-            backdrop,
-            duration: duration.as_secs() as i64,
-            plot: self.plot,
+            plot: self.plot.clone(),
             original_language,
             original_title,
+        }
+    }
+    pub fn into_db_movie(self, content_id: i64, duration: Duration) -> DbMovie {
+        let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
+        DbMovie {
+            id: None,
+            content_id,
+            backdrop,
+            duration: duration.as_secs() as i64,
         }
     }
 }

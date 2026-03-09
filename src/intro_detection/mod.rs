@@ -143,10 +143,10 @@ impl IntroRange {
         best_section
     }
 
-    pub fn into_db_intro(self, video_id: i64) -> crate::db::DbEpisodeIntro {
-        crate::db::DbEpisodeIntro {
+    pub fn into_db_intro(self, episode_id: i64) -> crate::db::DbIntro {
+        crate::db::DbIntro {
             id: None,
-            video_id,
+            episode_id,
             start_sec: self.start.as_secs() as i64,
             end_sec: self.end.as_secs() as i64,
         }

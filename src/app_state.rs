@@ -1,10 +1,6 @@
 use std::{
-    collections::HashMap,
-    error::Error,
-    fmt::Display,
-    num::ParseIntError,
-    sync::Mutex,
-    time::{Duration, Instant},
+    collections::HashMap, error::Error, fmt::Display, num::ParseIntError, sync::Mutex,
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -14,22 +10,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{self},
-    db::{Db, DbActions, DbEpisode, DbExternalId, DbMovie, DbSeason, DbShow, DbSubtitles},
+    db::{Db, DbActions, DbSubtitles},
     ffmpeg::{self, FFmpegRunningJob, SubtitlesJob, TranscodeJob},
     library::{
-        ContentIdentifier, Library, LibraryItem, Source, TranscodePayload, Video,
-        assets::{
-            AssetDir, BackdropAsset, BackdropContentType, FileAsset, PosterAsset,
-            PosterContentType, SubtitlesDirAsset, VariantAsset,
-        },
+        ContentIdentifier, Library, Source, TranscodePayload, Video,
+        assets::{AssetDir, FileAsset, SubtitlesDirAsset, VariantAsset},
         explore_movie_dirs, explore_show_dirs,
-        movie::MovieIdentifier,
-        show::ShowIdentifier,
     },
-    metadata::{
-        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, FetchParams, MetadataProvider,
-        MovieMetadata, ShowMetadata, ShowMetadataProvider, metadata_stack::MetadataProvidersStack,
-    },
+    metadata::{FetchParams, metadata_stack::MetadataProvidersStack},
     progress::TaskResource,
     scan,
     torrent::TorrentClient,
@@ -201,9 +189,12 @@ impl AppState {
 
     pub async fn delete_movie(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
-        let ids = sqlx::query!("SELECT id FROM videos WHERE movie_id = ?", id)
-            .fetch_all(&mut *tx)
-            .await?;
+        let ids = sqlx::query!(
+            "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?",
+            id
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         for video in ids {
             tx.remove_video(video.id).await?;
             if let Some(video) = {
@@ -220,9 +211,12 @@ impl AppState {
 
     pub async fn delete_season(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
-        let ids = sqlx::query!("SELECT videos.id FROM videos JOIN episodes ON episodes.id = videos.episode_id WHERE episodes.season_id = ?", id)
-            .fetch_all(&mut *tx)
-            .await?;
+        let ids = sqlx::query!(
+            "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.season_id = ?",
+            id
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         for video in ids {
             tx.remove_video(video.id).await?;
             if let Some(video) = {
@@ -241,7 +235,7 @@ impl AppState {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos
-JOIN episodes ON episodes.id = videos.episode_id
+JOIN episodes ON episodes.content_id = videos.content_id
 JOIN seasons ON seasons.id = episodes.season_id
 WHERE seasons.show_id = ?",
             id
@@ -264,9 +258,12 @@ WHERE seasons.show_id = ?",
 
     pub async fn delete_episode(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
-        let ids = sqlx::query!("SELECT id FROM videos WHERE episode_id = ?", id)
-            .fetch_all(&mut *tx)
-            .await?;
+        let ids = sqlx::query!(
+            "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+            id
+        )
+        .fetch_all(&mut *tx)
+        .await?;
         for video in ids {
             tx.remove_video(video.id).await?;
             if let Some(video) = {
@@ -291,206 +288,6 @@ WHERE seasons.show_id = ?",
                 .position(|x| *x.path() == asset.path())
                 .map(|idx| source.variants.swap_remove(idx));
         };
-        Ok(())
-    }
-
-    pub async fn reset_show_metadata(&self, show_id: i64) -> Result<(), AppError> {
-        self.partial_refresh().await;
-        let language: config::MetadataLanguage = config::CONFIG.get_value();
-        let fetch_params = FetchParams { lang: language.0 };
-        let orphans = sqlx::query!(
-            r#"SELECT videos.id FROM videos 
-JOIN episodes ON episodes.id = videos.episode_id
-JOIN seasons ON seasons.id = episodes.season_id
-JOIN shows ON shows.id = seasons.show_id
-WHERE shows.id = ? ORDER BY seasons.number;"#,
-            show_id
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
-        self.db.remove_show(show_id).await?;
-        let mut orphans: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            orphans
-                .into_iter()
-                .filter_map(|x| library.get_show(x.id))
-                .collect()
-        };
-
-        orphans.sort_unstable_by_key(|x| x.identifier.title.clone());
-
-        let mut show_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
-
-        for mut show_episodes in orphans
-            .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
-            .map(Vec::from)
-        {
-            show_episodes.sort_unstable_by_key(|x| x.identifier.season);
-            let db = self.db.clone();
-            let providers_stack = self.providers_stack;
-            let discover_providers = providers_stack.discover_providers();
-            let show_providers = providers_stack.show_providers();
-            show_scan_handles.spawn(async move {
-                let identifier = show_episodes.first().unwrap();
-                let local_show_id =
-                    handle_series(identifier, &db, fetch_params, discover_providers).await?;
-                handle_seasons_and_episodes(
-                    &db,
-                    local_show_id,
-                    show_episodes,
-                    fetch_params,
-                    &show_providers,
-                )
-                .await?;
-                Ok(())
-            });
-        }
-
-        while let Some(result) = show_scan_handles.join_next().await {
-            match result {
-                Ok(Err(e)) => tracing::error!("Show reconciliation task failed with err {}", e),
-                Err(e) => tracing::error!("Show reconciliation task panicked: {e}"),
-                Ok(Ok(_)) => tracing::trace!("Joined show reconciliation task"),
-            }
-        }
-
-        Ok(())
-    }
-
-    pub async fn reset_movie_metadata(&self, movie_id: i64) -> Result<(), AppError> {
-        self.partial_refresh().await;
-        let videos = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
-            movie_id
-        )
-            .fetch_all(&self.db.pool).await?;
-        self.db.remove_movie(movie_id).await?;
-        let language: config::MetadataLanguage = config::CONFIG.get_value();
-        let fetch_params = FetchParams { lang: language.0 };
-        let movies = {
-            let library = self.library.lock().unwrap();
-            videos
-                .into_iter()
-                .map(|v| library.get_movie(v.id).unwrap())
-                .collect()
-        };
-        let discover_providers = self.providers_stack.discover_providers();
-        handle_movie(movies, self.db, fetch_params, discover_providers).await?;
-        Ok(())
-    }
-
-    pub async fn fix_show_metadata(
-        &self,
-        show_id: i64,
-        new_metadata: ShowMetadata,
-        fetch_params: FetchParams,
-    ) -> Result<(), AppError> {
-        self.partial_refresh().await;
-        let orphans = sqlx::query!(
-            r#"SELECT videos.id FROM videos 
-JOIN episodes ON episodes.id = videos.episode_id
-JOIN seasons ON seasons.id = episodes.season_id
-WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
-            show_id
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
-        self.db.remove_show(show_id).await?;
-        let orphans: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            orphans
-                .into_iter()
-                .filter_map(|x| library.get_show(x.id))
-                .collect()
-        };
-
-        let local_show_id = {
-            if new_metadata.metadata_provider == MetadataProvider::Local {
-                new_metadata.metadata_id.parse()?
-            } else {
-                let mut external_ids = self
-                    .providers_stack
-                    .get_external_ids(
-                        &new_metadata.metadata_id,
-                        ContentType::Show,
-                        new_metadata.metadata_provider,
-                    )
-                    .await?;
-                let mut ids = Vec::with_capacity(external_ids.len() + 1);
-                ids.push(ExternalIdMetadata {
-                    provider: new_metadata.metadata_provider,
-                    id: new_metadata.metadata_id.clone(),
-                });
-                ids.append(&mut external_ids);
-                match self
-                    .db
-                    .external_to_local_ids(&ids)
-                    .await
-                    .and_then(|x| x.show_id)
-                {
-                    Some(id) => id,
-                    None => {
-                        // We have 2 options here.
-                        // 1. Fetch external'id with given provider and obtain show metadata with
-                        //    respect to providers order
-                        // 2. Fetch show with given provider
-                        let provider = self
-                            .providers_stack
-                            .discover_providers()
-                            .into_iter()
-                            .find(|p| p.provider_identifier() == new_metadata.metadata_provider)
-                            .unwrap();
-                        tracing::info!("Fetching show as new");
-                        handle_show_metadata(self.db, new_metadata, provider).await?
-                    }
-                }
-            }
-        };
-
-        let show_providers = self.providers_stack.show_providers();
-        handle_seasons_and_episodes(
-            self.db,
-            local_show_id,
-            orphans,
-            fetch_params,
-            &show_providers,
-        )
-        .await?;
-
-        Ok(())
-    }
-
-    pub async fn fix_movie_metadata(
-        &self,
-        target_movie_id: i64,
-        new_metadata: MovieMetadata,
-    ) -> Result<(), AppError> {
-        self.partial_refresh().await;
-        let videos = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE movies.id = ?",
-            target_movie_id
-        )
-            .fetch_all(&self.db.pool).await?;
-        self.db.remove_movie(target_movie_id).await?;
-        let movies: Vec<_> = {
-            let library = self.library.lock().unwrap();
-            videos
-                .into_iter()
-                .map(|v| library.get_movie(v.id).unwrap())
-                .collect()
-        };
-        let external_ids = self
-            .providers_stack
-            .get_external_ids(
-                &new_metadata.metadata_id,
-                ContentType::Movie,
-                new_metadata.metadata_provider,
-            )
-            .await?;
-        let item = movies.first().expect("movies are chunked");
-        let duration = item.source.video.fetch_duration().await?;
-        handle_movie_metadata(self.db, new_metadata, movies, external_ids, duration).await?;
-
         Ok(())
     }
 
@@ -647,9 +444,9 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
     pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
         let AppState { db, library, .. } = self;
         let video_ids = sqlx::query!(
-            r#"SELECT min(videos.id) as id FROM episodes
+            r#"SELECT min(videos.id) as "video_id!", episodes.id as "episode_id!" FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
-        JOIN videos ON videos.episode_id = episodes.id
+        JOIN videos ON videos.content_id = episodes.content_id
         WHERE seasons.show_id = ? AND seasons.number = ?
         GROUP BY episodes.id;"#,
             show_id,
@@ -660,11 +457,11 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
         let paths: Vec<_> = {
             let library = library.lock().unwrap();
             let mut paths = Vec::with_capacity(video_ids.len());
-            for id in &video_ids {
+            for row in &video_ids {
                 paths.push(
                     library
                         .videos
-                        .get(&id.id)
+                        .get(&row.video_id)
                         .map(|s| s.source.video.path().to_path_buf())
                         .ok_or(AppError::internal_error("One of the episodes is not found"))?,
                 );
@@ -674,13 +471,13 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
         let intros = crate::intro_detection::intro_detection(paths).await?;
         let mut tx = db.begin().await?;
         for (i, intro) in intros.into_iter().enumerate() {
-            let id = video_ids[i].id;
+            let episode_id = video_ids[i].episode_id;
             if let Some(intro) = intro {
-                if let Err(e) = tx.insert_intro(intro.into_db_intro(id)).await {
-                    tracing::warn!("Failed to insert intro for video id({id}): {e}");
+                if let Err(e) = tx.insert_intro(intro.into_db_intro(episode_id)).await {
+                    tracing::warn!("Failed to insert intro for episode id({episode_id}): {e}");
                 };
             } else {
-                tracing::warn!("Could not detect intro for video with id {id}");
+                tracing::warn!("Could not detect intro for episode with id {episode_id}");
             }
         }
         tx.commit().await?;
@@ -693,10 +490,11 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
 
-        let db_movies_videos =
-            sqlx::query!("SELECT videos.id FROM videos WHERE videos.movie_id NOT NULL;")
-                .fetch_all(&self.db.pool)
-                .await?;
+        let db_movies_videos = sqlx::query!(
+            "SELECT videos.id FROM videos WHERE videos.content_id IN (SELECT movies.content_id FROM movies);"
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
 
         let new_movies = {
             let movies: Vec<_> = {
@@ -761,10 +559,11 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
             tracing::error!("Movie scan failed: {e}");
         };
 
-        let db_episodes_videos =
-            sqlx::query!("SELECT videos.id FROM videos WHERE videos.episode_id NOT NULL;")
-                .fetch_all(&self.db.pool)
-                .await?;
+        let db_episodes_videos = sqlx::query!(
+            "SELECT videos.id FROM videos WHERE videos.content_id IN (SELECT episodes.content_id FROM episodes);"
+        )
+        .fetch_all(&self.db.pool)
+        .await?;
 
         let new_episodes = {
             let episodes: Vec<_> = {
@@ -894,600 +693,6 @@ WHERE seasons.show_id = ? ORDER BY seasons.number;"#,
 
         self.library.lock().unwrap().videos.extend(videos);
     }
-}
-
-/// external to local show id
-async fn crossreference_show(
-    db: &Db,
-    external_metadata: &ShowMetadata,
-) -> anyhow::Result<Option<i64>> {
-    let provider = external_metadata.metadata_provider.to_string();
-    let show_id = sqlx::query!(
-        r#"SELECT show_id as "show_id!" FROM external_ids WHERE show_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
-        provider,
-        external_metadata.metadata_id
-    )
-    .fetch_optional(&db.pool)
-    .await?
-    .map(|r| r.show_id);
-    Ok(show_id)
-}
-
-/// external to local movie id
-async fn crossreference_movie(
-    db: &Db,
-    external_metadata: &MovieMetadata,
-) -> anyhow::Result<Option<i64>> {
-    let provider = external_metadata.metadata_provider.to_string();
-    let movie_id = sqlx::query!(
-        r#"SELECT movie_id as "movie_id!" FROM external_ids WHERE movie_id NOT NULL AND metadata_provider = ? AND metadata_id = ?"#,
-        provider,
-        external_metadata.metadata_id,
-    )
-    .fetch_optional(&db.pool)
-    .await?
-    .map(|r| r.movie_id);
-    Ok(movie_id)
-}
-
-async fn handle_series(
-    item: &LibraryItem<ShowIdentifier>,
-    db: &Db,
-    search_params: FetchParams,
-    providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
-) -> Result<i64, AppError> {
-    // BUG: this will perform search with full text search so for example if we search for Dexter it will
-    // find Dexter: New Blood.
-    let shows = db.search_show(&item.identifier.title).await.unwrap();
-
-    // WARN: This temporary fix will only work if content does not have custom name
-    if shows.is_empty()
-        || shows.first().unwrap().title.split_whitespace().count()
-            != item.identifier.title.split_whitespace().count()
-    {
-        for provider in providers {
-            if provider.provider_identifier() == MetadataProvider::Local {
-                continue;
-            }
-            if let Ok(search_result) = provider
-                .show_search(&item.identifier.title, search_params)
-                .await
-            {
-                let Some(first_result) = search_result.into_iter().next() else {
-                    continue;
-                };
-                let local_id = match crossreference_show(&db, &first_result).await {
-                    Ok(Some(crossreference_id)) => crossreference_id,
-                    Ok(None) | Err(_) => handle_show_metadata(db, first_result, provider).await?,
-                };
-                return Ok(local_id);
-            }
-        }
-        // fallback
-        tracing::warn!("Using show metadata fallback");
-        let id = series_metadata_fallback(db, item).await?;
-        return Ok(id);
-    }
-    let top_search = shows.into_iter().next().expect("shows not empty");
-    Ok(top_search.metadata_id.parse().unwrap())
-}
-
-async fn handle_show_metadata(
-    db: &Db,
-    metadata: ShowMetadata,
-    provider: &(dyn DiscoverMetadataProvider + Send + Sync),
-) -> anyhow::Result<i64> {
-    let external_ids = provider
-        .external_ids(&metadata.metadata_id, ContentType::Show)
-        .await?;
-    let metadata_id = metadata.metadata_id.clone();
-    let metadata_provider = metadata.metadata_provider;
-    let poster_url = metadata.poster.clone();
-    let backdrop_url = metadata.backdrop.clone();
-    let local_id = db.insert_show(&metadata.into()).await.unwrap();
-    let poster_job = poster_url.map(|url| {
-        let poster_asset = PosterAsset::new(local_id, PosterContentType::Show);
-        save_asset_from_url(url.into(), poster_asset)
-    });
-    let backdrop_job = backdrop_url.map(|url| {
-        let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Show);
-        save_asset_from_url(url.into(), backdrop_asset)
-    });
-    let insert_job = db.insert_external_id(DbExternalId {
-        metadata_provider: metadata_provider.to_string(),
-        metadata_id: metadata_id.clone(),
-        show_id: Some(local_id),
-        is_prime: true.into(),
-        ..Default::default()
-    });
-    match (poster_job, backdrop_job) {
-        (Some(poster_job), Some(backdrop_job)) => {
-            let _ = tokio::join!(poster_job, backdrop_job, insert_job);
-        }
-        (Some(poster_job), None) => {
-            let _ = tokio::join!(poster_job, insert_job);
-        }
-        (None, Some(backdrop_job)) => {
-            let _ = tokio::join!(backdrop_job, insert_job);
-        }
-        (None, None) => {
-            let _ = insert_job.await;
-        }
-    }
-
-    for external_id in external_ids {
-        let db_external_id = DbExternalId {
-            metadata_provider: external_id.provider.to_string(),
-            metadata_id: external_id.id,
-            show_id: Some(local_id),
-            is_prime: false.into(),
-            ..Default::default()
-        };
-        if let Err(e) = db.insert_external_id(db_external_id).await {
-            tracing::error!("Failed to insert external id: {e}");
-        };
-    }
-    Ok(local_id)
-}
-
-async fn handle_movie_metadata(
-    db: &Db,
-    metadata: MovieMetadata,
-    movies: Vec<LibraryItem<MovieIdentifier>>,
-    external_ids: Vec<ExternalIdMetadata>,
-    duration: Duration,
-) -> anyhow::Result<i64> {
-    let movie = movies.first().expect("movies are chunked");
-    let metadata_id = metadata.metadata_id.clone();
-    let metadata_provider = metadata.metadata_provider;
-    let poster_url = metadata.poster.clone();
-    let backdrop_url = metadata.backdrop.clone();
-    let db_movie = metadata.into_db_movie(duration);
-    let mut tx = db.begin().await.unwrap();
-    let local_id = tx.insert_movie(db_movie).await.unwrap();
-    for movie in &movies {
-        tx.update_video_movie_id(movie.source.id, local_id)
-            .await
-            .unwrap();
-    }
-    for external_id in external_ids {
-        let db_external_id = DbExternalId {
-            metadata_provider: external_id.provider.to_string(),
-            metadata_id: external_id.id,
-            movie_id: Some(local_id),
-            is_prime: false.into(),
-            ..Default::default()
-        };
-        let _ = tx.insert_external_id(db_external_id).await;
-    }
-    tx.insert_external_id(DbExternalId {
-        metadata_provider: metadata_provider.to_string(),
-        metadata_id: metadata_id.clone(),
-        movie_id: Some(local_id),
-        is_prime: true.into(),
-        ..Default::default()
-    })
-    .await
-    .unwrap();
-    tx.commit().await.unwrap();
-
-    let poster_job = poster_url.map(|url| {
-        let poster_asset = PosterAsset::new(local_id, PosterContentType::Movie);
-        save_asset_from_url_with_frame_fallback(url.into(), poster_asset, &movie.source)
-    });
-    let backdrop_job = backdrop_url.map(|url| {
-        let backdrop_asset = BackdropAsset::new(local_id, BackdropContentType::Movie);
-        save_asset_from_url(url.into(), backdrop_asset)
-    });
-    match (poster_job, backdrop_job) {
-        (Some(poster_job), Some(backdrop_job)) => {
-            let _ = tokio::join!(poster_job, backdrop_job);
-        }
-        (Some(poster_job), None) => {
-            let _ = poster_job.await;
-        }
-        (None, Some(backdrop_job)) => {
-            let _ = backdrop_job.await;
-        }
-        _ => {}
-    }
-
-    Ok(local_id)
-}
-
-async fn handle_seasons_and_episodes(
-    db: &Db,
-    local_show_id: i64,
-    mut show_episodes: Vec<LibraryItem<ShowIdentifier>>,
-    fetch_params: FetchParams,
-    show_providers: &Vec<&'static (dyn ShowMetadataProvider + Send + Sync)>,
-) -> anyhow::Result<()> {
-    show_episodes.sort_unstable_by_key(|x| x.identifier.season);
-    let external_ids = db
-        .external_ids(&local_show_id.to_string(), ContentType::Show)
-        .await
-        .unwrap();
-    let mut seasons_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
-    for mut season_episodes in show_episodes
-        .chunk_by(|a, b| a.identifier.season == b.identifier.season)
-        .map(Vec::from)
-    {
-        let external_ids = external_ids.clone();
-        let show_providers = show_providers.clone();
-        let db = db.clone();
-        seasons_scan_handles.spawn(async move {
-            let season = season_episodes.first().unwrap().clone();
-            let local_season_id = handle_season(
-                local_show_id,
-                external_ids.clone(),
-                season,
-                fetch_params,
-                &db,
-                &show_providers,
-            )
-            .await?;
-            let mut episodes_scan_handles: JoinSet<anyhow::Result<i64>> = JoinSet::new();
-            tracing::debug!("Season's episodes count: {}", season_episodes.len());
-            season_episodes.sort_unstable_by_key(|x| x.identifier.episode);
-            for episode in season_episodes
-                .chunk_by(|a, b| a.identifier.episode == b.identifier.episode)
-                .map(Vec::from)
-            {
-                let db = db.clone();
-                let show_providers = show_providers.clone();
-                let external_ids = external_ids.clone();
-                episodes_scan_handles.spawn(async move {
-                    handle_episode(
-                        local_show_id,
-                        external_ids.clone(),
-                        local_season_id,
-                        episode,
-                        &db,
-                        fetch_params,
-                        &show_providers,
-                    )
-                    .await
-                });
-            }
-
-            while let Some(result) = episodes_scan_handles.join_next().await {
-                match result {
-                    Ok(Err(e)) => {
-                        tracing::error!("Episode reconciliation task failed with err {e}",)
-                    }
-                    Err(e) => tracing::error!("Episode reconciliation task panicked: {e}"),
-                    Ok(Ok(_)) => tracing::trace!("Joined episode reconciliation task"),
-                }
-            }
-
-            Ok(())
-        });
-    }
-
-    while let Some(result) = seasons_scan_handles.join_next().await {
-        match result {
-            Ok(Err(e)) => {
-                tracing::error!("Season Reconciliation task failed with err {}", e)
-            }
-            Err(e) => tracing::error!("Season reconciliation task panicked: {e}"),
-            Ok(Ok(_)) => tracing::trace!("Joined season reconciliation task"),
-        }
-    }
-    Ok(())
-}
-
-async fn handle_season(
-    local_show_id: i64,
-    external_shows_ids: Vec<ExternalIdMetadata>,
-    item: LibraryItem<ShowIdentifier>,
-    fetch_params: FetchParams,
-    db: &Db,
-    providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
-) -> anyhow::Result<i64> {
-    let season = item.identifier.season as usize;
-    let Ok(local_season) = db
-        .season(&local_show_id.to_string(), season, fetch_params)
-        .await
-    else {
-        for provider in providers {
-            let identifier = provider.provider_identifier();
-            if let Some(id) = external_shows_ids
-                .iter()
-                .find(|id| id.provider == identifier)
-            {
-                let Ok(season) = provider.season(&id.id, season, fetch_params).await else {
-                    continue;
-                };
-                let poster = season.poster.clone();
-                let id = db
-                    .insert_season(season.into_db_season(local_show_id))
-                    .await
-                    .unwrap();
-                if let Some(poster) = poster {
-                    let poster_asset = PosterAsset::new(id, PosterContentType::Season);
-                    let _ = save_asset_from_url(poster.into(), poster_asset).await;
-                }
-                return Ok(id);
-            }
-        }
-        // fallback
-        tracing::warn!("Using season metadata fallback");
-        let id = season_metadata_fallback(db, &item, local_show_id).await?;
-        return Ok(id);
-    };
-    Ok(local_season.metadata_id.parse().unwrap())
-}
-
-async fn handle_episode(
-    local_show_id: i64,
-    external_shows_ids: Vec<ExternalIdMetadata>,
-    local_season_id: i64,
-    items: Vec<LibraryItem<ShowIdentifier>>,
-    db: &Db,
-    fetch_params: FetchParams,
-    providers: &Vec<&(dyn ShowMetadataProvider + Send + Sync)>,
-) -> anyhow::Result<i64> {
-    let item = items.first().expect("episodes are chunked");
-    let season = item.identifier.season as usize;
-    let episode = item.identifier.episode as usize;
-    if let Ok(local_id) = db.get_episode_id(local_show_id, season, episode).await {
-        // connect new videos to existing episode
-        let mut tx = db.begin().await?;
-        for item in &items {
-            tx.update_video_episode_id(item.source.id, local_id).await?;
-        }
-        tx.commit().await?;
-        Ok(local_id)
-    } else {
-        tracing::trace!(
-            "Fetching duration for the episode: {}",
-            item.source.video.path().display()
-        );
-        let duration = item.source.video.fetch_duration().await?;
-        for provider in providers {
-            let identifier = provider.provider_identifier();
-            if let Some(id) = external_shows_ids
-                .iter()
-                .find(|id| id.provider == identifier)
-            {
-                let Ok(episode) = provider
-                    .episode(&id.id, season, episode, fetch_params)
-                    .await
-                else {
-                    continue;
-                };
-                let poster = episode.poster.clone();
-                let db_episode = episode.into_db_episode(local_season_id, duration);
-                let mut tx = db.begin().await?;
-                let local_id = tx.insert_episode(&db_episode).await?;
-                for item in &items {
-                    tx.update_video_episode_id(item.source.id, local_id).await?;
-                }
-                tx.commit().await?;
-                if let Some(poster) = poster {
-                    let poster_asset = PosterAsset::new(local_id, PosterContentType::Episode);
-                    let _ = save_asset_from_url_with_frame_fallback(
-                        poster.into(),
-                        poster_asset,
-                        &item.source,
-                    )
-                    .await;
-                }
-                return Ok(local_id);
-            }
-        }
-        // fallback
-        tracing::warn!("Using episode metadata fallback");
-        let id = episode_metadata_fallback(db, item, local_season_id, duration).await?;
-        Ok(id)
-    }
-}
-
-async fn handle_movie(
-    items: Vec<LibraryItem<MovieIdentifier>>,
-    db: &Db,
-    fetch_params: FetchParams,
-    providers: Vec<&(dyn DiscoverMetadataProvider + Send + Sync)>,
-) -> Result<i64, AppError> {
-    let item = items.first().expect("movies are chunked");
-    let db_movies = db.search_movie(&item.identifier.title).await?;
-    let duration = item.source.video.fetch_duration().await?;
-    if db_movies.is_empty()
-        || db_movies.first().unwrap().title.split_whitespace().count()
-            != item.identifier.title.split_whitespace().count()
-    {
-        for provider in providers {
-            if let Ok(search_result) = provider
-                .movie_search(&item.identifier.title, fetch_params)
-                .await
-            {
-                let Some(first_result) = search_result.into_iter().next() else {
-                    continue;
-                };
-                let local_id = match crossreference_movie(db, &first_result).await {
-                    Ok(Some(local_id)) => {
-                        tracing::debug!(movie_title = first_result.title, "Using local movie ref");
-                        let mut tx = db.begin().await.unwrap();
-                        for movie in &items {
-                            tx.update_video_movie_id(movie.source.id, local_id)
-                                .await
-                                .unwrap();
-                        }
-                        tx.commit().await?;
-                        local_id
-                    }
-                    Ok(None) | Err(_) => {
-                        // save poster, backdrop and mutate result's urls to local,
-                        // leave original url in if saving fails
-                        let external_ids = provider
-                            .external_ids(&first_result.metadata_id, ContentType::Movie)
-                            .await
-                            .unwrap_or_default();
-                        handle_movie_metadata(db, first_result, items, external_ids, duration)
-                            .await?
-                    }
-                };
-                return Ok(local_id);
-            }
-        }
-        let id = movie_metadata_fallback(db, item, duration).await?;
-        return Ok(id);
-    };
-    Ok(db_movies.first().unwrap().metadata_id.parse().unwrap())
-}
-
-pub async fn series_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-) -> anyhow::Result<i64> {
-    let show_fallback = DbShow {
-        id: None,
-        poster: None,
-        backdrop: None,
-        plot: None,
-        release_date: None,
-        original_language: None,
-        original_title: None,
-        title: file.identifier.title.to_string(),
-    };
-    let video_metadata = file.source.video.metadata().await?;
-    let id = db.insert_show(&show_fallback).await.unwrap();
-    let _ = db
-        .insert_external_id(DbExternalId {
-            metadata_provider: MetadataProvider::Local.to_string(),
-            metadata_id: id.to_string(),
-            show_id: Some(id),
-            is_prime: true.into(),
-            ..Default::default()
-        })
-        .await;
-    let poster_asset = PosterAsset::new(id, PosterContentType::Show);
-    fs::create_dir_all(poster_asset.path().parent().unwrap())
-        .await
-        .unwrap();
-    let _ = ffmpeg::pull_frame(
-        file.source.video.path(),
-        poster_asset.path(),
-        video_metadata.duration() / 2,
-    )
-    .await;
-    Ok(id)
-}
-
-pub async fn season_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-    show_id: i64,
-) -> anyhow::Result<i64> {
-    let fallback_season = DbSeason {
-        number: file.identifier.season.into(),
-        show_id,
-        id: None,
-        release_date: None,
-        plot: None,
-        title: None,
-        poster: None,
-    };
-    let id = db.insert_season(fallback_season).await?;
-    Ok(id)
-}
-
-pub async fn episode_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-    season_id: i64,
-    duration: Duration,
-) -> anyhow::Result<i64> {
-    let mut tx = db.begin().await?;
-    let fallback_episode = DbEpisode {
-        release_date: None,
-        plot: None,
-        poster: None,
-        number: file.identifier.episode.into(),
-        title: format!("Episode {}", file.identifier.episode),
-        id: None,
-        duration: duration.as_secs() as i64,
-        season_id,
-    };
-    let video_metadata = file.source.video.metadata().await?;
-    let id = tx.insert_episode(&fallback_episode).await?;
-    tx.update_video_episode_id(file.source.id, id).await?;
-    tx.commit().await?;
-    let poster_asset = PosterAsset::new(id, PosterContentType::Episode);
-    fs::create_dir_all(poster_asset.path().parent().unwrap())
-        .await
-        .unwrap();
-    let _ = ffmpeg::pull_frame(
-        file.source.video.path(),
-        poster_asset.path(),
-        video_metadata.duration() / 2,
-    )
-    .await;
-    Ok(id)
-}
-
-pub async fn movie_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<MovieIdentifier>,
-    duration: Duration,
-) -> anyhow::Result<i64> {
-    let mut chars = file.identifier.title.chars();
-    let first_letter = chars.next().and_then(|c| c.to_uppercase().next());
-    let title = first_letter.into_iter().chain(chars).collect();
-    let fallback_movie = DbMovie {
-        id: None,
-        poster: None,
-        backdrop: None,
-        plot: None,
-        release_date: None,
-        original_language: None,
-        original_title: None,
-        duration: duration.as_secs() as i64,
-        title,
-    };
-    let mut tx = db.begin().await?;
-    let id = tx.insert_movie(fallback_movie).await?;
-
-    let poster_asset = PosterAsset::new(id, PosterContentType::Movie);
-    fs::create_dir_all(poster_asset.path().parent().unwrap()).await?;
-    if let Err(e) =
-        ffmpeg::pull_frame(file.source.video.path(), poster_asset.path(), duration / 2).await
-    {
-        tracing::warn!("Failed to create video thumbnail: {e}");
-    };
-    Ok(id)
-}
-
-pub(crate) async fn save_asset_from_url(
-    url: reqwest::Url,
-    asset: impl FileAsset,
-) -> anyhow::Result<()> {
-    use std::io::{Error, ErrorKind};
-    use tokio_stream::StreamExt;
-    use tokio_util::io::StreamReader;
-
-    let response = reqwest::get(url).await?;
-    let stream = response
-        .bytes_stream()
-        .map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
-    let mut stream_reader = StreamReader::new(stream);
-    asset.save_from_reader(&mut stream_reader).await?;
-    Ok(())
-}
-
-async fn save_asset_from_url_with_frame_fallback(
-    url: reqwest::Url,
-    asset: impl FileAsset,
-    source: &Source,
-) -> anyhow::Result<()> {
-    let asset_path = asset.path();
-    let video_duration = source.video.metadata().await?.duration();
-    if let Err(e) = save_asset_from_url(url, asset).await {
-        tracing::warn!("Failed to save image, pulling frame: {e}");
-        fs::create_dir_all(asset_path.parent().unwrap()).await?;
-        ffmpeg::pull_frame(source.video.path(), asset_path, video_duration / 2).await?;
-    }
-    Ok(())
 }
 
 impl FromRef<AppState> for &'static Mutex<Library> {

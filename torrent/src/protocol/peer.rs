@@ -393,12 +393,12 @@ impl ExtensionHandshake {
             })
     }
 
-    /// Pex's extenison id if handshake supports it
+    /// Pex's extension id if handshake supports it
     pub fn pex_id(&self) -> Option<u8> {
         self.dict.get("ut_pex").copied()
     }
 
-    /// Ut_metadata's extenison id if handshake supports it
+    /// Ut_metadata's extension id if handshake supports it
     pub fn ut_metadata_id(&self) -> Option<u8> {
         self.dict.get("ut_metadata").copied()
     }

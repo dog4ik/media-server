@@ -3,29 +3,29 @@ use std::{collections::HashMap, time::Duration};
 use serde::Serialize;
 
 use crate::{
+    api::{
+        api_data::{LocalDataLookup, api_types::History},
+        server::Intro,
+    },
     metadata::{
         EpisodeMetadata, LocaleMetadata, MetadataImage, MetadataProvider, SeasonMetadata,
         ShowMetadata,
-    },
-    server::{
-        api_data::{LocalDataLookup, api_types::History},
-        server_api::Intro,
     },
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalShowData {
-    pub local_id: i64,
+    pub id: i64,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalSeasonData {
-    pub local_id: i64,
+    pub id: i64,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalEpisodeData {
-    pub local_id: i64,
+    pub id: i64,
     pub history: Option<super::api_types::History>,
     pub intro: Option<Intro>,
 }
@@ -116,12 +116,11 @@ impl Season {
             "select episodes.id,
             external_ids.metadata_id, external_ids.metadata_provider,
             history.id as history_id, history.time, history.update_time, history.is_finished,
-            episode_intro.id, episode_intro.start_sec, episode_intro.end_sec
+            intros.id as intro_id, intros.start_sec, intros.end_sec
             from external_ids
-            join episodes on episodes.id = external_ids.episode_id
-            join videos on videos.episode_id = episodes.id
-            left join history on history.video_id = videos.id
-            left join episode_intro on episode_intro.video_id = videos.id
+            join episodes on episodes.content_id = external_ids.content_id
+            left join intros on intros.episode_id = episodes.id
+            left join history on history.content_id = episodes.content_id
             where (external_ids.metadata_provider, external_ids.metadata_id) in",
         )
         .push_tuples(meta.episodes.iter(), |mut b, meta| {
@@ -136,7 +135,7 @@ impl Season {
             (
                 (r.metadata_provider, r.metadata_id),
                 LocalEpisodeData {
-                    local_id: r.id,
+                    id: r.id,
                     history: r.history_id.map(|id| History {
                         id,
                         time: r.time.unwrap(),
@@ -162,10 +161,8 @@ impl Season {
                 season_number: episode_meta.season_number,
                 runtime: episode_meta.runtime,
                 poster: episode_meta.poster,
-                local: local_episodes.remove(&(
-                    episode_meta.metadata_provider,
-                    episode_meta.metadata_id,
-                )),
+                local: local_episodes
+                    .remove(&(episode_meta.metadata_provider, episode_meta.metadata_id)),
             };
             episodes.push(local_episode);
         }
@@ -193,6 +190,7 @@ pub struct Episode {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
+    #[schema(value_type = Option<crate::api::SerdeDuration>)]
     pub runtime: Option<Duration>,
     pub poster: Option<MetadataImage>,
     pub local: Option<LocalEpisodeData>,

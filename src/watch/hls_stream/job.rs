@@ -133,7 +133,7 @@ pub async fn start(
     let playlist = if video_codec_copy {
         match keyframe::retrieve_keyframes(&args.video_path, args.video_track_idx).await {
             Ok(k) => {
-                tracing::debug!("Exracted {} keyframes", k.key_frames.len());
+                tracing::debug!("Extracted {} keyframes", k.key_frames.len());
                 M3U8Manifest::from_keyframes(k, &args.task_id, duration)
             }
             Err(e) => {

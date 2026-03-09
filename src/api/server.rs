@@ -20,26 +20,26 @@ use base64::Engine;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use time::OffsetDateTime;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
-use super::{
-    ContentTypeQuery, OptionalContentTypeQuery, OptionalUuidQuery, ProviderQuery, StringIdQuery,
-};
-use super::{CursorQuery, IdQuery, NumberQuery, SearchQuery, TakeParam, VariantQuery};
+use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
+use super::{IdQuery, NumberQuery, SearchQuery, VariantQuery};
+use crate::api::api_data::LocalDataLookup;
+use crate::api::api_data::local_movie::Movie;
+use crate::api::api_data::local_show::{Episode, Season, Show};
+use crate::api::{self, OptionalTorrentIndexQuery, Path, Query};
 use crate::app_state::AppError;
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
 };
+use crate::db::DbExternalId;
 use crate::db::{self, DbActions};
-use crate::db::{DbExternalId, DbHistory};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
-use crate::file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey};
 use crate::intro_detection::IntroJob;
 use crate::library::assets::{
     self, BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType,
@@ -56,13 +56,9 @@ use crate::metadata::{
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
-use crate::server::api_data::LocalDataLookup;
-use crate::server::api_data::local_movie::Movie;
-use crate::server::api_data::local_show::{Episode, Season, Show};
-use crate::server::{OptionalTorrentIndexQuery, Path, Query};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::watch::hls_stream::HlsStreamConfiguration;
-use crate::watch::{ClientType, WatchIdentifier, WatchProgress, WatchTask};
+use crate::watch::{ClientType, WatchIdentifier, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -82,7 +78,7 @@ pub struct DetailedVideo {
     pub path: PathBuf,
     pub previews_count: usize,
     pub size: u64,
-    #[schema(value_type = super::SerdeDuration)]
+    #[schema(value_type = api::SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
@@ -90,8 +86,6 @@ pub struct DetailedVideo {
     pub variants: Vec<DetailedVariant>,
     #[serde(with = "time::serde::rfc3339")]
     pub scan_date: time::OffsetDateTime,
-    pub history: Option<DbHistory>,
-    pub intro: Option<Intro>,
     pub chapters: Vec<DetailedChapter>,
     pub subtitles: Vec<DetailedSubtitlesAsset>,
     pub container: VideoContainer,
@@ -103,7 +97,7 @@ pub struct DetailedVariant {
     #[schema(value_type = String)]
     pub path: PathBuf,
     pub size: u64,
-    #[schema(value_type = super::SerdeDuration)]
+    #[schema(value_type = api::SerdeDuration)]
     pub duration: std::time::Duration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
@@ -152,9 +146,9 @@ pub struct Intro {
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedChapter {
-    #[schema(value_type = crate::server::SerdeDuration)]
+    #[schema(value_type = crate::api::SerdeDuration)]
     pub start: std::time::Duration,
-    #[schema(value_type = crate::server::SerdeDuration)]
+    #[schema(value_type = crate::api::SerdeDuration)]
     pub end: std::time::Duration,
     pub title: Option<String>,
 }
@@ -164,12 +158,9 @@ impl DetailedVideo {
         let id = source.id;
 
         let db_video = sqlx::query!(
-            r#"SELECT videos.scan_date, videos.path, history.time,
-        history.id, history.update_time, history.is_finished,
-        episode_intro.start_sec, episode_intro.end_sec
+            r#"SELECT videos.scan_date, videos.path, videos.content_id AS video_content_id
         FROM videos
-        LEFT JOIN history ON history.video_id = videos.id
-        LEFT JOIN episode_intro ON episode_intro.video_id = videos.id
+        LEFT JOIN episodes ON episodes.content_id = videos.content_id
         WHERE videos.id = ?;"#,
             id
         )
@@ -226,23 +217,6 @@ impl DetailedVideo {
 
         let date = db_video.scan_date.expect("scan date always defined");
 
-        let history = db_video
-            .time
-            .zip(db_video.is_finished)
-            .zip(db_video.update_time)
-            .map(|((time, is_finished), update_time)| DbHistory {
-                id: Some(db_video.id),
-                time,
-                is_finished,
-                update_time,
-                video_id: db_video.id,
-            });
-
-        let intro = db_video
-            .start_sec
-            .zip(db_video.end_sec)
-            .map(|(start_sec, end_sec)| Intro { start_sec, end_sec });
-
         let previews_count = PreviewsDirAsset::new(id).previews_count();
 
         Ok(DetailedVideo {
@@ -269,8 +243,6 @@ impl DetailedVideo {
                 .map(Into::into)
                 .collect(),
             chapters: video_metadata.chapters().iter().map(Into::into).collect(),
-            history,
-            intro,
             subtitles,
             container: source.video.container(),
         })
@@ -406,7 +378,7 @@ impl DetailedVariant {
 #[serde(tag = "content_type", rename_all = "lowercase")]
 pub enum VideoContentMetadata {
     Episode { show: Show, episode: Episode },
-    Movie { movie: MovieMetadata },
+    Movie { movie: Movie },
 }
 
 /// Get metadata related to the video
@@ -440,7 +412,7 @@ pub async fn video_content_metadata(
         ContentIdentifier::Show(_) => {
             let query = sqlx::query!(
                 r#"SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM videos
-            JOIN episodes ON episodes.id = videos.episode_id
+            JOIN episodes ON episodes.content_id = videos.content_id
             JOIN seasons ON seasons.id = episodes.season_id WHERE videos.id = ?;"#,
                 video_id
             )
@@ -457,8 +429,7 @@ pub async fn video_content_metadata(
         }
         ContentIdentifier::Movie(_) => {
             let query = sqlx::query!(
-                r#"SELECT movies.id FROM videos JOIN movies ON movies.id = videos.movie_id WHERE videos.id = ?;
-                "#,
+                "SELECT movies.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE videos.id = ?;",
                 video_id
             )
             .fetch_one(&db.pool)
@@ -787,10 +758,13 @@ pub async fn watch_episode(
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let video_id = sqlx::query!("SELECT id FROM videos WHERE episode_id = ?;", episode_id)
-        .fetch_one(&state.db.pool)
-        .await?
-        .id;
+    let video_id = sqlx::query!(
+        "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?;",
+        episode_id
+    )
+    .fetch_one(&state.db.pool)
+    .await?
+    .id;
 
     watch(Path(video_id), variant, State(state), range).await
 }
@@ -815,10 +789,13 @@ pub async fn watch_movie(
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
-    let video_id = sqlx::query!("SELECT id FROM videos WHERE movie_id = ?;", movie_id)
-        .fetch_one(&state.db.pool)
-        .await?
-        .id;
+    let video_id = sqlx::query!(
+        "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?;",
+        movie_id
+    )
+    .fetch_one(&state.db.pool)
+    .await?
+    .id;
     watch(Path(video_id), variant, State(state), range).await
 }
 
@@ -872,8 +849,8 @@ pub async fn local_episode_by_video_id(
     State(db): State<Db>,
 ) -> Result<Json<Episode>, AppError> {
     let episode_id = sqlx::query!(
-        r#"SELECT videos.episode_id as "episode_id!: i64"
-    FROM videos WHERE id = ? AND videos.episode_id NOT NULL"#,
+        r#"SELECT episodes.id as "episode_id!: i64"
+    FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE videos.id = ?"#,
         id
     )
     .fetch_one(&db.pool)
@@ -888,7 +865,7 @@ pub async fn local_episode_by_video_id(
         IdQuery,
     ),
     responses(
-        (status = 200, description = "Local movie", body = MovieMetadata),
+        (status = 200, description = "Local movie", body = Movie),
     ),
     tag = "Movies",
 )]
@@ -896,10 +873,13 @@ pub async fn local_episode_by_video_id(
 pub async fn local_movie_by_video_id(
     Query(IdQuery { id }): Query<IdQuery>,
     State(db): State<Db>,
-) -> Result<Json<MovieMetadata>, AppError> {
-    let movie_id = sqlx::query!(r#"SELECT movie_id as "movie_id!: i64" FROM videos WHERE id = ? AND videos.movie_id NOT NULL"#, id)
-        .fetch_one(&db.pool)
-        .await?;
+) -> Result<Json<Movie>, AppError> {
+    let movie_id = sqlx::query!(
+        r#"SELECT movies.id as "movie_id!: i64" FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE videos.id = ?"#,
+        id
+    )
+    .fetch_one(&db.pool)
+    .await?;
     Ok(Json(db.get_movie(movie_id.movie_id).await?))
 }
 
@@ -1000,14 +980,22 @@ pub async fn contents_video(
 
     let video_ids = match content_type.content_type {
         crate::metadata::ContentType::Movie => {
-            sqlx::query_as!(VideoId, "SELECT id FROM videos WHERE movie_id = ?", id)
-                .fetch_all(&state.db.pool)
-                .await
+            sqlx::query_as!(
+                VideoId,
+                "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?",
+                id
+            )
+            .fetch_all(&state.db.pool)
+            .await
         }
         crate::metadata::ContentType::Show => {
-            sqlx::query_as!(VideoId, "SELECT id FROM videos WHERE episode_id = ?", id)
-                .fetch_all(&state.db.pool)
-                .await
+            sqlx::query_as!(
+                VideoId,
+                "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+                id
+            )
+            .fetch_all(&state.db.pool)
+            .await
         }
     }?;
 
@@ -1122,18 +1110,20 @@ pub async fn get_show(
         ProviderQuery,
     ),
     responses(
-        (status = 200, description = "Requested movie", body = MovieMetadata),
+        (status = 200, description = "Requested movie", body = Movie),
         (status = 404, body = AppError)
     ),
     tag = "Movies",
 )]
 pub async fn get_movie(
     State(providers): State<&'static MetadataProvidersStack>,
+    State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
-) -> Result<Json<MovieMetadata>, AppError> {
+) -> Result<Json<Movie>, AppError> {
     let res = providers.get_movie(&id, provider).await?;
-    Ok(Json(res))
+    let extended_movie = Movie::extend_with_lookup(res, LocalDataLookup::new(db)).await?;
+    Ok(Json(extended_movie))
 }
 
 /// Get show poster
@@ -1472,217 +1462,6 @@ pub async fn search_content(
     Ok(Json(res))
 }
 
-/// Get history for specific video
-#[utoipa::path(
-    get,
-    path = "/api/history/{id}",
-    params(
-        ("id", description = "Video id"),
-    ),
-    responses(
-        (status = 200, description = "History of desired video", body = Vec<DbHistory>),
-        (status = 404),
-    ),
-    tag = "History",
-)]
-pub async fn video_history(
-    Path(video_id): Path<i64>,
-    State(db): State<Db>,
-) -> Result<Json<DbHistory>, AppError> {
-    let history = sqlx::query_as!(
-        DbHistory,
-        "SELECT * FROM history WHERE video_id = ?;",
-        video_id
-    )
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(Json(history))
-}
-
-/// Get all watch history of the default user. Limit defaults to 50 if not specified
-#[utoipa::path(
-    get,
-    path = "/api/history",
-    responses(
-        (status = 200, description = "All history", body = CursoredResponse<DbHistory>),
-    ),
-    params(
-        TakeParam,
-        CursorQuery,
-    ),
-    tag = "History",
-)]
-pub async fn all_history(
-    Query(TakeParam { take }): Query<TakeParam>,
-    Query(CursorQuery { cursor }): Query<CursorQuery>,
-    State(db): State<Db>,
-) -> Result<Json<CursoredResponse<DbHistory>>, AppError> {
-    let take = take.unwrap_or(50) as i64;
-    let cursor: Option<i64> = cursor
-        .map(|x| {
-            x.parse()
-                .map_err(|_| AppError::bad_request("invalid cursor"))
-        })
-        .transpose()?;
-    let history = match cursor {
-        Some(cursor) => {
-            tracing::trace!("Getting history with cursor");
-            sqlx::query_as!(
-                DbHistory,
-                "SELECT * FROM history WHERE update_time < datetime(?, 'unixepoch') ORDER BY update_time DESC LIMIT ?;",
-                cursor,
-                take,
-            )
-            .fetch_all(&db.pool)
-            .await?
-        }
-        None => {
-            tracing::trace!("Getting history without cursor");
-            sqlx::query_as!(
-                DbHistory,
-                "SELECT * FROM history ORDER BY update_time DESC LIMIT ?;",
-                take,
-            )
-            .fetch_all(&db.pool)
-            .await?
-        }
-    };
-    let cursor = history.last().map(|x| {
-        let date = x.update_time;
-        date.unix_timestamp()
-    });
-    let response = CursoredResponse::new(history, cursor);
-    Ok(Json(response))
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct MovieHistory {
-    pub movie: MovieMetadata,
-    pub history: DbHistory,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct ShowHistory {
-    pub show_id: i64,
-    pub episode: EpisodeMetadata,
-    pub history: DbHistory,
-}
-
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum HistoryEntry {
-    Show { show: ShowHistory },
-    Movie { movie: MovieHistory },
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct ShowSuggestion {
-    pub show_id: i64,
-    pub episode: Episode,
-    pub history: Option<DbHistory>,
-}
-
-/// Suggest to continue watching up to 3 movies based on history
-#[utoipa::path(
-    get,
-    path = "/api/history/suggest/movies",
-    responses(
-        (status = 200, description = "Suggested movies", body = Vec<MovieHistory>),
-    ),
-    tag = "History",
-)]
-pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
-    let history = sqlx::query!(
-        r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
-        history.video_id AS video_id, movies.id AS movie_id FROM history
-    JOIN videos ON videos.id = history.video_id
-    JOIN movies ON movies.id = videos.movie_id WHERE history.is_finished = false
-    ORDER BY history.update_time DESC LIMIT 3;"#
-    )
-    .fetch_all(&db.pool)
-    .await?;
-
-    let mut movie_suggestions = Vec::with_capacity(history.len());
-    for entry in history {
-        let Ok(movie_metadata) = db.get_movie(entry.movie_id).await else {
-            tracing::error!("Failed to get movie connected to the history");
-            continue;
-        };
-        movie_suggestions.push(MovieHistory {
-            history: DbHistory {
-                id: Some(entry.history_id),
-                time: entry.time,
-                is_finished: entry.is_finished,
-                update_time: entry.update_time,
-                video_id: entry.video_id,
-            },
-            movie: movie_metadata,
-        });
-    }
-    Ok(Json(movie_suggestions))
-}
-
-/// Suggest to continue watching up to 3 shows based on history
-#[utoipa::path(
-    get,
-    path = "/api/history/suggest/shows",
-    responses(
-        (status = 200, description = "Suggested shows", body = Vec<ShowSuggestion>),
-    ),
-    tag = "History",
-)]
-pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
-    let history = sqlx::query!(
-        r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
-        history.video_id AS video_id, episodes.number AS episode_number, seasons.show_id AS show_id,
-        seasons.number AS season_number FROM history
-    JOIN videos ON videos.id = history.video_id
-    JOIN episodes ON episodes.id = videos.episode_id
-    JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
-    ORDER BY history.update_time DESC LIMIT 50;"#
-    )
-    .fetch_all(&db.pool)
-    .await?;
-    let mut show_suggestions: Vec<ShowSuggestion> = Vec::with_capacity(3);
-    for entry in history {
-        if show_suggestions
-            .iter()
-            .map(|x| x.show_id)
-            .any(|id| id == entry.show_id)
-        {
-            continue;
-        };
-        let Ok(episode_metadata) = db
-            .get_episode(
-                entry.show_id,
-                entry.season_number as usize,
-                entry.episode_number as usize,
-            )
-            .await
-        else {
-            tracing::error!("Failed to get episode connected to the history");
-            continue;
-        };
-        show_suggestions.push(ShowSuggestion {
-            history: Some(DbHistory {
-                id: Some(entry.history_id),
-                time: entry.time,
-                is_finished: entry.is_finished,
-                update_time: entry.update_time,
-                video_id: entry.video_id,
-            }),
-            show_id: entry.show_id,
-            episode: episode_metadata,
-        });
-
-        if show_suggestions.len() == 3 {
-            break;
-        }
-    }
-
-    Ok(Json(show_suggestions))
-}
-
 /// Debug library files
 pub async fn library_state(
     State(app_state): State<AppState>,
@@ -1920,7 +1699,7 @@ pub async fn alter_show_metadata(
     Json(metadata): Json<ShowMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE shows SET title = ?, plot = ? WHERE id = ?;",
+        "UPDATE content SET title = ?, plot = ? WHERE id = (SELECT content_id FROM shows WHERE id = ?);",
         metadata.title,
         metadata.plot,
         show_id
@@ -1951,7 +1730,7 @@ pub async fn alter_season_metadata(
     Json(metadata): Json<SeasonMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE seasons SET plot = ? WHERE show_id = ? AND number = ?;",
+        "UPDATE content SET plot = ? WHERE id = (SELECT content_id FROM seasons WHERE show_id = ? AND number = ?);",
         metadata.plot,
         show_id,
         season
@@ -1983,8 +1762,12 @@ pub async fn alter_episode_metadata(
     Json(metadata): Json<EpisodeMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        r#"UPDATE episodes SET title = ?, plot = ?
-        FROM seasons WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
+        r#"UPDATE content SET title = ?, plot = ?
+        WHERE id = (
+            SELECT episodes.content_id FROM episodes
+            JOIN seasons ON seasons.id = episodes.season_id
+            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?
+        );"#,
         metadata.title,
         metadata.plot,
         show_id,
@@ -2016,7 +1799,7 @@ pub async fn alter_movie_metadata(
     Json(metadata): Json<MovieMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE movies SET title = ?, plot = ? WHERE id = ?;",
+        "UPDATE content SET title = ?, plot = ? WHERE id = (SELECT content_id FROM movies WHERE id = ?);",
         metadata.title,
         metadata.plot,
         id
@@ -2041,18 +1824,8 @@ pub async fn alter_movie_metadata(
     ),
     tag = "Shows",
 )]
-pub async fn fix_show_metadata(
-    State(app_state): State<AppState>,
-    Path(show_id): Path<i64>,
-    Query(provider_query): Query<ProviderQuery>,
-    Query(new_id): Query<StringIdQuery>,
-) -> Result<(), AppError> {
-    let show = app_state
-        .providers_stack
-        .get_show(&new_id.id, provider_query.provider)
-        .await?;
-    let params = app_state.metadata_fetch_params();
-    app_state.fix_show_metadata(show_id, show, params).await
+pub async fn fix_show_metadata() -> Result<(), AppError> {
+    unimplemented!("Fixing show metadata is unimplemented");
 }
 
 /// Fix movie metadata match
@@ -2070,17 +1843,8 @@ pub async fn fix_show_metadata(
     ),
     tag = "Movies",
 )]
-pub async fn fix_movie_metadata(
-    State(app_state): State<AppState>,
-    Path(movie_id): Path<i64>,
-    Query(provider_query): Query<ProviderQuery>,
-    Query(new_id): Query<StringIdQuery>,
-) -> Result<(), AppError> {
-    let movie = app_state
-        .providers_stack
-        .get_movie(&new_id.id, provider_query.provider)
-        .await?;
-    app_state.fix_movie_metadata(movie_id, movie).await
+pub async fn fix_movie_metadata() -> Result<(), AppError> {
+    unimplemented!("Fixing movie metadata is not implemented")
 }
 
 /// Fix metadata match
@@ -2099,30 +1863,8 @@ pub async fn fix_movie_metadata(
     ),
     tag = "Metadata",
 )]
-pub async fn fix_metadata(
-    Path(content_id): Path<i64>,
-    State(app_state): State<AppState>,
-    Query(provider_query): Query<ProviderQuery>,
-    Query(content_type_query): Query<ContentTypeQuery>,
-    Query(new_id): Query<StringIdQuery>,
-) -> Result<(), AppError> {
-    let params = app_state.metadata_fetch_params();
-    match content_type_query.content_type {
-        ContentType::Movie => {
-            let movie = app_state
-                .providers_stack
-                .get_movie(&new_id.id, provider_query.provider)
-                .await?;
-            app_state.fix_movie_metadata(content_id, movie).await
-        }
-        ContentType::Show => {
-            let show = app_state
-                .providers_stack
-                .get_show(&new_id.id, provider_query.provider)
-                .await?;
-            app_state.fix_show_metadata(content_id, show, params).await
-        }
-    }
+pub async fn fix_metadata() -> Result<(), AppError> {
+    unimplemented!("fixing metadata is not yet implemented");
 }
 
 /// Reset show metadata
@@ -2133,16 +1875,13 @@ pub async fn fix_metadata(
         ("show_id", description = "Id of the show that needs to be fixed"),
     ),
     responses(
-        (status = 200, description = "Succsessfully reset show metadata"),
+        (status = 200, description = "Successfully reset show metadata"),
         (status = 404, description = "Show is not found", body = AppError),
     ),
     tag = "Shows",
 )]
-pub async fn reset_show_metadata(
-    Path(show_id): Path<i64>,
-    State(app_state): State<AppState>,
-) -> Result<(), AppError> {
-    app_state.reset_show_metadata(show_id).await
+pub async fn reset_show_metadata() -> Result<(), AppError> {
+    unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Reset movie metadata
@@ -2157,11 +1896,8 @@ pub async fn reset_show_metadata(
     ),
     tag = "Movies",
 )]
-pub async fn reset_movie_metadata(
-    Path(movie_id): Path<i64>,
-    State(app_state): State<AppState>,
-) -> Result<(), AppError> {
-    app_state.reset_movie_metadata(movie_id).await
+pub async fn reset_movie_metadata() -> Result<(), AppError> {
+    unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Reset content's metadata
@@ -2178,15 +1914,8 @@ pub async fn reset_movie_metadata(
     ),
     tag = "Metadata",
 )]
-pub async fn reset_metadata(
-    Path(content_id): Path<i64>,
-    Query(content_type_query): Query<ContentTypeQuery>,
-    State(app_state): State<AppState>,
-) -> Result<(), AppError> {
-    match content_type_query.content_type {
-        ContentType::Movie => app_state.reset_movie_metadata(content_id).await,
-        ContentType::Show => app_state.reset_show_metadata(content_id).await,
-    }
+pub async fn reset_metadata() -> Result<(), AppError> {
+    unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Start transcode video job
@@ -2615,245 +2344,6 @@ pub async fn get_providers_order(
     })
 }
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
-pub struct UpdateHistoryPayload {
-    time: i64,
-    is_finished: bool,
-}
-
-/// Update history entry
-#[utoipa::path(
-    put,
-    path = "/api/history/{id}",
-    params(
-        ("id", description = "History id"),
-        OptionalUuidQuery,
-    ),
-    request_body = UpdateHistoryPayload,
-    responses(
-        (status = 200, description = "History update is successful"),
-        (status = 404, description = "History entry is not found", body = AppError),
-    ),
-    tag = "History",
-)]
-pub async fn update_history(
-    State(app_state): State<AppState>,
-    Path(id): Path<i64>,
-    Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
-    Json(payload): Json<UpdateHistoryPayload>,
-) -> Result<(), AppError> {
-    let update_time = OffsetDateTime::now_utc();
-    let db = app_state.db;
-    tracing::trace!(
-        history_id = id,
-        time = payload.time,
-        "Updating history entry"
-    );
-    let video_id = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING video_id;",
-        payload.time,
-        payload.is_finished,
-        update_time,
-        id,
-    )
-    .fetch_one(&db.pool)
-    .await?
-    .video_id;
-    if let Some(task_id) = task_id {
-        let watch_sessions = &app_state.tasks.watch_sessions;
-        let current_time = std::time::Duration::from_secs(payload.time as u64);
-        let identifier = WatchIdentifier { video_id };
-        let progress = WatchProgress { current_time };
-        watch_sessions.send_progress(
-            task_id,
-            crate::progress::ProgressChunk {
-                identifier,
-                status: crate::progress::ProgressStatus::Pending { progress },
-            },
-        );
-    }
-    Ok(())
-}
-
-/// Delete all history for the default user
-#[utoipa::path(
-    delete,
-    path = "/api/history",
-    responses(
-        (status = 200),
-    ),
-    tag = "History",
-)]
-pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
-    sqlx::query!("DELETE FROM history")
-        .execute(&db.pool)
-        .await?;
-    Ok(())
-}
-
-/// Delete history entry
-#[utoipa::path(
-    delete,
-    path = "/api/history/{id}",
-    params(
-        ("id", description = "History id"),
-    ),
-    responses(
-        (status = 200, description = "Successfully removed history item"),
-        (status = 404, description = "History entry is not found", body = AppError),
-    ),
-    tag = "History",
-)]
-pub async fn remove_history_item(
-    State(db): State<Db>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
-    sqlx::query!("DELETE FROM history WHERE id = ?;", id)
-        .execute(&db.pool)
-        .await?;
-    Ok(())
-}
-
-/// Update/Insert video history
-#[utoipa::path(
-    put,
-    path = "/api/video/{id}/history",
-    params(
-        ("id", description = "Video id"),
-        OptionalUuidQuery,
-    ),
-    request_body = UpdateHistoryPayload,
-    responses(
-        (status = 200, description = "History entry is updated"),
-        (status = 201, description = "History is created"),
-        (status = 404, description = "Video is not found", body = AppError),
-    ),
-    tag = "Videos",
-)]
-pub async fn update_video_history(
-    State(app_state): State<AppState>,
-    Path(id): Path<i64>,
-    Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
-    Json(payload): Json<UpdateHistoryPayload>,
-) -> Result<StatusCode, AppError> {
-    let db = app_state.db;
-    if let Some(task_id) = task_id {
-        let watch_sessions = &app_state.tasks.watch_sessions;
-        let current_time = std::time::Duration::from_secs(payload.time as u64);
-        let identifier = WatchIdentifier { video_id: id };
-        let progress = WatchProgress { current_time };
-        watch_sessions.send_progress(
-            task_id,
-            crate::progress::ProgressChunk {
-                identifier,
-                status: crate::progress::ProgressStatus::Pending { progress },
-            },
-        );
-    }
-    let update_time = OffsetDateTime::now_utc();
-    tracing::trace!(video_id = id, time = payload.time, "Updating video history");
-    let query = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE video_id = ? RETURNING video_id;",
-        payload.time,
-        payload.is_finished,
-        update_time,
-        id,
-    );
-    if let Err(err) = query.fetch_one(&db.pool).await {
-        match err {
-            sqlx::Error::RowNotFound => {
-                db.pool
-                    .insert_history(crate::db::DbHistory {
-                        id: None,
-                        time: payload.time,
-                        is_finished: payload.is_finished,
-                        update_time,
-                        video_id: id,
-                    })
-                    .await?;
-                return Ok(StatusCode::CREATED);
-            }
-            rest => return Err(rest.into()),
-        };
-    }
-    Ok(StatusCode::OK)
-}
-
-/// Delete video history entry
-#[utoipa::path(
-    delete,
-    path = "/api/video/{id}/history",
-    params(
-        ("id", description = "Video id"),
-    ),
-    responses(
-        (status = 200, description = "History entry is deleted"),
-        (status = 404, description = "Video is not found", body = AppError),
-    ),
-    tag = "Videos",
-)]
-pub async fn remove_video_history(
-    State(db): State<Db>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
-    sqlx::query!("DELETE FROM history WHERE video_id = ?;", id)
-        .execute(&db.pool)
-        .await?;
-    Ok(())
-}
-
-/// Root and other related directories/drives
-#[utoipa::path(
-    get,
-    path = "/api/file_browser/root_dirs",
-    responses(
-        (status = 200, body = BrowseRootDirs),
-    ),
-    tag = "FileBrowser",
-)]
-pub async fn root_dirs() -> Json<BrowseRootDirs> {
-    Json(BrowseRootDirs::new())
-}
-
-/// Browse internals of the given directory
-#[utoipa::path(
-    get,
-    path = "/api/file_browser/browse/{key}",
-    params(
-        ("key" = String, description = "Key of directory to explore. It is base64 encoded path in current implementation"),
-    ),
-    responses(
-        (status = 200, body = BrowseDirectory),
-        (status = 404, body = AppError, description = "Directory is not found"),
-        (status = 500, body = AppError, description = "Invalid permissions, other errors"),
-    ),
-    tag = "FileBrowser",
-)]
-pub async fn browse_directory(Path(key): Path<FileKey>) -> Result<Json<BrowseDirectory>, AppError> {
-    let resolved_dir = BrowseDirectory::explore(key).await?;
-    Ok(Json(resolved_dir))
-}
-
-/// Get parent directory. Returns same directory if parent is not found
-#[utoipa::path(
-    get,
-    path = "/api/file_browser/parent/{key}",
-    params(
-        ("key" = String, description = "Get parent directory"),
-    ),
-    responses(
-        (status = 200, body = BrowseFile),
-    ),
-    tag = "FileBrowser",
-)]
-pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<BrowseFile>, AppError> {
-    if let Some(parent) = key.path.parent() {
-        key.path = parent.to_owned();
-    }
-    let resolved_dir = BrowseFile::from(key.path);
-    Ok(Json(resolved_dir))
-}
-
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]
 pub struct StartHlsStreamRequest {
     variant_id: Option<uuid::Uuid>,
@@ -3196,7 +2686,9 @@ pub async fn video_intro(
 ) -> Result<Json<Intro>, AppError> {
     let intro = sqlx::query_as!(
         Intro,
-        "SELECT start_sec, end_sec FROM episode_intro WHERE video_id = ?",
+        r#"SELECT intros.start_sec, intros.end_sec FROM intros
+        JOIN episodes ON episodes.id = intros.episode_id
+        WHERE episodes.content_id = (SELECT content_id FROM videos WHERE id = ?)"#,
         video_id,
     )
     .fetch_one(&db.pool)
@@ -3222,7 +2714,9 @@ pub async fn delete_video_intro(
     State(db): State<Db>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "DELETE FROM episode_intro WHERE video_id = ? RETURNING id",
+        r#"DELETE FROM intros WHERE episode_id = (
+            SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?)
+        ) RETURNING id"#,
         video_id,
     )
     .fetch_one(&db.pool)
@@ -3250,9 +2744,8 @@ pub async fn delete_season_intros(
 ) -> Result<(), AppError> {
     let mut tx = db.pool.begin().await?;
     let intros = sqlx::query!(
-        r#"SELECT episode_intro.id FROM episode_intro
-        JOIN videos ON videos.id = episode_intro.video_id
-        JOIN episodes ON episodes.id = videos.episode_id
+        r#"SELECT intros.id FROM intros
+        JOIN episodes ON episodes.id = intros.episode_id
         JOIN seasons ON seasons.id = episodes.season_id
         WHERE seasons.show_id = ? AND seasons.number = ?;"#,
         show_id,
@@ -3287,9 +2780,8 @@ pub async fn delete_episode_intros(
     State(db): State<Db>,
 ) -> Result<(), AppError> {
     let intros = sqlx::query!(
-        r#"SELECT episode_intro.id FROM episode_intro
-        JOIN videos ON videos.id = episode_intro.video_id
-        JOIN episodes ON episodes.id = videos.episode_id
+        r#"SELECT intros.id FROM intros
+        JOIN episodes ON episodes.id = intros.episode_id
         JOIN seasons ON seasons.id = episodes.season_id
         WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
         show_id,
@@ -3344,7 +2836,9 @@ pub async fn update_video_intro(
     }
 
     let update = sqlx::query!(
-        "UPDATE episode_intro SET start_sec = ?, end_sec = ? WHERE video_id = ? RETURNING id;",
+        r#"UPDATE intros SET start_sec = ?, end_sec = ?
+        WHERE episode_id = (SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?))
+        RETURNING id;"#,
         start,
         end,
         video_id,
@@ -3357,9 +2851,16 @@ pub async fn update_video_intro(
             Ok(StatusCode::OK)
         }
         Err(sqlx::Error::RowNotFound) => {
-            let db_intro = crate::db::DbEpisodeIntro {
+            let episode_id = sqlx::query!(
+                "SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?)",
+                video_id
+            )
+            .fetch_one(&db.pool)
+            .await?
+            .id;
+            let db_intro = crate::db::DbIntro {
                 id: None,
-                video_id,
+                episode_id,
                 start_sec: start,
                 end_sec: end,
             };

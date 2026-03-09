@@ -411,7 +411,7 @@ impl Scheduler {
             }
         }
 
-        // We know that pending pieces are not enough to fulfill peer capabalities.
+        // We know that pending pieces are not enough to fulfill peer capabilities.
         // We should try to add new pending piece for this peer.
 
         loop {

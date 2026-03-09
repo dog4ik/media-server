@@ -134,7 +134,7 @@ pub enum TrackerStatus {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct StateTracker {
     pub url: String,
-    #[schema(value_type = crate::server::SerdeDuration)]
+    #[schema(value_type = crate::api::SerdeDuration)]
     pub announce_interval: Duration,
     #[serde(flatten)]
     pub status: TrackerStatus,
@@ -245,7 +245,7 @@ pub struct TrackerEvent {
 #[serde(rename_all = "lowercase", tag = "kind")]
 pub enum TrackerEventKind {
     Reannounce {
-        #[schema(value_type = crate::server::SerdeDuration)]
+        #[schema(value_type = crate::api::SerdeDuration)]
         interval: std::time::Duration,
     },
     Failed {
@@ -403,6 +403,7 @@ impl TorrentManager for Db {
             let db_file = DbTorrentFile {
                 id: None,
                 torrent_id,
+                content_id: None,
                 priority: params.files[i] as usize as i64,
                 idx: i as i64,
                 relative_path: path.to_string(),

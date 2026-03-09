@@ -97,7 +97,7 @@ impl MediaServerContentDirectory {
         for season in &seasons {
             let season = *season as i64;
             let season = sqlx::query!(
-                "SELECT id, plot FROM seasons WHERE show_id = ? AND number = ?",
+                "SELECT seasons.id, content.plot FROM seasons JOIN content ON content.id = seasons.content_id WHERE seasons.show_id = ? AND seasons.number = ?",
                 show_id,
                 season,
             )
@@ -132,17 +132,19 @@ impl MediaServerContentDirectory {
         })
     }
 
-    pub async fn show_season(&self, show_id: i64, season: i64) -> anyhow::Result<DidlResponse> {
+    pub async fn show_season(
+        &self,
+        show_id: i64,
+        season_number: i64,
+    ) -> anyhow::Result<DidlResponse> {
         let db = self.app_state.db;
         let show_metadata = db.get_show(show_id).await?;
-        let episodes = db
-            .get_local_season_episodes(show_id, season as usize)
-            .await?;
-        let mut items = Vec::with_capacity(episodes.len());
-        for episode in episodes {
+        let season = db.get_season(show_id, season_number as usize).await?;
+        let mut items = Vec::with_capacity(season.episodes.len());
+        for episode in season.episodes {
             let Ok(video_ids) = sqlx::query!(
-                "SELECT id FROM videos WHERE videos.episode_id = ?",
-                episode.id
+                "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+                episode.metadata_id
             )
             .fetch_all(&db.pool)
             .await
@@ -150,17 +152,20 @@ impl MediaServerContentDirectory {
                 continue;
             };
             let title = format!("Ep {}: {}", episode.number, episode.title);
-            let id = episode.id.unwrap();
+            let id = &episode.metadata_id;
             let poster_url = format!(
                 "{server_url}/api/episode/{episode_id}/poster",
                 server_url = self.server_location,
                 episode_id = id,
             );
-            let season_id = ContentId::Season { show_id, season };
+            let season_id = ContentId::Season {
+                show_id,
+                season: season_number,
+            };
             let item_id = ContentId::Episode {
                 show_id,
-                season,
-                episode: episode.number,
+                season: season_number,
+                episode: episode.number as i64,
             };
             let mut item = Item::new(item_id.to_string(), season_id.to_string(), title.clone());
             {
@@ -203,7 +208,7 @@ impl MediaServerContentDirectory {
             item.set_property(properties::AlbumArtUri(poster_url));
             item.set_property(properties::ProgramTitle(title));
             item.set_property(properties::EpisodeNumber(episode.number as u32));
-            item.set_property(properties::EpisodeSeason(season as u32));
+            item.set_property(properties::EpisodeSeason(season_number as u32));
             item.set_property(properties::SeriesTitle(show_metadata.title.clone()));
             //if let Some(release_date) = episode.release_date {
             //    item.set_property(
