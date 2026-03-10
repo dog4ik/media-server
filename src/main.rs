@@ -181,7 +181,10 @@ async fn main() {
             "/show/{show_id}/{season}/detect_intros",
             post(api::server::detect_intros),
         )
-        .route("/season/{season_id}/poster", get(api::server::season_poster))
+        .route(
+            "/season/{season_id}/poster",
+            get(api::server::season_poster),
+        )
         .route(
             "/season/{season_id}/intros",
             delete(api::server::delete_season_intros),
@@ -232,7 +235,10 @@ async fn main() {
             "/video/{id}/history",
             delete(api::history::remove_video_history),
         )
-        .route("/video/{id}/history", put(api::history::update_video_history))
+        .route(
+            "/video/{id}/history",
+            put(api::history::update_video_history),
+        )
         .route("/video/{id}/transcode", post(api::server::transcode_video))
         .route(
             "/watch/direct/start/{id}",
@@ -276,7 +282,10 @@ async fn main() {
             "/torrent/open_torrent_file",
             post(api::torrent::open_torrent_file),
         )
-        .route("/torrent/{info_hash}/state", get(api::torrent::torrent_state))
+        .route(
+            "/torrent/{info_hash}/state",
+            get(api::torrent::torrent_state),
+        )
         .route(
             "/torrent/{info_hash}/files_priority",
             post(api::torrent::set_files_priority),
@@ -287,7 +296,10 @@ async fn main() {
             "/torrent/{info_hash}/validate",
             post(api::torrent::validate_torrent),
         )
-        .route("/torrent/output_location", get(api::torrent::output_location))
+        .route(
+            "/torrent/output_location",
+            get(api::torrent::output_location),
+        )
         .route(
             "/torrent/index_magnet_link",
             get(api::torrent::index_magnet_link),
@@ -316,7 +328,10 @@ async fn main() {
             "/configuration/reset",
             post(api::server::reset_server_configuration),
         )
-        .route("/configuration/providers", put(api::server::order_providers))
+        .route(
+            "/configuration/providers",
+            put(api::server::order_providers),
+        )
         .route(
             "/configuration/providers",
             get(api::server::get_providers_order),
@@ -344,7 +359,10 @@ async fn main() {
         .route("/tasks/progress", get(api::server::progress))
         .route("/ws", any(ws::ws))
         .route("/scan", post(api::server::reconciliate_lib))
-        .route("/fix_metadata/{content_id}", post(api::server::fix_metadata))
+        .route(
+            "/fix_metadata/{content_id}",
+            post(api::server::fix_metadata),
+        )
         .route(
             "/reset_metadata/{content_id}",
             post(api::server::reset_metadata),

@@ -552,13 +552,10 @@ WHERE seasons.show_id = ?",
             fetch_params,
             ..scan::ScanConfig::default()
         };
-        if let Err(e) = scan::movie::MovieScanner::new(
-            self.db.clone(),
-            self.providers_stack,
-            config.clone(),
-        )
-        .scan(new_movies)
-        .await
+        if let Err(e) =
+            scan::movie::MovieScanner::new(self.db.clone(), self.providers_stack, config.clone())
+                .scan(new_movies)
+                .await
         {
             tracing::error!("Movie scan failed: {e}");
         };
@@ -621,13 +618,9 @@ WHERE seasons.show_id = ?",
             new_episodes
         };
 
-        if let Err(e) = scan::show::ShowScanner::new(
-            self.db.clone(),
-            self.providers_stack,
-            config,
-        )
-        .scan(new_episodes)
-        .await
+        if let Err(e) = scan::show::ShowScanner::new(self.db.clone(), self.providers_stack, config)
+            .scan(new_episodes)
+            .await
         {
             tracing::error!("Failed to scan episodes: {e}");
         };

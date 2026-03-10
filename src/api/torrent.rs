@@ -15,10 +15,10 @@ use tokio_stream::{Stream, StreamExt};
 use torrent::{DownloadParams, MagnetLink, TorrentFile};
 
 use crate::{
+    api::{OptionalContentTypeQuery, Path, Query},
     app_state::{AppError, AppState},
     config,
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
-    api::{OptionalContentTypeQuery, Path, Query},
     torrent::{
         Action, DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState,
         TorrentClient, TorrentDownloadPayload, TorrentInfo, TorrentState,

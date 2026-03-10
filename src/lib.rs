@@ -1,6 +1,8 @@
 #![windows_subsystem = "windows"]
 #![doc = include_str!("../README.md")]
 
+/// Api surface of the media server
+pub mod api;
 /// Shared state of the application
 pub mod app_state;
 /// All server related configuration
@@ -35,8 +37,6 @@ pub mod progress;
 /// 2. New metadata and assets must be saved.
 /// 3. Library items should be linked to their metadata
 pub mod scan;
-/// Api surface of the media server
-pub mod api;
 /// Glue between torrent crate and media server
 pub mod torrent;
 /// Torrent providers

@@ -3,9 +3,9 @@ use std::collections::HashMap;
 use sqlx::QueryBuilder;
 
 use crate::{
+    api::{api_data::api_types::History, server::Intro},
     db::{Db, DbActions},
     metadata::{MetadataProvider, MovieMetadata, ShowMetadata},
-    api::{api_data::api_types::History, server::Intro},
 };
 
 pub mod api_types;

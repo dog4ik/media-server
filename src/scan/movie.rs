@@ -27,8 +27,7 @@ use crate::{
 
 use super::{
     AssetKind, AssetSaveTask, AssetTaskSource, MetadataLookupWithIds, ScanConfig,
-    fallback::movie_fallback,
-    merge::try_merge_chunks,
+    fallback::movie_fallback, merge::try_merge_chunks,
 };
 
 struct ResolvedMovie {
@@ -320,12 +319,7 @@ async fn fetch_single_movie_chunk(
             videos: videos.to_vec(),
         }
     } else {
-        let local_id = db_movies
-            .first()
-            .unwrap()
-            .metadata_id
-            .parse()
-            .unwrap();
+        let local_id = db_movies.first().unwrap().metadata_id.parse().unwrap();
         ResolvedMovie {
             lookup: MetadataLookupWithIds::Local(local_id),
             duration: Duration::ZERO,

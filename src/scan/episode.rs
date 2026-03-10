@@ -84,7 +84,10 @@ impl EpisodeScanner {
         }
 
         let seasons = handles.join_all().await;
-        ResolvedShow { show_lookup, seasons }
+        ResolvedShow {
+            show_lookup,
+            seasons,
+        }
     }
 
     #[instrument(skip(self, season_videos), fields(season = season_number))]
@@ -118,7 +121,13 @@ impl EpisodeScanner {
         {
             let episode_number = episode_videos.first().unwrap().identifier.episode as usize;
             let resolved = self
-                .resolve_episode(show_id, season_id, season_number, episode_number, episode_videos)
+                .resolve_episode(
+                    show_id,
+                    season_id,
+                    season_number,
+                    episode_number,
+                    episode_videos,
+                )
                 .await;
             episodes.push(resolved);
         }
@@ -209,4 +218,3 @@ impl EpisodeScanner {
         }
     }
 }
-

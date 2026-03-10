@@ -7,9 +7,9 @@ use crate::{
     metadata::{ExternalIdMetadata, FetchParams},
 };
 
-mod merge;
 pub mod episode;
 pub mod fallback;
+mod merge;
 pub mod movie;
 pub mod show;
 
