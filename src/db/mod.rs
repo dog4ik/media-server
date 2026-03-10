@@ -77,7 +77,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let movie_id = sqlx::query!(
-                "INSERT OR IGNORE INTO movies (content_id, backdrop, duration) VALUES (?, ?, ?) RETURNING id;",
+                "INSERT INTO movies (content_id, backdrop, duration) VALUES (?, ?, ?) RETURNING id;",
                 movie.content_id,
                 movie.backdrop,
                 movie.duration,
@@ -122,7 +122,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let show_id = sqlx::query!(
-                "INSERT OR IGNORE INTO shows (content_id, backdrop) VALUES (?, ?) RETURNING id;",
+                "INSERT INTO shows (content_id, backdrop) VALUES (?, ?) RETURNING id;",
                 show.content_id,
                 show.backdrop,
             )
@@ -141,7 +141,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let season_id = sqlx::query!(
-                "INSERT OR IGNORE INTO seasons (show_id, number, content_id) VALUES (?, ?, ?) RETURNING id;",
+                "INSERT INTO seasons (show_id, number, content_id) VALUES (?, ?, ?) RETURNING id;",
                 season.show_id,
                 season.number,
                 season.content_id,
@@ -161,7 +161,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let episode_id = sqlx::query!(
-                "INSERT OR IGNORE INTO episodes (season_id, number, duration, content_id)
+                "INSERT INTO episodes (season_id, number, duration, content_id)
                 VALUES (?, ?, ?, ?) RETURNING id;",
                 episode.season_id,
                 episode.number,
@@ -239,7 +239,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
-                "INSERT OR IGNORE INTO external_ids
+                "INSERT INTO external_ids
             (metadata_provider, metadata_id, content_id, is_prime)
             VALUES (?, ?, ?, ?) RETURNING id;",
                 db_external_id.metadata_provider,
@@ -277,7 +277,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
-                "INSERT OR IGNORE INTO torrents
+                "INSERT INTO torrents
             (info_hash, bitfield, trackers, save_location, bencoded_info)
             VALUES (?, ?, ?, ?, ?) RETURNING id;",
                 torrent.info_hash,
@@ -298,7 +298,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let query = sqlx::query!(
-                "INSERT OR IGNORE INTO torrent_files
+                "INSERT INTO torrent_files
             (torrent_id, relative_path, priority, idx)
             VALUES (?, ?, ?, ?) RETURNING id;",
                 file.torrent_id,

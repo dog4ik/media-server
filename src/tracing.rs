@@ -201,7 +201,7 @@ pub fn init_tracer() -> LogChannel {
     let log_channel = LogChannel(pub_tracer.channel.clone());
     let sub = tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::from_default_env())
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_span_events(FmtSpan::CLOSE)
         .finish();
     sub.with(pub_tracer).with(file_logger).init();
     log_channel

@@ -1,649 +1,421 @@
-//! Show scan
+//! Show scan pipeline
 //!
-//! Algorithm should look like:
-//! 1. Chunk new show episodes by their local name.
-//! 2. Concurrently fetch show metadata and external ids from providers.
-//! 3. Wait for all shows, merge elements resolved to the same content using external ids.
-//! 4. Concurrently fetch and save the rest of seasons and episodes, their assets.
+//! Stages:
+//! 1. `fetch_show_chunks` — parallel show metadata lookups
+//! 2. `merge_show_chunks` — merge chunks that resolved to the same show
+//! 3. `resolve_seasons_episodes` — parallel season/episode fetches (no DB writes)
+//! 4. `flush_to_db` — sequential DB inserts, one transaction per show
+//! 5. `save_assets` — parallel asset downloads/frame extracts
 
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 
-use tokio::task::JoinSet;
+use tokio::{sync::Semaphore, task::JoinSet};
 use tokio_util::task::TaskTracker;
-use tracing::instrument;
+use tracing::{Instrument, debug_span};
 
 use crate::{
-    app_state::AppError,
-    db::{
-        Db, DbActions, DbContent, DbContentType, DbEpisode, DbExternalId, DbSeason, DbShow,
-        DbTransaction,
-    },
-    ffmpeg,
+    db::{Db, DbActions, DbExternalId},
     library::{
         LibraryItem,
-        assets::{BackdropAsset, BackdropContentType, FileAsset, PosterAsset, PosterContentType},
+        assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
         show::ShowIdentifier,
     },
     metadata::{
-        ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-        MetadataProvider, ShowMetadata, ShowMetadataProvider,
+        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, MetadataProvider, ShowMetadata,
         metadata_stack::MetadataProvidersStack,
     },
-    scan::{MetadataLookup, merge::try_merge_chunks},
 };
 
-use super::{MetadataLookupWithIds, save_asset_from_url, save_asset_from_url_with_frame_fallback};
+use super::{
+    AssetKind, AssetSaveTask, AssetTaskSource, MetadataLookup, MetadataLookupWithIds, ScanConfig,
+    episode::{EpisodeScanner, ResolvedEpisode, ResolvedSeason, ResolvedShow, ShowProvider},
+    fallback::show_fallback,
+    merge::try_merge_chunks,
+};
 
-struct IdWithProvider {
-    provider: &'static (dyn ShowMetadataProvider + Send + Sync),
-    id: String,
+struct ShowChunk {
+    lookup: MetadataLookupWithIds<ShowMetadata>,
+    videos: Vec<LibraryItem<ShowIdentifier>>,
 }
 
-impl IdWithProvider {
-    pub fn new(id: String, provider: &'static (dyn ShowMetadataProvider + Send + Sync)) -> Self {
-        Self { id, provider }
-    }
-}
-
-pub async fn scan_shows(
-    fetch_params: FetchParams,
+pub struct ShowScanner {
     db: Db,
-    providers: &MetadataProvidersStack,
-    mut new_files: Vec<LibraryItem<ShowIdentifier>>,
-) -> anyhow::Result<()> {
-    new_files.sort_unstable_by(|a, b| {
-        a.identifier
-            .title
-            .to_lowercase()
-            .cmp(&b.identifier.title.to_lowercase())
-    });
+    providers: &'static MetadataProvidersStack,
+    config: ScanConfig,
+}
 
-    let mut show_scan_handles: JoinSet<anyhow::Result<ItemsChunk>> = JoinSet::new();
-
-    let mut discover_providers = providers.discover_providers();
-    discover_providers.retain(|p| p.provider_identifier() != MetadataProvider::Local);
-    let discover_providers = discover_providers.into_boxed_slice();
-
-    tracing::trace!("Started shows fetch");
-    for show_episodes in new_files
-        .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
-        .map(Vec::from)
-    {
-        let db = db.clone();
-        let discover_providers = discover_providers.clone();
-        show_scan_handles.spawn(async move {
-            let first_item = show_episodes.first().expect("chunked");
-            let relation = fetch_show(db, first_item, &fetch_params, discover_providers).await?;
-            Ok(ItemsChunk {
-                status: relation,
-                items: show_episodes,
-            })
-        });
-    }
-
-    let (mut statuses, mut items_chunks) = show_scan_handles
-        .join_all()
-        .await
-        .into_iter()
-        .inspect(|res| {
-            if let Err(e) = res {
-                tracing::error!("Show scan task failed: {e}");
-            }
-        })
-        .filter_map(Result::ok)
-        .fold((Vec::new(), Vec::new()), |mut acc, n| {
-            acc.0.push(n.status);
-            acc.1.push(n.items);
-            acc
-        });
-    tracing::trace!("Finished shows fetch");
-
-    debug_assert_eq!(statuses.len(), items_chunks.len());
-    try_merge_chunks(&statuses, &mut items_chunks);
-    debug_assert_eq!(statuses.len(), items_chunks.len());
-
-    {
-        let mut idx = 0;
-        statuses.retain(|_| {
-            let keep = !items_chunks[idx].is_empty();
-            idx += 1;
-            keep
-        });
-    }
-    items_chunks.retain(|chunk| !chunk.is_empty());
-    debug_assert_eq!(statuses.len(), items_chunks.len());
-
-    tracing::debug!("Saving shows");
-    let task_tracker = TaskTracker::new();
-    let mut local_show_chunks = Vec::new();
-    let mut tx = db.begin().await?;
-    for (status, chunk) in statuses.into_iter().zip(items_chunks) {
-        match status {
-            MetadataLookupWithIds::New {
-                metadata,
-                external_ids,
-            } => {
-                let external_ids: Arc<[ExternalIdMetadata]> = Arc::from(external_ids);
-                let local_id = handle_new_series(
-                    metadata,
-                    external_ids.clone(),
-                    &mut tx,
-                    task_tracker.clone(),
-                )
-                .await?;
-                local_show_chunks.push((local_id, external_ids, chunk));
-            }
-            MetadataLookupWithIds::Local(local_id) => {
-                let external_ids = db
-                    .get_external_ids(local_id, ContentType::Show)
-                    .await
-                    .unwrap_or_default();
-                let external_ids: Arc<[ExternalIdMetadata]> = Arc::from(external_ids);
-                local_show_chunks.push((local_id, external_ids, chunk));
-            }
+impl ShowScanner {
+    pub fn new(db: Db, providers: &'static MetadataProvidersStack, config: ScanConfig) -> Self {
+        Self {
+            db,
+            providers,
+            config,
         }
     }
-    tx.commit().await?;
-    tracing::debug!("Finished saving shows");
 
-    let show_providers = providers.show_providers();
-
-    tracing::debug!("Started handling seasons and episodes");
-    for (local_id, external_ids, chunk) in local_show_chunks {
-        let db = db.clone();
-        let show_providers: Arc<[IdWithProvider]> = show_providers
-            .iter()
-            .filter_map(|p| {
-                let identifier = p.provider_identifier();
-                if identifier == MetadataProvider::Local {
-                    return None;
-                }
-                external_ids
-                    .iter()
-                    .find(|id| id.provider == identifier)
-                    .map(|external_id| IdWithProvider::new(external_id.id.clone(), *p))
-            })
-            .collect();
-        handle_seasons_and_episodes(
-            &db,
-            local_id,
-            chunk,
-            fetch_params,
-            task_tracker.clone(),
-            show_providers.clone(),
-        )
-        .await?;
+    pub async fn scan(&self, videos: Vec<LibraryItem<ShowIdentifier>>) -> anyhow::Result<()> {
+        let chunks = self.fetch_show_chunks(videos).await;
+        let merged = self.merge_show_chunks(chunks);
+        let resolved = self.resolve_seasons_episodes(merged).await;
+        let asset_tasks = self.flush_to_db(resolved).await?;
+        self.save_assets(asset_tasks).await;
+        Ok(())
     }
 
-    tracing::debug!("Finished handling seasons and episodes");
+    async fn fetch_show_chunks(
+        &self,
+        mut videos: Vec<LibraryItem<ShowIdentifier>>,
+    ) -> Vec<ShowChunk> {
+        videos.sort_unstable_by(|a, b| {
+            a.identifier
+                .title
+                .to_lowercase()
+                .cmp(&b.identifier.title.to_lowercase())
+        });
 
-    task_tracker.close();
-    tracing::debug!("Waiting for all show asset tasks to finish");
-    task_tracker.wait().await;
-    Ok(())
-}
+        let mut discover_providers = self.providers.discover_providers();
+        discover_providers.retain(|p| p.provider_identifier() != MetadataProvider::Local);
+        let discover_providers: Arc<[&'static (dyn DiscoverMetadataProvider + Send + Sync)]> =
+            Arc::from(discover_providers.into_boxed_slice());
 
-#[derive(Debug)]
-struct ItemsChunk {
-    status: MetadataLookupWithIds<ShowMetadata>,
-    items: Vec<LibraryItem<ShowIdentifier>>,
-}
+        let semaphore = Arc::new(Semaphore::new(self.config.max_show_concurrency));
+        let mut handles: JoinSet<ShowChunk> = JoinSet::new();
 
-#[instrument(skip_all)]
-async fn fetch_show(
-    db: Db,
-    item: &LibraryItem<ShowIdentifier>,
-    fetch_params: &FetchParams,
-    discover_providers: Box<[&(dyn DiscoverMetadataProvider + Send + Sync)]>,
-) -> anyhow::Result<MetadataLookupWithIds<ShowMetadata>> {
-    // BUG: this will perform search with full text search so for example if we search for Dexter it will
-    // find Dexter: New Blood.
-    let shows = db.search_show(&item.identifier.title).await?;
-
-    // WARN: This temporary fix will only work if content does not have custom name
-    if shows.is_empty()
-        || shows.first().unwrap().title.split_whitespace().count()
-            != item.identifier.title.split_whitespace().count()
-    {
-        for provider in discover_providers {
-            if let Ok(search_result) = provider
-                .show_search(&item.identifier.title, *fetch_params)
-                .await
-            {
-                let Some(first_result) = search_result.into_iter().next() else {
-                    continue;
-                };
-                match crossreference_show(&db, &first_result)
-                    .await
-                    .inspect_err(|e| tracing::error!("failed to crossreference show: {e}"))
-                {
-                    Ok(Some(local_id)) => {
-                        return Ok(MetadataLookupWithIds::Local(local_id));
+        for title_videos in videos
+            .chunk_by(|a, b| a.identifier.title.eq_ignore_ascii_case(&b.identifier.title))
+            .map(Vec::from)
+        {
+            let title = title_videos.first().unwrap().identifier.title.clone();
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let db = self.db.clone();
+            let config = self.config.clone();
+            let discover_providers = discover_providers.clone();
+            let span = debug_span!("scan_show", title = %title);
+            handles.spawn(
+                async move {
+                    let _permit = permit;
+                    let lookup =
+                        fetch_single_show_chunk(db, config, &title, &discover_providers).await;
+                    ShowChunk {
+                        lookup,
+                        videos: title_videos,
                     }
-                    Ok(None) | Err(_) => {
-                        let Ok(mut external_ids) = provider
-                            .external_ids(&first_result.metadata_id, ContentType::Show)
-                            .await
-                        else {
-                            continue;
-                        };
-                        external_ids.insert(
-                            0,
-                            ExternalIdMetadata {
-                                provider: first_result.metadata_provider,
-                                id: first_result.metadata_id.clone(),
-                            },
-                        );
+                }
+                .instrument(span),
+            );
+        }
 
-                        return Ok(MetadataLookupWithIds::New {
-                            external_ids,
-                            metadata: first_result,
+        handles.join_all().await
+    }
+
+    fn merge_show_chunks(&self, chunks: Vec<ShowChunk>) -> Vec<ShowChunk> {
+        let (statuses, mut items): (Vec<_>, Vec<_>) =
+            chunks.into_iter().map(|c| (c.lookup, c.videos)).unzip();
+
+        try_merge_chunks(&statuses, &mut items);
+
+        statuses
+            .into_iter()
+            .zip(items)
+            .filter(|(_, videos)| !videos.is_empty())
+            .map(|(lookup, videos)| ShowChunk { lookup, videos })
+            .collect()
+    }
+
+    async fn resolve_seasons_episodes(&self, chunks: Vec<ShowChunk>) -> Vec<ResolvedShow> {
+        let semaphore = Arc::new(Semaphore::new(self.config.max_show_concurrency));
+        let show_providers = self.providers.show_providers();
+        let mut handles: JoinSet<ResolvedShow> = JoinSet::new();
+
+        for chunk in chunks {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            let db = self.db.clone();
+            let config = self.config.clone();
+
+            let external_ids: Vec<ExternalIdMetadata> = match &chunk.lookup {
+                MetadataLookupWithIds::New { external_ids, .. } => external_ids.clone(),
+                MetadataLookupWithIds::Local(show_id) => db
+                    .get_external_ids(*show_id, ContentType::Show)
+                    .await
+                    .unwrap_or_default(),
+            };
+
+            let providers: Arc<[ShowProvider]> = show_providers
+                .iter()
+                .filter_map(|p| {
+                    let identifier = p.provider_identifier();
+                    if identifier == MetadataProvider::Local {
+                        return None;
+                    }
+                    external_ids
+                        .iter()
+                        .find(|id| id.provider == identifier)
+                        .map(|ext_id| ShowProvider {
+                            provider: *p,
+                            id: ext_id.id.clone(),
+                        })
+                })
+                .collect();
+
+            let ShowChunk {
+                lookup: show_lookup,
+                videos,
+            } = chunk;
+            let span = debug_span!("scan_show_details");
+            handles.spawn(
+                async move {
+                    let _permit = permit;
+                    EpisodeScanner::new(db, providers, config)
+                        .resolve_show(show_lookup, videos)
+                        .await
+                }
+                .instrument(span),
+            );
+        }
+
+        handles.join_all().await
+    }
+
+    async fn flush_to_db(
+        &self,
+        resolved_shows: Vec<ResolvedShow>,
+    ) -> anyhow::Result<Vec<AssetSaveTask>> {
+        let span = debug_span!("flush_shows", count = resolved_shows.len());
+        let _enter = span.enter();
+
+        let mut asset_tasks = Vec::new();
+
+        for resolved in resolved_shows {
+            let mut tx = self.db.begin().await?;
+
+            let show_id = match resolved.show_lookup {
+                MetadataLookupWithIds::New {
+                    metadata,
+                    external_ids,
+                } => {
+                    let poster = metadata.poster.clone();
+                    let backdrop = metadata.backdrop.clone();
+                    let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                    let show_id = tx.insert_show(&metadata.into_db_show(content_id)).await?;
+                    for ext_id in &external_ids {
+                        if let Err(e) = tx
+                            .insert_external_id(DbExternalId {
+                                metadata_provider: ext_id.provider,
+                                metadata_id: ext_id.id.clone(),
+                                content_id: Some(content_id),
+                                ..Default::default()
+                            })
+                            .await
+                        {
+                            tracing::error!(
+                                provider = %ext_id.provider,
+                                "Failed to insert external id: {e}"
+                            );
+                        }
+                    }
+                    if let Some(url) = poster {
+                        asset_tasks.push(AssetSaveTask {
+                            kind: AssetKind::Poster(PosterAsset::new(
+                                show_id,
+                                PosterContentType::Show,
+                            )),
+                            source: AssetTaskSource::Url(url.into()),
                         });
                     }
-                };
-            }
-        }
-        // fallback
-        tracing::warn!("Using show metadata fallback");
-        let local_id = series_metadata_fallback(&db, item).await?;
-        return Ok(MetadataLookupWithIds::Local(local_id));
-    }
-    let top_search = shows.into_iter().next().expect("shows not empty");
-    let local_id = top_search
-        .metadata_id
-        .parse()
-        .expect("local ids are integers");
-    Ok(MetadataLookupWithIds::Local(local_id))
-}
-
-/// Save series metadata and spawn saving assets.
-///
-/// Returns local id of the show
-///
-/// This function will not block.
-async fn handle_new_series(
-    show: ShowMetadata,
-    external_ids: Arc<[ExternalIdMetadata]>,
-    tx: &mut DbTransaction,
-    assets_save_tracker: TaskTracker,
-) -> anyhow::Result<i64> {
-    let poster = show.poster.clone();
-    let backdrop = show.backdrop.clone();
-    let content_id = tx.insert_content(&show.into_db_content()).await?;
-    let db_show = show.into_db_show(content_id);
-    let id = tx.insert_show(&db_show).await?;
-
-    for id in external_ids.iter() {
-        if let Err(e) = tx
-            .insert_external_id(DbExternalId {
-                metadata_provider: id.provider,
-                metadata_id: id.id.clone(),
-                content_id: Some(content_id),
-                ..Default::default()
-            })
-            .await
-        {
-            tracing::error!(provider = %id.provider, "Failed to insert external id: {e}");
-        }
-    }
-
-    assets_save_tracker.spawn(async move {
-        if let Some(url) = poster {
-            let poster_asset = PosterAsset::new(id, PosterContentType::Show);
-            if let Err(e) = save_asset_from_url(url.into(), poster_asset).await {
-                tracing::warn!(id, "Failed to save show poster: {e}")
-            }
-        }
-        if let Some(url) = backdrop {
-            let backdrop_asset = BackdropAsset::new(id, BackdropContentType::Show);
-            if let Err(e) = save_asset_from_url(url.into(), backdrop_asset).await {
-                tracing::warn!(id, "Failed to save show backdrop: {e}")
-            }
-        }
-    });
-
-    Ok(id)
-}
-
-async fn handle_seasons_and_episodes(
-    db: &Db,
-    local_show_id: i64,
-    mut show_episodes: Vec<LibraryItem<ShowIdentifier>>,
-    fetch_params: FetchParams,
-    assets_save_tracker: TaskTracker,
-    show_providers: Arc<[IdWithProvider]>,
-) -> anyhow::Result<()> {
-    show_episodes.sort_unstable_by_key(|x| x.identifier.season);
-    let mut seasons_scan_handles: JoinSet<Result<(), AppError>> = JoinSet::new();
-    for mut season_episodes in show_episodes
-        .chunk_by(|a, b| a.identifier.season == b.identifier.season)
-        .map(Vec::from)
-    {
-        let show_providers = show_providers.clone();
-        let db = db.clone();
-        let assets_save_tracker = assets_save_tracker.clone();
-        seasons_scan_handles.spawn(async move {
-            let season = season_episodes.first().unwrap().clone();
-            let local_season_id = fetch_save_season(
-                local_show_id,
-                season,
-                fetch_params,
-                &db,
-                assets_save_tracker.clone(),
-                show_providers.clone(),
-            )
-            .await?;
-            let mut episodes_scan_handles: JoinSet<(
-                anyhow::Result<MetadataLookup<EpisodeMetadata>>,
-                Vec<LibraryItem<ShowIdentifier>>,
-            )> = JoinSet::new();
-            tracing::debug!("Season's episodes count: {}", season_episodes.len());
-            season_episodes.sort_unstable_by_key(|x| x.identifier.episode);
-            for episodes in season_episodes
-                .chunk_by(|a, b| a.identifier.episode == b.identifier.episode)
-                .map(Vec::from)
-            {
-                let db = db.clone();
-                let show_providers = show_providers.clone();
-                episodes_scan_handles.spawn(async move {
-                    (
-                        fetch_episode(
-                            local_show_id,
-                            local_season_id,
-                            &episodes,
-                            &db,
-                            fetch_params,
-                            show_providers,
-                        )
-                        .await,
-                        episodes,
-                    )
-                });
-            }
-
-            let results = episodes_scan_handles
-                .join_all()
-                .await
-                .into_iter()
-                .inspect(|res| {
-                    if let Err(e) = &res.0 {
-                        tracing::error!("Episode scan task failed: {e}");
+                    if let Some(url) = backdrop {
+                        asset_tasks.push(AssetSaveTask {
+                            kind: AssetKind::Backdrop(BackdropAsset::new(
+                                show_id,
+                                BackdropContentType::Show,
+                            )),
+                            source: AssetTaskSource::Url(url.into()),
+                        });
                     }
-                })
-                .filter_map(|r| Some((r.0.ok()?, r.1)));
+                    show_id
+                }
+                MetadataLookupWithIds::Local(show_id) => show_id,
+            };
 
-            let mut tx = db.begin().await?;
-            for (result, episodes) in results {
-                let content_id: i64 = match result {
+            for resolved_season in resolved.seasons {
+                let ResolvedSeason {
+                    season_number: _,
+                    lookup,
+                    episodes,
+                } = resolved_season;
+
+                let season_id = match lookup {
                     MetadataLookup::New { metadata } => {
                         let poster = metadata.poster.clone();
-                        let first = episodes[0].source.clone();
-                        let runtime = metadata.runtime.clone();
                         let content_id = tx.insert_content(&metadata.into_db_content()).await?;
-                        tx.insert_external_id(DbExternalId {
-                            metadata_provider: metadata.metadata_provider,
-                            metadata_id: metadata.metadata_id.clone(),
-                            content_id: Some(content_id),
-                            ..Default::default()
-                        })
-                        .await?;
-                        let db_episode = metadata.into_db_episode(
-                            content_id,
-                            local_season_id,
-                            first
-                                .video
-                                .fetch_duration()
-                                .await
-                                .ok()
-                                .or(runtime)
-                                .unwrap_or_default(),
-                        );
-                        let id = tx.insert_episode(&db_episode).await?;
-                        assets_save_tracker.spawn(async move {
-                            if let Some(poster) = poster {
-                                let asset = PosterAsset::new(id, PosterContentType::Episode);
-                                if let Err(e) = save_asset_from_url_with_frame_fallback(
-                                    poster.into(),
-                                    asset,
-                                    &first,
-                                )
-                                .await
-                                {
-                                    tracing::error!("Failed to save episode poster: {e}");
-                                };
-                            }
-                        });
-                        content_id
+                        let season_id = tx
+                            .insert_season(metadata.into_db_season(content_id, show_id))
+                            .await?;
+                        if let Some(url) = poster {
+                            asset_tasks.push(AssetSaveTask {
+                                kind: AssetKind::Poster(PosterAsset::new(
+                                    season_id,
+                                    PosterContentType::Season,
+                                )),
+                                source: AssetTaskSource::Url(url.into()),
+                            });
+                        }
+                        season_id
                     }
-                    MetadataLookup::Local(id) => {
-                        sqlx::query!("SELECT content_id FROM episodes WHERE id = ?", id)
-                            .fetch_one(&mut *tx)
-                            .await?
-                            .content_id
-                    }
+                    MetadataLookup::Local(season_id) => season_id,
                 };
-                // connect new videos to existing episode
-                for video in episodes {
-                    tx.update_video_content_id(video.source.id, content_id)
-                        .await?;
+
+                for resolved_episode in episodes {
+                    let ResolvedEpisode {
+                        lookup,
+                        duration,
+                        videos,
+                        ..
+                    } = resolved_episode;
+
+                    let content_id = match lookup {
+                        MetadataLookup::New { metadata } => {
+                            let poster = metadata.poster.clone();
+                            let metadata_provider = metadata.metadata_provider;
+                            let metadata_id = metadata.metadata_id.clone();
+                            let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                            dbg!(&metadata);
+                            if metadata.metadata_provider != MetadataProvider::Local {
+                                tx.insert_external_id(DbExternalId {
+                                    metadata_provider,
+                                    metadata_id,
+                                    content_id: Some(content_id),
+                                    ..Default::default()
+                                })
+                                .await?;
+                            }
+                            let episode_id = tx
+                                .insert_episode(
+                                    &metadata.into_db_episode(content_id, season_id, duration),
+                                )
+                                .await?;
+                            let first_source = videos.first().map(|v| v.source.clone());
+                            if let Some(url) = poster {
+                                let task_source = match first_source {
+                                    Some(source) => AssetTaskSource::UrlWithFrameFallback {
+                                        url: url.into(),
+                                        source,
+                                    },
+                                    None => AssetTaskSource::Url(url.into()),
+                                };
+                                asset_tasks.push(AssetSaveTask {
+                                    kind: AssetKind::Poster(PosterAsset::new(
+                                        episode_id,
+                                        PosterContentType::Episode,
+                                    )),
+                                    source: task_source,
+                                });
+                            } else if let Some(source) = first_source {
+                                asset_tasks.push(AssetSaveTask {
+                                    kind: AssetKind::Poster(PosterAsset::new(
+                                        episode_id,
+                                        PosterContentType::Episode,
+                                    )),
+                                    source: AssetTaskSource::VideoFrame(source),
+                                });
+                            }
+                            content_id
+                        }
+                        MetadataLookup::Local(episode_id) => {
+                            dbg!(episode_id);
+                            sqlx::query!("SELECT content_id FROM episodes WHERE id = ?", episode_id)
+                                .fetch_one(&mut *tx)
+                                .await?
+                                .content_id
+                        }
+                    };
+
+                    for video in &videos {
+                        tx.update_video_content_id(video.source.id, content_id)
+                            .await?;
+                    }
                 }
             }
+
             tx.commit().await?;
-
-            Ok(())
-        });
-    }
-
-    while let Some(result) = seasons_scan_handles.join_next().await {
-        match result {
-            Ok(Err(e)) => {
-                tracing::error!("Season Reconciliation task failed with err {}", e)
-            }
-            Err(e) => tracing::error!("Season reconciliation task panicked: {e}"),
-            Ok(Ok(_)) => tracing::trace!("Joined season reconciliation task"),
         }
-    }
-    Ok(())
-}
 
-#[instrument(skip_all)]
-async fn fetch_save_season(
-    local_show_id: i64,
-    item: LibraryItem<ShowIdentifier>,
-    fetch_params: FetchParams,
-    db: &Db,
-    assets_save_tracker: TaskTracker,
-    providers: Arc<[IdWithProvider]>,
-) -> anyhow::Result<i64> {
-    let season = item.identifier.season as usize;
-    let Ok(local_id) = db.get_season_id(local_show_id, season).await else {
-        for provider in providers.iter() {
-            let Ok(season) = provider
-                .provider
-                .season(&provider.id, season, fetch_params)
-                .await
-            else {
-                continue;
-            };
-            let poster = season.poster.clone();
-            let mut tx = db.pool.begin().await?;
-            let content_id = tx.insert_content(&season.into_db_content()).await?;
-            let id = tx
-                .insert_season(season.into_db_season(content_id, local_show_id))
-                .await?;
-            tx.commit().await?;
-            assets_save_tracker.spawn(async move {
-                if let Some(poster) = poster {
-                    let poster_asset = PosterAsset::new(id, PosterContentType::Season);
-                    let _ = save_asset_from_url(poster.into(), poster_asset).await;
+        Ok(asset_tasks)
+    }
+
+    async fn save_assets(&self, tasks: Vec<AssetSaveTask>) {
+        let span = debug_span!("save_assets", count = tasks.len());
+        let _enter = span.enter();
+        let semaphore = Arc::new(Semaphore::new(self.config.max_asset_concurrency));
+        let tracker = TaskTracker::new();
+        for task in tasks {
+            let permit = semaphore.clone().acquire_owned().await.unwrap();
+            tracker.spawn(async move {
+                let _permit = permit;
+                if let Err(e) = task.execute().await {
+                    tracing::warn!("Asset save task failed: {e}");
                 }
             });
-            return Ok(id);
         }
-        // fallback
-        tracing::warn!("Using season metadata fallback");
-        let id = season_metadata_fallback(db, &item, local_show_id).await?;
-        return Ok(id);
-    };
-    Ok(local_id)
-}
-
-#[instrument(skip_all)]
-async fn fetch_episode(
-    local_show_id: i64,
-    local_season_id: i64,
-    items: &[LibraryItem<ShowIdentifier>],
-    db: &Db,
-    fetch_params: FetchParams,
-    providers: Arc<[IdWithProvider]>,
-) -> anyhow::Result<MetadataLookup<EpisodeMetadata>> {
-    let item = items.first().expect("episodes are chunked");
-    let season = item.identifier.season as usize;
-    let episode = item.identifier.episode as usize;
-    if let Ok(local_id) = db.get_episode_id(local_show_id, season, episode).await {
-        Ok(MetadataLookup::Local(local_id))
-    } else {
-        tracing::trace!(
-            "Fetching duration for the episode: {}",
-            item.source.video.path().display()
-        );
-        let duration = item.source.video.fetch_duration().await?;
-        for provider in providers.iter() {
-            let Ok(episode) = provider
-                .provider
-                .episode(&provider.id, season, episode, fetch_params)
-                .await
-            else {
-                continue;
-            };
-            return Ok(MetadataLookup::New { metadata: episode });
-        }
-        // fallback
-        tracing::warn!("Using episode metadata fallback");
-        let id = episode_metadata_fallback(db, item, local_season_id, duration).await?;
-        Ok(MetadataLookup::Local(id))
+        tracker.close();
+        tracker.wait().await;
     }
 }
 
-#[instrument(skip_all)]
-async fn series_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-) -> anyhow::Result<i64> {
-    let mut tx = db.begin().await?;
-    let content_fallback = DbContent {
-        id: None,
-        content_type: DbContentType::Show,
-        poster: None,
-        plot: None,
-        release_date: None,
-        title: file.identifier.title.to_string(),
-        original_language: None,
-        original_title: None,
-    };
-    let content_id = tx.insert_content(&content_fallback).await?;
-    let show_fallback = DbShow {
-        id: None,
-        content_id,
-        backdrop: None,
-    };
-    let video_metadata = file.source.video.metadata().await?;
-    let id = tx.insert_show(&show_fallback).await?;
-    tx.commit().await?;
-    let poster_asset = PosterAsset::new(id, PosterContentType::Show);
-    tokio::fs::create_dir_all(poster_asset.path().parent().unwrap())
-        .await
-        .unwrap();
-    let _ = ffmpeg::pull_frame(
-        file.source.video.path(),
-        poster_asset.path(),
-        video_metadata.duration() / 2,
-    )
-    .await;
-    Ok(id)
-}
+async fn fetch_single_show_chunk(
+    db: Db,
+    config: ScanConfig,
+    title: &str,
+    discover_providers: &[&'static (dyn DiscoverMetadataProvider + Send + Sync)],
+) -> MetadataLookupWithIds<ShowMetadata> {
+    let shows = db.search_show(title).await.unwrap_or_default();
 
-async fn season_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-    show_id: i64,
-) -> anyhow::Result<i64> {
-    let mut tx = db.pool.begin().await?;
-    let fallback_content = DbContent {
-        id: None,
-        content_type: DbContentType::Season,
-        original_language: None,
-        original_title: None,
-        release_date: None,
-        plot: None,
-        poster: None,
-        title: format!("Season: {}", file.identifier.season),
-    };
-    let content_id = tx.insert_content(&fallback_content).await?;
-    let fallback_season = DbSeason {
-        number: i64::from(file.identifier.season),
-        show_id,
-        id: None,
-        content_id,
-    };
-    let id = tx.insert_season(fallback_season).await?;
-    tx.commit().await?;
-
-    Ok(id)
-}
-
-async fn episode_metadata_fallback(
-    db: &Db,
-    file: &LibraryItem<ShowIdentifier>,
-    season_id: i64,
-    duration: Duration,
-) -> anyhow::Result<i64> {
-    let mut tx = db.begin().await?;
-    let fallback_content = DbContent {
-        release_date: None,
-        content_type: DbContentType::Episode,
-        original_language: None,
-        original_title: None,
-        plot: None,
-        poster: None,
-        title: format!("Episode {}", file.identifier.episode),
-        id: None,
-    };
-    let content_id = tx.insert_content(&fallback_content).await?;
-    let fallback_episode = DbEpisode {
-        number: file.identifier.episode.into(),
-        id: None,
-        content_id,
-        duration: duration.as_secs() as i64,
-        season_id,
-    };
-    let video_metadata = file.source.video.metadata().await?;
-    let id = tx.insert_episode(&fallback_episode).await?;
-    tx.update_video_content_id(file.source.id, content_id)
-        .await?;
-    tx.commit().await?;
-    let poster_asset = PosterAsset::new(id, PosterContentType::Episode);
-    tokio::fs::create_dir_all(poster_asset.path().parent().unwrap())
-        .await
-        .unwrap();
-    let _ = ffmpeg::pull_frame(
-        file.source.video.path(),
-        poster_asset.path(),
-        video_metadata.duration() / 2,
-    )
-    .await;
-    Ok(id)
-}
-
-/// external to local show id
-async fn crossreference_show(
-    db: &Db,
-    external_metadata: &ShowMetadata,
-) -> anyhow::Result<Option<i64>> {
-    db.crossreference_show(
-        external_metadata.metadata_provider,
-        &external_metadata.metadata_id,
-    )
-    .await
-    .map_err(Into::into)
+    if shows.is_empty()
+        || shows.first().unwrap().title.split_whitespace().count()
+            != title.split_whitespace().count()
+    {
+        for provider in discover_providers {
+            let Ok(search_results) = provider.show_search(title, config.fetch_params).await else {
+                continue;
+            };
+            let Some(first_result) = search_results.into_iter().next() else {
+                continue;
+            };
+            match db
+                .crossreference_show(first_result.metadata_provider, &first_result.metadata_id)
+                .await
+            {
+                Ok(Some(local_id)) => return MetadataLookupWithIds::Local(local_id),
+                Ok(None) | Err(_) => {
+                    let Ok(mut external_ids) = provider
+                        .external_ids(&first_result.metadata_id, ContentType::Show)
+                        .await
+                    else {
+                        continue;
+                    };
+                    external_ids.insert(
+                        0,
+                        ExternalIdMetadata {
+                            provider: first_result.metadata_provider,
+                            id: first_result.metadata_id.clone(),
+                        },
+                    );
+                    return MetadataLookupWithIds::New {
+                        external_ids,
+                        metadata: first_result,
+                    };
+                }
+            }
+        }
+        tracing::warn!("Using show metadata fallback for: {title}");
+        show_fallback(title)
+    } else {
+        let local_id = shows
+            .into_iter()
+            .next()
+            .unwrap()
+            .metadata_id
+            .parse()
+            .unwrap();
+        MetadataLookupWithIds::Local(local_id)
+    }
 }
