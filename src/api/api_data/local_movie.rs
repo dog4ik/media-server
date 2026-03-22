@@ -1,23 +1,24 @@
-use std::time::Duration;
-
 use serde::Serialize;
 
 use crate::{
-    api::api_data::{LocalDataLookup, api_types::History},
-    metadata::{LocaleMetadata, MetadataImage, MetadataProvider, MovieMetadata},
+    api::api_data::{
+        LocalDataLookup,
+        api_types::{Actor, History},
+    },
+    metadata::{LocaleMetadata, MetadataProvider, MovieMetadata},
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Movie {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
-    pub poster: Option<MetadataImage>,
-    pub backdrop: Option<MetadataImage>,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
+    pub runtime: Option<crate::MediaDuration>,
     pub title: String,
+    pub cast: Option<Vec<Actor>>,
     pub locale_metadata: Option<LocaleMetadata>,
     pub local: Option<LocalMovieData>,
 }
@@ -34,6 +35,7 @@ impl From<Movie> for MovieMetadata {
             runtime: value.runtime,
             title: value.title,
             locale_metadata: value.locale_metadata,
+            cast: None,
         }
     }
 }
@@ -46,14 +48,20 @@ pub struct LocalMovieData {
 
 impl Movie {
     pub async fn extend_with_lookup(
-        meta: MovieMetadata,
+        mut meta: MovieMetadata,
         lookup: LocalDataLookup,
     ) -> sqlx::Result<Self> {
         let local = lookup
             .movie_data(meta.metadata_provider, &meta.metadata_id)
             .await?;
-
-        Ok(Self::extend_meta(meta, local))
+        let cast = if let Some(cast) = std::mem::take(&mut meta.cast) {
+            Some(lookup.extend_actors(cast).await?)
+        } else {
+            None
+        };
+        let mut extended_movie = Self::extend_meta(meta, local);
+        extended_movie.cast = cast;
+        Ok(extended_movie)
     }
 
     pub fn extend_meta(meta: MovieMetadata, local: Option<LocalMovieData>) -> Self {
@@ -67,6 +75,7 @@ impl Movie {
             runtime: meta.runtime,
             title: meta.title,
             locale_metadata: meta.locale_metadata,
+            cast: None,
             local,
         }
     }

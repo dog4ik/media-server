@@ -1,10 +1,9 @@
-use std::time::Duration;
-
 use serde::Serialize;
 
 use crate::{
+    api::api_data::local_actor::LocalActorData,
     db,
-    metadata::{LocaleMetadata, MetadataImage},
+    metadata::{LocaleMetadata, MetadataProvider, PersonMetadata},
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -12,8 +11,7 @@ pub struct History {
     pub id: i64,
     pub time: i64,
     pub is_finished: bool,
-    #[serde(with = "time::serde::rfc3339")]
-    pub update_time: time::OffsetDateTime,
+    pub update_time: crate::OffsetDateTime,
 }
 
 impl From<db::DbHistory> for History {
@@ -23,14 +21,14 @@ impl From<db::DbHistory> for History {
             time,
             is_finished,
             update_time,
-            content_id,
+            content_id: _,
         }: db::DbHistory,
     ) -> Self {
         Self {
             id: id.expect("id is not null"),
             time,
             is_finished,
-            update_time,
+            update_time: update_time.unwrap().into(),
         }
     }
 }
@@ -38,7 +36,7 @@ impl From<db::DbHistory> for History {
 /// Any content base data
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Content {
-    pub poster: Option<MetadataImage>,
+    pub poster: Option<String>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
     pub title: String,
@@ -48,9 +46,7 @@ pub struct Content {
 impl From<db::DbContent> for Content {
     fn from(value: db::DbContent) -> Self {
         Self {
-            poster: value
-                .poster
-                .map(|u| MetadataImage::new(u.parse().expect("poster is a valid url"))),
+            poster: value.poster,
             plot: value.plot,
             release_date: value.release_date,
             title: value.title,
@@ -64,33 +60,27 @@ impl From<db::DbContent> for Content {
     }
 }
 
-/// Show specific data
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct Show {
-    pub backdrop: Option<MetadataImage>,
-    /// Array of available season numbers
-    pub seasons: Option<Vec<usize>>,
-    pub episodes_amount: Option<usize>,
+pub struct Actor {
+    pub name: String,
+    pub poster: Option<String>,
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
+    pub imdb_id: Option<String>,
+    pub character: Option<String>,
+    pub local: Option<LocalActorData>,
 }
 
-/// Season specific data
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct Season {
-    pub number: usize,
-}
-
-/// Episode specific data
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct Episode {
-    pub number: usize,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
-}
-
-/// Movie specific data parts
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct Movie {
-    pub backdrop: Option<MetadataImage>,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
+impl Actor {
+    pub fn extend_meta(meta: PersonMetadata, local: Option<LocalActorData>) -> Self {
+        Self {
+            name: meta.name,
+            poster: meta.person_poster,
+            metadata_id: meta.metadata_id,
+            metadata_provider: meta.metadata_provider,
+            imdb_id: meta.imdb_id,
+            character: meta.role.map(|r| r.character),
+            local,
+        }
+    }
 }

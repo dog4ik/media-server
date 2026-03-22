@@ -16,9 +16,9 @@ use crate::{app_state::AppError, metadata::LocaleMetadata};
 
 use super::{
     ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-    Language, METADATA_CACHE_SIZE, MetadataImage, MetadataProvider, MetadataSearchResult,
-    MovieMetadata, MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
-    provod_agent, request_client::LimitedRequestClient,
+    Language, METADATA_CACHE_SIZE, MetadataProvider, MetadataSearchResult, MovieMetadata,
+    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider, provod_agent,
+    request_client::LimitedRequestClient,
 };
 
 #[derive(Debug)]
@@ -225,9 +225,6 @@ impl ShowMetadataProvider for TvdbApi {
         let plot = season
             .overview_translations
             .and_then(|t| t.into_iter().next());
-        let poster = season
-            .image
-            .and_then(|i| Some(MetadataImage::new(i.parse().ok()?)));
 
         Ok(SeasonMetadata {
             metadata_id: show.id.to_string(),
@@ -235,9 +232,10 @@ impl ShowMetadataProvider for TvdbApi {
             release_date: season.year,
             episodes,
             plot,
-            poster,
+            poster: season.image,
             number: season.number,
             title: season.name,
+            cast: None,
         })
     }
 
@@ -342,15 +340,8 @@ impl DiscoverMetadataProvider for TvdbApi {
 
 impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
     fn into(self) -> ShowMetadata {
-        let poster = self
-            .image
-            .map(|p| MetadataImage::new(Url::parse(&p).unwrap()));
         // 3 means 16 / 9 image
-        let backdrop = self
-            .artworks
-            .iter()
-            .find(|a| a.artwork_type == 3)
-            .and_then(|a| Some(MetadataImage::new(Url::parse(&a.image).ok()?)));
+        let backdrop = self.artworks.into_iter().find(|a| a.artwork_type == 3);
 
         // season_number 0 is extras
         let seasons: BTreeSet<_> = self
@@ -372,29 +363,23 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
         ShowMetadata {
             metadata_id: self.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
-            poster,
-            backdrop,
+            poster: self.image,
+            backdrop: backdrop.map(|v| v.image),
             plot: self.overview,
             release_date: self.first_aired,
             title: self.name,
             episodes_amount: Some(self.episodes.len()),
             seasons: Some(seasons.into_iter().collect()),
             locale_metadata,
+            cast: None,
         }
     }
 }
 
 impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
     fn into(self) -> MovieMetadata {
-        let poster = self
-            .image
-            .map(|p| MetadataImage::new(Url::parse(&p).unwrap()));
         // 3 is somehow 16 / 9 image
-        let backdrop = self
-            .artworks
-            .iter()
-            .find(|a| a.artwork_type == 3)
-            .and_then(|a| Some(MetadataImage::new(Url::parse(&a.image).ok()?)));
+        let backdrop = self.artworks.into_iter().find(|a| a.artwork_type == 3);
         let plot = self
             .translations
             .overview_translations
@@ -413,23 +398,23 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
         MovieMetadata {
             metadata_id: self.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
-            poster,
-            backdrop,
+            poster: self.image,
+            backdrop: backdrop.map(|v| v.image),
             plot,
             release_date: self.first_release.map(|r| r.date),
-            runtime: self.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
+            runtime: self
+                .runtime
+                .map(|t| Duration::from_secs(t as u64 * 60))
+                .map(Into::into),
             title: self.name,
             locale_metadata,
+            cast: None,
         }
     }
 }
 
 impl From<TvdbSearchResult> for MovieMetadata {
     fn from(mut val: TvdbSearchResult) -> Self {
-        let poster = val
-            .image_url
-            .and_then(|url| url.parse().ok())
-            .map(MetadataImage::new);
         let locale_metadata =
             val.translations
                 .remove(&val.primary_language)
@@ -441,24 +426,20 @@ impl From<TvdbSearchResult> for MovieMetadata {
         MovieMetadata {
             metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
-            poster,
+            poster: val.image_url,
             backdrop: None,
             plot: val.overview,
             release_date: val.first_air_time,
             runtime: None,
             title: val.name,
             locale_metadata,
+            cast: None,
         }
     }
 }
 
 impl From<TvdbSearchResult> for ShowMetadata {
     fn from(mut val: TvdbSearchResult) -> Self {
-        let poster = val
-            .image_url
-            .and_then(|url| url.parse().ok())
-            .map(MetadataImage::new);
-
         let locale_metadata =
             val.translations
                 .remove(&val.primary_language)
@@ -470,7 +451,7 @@ impl From<TvdbSearchResult> for ShowMetadata {
         ShowMetadata {
             metadata_id: val.tvdb_id,
             metadata_provider: MetadataProvider::Tvdb,
-            poster,
+            poster: val.image_url,
             backdrop: None,
             plot: val.overview,
             release_date: val.first_air_time,
@@ -483,7 +464,6 @@ impl From<TvdbSearchResult> for ShowMetadata {
 
 impl From<TvdbEpisode> for EpisodeMetadata {
     fn from(value: TvdbEpisode) -> Self {
-        let poster = value.image.map(Into::into);
         Self {
             metadata_id: value.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
@@ -492,8 +472,12 @@ impl From<TvdbEpisode> for EpisodeMetadata {
             title: value.name,
             plot: value.overview,
             season_number: value.season_number,
-            runtime: value.runtime.map(|r| Duration::from_secs(r as u64 * 60)),
-            poster,
+            runtime: value
+                .runtime
+                .map(|r| Duration::from_secs(r as u64 * 60))
+                .map(Into::into),
+            poster: value.image.map(|v| v.to_string()),
+            cast: None,
         }
     }
 }
@@ -505,10 +489,6 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
             "movie" => ContentType::Movie,
             _ => Err(anyhow::anyhow!("Unknown content type: {}", val.search_type))?,
         };
-        let poster = val
-            .image_url
-            .and_then(|url| url.parse().ok())
-            .map(MetadataImage::new);
         let locale_metadata =
             val.translations
                 .remove(&val.primary_language)
@@ -519,7 +499,7 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
 
         Ok(MetadataSearchResult {
             title: val.name,
-            poster,
+            poster: val.image_url,
             plot: val.overview,
             metadata_provider: MetadataProvider::Tvdb,
             content_type,
@@ -555,17 +535,6 @@ impl TvdbPoster {
 impl Display for TvdbPoster {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}{}", Self::BASE_PATH, self.0)
-    }
-}
-
-impl From<TvdbPoster> for MetadataImage {
-    fn from(value: TvdbPoster) -> Self {
-        Self(
-            value
-                .to_string()
-                .parse()
-                .expect("Tvdb images are valid urls"),
-        )
     }
 }
 

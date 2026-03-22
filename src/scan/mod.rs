@@ -1,10 +1,8 @@
 use crate::{
-    ffmpeg,
-    library::{
+    db::{DbActions, DbRole, DbTransaction}, ffmpeg, library::{
         Source,
-        assets::{BackdropAsset, FileAsset, PosterAsset},
-    },
-    metadata::{ExternalIdMetadata, FetchParams},
+        assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
+    }, metadata::{ExternalIdMetadata, FetchParams, PersonMetadata}
 };
 
 pub mod episode;
@@ -12,6 +10,7 @@ pub mod fallback;
 mod merge;
 pub mod movie;
 pub mod show;
+pub mod scan_progress;
 
 #[derive(Debug, Clone)]
 enum MetadataLookup<T> {
@@ -48,15 +47,16 @@ impl Default for ScanConfig {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum AssetKind {
     Poster(PosterAsset),
     Backdrop(BackdropAsset),
 }
 
 pub enum AssetTaskSource {
-    Url(reqwest::Url),
+    Url(String),
     VideoFrame(Source),
-    UrlWithFrameFallback { url: reqwest::Url, source: Source },
+    UrlWithFrameFallback { url: String, source: Source },
 }
 
 pub struct AssetSaveTask {
@@ -76,10 +76,10 @@ impl AssetSaveTask {
 impl AssetTaskSource {
     async fn execute_with(self, asset: impl FileAsset) -> anyhow::Result<()> {
         match self {
-            AssetTaskSource::Url(url) => save_asset_from_url(url, asset).await,
+            AssetTaskSource::Url(url) => save_asset_from_url(url.parse()?, asset).await,
             AssetTaskSource::VideoFrame(source) => save_asset_from_frame(asset, &source).await,
             AssetTaskSource::UrlWithFrameFallback { url, source } => {
-                save_asset_from_url_with_frame_fallback(url, asset, &source).await
+                save_asset_from_url_with_frame_fallback(url.parse()?, asset, &source).await
             }
         }
     }
@@ -120,6 +120,48 @@ async fn save_asset_from_url_with_frame_fallback(
         tracing::warn!("Failed to save image, pulling frame: {e}");
         fs::create_dir_all(asset_path.parent().unwrap()).await?;
         ffmpeg::pull_frame(source.video.path(), asset_path, video_duration / 2).await?;
+    }
+    Ok(())
+}
+
+pub(super) async fn insert_roles(
+    tx: &mut DbTransaction,
+    content_id: i64,
+    cast: Vec<PersonMetadata>,
+    asset_tasks: &mut Vec<AssetSaveTask>,
+) -> sqlx::Result<()> {
+    for cast in cast {
+        let actor_id = match tx
+            .lookup_actor_id(
+                cast.metadata_provider,
+                &cast.metadata_id,
+                cast.imdb_id.as_deref(),
+            )
+            .await?
+        {
+            Some(id) => id,
+            None => {
+                let actor_id = tx.insert_actor(&cast.into_db_actor()).await?;
+                if let Some(poster_url) = cast.person_poster {
+                    asset_tasks.push(AssetSaveTask {
+                        kind: AssetKind::Poster(PosterAsset::new(
+                            actor_id,
+                            PosterContentType::Actor,
+                        )),
+                        source: AssetTaskSource::Url(poster_url),
+                    });
+                }
+                actor_id
+            }
+        };
+
+        tx.insert_role(&DbRole {
+            id: None,
+            actor_id,
+            content_id,
+            character: cast.role.as_ref().map(|r| r.character.clone()),
+        })
+        .await?;
     }
     Ok(())
 }

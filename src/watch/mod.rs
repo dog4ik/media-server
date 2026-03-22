@@ -1,4 +1,3 @@
-use std::time::Duration;
 
 use hls_stream::{HlsStreamConfiguration, HlsTempPath, job::HlsJobHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
@@ -39,8 +38,7 @@ pub enum Stream {
 
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
 pub struct WatchProgress {
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub current_time: Duration,
+    pub current_time: crate::MediaDuration,
 }
 
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
@@ -55,8 +53,7 @@ pub struct WatchIdentifier {
 #[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize)]
 pub struct WatchTask {
     pub video_id: i64,
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub total_duration: Duration,
+    pub total_duration: crate::MediaDuration,
     pub variant_id: Option<uuid::Uuid>,
     pub method: StreamMethod,
     pub client_agent: String,

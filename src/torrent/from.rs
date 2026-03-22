@@ -92,7 +92,7 @@ impl From<torrent::FullStateTracker> for super::StateTracker {
     fn from(value: torrent::FullStateTracker) -> Self {
         Self {
             url: value.url,
-            announce_interval: value.announce_interval,
+            announce_interval: value.announce_interval.into(),
             status: value.status.into(),
         }
     }
@@ -286,7 +286,9 @@ impl From<events::TrackerEvent> for super::TrackerEvent {
 impl From<events::TrackerEventKind> for super::TrackerEventKind {
     fn from(value: events::TrackerEventKind) -> Self {
         match value {
-            events::TrackerEventKind::Reannounce { interval } => Self::Reannounce { interval },
+            events::TrackerEventKind::Reannounce { interval } => Self::Reannounce {
+                interval: interval.into(),
+            },
             events::TrackerEventKind::Failed { reason } => Self::Failed { reason },
         }
     }

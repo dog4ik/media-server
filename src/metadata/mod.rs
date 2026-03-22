@@ -3,13 +3,8 @@ use std::{fmt::Display, num::NonZero, str::FromStr, time::Duration};
 use crate::{
     app_state::AppError,
     db::{DbContent, DbContentType, DbEpisode, DbMovie, DbSeason, DbShow},
-    ffmpeg,
 };
-use reqwest::Url;
-use serde::{
-    Deserialize, Deserializer, Serialize,
-    de::{self},
-};
+use serde::{Deserialize, Serialize};
 
 pub mod metadata_stack;
 /// Fallback service for different metadata providers.
@@ -70,103 +65,9 @@ impl Language {
     }
 }
 
-impl FromStr for Language {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "en" => Ok(Language::En),
-            "es" => Ok(Language::Es),
-            "de" => Ok(Language::De),
-            "fr" => Ok(Language::Fr),
-            "ru" => Ok(Language::Ru),
-            "ja" => Ok(Language::Ja),
-            "sr" => Ok(Language::Sr),
-            _ => Err(anyhow::anyhow!("Unsupported language: {s}")),
-        }
-    }
-}
-
 #[derive(Debug, Default, Clone, Copy)]
 pub struct FetchParams {
     pub lang: Language,
-}
-
-#[derive(Debug, Clone, utoipa::ToSchema)]
-pub struct MetadataImage(pub Url);
-
-impl AsRef<Url> for MetadataImage {
-    fn as_ref(&self) -> &Url {
-        &self.0
-    }
-}
-
-impl From<MetadataImage> for Url {
-    fn from(val: MetadataImage) -> Self {
-        val.0
-    }
-}
-
-impl Serialize for MetadataImage {
-    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        serializer.serialize_str(self.0.as_str())
-    }
-}
-
-impl<'de> Deserialize<'de> for MetadataImage {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct MetadataImageVisitor;
-
-        impl de::Visitor<'_> for MetadataImageVisitor {
-            type Value = MetadataImage;
-
-            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
-                formatter.write_str("a string representing a valid URL")
-            }
-
-            fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
-            where
-                E: de::Error,
-            {
-                match Url::from_str(value) {
-                    Ok(url) => Ok(MetadataImage(url)),
-                    Err(_) => Err(de::Error::invalid_value(de::Unexpected::Str(value), &self)),
-                }
-            }
-        }
-
-        deserializer.deserialize_str(MetadataImageVisitor)
-    }
-}
-
-impl MetadataImage {
-    pub fn new(url: Url) -> Self {
-        MetadataImage(url)
-    }
-    const BLUR_DATA_IMG_WIDTH: i32 = 30;
-
-    pub async fn generate_blur_data(&self) -> Result<String, anyhow::Error> {
-        tracing::trace!("Generating blur data for: {}", self.0);
-        let MetadataImage(url) = self;
-        let bytes = reqwest::get(url.clone()).await?.bytes().await?;
-        ffmpeg::resize_image_ffmpeg(bytes, Self::BLUR_DATA_IMG_WIDTH, None).await
-    }
-
-    pub fn as_str(&self) -> &str {
-        self.0.as_str()
-    }
-}
-
-impl Display for MetadataImage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.0)
-    }
 }
 
 /// This trait must be implemented by all movie metadata providers
@@ -327,7 +228,7 @@ pub enum ContentType {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct MetadataSearchResult {
     pub title: String,
-    pub poster: Option<MetadataImage>,
+    pub poster: Option<String>,
     pub plot: Option<String>,
     pub metadata_provider: MetadataProvider,
     pub content_type: ContentType,
@@ -340,14 +241,14 @@ pub struct MetadataSearchResult {
 pub struct MovieMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
-    pub poster: Option<MetadataImage>,
-    pub backdrop: Option<MetadataImage>,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
     pub plot: Option<String>,
     pub release_date: Option<String>,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
+    pub runtime: Option<crate::MediaDuration>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
+    pub cast: Option<Vec<PersonMetadata>>,
 }
 
 /// The unified show data structure from any show provider
@@ -355,8 +256,8 @@ pub struct MovieMetadata {
 pub struct ShowMetadata {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
-    pub poster: Option<MetadataImage>,
-    pub backdrop: Option<MetadataImage>,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
     pub plot: Option<String>,
     /// Array of available season numbers
     pub seasons: Option<Vec<usize>>,
@@ -364,6 +265,7 @@ pub struct ShowMetadata {
     pub release_date: Option<String>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
+    pub cast: Option<Vec<PersonMetadata>>,
 }
 
 /// The unified season data structure from any show provider
@@ -375,8 +277,9 @@ pub struct SeasonMetadata {
     pub title: Option<String>,
     pub episodes: Vec<EpisodeMetadata>,
     pub plot: Option<String>,
-    pub poster: Option<MetadataImage>,
+    pub poster: Option<String>,
     pub number: usize,
+    pub cast: Option<Vec<PersonMetadata>>,
 }
 
 /// The unified episode data structure from any show provider
@@ -389,9 +292,9 @@ pub struct EpisodeMetadata {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
-    pub poster: Option<MetadataImage>,
+    pub runtime: Option<crate::MediaDuration>,
+    pub poster: Option<String>,
+    pub cast: Option<Vec<PersonMetadata>>,
 }
 
 /// Localization specific data
@@ -401,11 +304,20 @@ pub struct LocaleMetadata {
     pub original_language: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CharacterMetadata {
-    pub actor: String,
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct PersonMetadata {
+    pub metadata_id: String,
+    pub metadata_provider: MetadataProvider,
+    pub person_poster: Option<String>,
+    pub name: String,
+    pub imdb_id: Option<String>,
+    pub role: Option<RoleMetadata>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
+pub struct RoleMetadata {
     pub character: String,
-    pub image: Option<String>,
+    pub poster: Option<String>,
 }
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq, Serialize, Deserialize, utoipa::ToSchema)]
@@ -467,8 +379,8 @@ impl ShowMetadata {
         }
     }
 
-    pub fn into_db_show(self, content_id: i64) -> DbShow {
-        let backdrop = self.backdrop.map(|p| p.as_str().to_owned());
+    pub fn into_db_show(&self, content_id: i64) -> DbShow {
+        let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
 
         DbShow {
             id: None,
@@ -492,7 +404,12 @@ impl EpisodeMetadata {
         }
     }
 
-    pub fn into_db_episode(self, content_id: i64, season_id: i64, duration: Duration) -> DbEpisode {
+    pub fn into_db_episode(
+        &self,
+        content_id: i64,
+        season_id: i64,
+        duration: Duration,
+    ) -> DbEpisode {
         DbEpisode {
             id: None,
             content_id,
@@ -527,7 +444,7 @@ impl SeasonMetadata {
         }
     }
 
-    pub fn into_db_season(self, content_id: i64, show_id: i64) -> DbSeason {
+    pub fn into_db_season(&self, content_id: i64, show_id: i64) -> DbSeason {
         DbSeason {
             id: None,
             content_id,
@@ -561,13 +478,26 @@ impl MovieMetadata {
             original_title,
         }
     }
-    pub fn into_db_movie(self, content_id: i64, duration: Duration) -> DbMovie {
+    pub fn into_db_movie(&self, content_id: i64, duration: Duration) -> DbMovie {
         let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
         DbMovie {
             id: None,
             content_id,
             backdrop,
             duration: duration.as_secs() as i64,
+        }
+    }
+}
+
+impl PersonMetadata {
+    pub fn into_db_actor(&self) -> crate::db::DbActor {
+        crate::db::DbActor {
+            id: None,
+            name: self.name.clone(),
+            imdb_id: self.imdb_id.clone(),
+            metadata_id: self.metadata_id.clone(),
+            metadata_provider: self.metadata_provider,
+            poster: self.person_poster.clone(),
         }
     }
 }

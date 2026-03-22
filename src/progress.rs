@@ -10,11 +10,12 @@ use crate::{
     app_state::AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
     intro_detection::IntroJob,
+    scan::scan_progress,
     torrent::PendingTorrent,
     watch::WatchTask,
 };
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema, PartialEq)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "task_type")]
 pub enum TaskProgress {
     WatchSession(ProgressChunk<WatchTask>),
@@ -81,11 +82,13 @@ impl Display for VideoTask {
 pub struct LibraryScanTask;
 
 impl TaskTrait for LibraryScanTask {
-    type Identifier = ();
+    type Identifier = LibraryScanTask;
 
-    type Progress = Vec<String>;
+    type Progress = scan_progress::ProgressChunk;
 
-    fn identifier(&self) -> Self::Identifier {}
+    fn identifier(&self) -> Self::Identifier {
+        LibraryScanTask
+    }
 
     fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
         TaskProgress::LibraryScan(chunk)

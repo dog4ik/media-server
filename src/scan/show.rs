@@ -24,6 +24,7 @@ use crate::{
         ContentType, DiscoverMetadataProvider, ExternalIdMetadata, MetadataProvider, ShowMetadata,
         metadata_stack::MetadataProvidersStack,
     },
+    scan::{insert_roles, scan_progress::ScanProgressConsumer},
 };
 
 use super::{
@@ -38,18 +39,28 @@ struct ShowChunk {
     videos: Vec<LibraryItem<ShowIdentifier>>,
 }
 
-pub struct ShowScanner {
+pub struct ShowScanner<T> {
     db: Db,
     providers: &'static MetadataProvidersStack,
     config: ScanConfig,
+    progress_consumer: T,
 }
 
-impl ShowScanner {
-    pub fn new(db: Db, providers: &'static MetadataProvidersStack, config: ScanConfig) -> Self {
+impl<T> ShowScanner<T>
+where
+    T: ScanProgressConsumer,
+{
+    pub fn new(
+        db: Db,
+        providers: &'static MetadataProvidersStack,
+        config: ScanConfig,
+        progress_consumer: T,
+    ) -> Self {
         Self {
             db,
             providers,
             config,
+            progress_consumer,
         }
     }
 
@@ -197,6 +208,9 @@ impl ShowScanner {
                     let backdrop = metadata.backdrop.clone();
                     let content_id = tx.insert_content(&metadata.into_db_content()).await?;
                     let show_id = tx.insert_show(&metadata.into_db_show(content_id)).await?;
+                    if let Some(cast) = metadata.cast {
+                        insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                    }
                     for ext_id in &external_ids {
                         if let Err(e) = tx
                             .insert_external_id(DbExternalId {
@@ -219,7 +233,7 @@ impl ShowScanner {
                                 show_id,
                                 PosterContentType::Show,
                             )),
-                            source: AssetTaskSource::Url(url.into()),
+                            source: AssetTaskSource::Url(url),
                         });
                     }
                     if let Some(url) = backdrop {
@@ -228,7 +242,7 @@ impl ShowScanner {
                                 show_id,
                                 BackdropContentType::Show,
                             )),
-                            source: AssetTaskSource::Url(url.into()),
+                            source: AssetTaskSource::Url(url),
                         });
                     }
                     show_id
@@ -250,6 +264,9 @@ impl ShowScanner {
                         let season_id = tx
                             .insert_season(metadata.into_db_season(content_id, show_id))
                             .await?;
+                        if let Some(cast) = metadata.cast {
+                            insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                        }
                         if let Some(url) = poster {
                             asset_tasks.push(AssetSaveTask {
                                 kind: AssetKind::Poster(PosterAsset::new(
@@ -293,6 +310,9 @@ impl ShowScanner {
                                     &metadata.into_db_episode(content_id, season_id, duration),
                                 )
                                 .await?;
+                            if let Some(cast) = metadata.cast {
+                                insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                            }
                             let first_source = videos.first().map(|v| v.source.clone());
                             if let Some(url) = poster {
                                 let task_source = match first_source {

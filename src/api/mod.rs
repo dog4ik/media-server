@@ -1,3 +1,5 @@
+use crate::MediaDuration as CrateDuration;
+use crate::OffsetDateTime as CrateOffsetDateTime;
 use crate::app_state;
 use crate::app_state::AppError;
 use crate::config;
@@ -30,12 +32,6 @@ pub mod history;
 pub mod server;
 /// Torrent client specific endpoints
 pub mod torrent;
-
-#[derive(Debug, serde::Serialize, utoipa::ToSchema)]
-pub struct SerdeDuration {
-    pub secs: u64,
-    pub nanos: u32,
-}
 
 #[derive(OpenApi)]
 #[openapi(
@@ -122,6 +118,7 @@ pub struct SerdeDuration {
         server::delete_season,
         server::delete_show,
         server::delete_movie,
+        server::actor_poster,
         file_browser::browse_directory,
         file_browser::parent_directory,
         file_browser::root_dirs,
@@ -156,7 +153,6 @@ pub struct SerdeDuration {
             metadata::EpisodeMetadata,
             metadata::SeasonMetadata,
             metadata::MetadataProvider,
-            metadata::MetadataImage,
             metadata::ExternalIdMetadata,
             metadata::MetadataSearchResult,
             metadata::ContentType,
@@ -212,7 +208,8 @@ pub struct SerdeDuration {
             config::ConfigurationApplyError,
             ws::WsRequest,
             ws::WsMessage,
-            SerdeDuration
+            CrateDuration,
+            CrateOffsetDateTime,
         )
     ),
     tags(
@@ -228,6 +225,7 @@ pub struct SerdeDuration {
         (name = "Watch", description = "Content watching operations"),
         (name = "Videos", description = "Video files operations"),
         (name = "Subtitles", description = "Subtitles operations"),
+        (name = "Actors", description = "Actors operations"),
     )
 )]
 pub struct OpenApiDoc;

@@ -6,7 +6,6 @@ use serde::{Serialize, ser::SerializeStruct};
 use crate::{
     app_state::AppError,
     config,
-    db::Db,
     torrent_index::{
         Torrent, TorrentIndex, TorrentIndexIdentifier, rutracker::ProvodRuTrackerAdapter,
         tpb::TpbApi,
@@ -22,7 +21,6 @@ use super::{
 pub struct MetadataProvidersStack {
     pub tmdb: Option<&'static TmdbApi>,
     pub tvdb: Option<&'static TvdbApi>,
-    pub local: &'static Db,
     pub tpb: Option<&'static TpbApi>,
     pub rutracker: Option<&'static ProvodRuTrackerAdapter>,
     pub discover_providers_stack: Mutex<Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)>>,
@@ -73,9 +71,8 @@ impl std::fmt::Debug for MetadataProvidersStack {
 }
 
 impl MetadataProvidersStack {
-    pub fn new(db: &'static Db) -> Self {
+    pub fn new() -> Self {
         Self {
-            local: db,
             tvdb: None,
             tmdb: None,
             tpb: None,
@@ -360,9 +357,7 @@ impl MetadataProvidersStack {
         provider: MetadataProvider,
     ) -> Option<&'static (dyn DiscoverMetadataProvider + Send + Sync)> {
         match provider {
-            MetadataProvider::Local => {
-                Some(self.local as &(dyn DiscoverMetadataProvider + Send + Sync))
-            }
+            MetadataProvider::Local => None,
             MetadataProvider::Tmdb => self
                 .tmdb
                 .map(|p| p as &(dyn DiscoverMetadataProvider + Send + Sync)),
@@ -378,9 +373,7 @@ impl MetadataProvidersStack {
         provider: MetadataProvider,
     ) -> Option<&'static (dyn MovieMetadataProvider + Send + Sync)> {
         match provider {
-            MetadataProvider::Local => {
-                Some(self.local as &(dyn MovieMetadataProvider + Send + Sync))
-            }
+            MetadataProvider::Local => None,
             MetadataProvider::Tmdb => self
                 .tmdb
                 .map(|p| p as &(dyn MovieMetadataProvider + Send + Sync)),
@@ -396,9 +389,7 @@ impl MetadataProvidersStack {
         provider: MetadataProvider,
     ) -> Option<&'static (dyn ShowMetadataProvider + Send + Sync)> {
         match provider {
-            MetadataProvider::Local => {
-                Some(self.local as &(dyn ShowMetadataProvider + Send + Sync))
-            }
+            MetadataProvider::Local => None,
             MetadataProvider::Tmdb => self
                 .tmdb
                 .map(|p| p as &(dyn ShowMetadataProvider + Send + Sync)),

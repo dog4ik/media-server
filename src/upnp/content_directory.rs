@@ -188,7 +188,7 @@ impl MediaServerContentDirectory {
                         watch_url,
                         ProtocolInfo::http_get(source.video.container().mime_type().to_string()),
                     );
-                    if let Ok(size) = source.video.async_file_size().await {
+                    if let Ok(size) = source.video.file_size().await {
                         watch_resource.set_size(size);
                     }
                     watch_resource.set_duartion(metadata.duration());

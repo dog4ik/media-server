@@ -10,11 +10,12 @@ use reqwest::{
 use serde::Deserialize;
 
 use crate::app_state::AppError;
+use crate::metadata::{PersonMetadata, RoleMetadata};
 
 use super::{
     ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
-    MetadataImage, MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider,
-    SeasonMetadata, ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
+    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+    ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
 use super::{FetchParams, Language, METADATA_CACHE_SIZE, provod_agent};
 
@@ -26,7 +27,7 @@ pub struct TmdbApi {
 }
 
 #[derive(Debug, Clone, Default)]
-pub enum PosterSizes {
+enum PosterSizes {
     W92,
     W154,
     W185,
@@ -52,7 +53,7 @@ impl PosterSizes {
 }
 
 #[derive(Debug, Clone)]
-pub struct TmdbImage {
+struct TmdbImage {
     url: Url,
 }
 
@@ -72,9 +73,9 @@ impl TmdbImage {
     }
 }
 
-impl From<TmdbImage> for MetadataImage {
-    fn from(val: TmdbImage) -> Self {
-        MetadataImage::new(val.url)
+impl std::fmt::Display for TmdbImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.url)
     }
 }
 
@@ -221,6 +222,8 @@ impl TmdbApi {
             .push(&tmdb_show_id.to_string())
             .push("season")
             .push(&season.to_string());
+        url.query_pairs_mut()
+            .append_pair("append_to_response", "credits");
         append_language(&mut url, fetch_params.lang);
         let req = Request::new(Method::GET, url);
         let response: TmdbShowSeason = self.client.request(req).await?;
@@ -237,22 +240,20 @@ impl TmdbApi {
         episode: usize,
         params: FetchParams,
     ) -> Result<TmdbSeasonEpisode, AppError> {
-        //FIX: case when episode cant be found by metadata provider while we have its siblings in
-        //cache
-        if let Some(cache_episode) = self.get_from_cache(tmdb_show_id, season, episode) {
-            tracing::debug!(
-                "Reused cache entry for {} season: {} episode: {}",
-                tmdb_show_id,
-                season,
-                episode
-            );
-            Ok(cache_episode)
-        } else {
-            let response = self.tv_show_season(tmdb_show_id, season, params).await?;
-            self.update_cache(tmdb_show_id, season, response.episodes);
-            self.get_from_cache(tmdb_show_id, season, episode)
-                .ok_or(AppError::not_found("Could not found episode in cache"))
-        }
+        let mut url = self.base_url.clone();
+        url.path_segments_mut()
+            .unwrap()
+            .push("tv")
+            .push(&tmdb_show_id.to_string())
+            .push("season")
+            .push(&season.to_string())
+            .push("episode")
+            .push(&episode.to_string());
+        url.query_pairs_mut()
+            .append_pair("append_to_response", "credits")
+            .append_pair("language", &params.lang.to_string());
+        let req = Request::new(Method::GET, url);
+        self.client.request(req).await
     }
 
     pub async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
@@ -300,7 +301,8 @@ impl TmdbApi {
             .push("movie")
             .push(&movie_id.to_string());
         url.query_pairs_mut()
-            .append_pair("language", &lang.to_string());
+            .append_pair("language", &lang.to_string())
+            .append_pair("append_to_response", "credits");
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
@@ -346,10 +348,10 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
     fn from(val: TmdbSearchMovieResult) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         let backdrop = val
             .backdrop_path
-            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
         let original_title = val.original_title;
         let original_language = val.original_language;
         MovieMetadata {
@@ -365,6 +367,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
                 original_title,
                 original_language,
             }),
+            cast: None,
         }
     }
 }
@@ -373,10 +376,10 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
     fn from(val: TmdbSearchShowResult) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         let backdrop = val
             .backdrop_path
-            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
         let original_title = val.original_name;
         let original_language = val.original_language;
         ShowMetadata {
@@ -393,6 +396,7 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             }),
             seasons: None,
             episodes_amount: None,
+            cast: None,
         }
     }
 }
@@ -401,7 +405,7 @@ impl From<TmdbShowSeason> for SeasonMetadata {
     fn from(val: TmdbShowSeason) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         SeasonMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -411,6 +415,9 @@ impl From<TmdbShowSeason> for SeasonMetadata {
             poster,
             number: val.season_number,
             title: Some(val.name),
+            cast: val
+                .credits
+                .map(|credits| credits.cast.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -419,17 +426,23 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
     fn from(val: TmdbSeasonEpisode) -> Self {
         let poster = val
             .still_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         EpisodeMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
             release_date: val.air_date,
             number: val.episode_number,
             title: val.name,
-            runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
+            runtime: val
+                .runtime
+                .map(|t| Duration::from_secs(t as u64 * 60))
+                .map(Into::into),
             plot: val.overview,
             season_number: val.season_number,
             poster,
+            cast: val
+                .credits
+                .map(|credits| credits.cast.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -565,10 +578,10 @@ impl From<TmdbMovieDetails> for MovieMetadata {
     fn from(val: TmdbMovieDetails) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         let backdrop = val
             .backdrop_path
-            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
         MovieMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -576,12 +589,18 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             backdrop,
             plot: Some(val.overview),
             release_date: val.release_date,
-            runtime: val.runtime.map(|t| Duration::from_secs(t as u64 * 60)),
+            runtime: val
+                .runtime
+                .map(|t| Duration::from_secs(t as u64 * 60))
+                .map(Into::into),
             title: val.title,
             locale_metadata: Some(LocaleMetadata {
                 original_title: val.original_title,
                 original_language: val.original_language,
             }),
+            cast: val
+                .credits
+                .map(|credits| credits.cast.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -590,10 +609,10 @@ impl From<TmdbShowDetails> for ShowMetadata {
     fn from(val: TmdbShowDetails) -> Self {
         let poster = val
             .poster_path
-            .map(|p| TmdbImage::new(&p, PosterSizes::default()).into());
+            .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
         let backdrop = val
             .backdrop_path
-            .map(|b| TmdbImage::new(&b, PosterSizes::Original).into());
+            .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
         ShowMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -608,6 +627,9 @@ impl From<TmdbShowDetails> for ShowMetadata {
                 original_title: val.original_name,
                 original_language: val.original_language,
             }),
+            cast: val
+                .credits
+                .map(|v| v.cast.into_iter().map(Into::into).collect()),
         }
     }
 }
@@ -627,7 +649,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 title = movie.title;
                 poster = movie
                     .poster_path
-                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::default()).url));
+                    .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
                 tmdb_id = movie.id;
                 plot = movie.overview;
                 content_type = ContentType::Movie;
@@ -638,7 +660,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 title = show.name;
                 poster = show
                     .poster_path
-                    .map(|p| MetadataImage::new(TmdbImage::new(&p, PosterSizes::default()).url));
+                    .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
                 tmdb_id = show.id;
                 plot = show.overview;
                 content_type = ContentType::Show;
@@ -663,12 +685,31 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
     }
 }
 
+impl From<TmdbCast> for PersonMetadata {
+    fn from(value: TmdbCast) -> Self {
+        let poster = value
+            .profile_path
+            .map(|p| TmdbImage::new(&p, Default::default()).to_string());
+        Self {
+            metadata_id: value.id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            person_poster: poster,
+            name: value.name,
+            imdb_id: None,
+            role: value.character.map(|character| RoleMetadata {
+                character,
+                poster: None,
+            }),
+        }
+    }
+}
+
 // Types
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct TmdbFindByIdResult {
-    pub movie_results: Vec<TmdbSearchMovieResult>,
-    pub tv_results: Vec<TmdbSearchShowResult>,
+struct TmdbFindByIdResult {
+    movie_results: Vec<TmdbSearchMovieResult>,
+    tv_results: Vec<TmdbSearchShowResult>,
 }
 
 // possible bug: media_type field is not checked. if semantics of different content types are the same
@@ -676,7 +717,7 @@ pub struct TmdbFindByIdResult {
 // consider manual deserialize implementation
 #[derive(Deserialize, Debug, Clone)]
 #[serde(untagged)]
-pub enum TmdbFindMultiResult {
+enum TmdbFindMultiResult {
     Movie(TmdbSearchMovieResult),
     Show(TmdbSearchShowResult),
     Episode(TmdbSeasonEpisode),
@@ -684,150 +725,170 @@ pub enum TmdbFindMultiResult {
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbExternalIds {
-    pub id: Option<usize>,
-    pub imdb_id: Option<String>,
-    pub freebase_mid: Option<String>,
-    pub freebase_id: Option<String>,
-    pub tvdb_id: Option<usize>,
-    pub tvrage_id: Option<usize>,
-    pub wikidata_id: Option<String>,
+struct TmdbExternalIds {
+    id: Option<usize>,
+    imdb_id: Option<String>,
+    freebase_mid: Option<String>,
+    freebase_id: Option<String>,
+    tvdb_id: Option<usize>,
+    tvrage_id: Option<usize>,
+    wikidata_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbShowDetails {
-    pub adult: bool,
-    pub backdrop_path: Option<String>,
-    pub first_air_date: Option<String>,
-    pub genres: Option<Vec<TmdbGenre>>,
-    pub id: usize,
-    pub last_air_date: Option<String>,
-    pub name: String,
-    pub number_of_episodes: usize,
-    pub number_of_seasons: usize,
-    pub original_language: String,
-    pub original_name: String,
-    pub overview: String,
-    pub poster_path: Option<String>,
+struct TmdbShowDetails {
+    adult: bool,
+    backdrop_path: Option<String>,
+    first_air_date: Option<String>,
+    genres: Option<Vec<TmdbGenre>>,
+    id: usize,
+    last_air_date: Option<String>,
+    name: String,
+    number_of_episodes: usize,
+    number_of_seasons: usize,
+    original_language: String,
+    original_name: String,
+    overview: String,
+    poster_path: Option<String>,
+    credits: Option<TmdbCredits>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbMovieDetails {
-    pub backdrop_path: Option<String>,
-    pub genres: Option<Vec<TmdbGenre>>,
-    pub id: usize,
-    pub imdb_id: Option<String>,
-    pub original_language: String,
-    pub original_title: String,
-    pub overview: String,
-    pub poster_path: Option<String>,
-    pub release_date: Option<String>,
-    pub runtime: Option<usize>,
-    pub title: String,
+struct TmdbMovieDetails {
+    backdrop_path: Option<String>,
+    genres: Option<Vec<TmdbGenre>>,
+    id: usize,
+    imdb_id: Option<String>,
+    original_language: String,
+    original_title: String,
+    overview: String,
+    poster_path: Option<String>,
+    release_date: Option<String>,
+    runtime: Option<usize>,
+    title: String,
+    credits: Option<TmdbCredits>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbGenre {
-    pub id: usize,
-    pub name: String,
+struct TmdbCredits {
+    cast: Vec<TmdbCast>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbEpisodeToAir {
-    pub id: usize,
-    pub name: String,
-    pub overview: String,
-    pub air_date: Option<String>,
-    pub episode_number: usize,
-    pub runtime: Option<usize>,
-    pub season_number: usize,
-    pub show_id: usize,
-    pub still_path: Option<String>,
+struct TmdbCast {
+    id: usize,
+    name: String,
+    original_name: Option<String>,
+    profile_path: Option<String>,
+    character: Option<String>,
+    order: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbCrew {
-    pub id: Option<usize>,
-    pub credit_id: Option<String>,
-    pub name: Option<String>,
-    pub adult: Option<bool>,
-    pub gender: Option<usize>,
-    pub known_for_department: Option<String>,
-    pub department: Option<String>,
-    pub original_name: Option<String>,
-    pub popularity: Option<f64>,
-    pub job: Option<String>,
-    pub profile_path: Option<String>,
+struct TmdbGenre {
+    id: usize,
+    name: String,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct TmdbEpisodeToAir {
+    id: usize,
+    name: String,
+    overview: String,
+    air_date: Option<String>,
+    episode_number: usize,
+    runtime: Option<usize>,
+    season_number: usize,
+    show_id: usize,
+    still_path: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct TmdbCrew {
+    id: Option<usize>,
+    credit_id: Option<String>,
+    name: Option<String>,
+    adult: Option<bool>,
+    gender: Option<usize>,
+    known_for_department: Option<String>,
+    department: Option<String>,
+    original_name: Option<String>,
+    popularity: Option<f64>,
+    job: Option<String>,
+    profile_path: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+struct TmdbGuestStars {
+    adult: Option<bool>,
+    gender: Option<usize>,
+    known_for_department: Option<String>,
+    original_name: Option<String>,
+    popularity: Option<f64>,
+    id: Option<usize>,
+    name: Option<String>,
+    credit_id: Option<String>,
+    character: Option<String>,
+    order: Option<usize>,
+    profile_path: Option<String>,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbGuestStars {
-    pub adult: Option<bool>,
-    pub gender: Option<usize>,
-    pub known_for_department: Option<String>,
-    pub original_name: Option<String>,
-    pub popularity: Option<f64>,
-    pub id: Option<usize>,
-    pub name: Option<String>,
-    pub credit_id: Option<String>,
-    pub character: Option<String>,
-    pub order: Option<usize>,
-    pub profile_path: Option<String>,
-}
-#[derive(Deserialize, Debug, Clone)]
-pub struct TmdbSeasonEpisode {
-    pub air_date: Option<String>,
-    pub episode_number: usize,
-    pub crew: Vec<Option<TmdbCrew>>,
-    pub guest_stars: Vec<Option<TmdbGuestStars>>,
-    pub name: String,
-    pub overview: Option<String>,
-    pub id: usize,
+struct TmdbSeasonEpisode {
+    air_date: Option<String>,
+    episode_number: usize,
+    crew: Vec<Option<TmdbCrew>>,
+    guest_stars: Vec<Option<TmdbGuestStars>>,
+    name: String,
+    overview: Option<String>,
+    id: usize,
     /// Duration in minutes
-    pub runtime: Option<usize>,
-    pub season_number: usize,
-    pub still_path: Option<String>,
+    runtime: Option<usize>,
+    season_number: usize,
+    still_path: Option<String>,
+    credits: Option<TmdbCredits>,
 }
 #[derive(Deserialize, Debug, Clone)]
-pub struct TmdbShowSeason {
-    pub air_date: Option<String>,
-    pub episodes: Vec<TmdbSeasonEpisode>,
-    pub name: String,
-    pub overview: Option<String>,
-    pub id: usize,
-    pub poster_path: Option<String>,
-    pub season_number: usize,
+struct TmdbShowSeason {
+    air_date: Option<String>,
+    episodes: Vec<TmdbSeasonEpisode>,
+    name: String,
+    overview: Option<String>,
+    id: usize,
+    poster_path: Option<String>,
+    season_number: usize,
+    credits: Option<TmdbCredits>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearchShowResult {
-    pub poster_path: Option<String>,
-    pub id: usize,
-    pub backdrop_path: Option<String>,
-    pub overview: Option<String>,
-    pub first_air_date: Option<String>,
-    pub name: String,
+    poster_path: Option<String>,
+    id: usize,
+    backdrop_path: Option<String>,
+    overview: Option<String>,
+    first_air_date: Option<String>,
+    name: String,
     #[serde(alias = "original_title")]
-    pub original_name: String,
-    pub original_language: String,
+    original_name: String,
+    original_language: String,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearch<T> {
-    pub page: usize,
+    page: usize,
     pub results: Vec<T>,
-    pub total_results: usize,
-    pub total_pages: usize,
+    total_results: usize,
+    total_pages: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearchMovieResult {
-    pub backdrop_path: Option<String>,
-    pub poster_path: Option<String>,
-    pub id: usize,
-    pub overview: Option<String>,
-    pub release_date: Option<String>,
-    pub title: String,
+    backdrop_path: Option<String>,
+    poster_path: Option<String>,
+    id: usize,
+    overview: Option<String>,
+    release_date: Option<String>,
+    title: String,
     #[serde(alias = "original_name")]
-    pub original_title: String,
-    pub original_language: String,
+    original_title: String,
+    original_language: String,
 }

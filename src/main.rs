@@ -65,7 +65,7 @@ async fn main() {
     let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
     let library = Box::leak(Box::new(Mutex::new(library)));
 
-    let mut providers_stack = MetadataProvidersStack::new(db);
+    let mut providers_stack = MetadataProvidersStack::new();
 
     match TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0) {
         Ok(tmdb_api) => {
@@ -264,6 +264,7 @@ async fn main() {
         .route("/history/suggest/shows", get(api::history::suggest_shows))
         .route("/history/{id}", delete(api::history::remove_history_item))
         .route("/history/{id}", put(api::history::update_history))
+        .route("/actor/{id}/poster", get(api::server::actor_poster))
         .route("/subtitles/{id}", delete(api::server::delete_subtitles))
         .route("/subtitles/{id}", get(api::server::get_subtitles))
         .route("/torrent/search", get(api::server::search_torrent))

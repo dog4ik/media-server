@@ -144,6 +144,7 @@ pub enum PosterContentType {
     Movie,
     Episode,
     Season,
+    Actor,
 }
 impl From<PosterContentType> for AssetContentType {
     fn from(val: PosterContentType) -> Self {
@@ -152,6 +153,7 @@ impl From<PosterContentType> for AssetContentType {
             PosterContentType::Movie => AssetContentType::Movie,
             PosterContentType::Episode => AssetContentType::Episode,
             PosterContentType::Season => AssetContentType::Season,
+            PosterContentType::Actor => AssetContentType::Actor,
         }
     }
 }
@@ -333,6 +335,20 @@ impl MovieAssetsDir {
     }
 }
 
+/// Directory of all actor assets
+#[derive(Debug, Clone)]
+pub struct ActorAssetsDir(PathBuf);
+impl AssetDir for ActorAssetsDir {
+    fn relative_path(&self) -> &Path {
+        &self.0
+    }
+}
+impl ActorAssetsDir {
+    pub fn new(actor_id: i64) -> Self {
+        Self(sharded_path(actor_id, AssetContentType::Actor))
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct VariantsDirAsset {
     path: PathBuf,
@@ -414,6 +430,7 @@ pub enum AssetContentType {
     Season,
     Episode,
     Video,
+    Actor,
 }
 
 impl Display for AssetContentType {
@@ -424,6 +441,7 @@ impl Display for AssetContentType {
             AssetContentType::Season => write!(f, "season"),
             AssetContentType::Episode => write!(f, "episode"),
             AssetContentType::Video => write!(f, "video"),
+            AssetContentType::Actor => write!(f, "actor"),
         }
     }
 }

@@ -1,28 +1,8 @@
 use std::{
-    fs::{self},
-    io::{self},
+    fs, io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
     path::{Path, PathBuf},
 };
-
-use tokio::io::AsyncReadExt;
-
-pub async fn file_hash(file: &mut tokio::fs::File) -> Result<u32, std::io::Error> {
-    use crc32fast::Hasher;
-    let mut hasher = Hasher::new();
-    let mut buffer = [0; 4096];
-
-    loop {
-        let bytes_read = file.read(&mut buffer).await?;
-        if bytes_read == 0 {
-            break;
-        }
-        hasher.update(&buffer[..bytes_read]);
-    }
-    let result = hasher.finalize();
-
-    Ok(result)
-}
 
 pub fn assert_send<T: Send>(_t: T) {}
 pub fn assert_sync<T: Sync>(_t: T) {}
@@ -76,21 +56,6 @@ pub fn tokenize_filename(file_name: &str) -> Vec<String> {
     .map(|e| e.trim().to_lowercase())
     .filter(|t| t != "-")
     .collect()
-}
-
-pub fn calculate_sha256<I, S>(args: I) -> String
-where
-    I: IntoIterator<Item = S> + Copy,
-    S: AsRef<[u8]>,
-{
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-
-    for arg in args {
-        hasher.update(arg);
-    }
-
-    format!("{:x}", hasher.finalize())
 }
 
 #[tracing::instrument(level = "debug")]

@@ -6,8 +6,6 @@ use std::process::{ExitStatus, Stdio};
 use std::str::FromStr;
 use std::time::Duration;
 
-use base64::Engine;
-use base64::engine::general_purpose;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout};
@@ -883,48 +881,6 @@ impl FFmpegProgressStdout {
             }
         }
         None
-    }
-}
-
-/// Resize and base64 encode image using ffmpeg image2pipe format
-pub async fn resize_image_ffmpeg(
-    bytes: bytes::Bytes,
-    width: i32,
-    height: Option<i32>,
-) -> Result<String, anyhow::Error> {
-    let scale = format!("scale={}:{}", width, height.unwrap_or(-1));
-    let ffmpeg: config::FFmpegPath = config::CONFIG.get_value();
-    let mut cmd = tokio::process::Command::new(ffmpeg.as_ref());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
-    }
-    let mut child = cmd
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-            "-",
-            "-vf",
-            &scale,
-            "-f",
-            "image2pipe",
-            "-",
-        ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()?;
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        stdin.write_all(&bytes).await?;
-    }
-    let output = child.wait_with_output().await?;
-    if output.status.success() {
-        Ok(general_purpose::STANDARD_NO_PAD.encode(output.stdout))
-    } else {
-        Err(anyhow!("resize process was unexpectedly terminated"))
     }
 }
 

@@ -25,8 +25,7 @@ pub struct HistoryEntry {
     #[serde(flatten)]
     pub content: Content,
     pub content_id: i64,
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub runtime: Duration,
+    pub runtime: crate::MediaDuration,
     #[serde(flatten)]
     pub history_content_type: HistoryContentType,
     pub history: History,
@@ -77,7 +76,7 @@ impl From<DbHistoryQuery> for HistoryEntry {
         Self {
             content_id: content.id.expect("content id is not null"),
             content: Content::from(content),
-            runtime: Duration::from_secs(runtime as u64),
+            runtime: Duration::from_secs(runtime as u64).into(),
             history_content_type,
             history: History::from(history),
         }
@@ -121,7 +120,7 @@ pub async fn all_history(
 
     let cursor = history
         .last()
-        .map(|x| x.history.update_time.unix_timestamp());
+        .map(|x| x.history.update_time.0.unix_timestamp());
     Ok(Json(CursoredResponse::new(history, cursor)))
 }
 
@@ -174,7 +173,7 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
                 id: entry.history_id,
                 time: entry.time,
                 is_finished: entry.is_finished,
-                update_time: entry.update_time,
+                update_time: entry.update_time.into(),
             },
             movie: movie_metadata.into(),
         });
@@ -227,7 +226,7 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
                 id: entry.history_id,
                 time: entry.time,
                 is_finished: entry.is_finished,
-                update_time: entry.update_time,
+                update_time: entry.update_time.into(),
             }),
             show_id: entry.show_id,
             episode: episode_metadata,
@@ -326,7 +325,7 @@ pub async fn update_history(
     .content_id;
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
-        let current_time = std::time::Duration::from_secs(payload.time as u64);
+        let current_time = std::time::Duration::from_secs(payload.time as u64).into();
         if let Ok(Some(video)) = sqlx::query!(
             "SELECT id FROM videos WHERE content_id = ? LIMIT 1",
             content_id
@@ -373,7 +372,7 @@ pub async fn update_video_history(
     let db = app_state.db;
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
-        let current_time = std::time::Duration::from_secs(payload.time as u64);
+        let current_time = std::time::Duration::from_secs(payload.time as u64).into();
         let identifier = WatchIdentifier { video_id: id };
         let progress = WatchProgress { current_time };
         watch_sessions.send_progress(
@@ -384,7 +383,7 @@ pub async fn update_video_history(
             },
         );
     }
-    let update_time = time::OffsetDateTime::now_utc();
+    let update_time = time::OffsetDateTime::now_utc().into();
     tracing::trace!(video_id = id, time = payload.time, "Updating video history");
     let content_id = sqlx::query!("SELECT content_id FROM videos WHERE id = ?", id)
         .fetch_one(&db.pool)
@@ -406,7 +405,7 @@ pub async fn update_video_history(
                         id: None,
                         time: payload.time,
                         is_finished: payload.is_finished,
-                        update_time,
+                        update_time: Some(update_time),
                         content_id,
                     })
                     .await?;

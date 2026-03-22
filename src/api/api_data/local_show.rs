@@ -1,16 +1,13 @@
-use std::{collections::HashMap, time::Duration};
+use std::collections::HashMap;
 
 use serde::Serialize;
 
 use crate::{
     api::{
-        api_data::{LocalDataLookup, api_types::History},
+        api_data::{LocalDataLookup, api_types::{Actor, History}},
         server::Intro,
     },
-    metadata::{
-        EpisodeMetadata, LocaleMetadata, MetadataImage, MetadataProvider, SeasonMetadata,
-        ShowMetadata,
-    },
+    metadata::{EpisodeMetadata, LocaleMetadata, MetadataProvider, SeasonMetadata, ShowMetadata},
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -35,8 +32,8 @@ pub struct LocalEpisodeData {
 pub struct Show {
     pub metadata_id: String,
     pub metadata_provider: MetadataProvider,
-    pub poster: Option<MetadataImage>,
-    pub backdrop: Option<MetadataImage>,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
     pub plot: Option<String>,
     /// Array of available season numbers
     pub seasons: Option<Vec<usize>>,
@@ -44,6 +41,7 @@ pub struct Show {
     pub release_date: Option<String>,
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
+    pub cast: Option<Vec<Actor>>,
     pub local: Option<LocalShowData>,
 }
 
@@ -71,6 +69,7 @@ impl Show {
             release_date: meta.release_date,
             title: meta.title,
             locale_metadata: meta.locale_metadata,
+            cast: None,
             local,
         }
     }
@@ -85,7 +84,7 @@ pub struct Season {
     pub title: Option<String>,
     pub episodes: Vec<Episode>,
     pub plot: Option<String>,
-    pub poster: Option<MetadataImage>,
+    pub poster: Option<String>,
     pub number: usize,
     pub local: Option<LocalSeasonData>,
 }
@@ -140,7 +139,7 @@ impl Season {
                         id,
                         time: r.time.unwrap(),
                         is_finished: r.is_finished.unwrap(),
-                        update_time: r.update_time.unwrap(),
+                        update_time: r.update_time.map(Into::into).unwrap(),
                     }),
                     intro: r.intro_id.map(|_| Intro {
                         start_sec: r.start_sec.unwrap(),
@@ -161,6 +160,7 @@ impl Season {
                 season_number: episode_meta.season_number,
                 runtime: episode_meta.runtime,
                 poster: episode_meta.poster,
+                cast: None,
                 local: local_episodes
                     .remove(&(episode_meta.metadata_provider, episode_meta.metadata_id)),
             };
@@ -190,15 +190,15 @@ pub struct Episode {
     pub title: String,
     pub plot: Option<String>,
     pub season_number: usize,
-    #[schema(value_type = Option<crate::api::SerdeDuration>)]
-    pub runtime: Option<Duration>,
-    pub poster: Option<MetadataImage>,
+    pub runtime: Option<crate::MediaDuration>,
+    pub poster: Option<String>,
+    pub cast: Option<Vec<Actor>>,
     pub local: Option<LocalEpisodeData>,
 }
 
 impl Episode {
     pub async fn extend_from_metadata(
-        meta: EpisodeMetadata,
+        mut meta: EpisodeMetadata,
         lookup: LocalDataLookup,
     ) -> sqlx::Result<Self> {
         let local = lookup
@@ -209,6 +209,11 @@ impl Episode {
                 meta.number,
             )
             .await?;
+        let cast = if let Some(cast) = std::mem::take(&mut meta.cast) {
+            Some(lookup.extend_actors(cast).await?)
+        } else {
+            None
+        };
         Ok(Episode {
             metadata_id: meta.metadata_id,
             metadata_provider: meta.metadata_provider,
@@ -219,6 +224,7 @@ impl Episode {
             season_number: meta.season_number,
             runtime: meta.runtime,
             poster: meta.poster,
+            cast,
             local,
         })
     }

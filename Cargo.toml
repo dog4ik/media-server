@@ -28,15 +28,18 @@ sysinfo = "0.38.2"
 async-trait = "0.1.89"
 clap = { version = "4.5.60", features = ["derive"] }
 
+[dev-dependencies]
+test-log = "0.2.19"
+
 [dependencies]
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
 axum = { workspace = true, features = ["macros", "tracing", "multipart", "ws"] }
 axum-extra = { workspace = true, features = ["typed-header"] }
-time = { workspace = true, features = ["serde", "parsing"] }
+time = { workspace = true, features = ["serde-human-readable"] }
 tracing = { workspace = true }
-uuid = { workspace = true, features = ["v4", "v1", "serde"] }
+uuid = { workspace = true, features = ["v4", "serde"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 serde = { workspace = true, features = ["serde_derive"] }
 rand = { workspace = true }
@@ -46,22 +49,18 @@ async-trait = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 base64 = "0.22.1"
 bytes = "1.11.1"
-crc32fast = { version = "1.5.0", features = ["nightly"] }
 dirs = "6.0.0"
 dotenvy = "0.15.7"
 notify = { version = "8.2.0", default-features = false, features = ["macos_kqueue"] }
 serde_json = "1.0.149"
-sha2 = "0.10.9"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
-tokio-stream = { version = "0.1.18", features = ["full"] }
+tokio-stream = "0.1.18"
 toml = "1.0.3"
 tower-http = { version = "0.6.8", features = ["cors", "fs", "trace"] }
 tracing-subscriber = { version = "0.3.22", features = ["json", "serde_json", "serde", "time", "fmt", "env-filter"] }
 utoipa = { version = "5.4.0", features = ["axum_extras", "time", "url", "uuid"] }
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 serde_plain = "1.0.2"
-toml_edit = { version = "0.25.3", features = ["serde"] }
-test-log = "0.2.19"
 ffmpeg-next = { version = "8.0.0" }
 torrent = { path = "./torrent" }
 upnp = { path = "./upnp" }

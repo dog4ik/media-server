@@ -23,6 +23,7 @@ use crate::{
         ContentType, DiscoverMetadataProvider, ExternalIdMetadata, MovieMetadata,
         metadata_stack::MetadataProvidersStack,
     },
+    scan::insert_roles,
 };
 
 use super::{
@@ -158,6 +159,9 @@ impl MovieScanner {
                     let movie_id = tx
                         .insert_movie(&metadata.into_db_movie(content_id, duration))
                         .await?;
+                    if let Some(cast) = metadata.cast {
+                        insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                    }
                     for ext_id in &external_ids {
                         let _ = tx
                             .insert_external_id(DbExternalId {
@@ -172,11 +176,8 @@ impl MovieScanner {
                     let first_source = videos.first().map(|v| v.source.clone());
                     if let Some(url) = poster {
                         let task_source = match first_source.clone() {
-                            Some(source) => AssetTaskSource::UrlWithFrameFallback {
-                                url: url.into(),
-                                source,
-                            },
-                            None => AssetTaskSource::Url(url.into()),
+                            Some(source) => AssetTaskSource::UrlWithFrameFallback { url, source },
+                            None => AssetTaskSource::Url(url),
                         };
                         asset_tasks.push(AssetSaveTask {
                             kind: AssetKind::Poster(PosterAsset::new(
@@ -200,7 +201,7 @@ impl MovieScanner {
                                 movie_id,
                                 BackdropContentType::Movie,
                             )),
-                            source: AssetTaskSource::Url(url.into()),
+                            source: AssetTaskSource::Url(url),
                         });
                     }
                     content_id

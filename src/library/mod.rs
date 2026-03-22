@@ -29,7 +29,6 @@ use crate::{
     app_state::AppError,
     db::{Db, DbActions, DbVideo},
     ffmpeg_abi::{Av1Encoder, H264Encoder, HevcEncoder, ProbeOutput, get_metadata},
-    utils,
 };
 
 use self::{
@@ -550,22 +549,8 @@ impl Video {
         self.metadata.get_or_init(self.path()).await
     }
 
-    /// Calculate hash for the video
-    pub async fn calculate_video_hash(&self) -> Result<u32, std::io::Error> {
-        tracing::trace!("Calculating hash for file: {}", self.path.display());
-        let path = &self.path;
-        let mut file = tokio::fs::File::open(path).await?;
-        let hash = utils::file_hash(&mut file).await?;
-        Ok(hash)
-    }
-
     /// Get file size in bytes
     pub async fn file_size(&self) -> std::io::Result<u64> {
-        tokio::fs::metadata(&self.path).await.map(|m| m.len())
-    }
-
-    /// Get file size in bytes
-    pub async fn async_file_size(&self) -> std::io::Result<u64> {
         tokio::fs::metadata(&self.path).await.map(|m| m.len())
     }
 

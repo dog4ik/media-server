@@ -249,15 +249,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "atomic"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d818003e740b63afc82337e3160717f4f63078720a810b7b903e70a5d1d2994"
-dependencies = [
- "bytemuck",
-]
-
-[[package]]
 name = "atomic-waker"
 version = "1.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2605,7 +2596,6 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "clap",
- "crc32fast",
  "dirs",
  "dotenvy",
  "ffmpeg-next",
@@ -2619,7 +2609,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_plain",
- "sha2",
  "sqlx",
  "sysinfo",
  "test-log",
@@ -2628,7 +2617,6 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "toml 1.0.3+spec-1.1.0",
- "toml_edit 0.25.3+spec-1.1.0",
  "torrent",
  "tower-http",
  "tracing",
@@ -5133,21 +5121,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_edit"
-version = "0.25.3+spec-1.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0a07913e63758bc95142d9863a5a45173b71515e68b690cad70cf99c3255ce1"
-dependencies = [
- "indexmap",
- "serde_core",
- "serde_spanned 1.0.4",
- "toml_datetime 1.0.0+spec-1.1.0",
- "toml_parser",
- "toml_writer",
- "winnow 0.7.14",
-]
-
-[[package]]
 name = "toml_parser"
 version = "1.0.9+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5557,7 +5530,6 @@ version = "1.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b672338555252d43fd2240c714dc444b8c6fb0a5c5335e65a07bba7742735ddb"
 dependencies = [
- "atomic",
  "getrandom 0.4.1",
  "js-sys",
  "serde_core",

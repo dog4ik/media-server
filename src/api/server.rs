@@ -30,7 +30,7 @@ use super::{IdQuery, NumberQuery, SearchQuery, VariantQuery};
 use crate::api::api_data::LocalDataLookup;
 use crate::api::api_data::local_movie::Movie;
 use crate::api::api_data::local_show::{Episode, Season, Show};
-use crate::api::{self, OptionalTorrentIndexQuery, Path, Query};
+use crate::api::{OptionalTorrentIndexQuery, Path, Query};
 use crate::app_state::AppError;
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
@@ -78,8 +78,7 @@ pub struct DetailedVideo {
     pub path: PathBuf,
     pub previews_count: usize,
     pub size: u64,
-    #[schema(value_type = api::SerdeDuration)]
-    pub duration: std::time::Duration,
+    pub duration: crate::MediaDuration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
     pub subtitle_tracks: Vec<DetailedSubtitleTrack>,
@@ -97,8 +96,7 @@ pub struct DetailedVariant {
     #[schema(value_type = String)]
     pub path: PathBuf,
     pub size: u64,
-    #[schema(value_type = api::SerdeDuration)]
-    pub duration: std::time::Duration,
+    pub duration: crate::MediaDuration,
     pub video_tracks: Vec<DetailedVideoTrack>,
     pub audio_tracks: Vec<DetailedAudioTrack>,
     pub container: VideoContainer,
@@ -146,10 +144,8 @@ pub struct Intro {
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct DetailedChapter {
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub start: std::time::Duration,
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub end: std::time::Duration,
+    pub start: crate::MediaDuration,
+    pub end: crate::MediaDuration,
     pub title: Option<String>,
 }
 
@@ -224,7 +220,7 @@ impl DetailedVideo {
             path: source.video.path().to_path_buf(),
             previews_count,
             size: source.video.file_size().await?,
-            duration: video_metadata.duration(),
+            duration: video_metadata.duration().into(),
             variants: detailed_variants,
             scan_date: date,
             video_tracks: video_metadata
@@ -338,8 +334,8 @@ impl From<&Track<Subtitle>> for DetailedSubtitleTrack {
 impl From<&ffmpeg_abi::Chapter> for DetailedChapter {
     fn from(val: &ffmpeg_abi::Chapter) -> Self {
         DetailedChapter {
-            start: val.start,
-            end: val.end,
+            start: val.start.into(),
+            end: val.end.into(),
             title: val.title.clone(),
         }
     }
@@ -357,7 +353,7 @@ impl DetailedVariant {
         Ok(Self {
             id,
             size: video.file_size().await?,
-            duration: metadata.duration(),
+            duration: crate::MediaDuration(metadata.duration()),
             video_tracks: metadata
                 .video_streams()
                 .into_iter()
@@ -407,7 +403,7 @@ pub async fn video_content_metadata(
     };
     let db = app_state.db;
     let video_metadata = video.source.video.metadata().await?;
-    let duration = video_metadata.duration();
+    let duration = crate::MediaDuration(video_metadata.duration());
     let metadata = match video.identifier {
         ContentIdentifier::Show(_) => {
             let query = sqlx::query!(
@@ -887,12 +883,12 @@ pub async fn local_movie_by_video_id(
     get,
     path = "/api/local_movies",
     responses(
-        (status = 200, description = "All local movies", body = Vec<MovieMetadata>),
+        (status = 200, description = "All local movies", body = Vec<Movie>),
     ),
     tag = "Movies",
 )]
 /// All local movies
-pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<MovieMetadata>>, AppError> {
+pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<Movie>>, AppError> {
     Ok(Json(db.all_movies(None).await?))
 }
 
@@ -1121,9 +1117,13 @@ pub async fn get_movie(
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
 ) -> Result<Json<Movie>, AppError> {
-    let res = providers.get_movie(&id, provider).await?;
-    let extended_movie = Movie::extend_with_lookup(res, LocalDataLookup::new(db)).await?;
-    Ok(Json(extended_movie))
+    let movie = if provider.is_local() {
+        db.get_movie(id.parse()?).await?
+    } else {
+        let res = providers.get_movie(&id, provider).await?;
+        Movie::extend_with_lookup(res, LocalDataLookup::new(db)).await?
+    };
+    Ok(Json(movie))
 }
 
 /// Get show poster
@@ -1270,6 +1270,31 @@ pub async fn episode_poster(
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> Result<impl IntoResponse, AppError> {
     let asset = PosterAsset::new(id, PosterContentType::Episode);
+    let response = asset
+        .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
+        .await?;
+    Ok(response)
+}
+
+/// Get actor poster
+#[utoipa::path(
+    get,
+    path = "/api/actor/{id}/poster",
+    params(
+        ("id", description = "Actor id"),
+    ),
+    responses(
+        (status = 200, content_type = "image/*"),
+        (status = 304),
+        (status = 404, body = AppError)
+    ),
+    tag = "Actors",
+)]
+pub async fn actor_poster(
+    Path(id): Path<i64>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let asset = PosterAsset::new(id, PosterContentType::Actor);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
@@ -2384,7 +2409,7 @@ pub async fn start_direct_stream(
 ) -> Result<Json<StartWatchSessionResponse>, AppError> {
     let watch_sessions = &app_state.tasks.watch_sessions;
     let source = app_state.get_source_by_id(video_id)?;
-    let total_duration = source.video.fetch_duration().await?;
+    let total_duration = source.video.fetch_duration().await.map(Into::into)?;
     let exit_token = app_state.tasks.parent_cancellation_token.child_token();
 
     let task = WatchTask {
@@ -2450,7 +2475,7 @@ pub async fn start_hls_stream(
     .map(|t| t.index)
     .ok_or(AppError::not_found("audio stream is not found"))?;
 
-    let total_duration = metadata.duration();
+    let total_duration = metadata.duration().into();
     let exit_token = app_state.tasks.parent_cancellation_token.child_token();
     let task_id = uuid::Uuid::new_v4();
     let identifier = WatchIdentifier { video_id };

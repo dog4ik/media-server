@@ -618,9 +618,10 @@ WHERE seasons.show_id = ?",
             new_episodes
         };
 
-        if let Err(e) = scan::show::ShowScanner::new(self.db.clone(), self.providers_stack, config)
-            .scan(new_episodes)
-            .await
+        if let Err(e) =
+            scan::show::ShowScanner::new(self.db.clone(), self.providers_stack, config, |_| {})
+                .scan(new_episodes)
+                .await
         {
             tracing::error!("Failed to scan episodes: {e}");
         };

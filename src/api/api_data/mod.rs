@@ -3,12 +3,16 @@ use std::collections::HashMap;
 use sqlx::QueryBuilder;
 
 use crate::{
-    api::{api_data::api_types::History, server::Intro},
+    api::{
+        api_data::api_types::{Actor, History},
+        server::Intro,
+    },
     db::{Db, DbActions},
-    metadata::{MetadataProvider, MovieMetadata, ShowMetadata},
+    metadata::{MetadataProvider, MovieMetadata, PersonMetadata, ShowMetadata},
 };
 
 pub mod api_types;
+pub mod local_actor;
 pub mod local_movie;
 pub mod local_show;
 
@@ -128,7 +132,7 @@ impl LocalDataLookup {
                         id,
                         time: v.time.unwrap(),
                         is_finished: v.is_finished.unwrap(),
-                        update_time: v.update_time.unwrap(),
+                        update_time: v.update_time.map(Into::into).unwrap(),
                     }),
                 },
             )
@@ -140,6 +144,43 @@ impl LocalDataLookup {
             .map(|meta| {
                 let local = local_map.remove(&(meta.metadata_provider, meta.metadata_id.clone()));
                 local_movie::Movie::extend_meta(meta, local)
+            })
+            .collect())
+    }
+
+    #[tracing::instrument(skip_all)]
+    pub async fn extend_actors(&self, actor_metadata: Vec<PersonMetadata>) -> sqlx::Result<Vec<Actor>> {
+        #[derive(sqlx::FromRow)]
+        struct Record {
+            id: i64,
+            metadata_provider: MetadataProvider,
+            metadata_id: String,
+        }
+        let mut local_map = QueryBuilder::new(
+            r#"select actors.id, actors.metadata_provider, actors.metadata_id from actors
+            where (actors.metadata_provider, actors.metadata_id) in "#,
+        )
+        .push_tuples(actor_metadata.iter(), |mut b, meta| {
+            b.push_bind(meta.metadata_provider.to_string())
+                .push_bind(&meta.metadata_id);
+        })
+        .build_query_as::<Record>()
+        .fetch_all(&self.db.pool)
+        .await?
+        .into_iter()
+        .map(|v| 
+            (
+                (v.metadata_provider, v.metadata_id),
+                local_actor::LocalActorData { id: v.id },
+            )
+        )
+        .collect::<HashMap<_, _>>();
+
+        Ok(actor_metadata
+            .into_iter()
+            .map(|meta| {
+                let local = local_map.remove(&(meta.metadata_provider, meta.metadata_id.clone()));
+                Actor::extend_meta(meta, local)
             })
             .collect())
     }
@@ -167,7 +208,7 @@ impl LocalDataLookup {
             history: r.history_id.map(|id| api_types::History { id,
                 time: r.time.unwrap(),
                 is_finished: r.is_finished.unwrap(),
-                update_time: r.history_update_time.unwrap()
+                update_time: r.history_update_time.map(Into::into).unwrap()
             })
         }))
     }
@@ -197,7 +238,7 @@ impl LocalDataLookup {
         };
 
         Ok(sqlx::query!(
-            "SELECT id from seasons WHERE seasons.show_id = ? and seasons.number = ?",
+            "SELECT seasons.id from seasons WHERE seasons.show_id = ? and seasons.number = ?",
             local_id,
             season,
         )
@@ -244,7 +285,7 @@ impl LocalDataLookup {
                         id,
                         time: r.history_time.unwrap(),
                         is_finished: r.is_finished.unwrap(),
-                        update_time: r.history_update_time.unwrap(),
+                        update_time: r.history_update_time.map(Into::into).unwrap(),
                     }),
                     intro: r.intro_start.zip(r.intro_end).map(|(start_sec, end_sec)| Intro { start_sec, end_sec })
                 }))

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::Context;
@@ -134,8 +134,7 @@ pub enum TrackerStatus {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct StateTracker {
     pub url: String,
-    #[schema(value_type = crate::api::SerdeDuration)]
-    pub announce_interval: Duration,
+    pub announce_interval: crate::MediaDuration,
     #[serde(flatten)]
     pub status: TrackerStatus,
 }
@@ -245,8 +244,7 @@ pub struct TrackerEvent {
 #[serde(rename_all = "lowercase", tag = "kind")]
 pub enum TrackerEventKind {
     Reannounce {
-        #[schema(value_type = crate::api::SerdeDuration)]
-        interval: std::time::Duration,
+        interval: crate::MediaDuration,
     },
     Failed {
         reason: String,

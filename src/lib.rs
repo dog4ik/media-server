@@ -53,3 +53,70 @@ pub mod utils;
 pub mod watch;
 /// Websockets clients connection
 pub mod ws;
+
+/// Wrapper around `time::OffsetDateTime`
+#[derive(
+    Debug,
+    utoipa::ToSchema,
+    serde::Serialize,
+    serde::Deserialize,
+    sqlx::Type,
+    Clone,
+    PartialEq,
+    PartialOrd,
+    Eq,
+    Ord,
+)]
+#[serde(transparent)]
+#[sqlx(transparent)]
+pub struct OffsetDateTime(#[serde(with = "time::serde::rfc3339")] pub time::OffsetDateTime);
+
+impl From<time::OffsetDateTime> for OffsetDateTime {
+    fn from(value: time::OffsetDateTime) -> Self {
+        Self(value)
+    }
+}
+
+/// Wrapper around [std::time::Duration] that is serialized in milliseconds
+#[derive(Debug, utoipa::ToSchema, Clone, PartialEq, PartialOrd, Eq, Ord)]
+#[schema(value_type = u128)]
+pub struct MediaDuration(pub std::time::Duration);
+
+impl serde::Serialize for MediaDuration {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u128(self.0.as_millis())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for MediaDuration {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct DurationVisitor;
+        impl serde::de::Visitor<'_> for DurationVisitor {
+            type Value = MediaDuration;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+                formatter.write_str("Duration time in milliseconds")
+            }
+            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            where
+                E: serde::de::Error,
+            {
+                Ok(std::time::Duration::from_millis(v).into())
+            }
+        }
+
+        deserializer.deserialize_u64(DurationVisitor)
+    }
+}
+
+impl From<std::time::Duration> for MediaDuration {
+    fn from(value: std::time::Duration) -> Self {
+        Self(value)
+    }
+}
