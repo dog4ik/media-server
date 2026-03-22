@@ -94,7 +94,7 @@ pub struct CastQueryJson {
     pub character: Option<String>,
     pub imdb_id: Option<String>,
     pub metadata_provider: MetadataProvider,
-    pub metadata_id: i64,
+    pub metadata_id: String,
 }
 
 impl CastQueryJson {
