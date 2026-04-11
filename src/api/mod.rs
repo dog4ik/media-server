@@ -9,14 +9,13 @@ use crate::library;
 use crate::metadata;
 use crate::progress;
 use crate::torrent_index;
-use crate::tracing;
 use crate::watch;
 use crate::ws;
 use axum::extract::FromRequestParts;
 use axum::extract::path;
 use axum::extract::rejection::PathRejection;
-use axum::extract::rejection::QueryRejection;
 use axum::http::request::Parts;
+use axum_extra::extract::QueryRejection;
 use base64::Engine;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -41,7 +40,6 @@ pub mod torrent;
         server::local_episode_by_video_id,
         server::local_movie_by_video_id,
         server::all_local_movies,
-        server::external_to_local_id,
         server::external_ids,
         server::get_movie,
         server::fix_show_metadata,
@@ -119,6 +117,7 @@ pub mod torrent;
         server::delete_show,
         server::delete_movie,
         server::actor_poster,
+        server::actor_list,
         file_browser::browse_directory,
         file_browser::parent_directory,
         file_browser::root_dirs,
@@ -191,7 +190,7 @@ pub mod torrent;
             progress::Notification,
             progress::ProgressStatus<f32>,
             progress::TaskProgress,
-            tracing::JsonTracingEvent,
+            crate::tracing::JsonTracingEvent,
             torrent_index::Torrent,
             db::DbExternalId,
             library::TranscodePayload,
@@ -233,6 +232,26 @@ pub struct OpenApiDoc;
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct PageQuery {
     pub page: Option<usize>,
+}
+
+#[derive(Deserialize, utoipa::IntoParams)]
+pub struct ContentFilterQuery {
+    #[serde(default)]
+    pub actors: Vec<i64>,
+    pub search: Option<String>,
+    pub take: Option<i64>,
+    pub cursor: Option<String>,
+}
+
+impl From<ContentFilterQuery> for db::ContentFetchParams {
+    fn from(filter: ContentFilterQuery) -> Self {
+        db::ContentFetchParams {
+            take: filter.take,
+            cursor: filter.cursor,
+            search: filter.search,
+            actors: (!filter.actors.is_empty()).then_some(filter.actors),
+        }
+    }
 }
 
 #[derive(utoipa::IntoParams)]
@@ -365,8 +384,8 @@ pub struct LanguageQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
-pub struct TakeParam {
-    pub take: Option<usize>,
+pub struct TakeQuery {
+    pub take: Option<i64>,
 }
 
 /// `Path` extractor wrapper that customizes the error from `axum::extract::Path`
@@ -431,7 +450,7 @@ where
     }
 }
 
-/// `Query` extractor wrapper that customizes the error from `axum::extract::Query`
+/// `Query` extractor wrapper that customizes the error from `axum_extra::extract::Query`
 pub struct Query<T>(T);
 
 impl<S, T> FromRequestParts<S> for Query<T>
@@ -442,11 +461,12 @@ where
     type Rejection = AppError;
 
     async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
-        match axum::extract::Query::<T>::from_request_parts(parts, state).await {
+        match axum_extra::extract::Query::<T>::from_request_parts(parts, state).await {
             Ok(value) => Ok(Self(value.0)),
             Err(rejection) => {
                 let error = match rejection {
-                    QueryRejection::FailedToDeserializeQueryString(_) => {
+                    QueryRejection::FailedToDeserializeQueryString(e) => {
+                        tracing::error!("Query deserialization error: {e}");
                         AppError::bad_request("Failed to deserialize query string")
                     }
                     _ => {

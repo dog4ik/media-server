@@ -28,15 +28,19 @@ use uuid::Uuid;
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use super::{IdQuery, NumberQuery, SearchQuery, VariantQuery};
 use crate::api::api_data::LocalDataLookup;
+use crate::api::api_data::api_types::Actor;
 use crate::api::api_data::local_movie::Movie;
 use crate::api::api_data::local_show::{Episode, Season, Show};
-use crate::api::{OptionalTorrentIndexQuery, Path, Query};
+use crate::api::{
+    ContentFilterQuery, CursorQuery, OptionalTorrentIndexQuery, Path, Query, TakeQuery,
+};
 use crate::app_state::AppError;
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
 };
-use crate::db::DbExternalId;
+use crate::db::query_builders::DbActorsQuery;
 use crate::db::{self, DbActions};
+use crate::db::{DbExternalId, query_builders};
 use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
@@ -799,13 +803,23 @@ pub async fn watch_movie(
     get,
     path = "/api/local_shows",
     responses(
-        (status = 200, description = "All local shows", body = Vec<Show>),
+        (status = 200, description = "All local shows", body = CursoredResponse<Show>),
+    ),
+    params(
+        ContentFilterQuery,
     ),
     tag = "Shows",
 )]
 /// All local shows
-pub async fn all_local_shows(State(db): State<Db>) -> Result<Json<Vec<Show>>, AppError> {
-    Ok(Json(db.pool.all_shows(None).await?))
+pub async fn all_local_shows(
+    Query(filter): Query<ContentFilterQuery>,
+    State(db): State<Db>,
+) -> Result<Json<CursoredResponse<Show>>, AppError> {
+    let shows = db.all_shows(filter.into()).await?;
+
+    let cursor = shows.last().and_then(|s| s.local.as_ref()).map(|l| l.id);
+
+    Ok(Json(CursoredResponse::new(shows, cursor)))
 }
 
 #[utoipa::path(
@@ -883,45 +897,22 @@ pub async fn local_movie_by_video_id(
     get,
     path = "/api/local_movies",
     responses(
-        (status = 200, description = "All local movies", body = Vec<Movie>),
+        (status = 200, description = "All local movies", body = CursoredResponse<Movie>),
+    ),
+    params(
+        ContentFilterQuery,
     ),
     tag = "Movies",
 )]
 /// All local movies
-pub async fn all_local_movies(State(db): State<Db>) -> Result<Json<Vec<Movie>>, AppError> {
-    Ok(Json(db.all_movies(None).await?))
-}
-
-/// Map external to local id
-#[utoipa::path(
-    get,
-    path = "/api/external_to_local/{id}",
-    params(
-        ("id", description = "External id"),
-        ProviderQuery,
-    ),
-    responses(
-        (status = 200, body = DbExternalId),
-        (status = 404, description = "Local id is not found", body = AppError),
-    ),
-    tag = "Metadata",
-)]
-pub async fn external_to_local_id(
-    Path(id): Path<String>,
-    Query(provider): Query<ProviderQuery>,
+pub async fn all_local_movies(
     State(db): State<Db>,
-) -> Result<Json<DbExternalId>, AppError> {
-    let provider = provider.provider.to_string();
-    let local_id = sqlx::query_as!(
-        DbExternalId,
-        "SELECT * FROM external_ids WHERE metadata_id = ? AND metadata_provider = ?",
-        id,
-        provider
-    )
-    .fetch_one(&db.pool)
-    .await?;
+    Query(filter): Query<ContentFilterQuery>,
+) -> Result<Json<CursoredResponse<Movie>>, AppError> {
+    let movies = db.all_movies(filter.into()).await?;
+    let cursor = movies.last().and_then(|s| s.local.as_ref()).map(|l| l.id);
 
-    Ok(Json(local_id))
+    Ok(Json(CursoredResponse::new(movies, cursor)))
 }
 
 /// List external ids for desired content
@@ -1299,6 +1290,60 @@ pub async fn actor_poster(
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
         .await?;
     Ok(response)
+}
+
+/// Get actor list
+#[utoipa::path(
+    get,
+    path = "/api/actor/list",
+    params(
+        TakeQuery,
+        CursorQuery,
+    ),
+    responses(
+        (status = 200, description = "Actor list", body = CursoredResponse<Actor>),
+    ),
+    tag = "Actors",
+)]
+pub async fn actor_list(
+    State(db): State<Db>,
+    Query(CursorQuery { cursor }): Query<CursorQuery>,
+    Query(TakeQuery { take }): Query<TakeQuery>,
+    Query(SearchQuery { search }): Query<SearchQuery>,
+    is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
+) -> Result<impl IntoResponse, AppError> {
+    let mut builder = db::DbQueryBuilder::default();
+    DbActorsQuery::build(&mut builder);
+
+    if !search.is_empty() {
+        builder
+            .push(" where actors.name like ")
+            .push_bind(format!("%{search}%"));
+        if let Some(cursor) = cursor {
+            builder.push("and actors.id < ").push_bind(cursor);
+        }
+    } else if let Some(cursor) = cursor {
+        builder.push(" where actors.id < ").push_bind(cursor);
+    }
+
+    builder
+        .push(" order by actors.id desc ")
+        .push("limit ")
+        .push_bind(take.unwrap_or(50));
+    tracing::debug!("Actor list sql: {}", builder.sql());
+
+    let actors: Vec<Actor> = builder
+        .build_query_as::<DbActorsQuery>()
+        .fetch_all(&db.pool)
+        .await?
+        .into_iter()
+        .map(Into::into)
+        .collect();
+
+    let cursor = actors
+        .last()
+        .map(|x| x.local.as_ref().unwrap().id.to_string());
+    Ok(Json(CursoredResponse::new(actors, cursor)))
 }
 
 /// Get season metadata

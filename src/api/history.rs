@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     api::{
-        CursorQuery, Json, OptionalUuidQuery, Path, Query, TakeParam,
+        CursorQuery, Json, OptionalUuidQuery, Path, Query, TakeQuery,
         api_data::{
             api_types::{Content, History},
             local_show::Episode,
@@ -91,24 +91,24 @@ impl From<DbHistoryQuery> for HistoryEntry {
         (status = 200, description = "All history", body = CursoredResponse<HistoryEntry>),
     ),
     params(
-        TakeParam,
+        TakeQuery,
         CursorQuery,
     ),
     tag = "History",
 )]
 pub async fn all_history(
-    Query(TakeParam { take }): Query<TakeParam>,
+    Query(TakeQuery { take }): Query<TakeQuery>,
     Query(CursorQuery { cursor }): Query<CursorQuery>,
     State(db): State<Db>,
 ) -> Result<Json<CursoredResponse<HistoryEntry>>, AppError> {
-    let take = take.unwrap_or(50) as i64;
+    let take = take.unwrap_or(50);
     let cursor: Option<i64> = cursor
         .map(|x| {
             x.parse()
                 .map_err(|_| AppError::bad_request("invalid cursor"))
         })
         .transpose()?;
-    let mut builder = db::DbQueryBuilder::new("");
+    let mut builder = db::DbQueryBuilder::default();
     DbHistoryQuery::build(cursor, take, &mut builder);
     let history: Vec<HistoryEntry> = builder
         .build_query_as::<DbHistoryQuery>()

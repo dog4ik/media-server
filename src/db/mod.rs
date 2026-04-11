@@ -44,6 +44,57 @@ fn path_to_url(path: &Path) -> String {
     format!("sqlite://{}", path)
 }
 
+#[derive(Debug, Default)]
+pub struct ContentFetchParams {
+    pub take: Option<i64>,
+    pub cursor: Option<String>,
+    pub search: Option<String>,
+    /// List of actor id's
+    pub actors: Option<Vec<i64>>,
+}
+
+impl ContentFetchParams {
+    pub fn build<'a>(&'a self, content_type: DbContentType, builder: &mut DbQueryBuilder<'a>) {
+        let content_table = content_type.table_name();
+        if let Some(actors) = &self.actors {
+            builder
+                .push(" join roles on roles.content_id = content.id ")
+                .push("where roles.actor_id in (");
+            let mut separated = builder.separated(", ");
+            for actor in actors {
+                separated.push_bind(actor);
+            }
+            builder.push(")");
+        }
+
+        if let Some(cursor) = &self.cursor {
+            if self.actors.is_none() {
+                builder.push(" where ");
+            } else {
+                builder.push(" and ");
+            }
+            builder
+                .push(format_args!("{content_table}.id < "))
+                .push_bind(cursor);
+        }
+
+        if let Some(search) = &self.search {
+            if self.actors.is_none() && self.cursor.is_none() {
+                builder.push(" where ");
+            } else {
+                builder.push(" and ");
+            }
+            builder
+                .push("content.title like ")
+                .push_bind(format!("%{search}%"));
+        }
+
+        builder
+            .push(&format_args!(" order by {content_table}.id desc limit "))
+            .push_bind(self.take.unwrap_or(50));
+    }
+}
+
 pub const DEFAULT_LIMIT: i64 = 50;
 
 /// All database queries and mutations
@@ -693,105 +744,40 @@ where
 
     fn all_movies(
         self,
-        limit: impl Into<Option<i64>>,
+        params: ContentFetchParams,
     ) -> impl std::future::Future<Output = anyhow::Result<Vec<Movie>>> {
         async move {
-            let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
             let mut conn = self.acquire().await?;
-            let mut query = DbQueryBuilder::new("");
+            let mut query = DbQueryBuilder::default();
             DbMovieQuery::build(&mut query);
-            query.push(" limit ").push_bind(limit);
-            let movies = query
+            params.build(DbContentType::Movie, &mut query);
+            Ok(query
                 .build_query_as::<DbMovieQuery>()
                 .fetch_all(&mut *conn)
-                .await?;
-            Ok(movies
+                .await?
                 .into_iter()
-                .map(
-                    |DbMovieQuery {
-                         movie,
-                         content,
-                         history,
-                         cast,
-                     }| {
-                        let locale_metadata = content
-                            .original_language
-                            .zip(content.original_title)
-                            .map(|(original_language, original_title)| LocaleMetadata {
-                                original_language,
-                                original_title,
-                            });
-                        Movie {
-                            metadata_id: movie.id.unwrap().to_string(),
-                            metadata_provider: MetadataProvider::Local,
-                            poster: content.poster,
-                            backdrop: movie.backdrop,
-                            plot: content.plot,
-                            release_date: content.release_date,
-                            runtime: Some(Duration::from_secs(movie.duration as u64).into()),
-                            title: content.title,
-                            locale_metadata,
-                            local: Some(LocalMovieData {
-                                id: movie.id.unwrap(),
-                                history: Some(History::from(history)),
-                            }),
-                            cast: todo!(),
-                        }
-                    },
-                )
+                .map(Into::into)
                 .collect())
         }
     }
 
     fn all_shows(
         self,
-        limit: impl Into<Option<i64>>,
-    ) -> impl std::future::Future<Output = anyhow::Result<Vec<Show>>> + Send {
-        let limit = limit.into().unwrap_or(DEFAULT_LIMIT);
+        params: ContentFetchParams,
+    ) -> impl std::future::Future<Output = sqlx::Result<Vec<Show>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let shows = sqlx::query!(
-                r#"SELECT shows.id, shows.backdrop,
-                content.title, content.plot, content.poster, content.release_date,
-                content.original_language, content.original_title,
-                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
-                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as "episodes_count!: i64"
-                FROM shows JOIN content ON content.id = shows.content_id
-                LIMIT ?;"#,
-                limit
-            )
-            .fetch_all(&mut *conn)
-            .await?;
-            Ok(shows
+            let mut query = DbQueryBuilder::default();
+            query_builders::DbShowQuery::build(&mut query);
+            params.build(DbContentType::Show, &mut query);
+            tracing::debug!(sql = %query.sql(), "All shows sql query");
+
+            Ok(query
+                .build_query_as::<query_builders::DbShowQuery>()
+                .fetch_all(&mut *conn)
+                .await?
                 .into_iter()
-                .map(|show| {
-                    let mut seasons: Vec<usize> = show
-                        .seasons
-                        .split(',')
-                        .filter_map(|x| x.parse().ok())
-                        .collect();
-                    seasons.sort_unstable();
-                    let locale_metadata = show.original_language.zip(show.original_title).map(
-                        |(original_language, original_title)| LocaleMetadata {
-                            original_language,
-                            original_title,
-                        },
-                    );
-                    Show {
-                        metadata_id: show.id.to_string(),
-                        metadata_provider: MetadataProvider::Local,
-                        poster: show.poster,
-                        backdrop: show.backdrop,
-                        plot: show.plot,
-                        episodes_amount: Some(show.episodes_count as usize),
-                        seasons: Some(seasons),
-                        release_date: show.release_date,
-                        title: show.title,
-                        locale_metadata,
-                        cast: None,
-                        local: Some(LocalShowData { id: show.id }),
-                    }
-                })
+                .map(Into::into)
                 .collect())
         }
     }
@@ -799,44 +785,16 @@ where
     fn get_movie(self, id: i64) -> impl std::future::Future<Output = sqlx::Result<Movie>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let m = sqlx::query!(
-                r#"SELECT movies.id, movies.backdrop, movies.duration,
-                content.title, content.plot, content.poster, content.release_date,
-                content.original_language, content.original_title,
-                history.id as "history_id?: i64", history.time, history.update_time, history.is_finished
-                FROM movies
-                JOIN content ON content.id = movies.content_id
-                LEFT JOIN history ON history.content_id = content.id
-                WHERE movies.id = ?"#,
-                id
-            )
-            .fetch_one(&mut *conn)
-            .await?;
-            let locale_metadata = m.original_language.zip(m.original_title).map(
-                |(original_language, original_title)| LocaleMetadata {
-                    original_language,
-                    original_title,
-                },
-            );
-            let history = m.history_id.map(|id| History {
-                id,
-                time: m.time.unwrap(),
-                is_finished: m.is_finished.unwrap(),
-                update_time: m.update_time.map(Into::into).unwrap(),
-            });
-            Ok(Movie {
-                metadata_id: m.id.to_string(),
-                metadata_provider: MetadataProvider::Local,
-                poster: m.poster,
-                backdrop: m.backdrop,
-                plot: m.plot,
-                release_date: m.release_date,
-                runtime: Some(Duration::from_secs(m.duration as u64).into()),
-                title: m.title,
-                locale_metadata,
-                local: Some(LocalMovieData { id, history }),
-                cast: None,
-            })
+            let mut query = DbQueryBuilder::default();
+            query_builders::DbMovieQuery::build(&mut query);
+            query.push(" where movies.id = ").push_bind(id);
+            tracing::debug!(sql = %query.sql(), "Get movie sql query");
+
+            query
+                .build_query_as::<query_builders::DbMovieQuery>()
+                .fetch_one(&mut *conn)
+                .await
+                .map(Into::into)
         }
     }
 
@@ -1466,6 +1424,17 @@ pub enum DbContentType {
     Show,
     Season,
     Episode,
+}
+
+impl DbContentType {
+    pub fn table_name(&self) -> &'static str {
+        match self {
+            DbContentType::Movie => "movies",
+            DbContentType::Show => "shows",
+            DbContentType::Season => "seasons",
+            DbContentType::Episode => "episodes",
+        }
+    }
 }
 
 /// `content` is a shared table that holds common information between movies, shows, seasons and

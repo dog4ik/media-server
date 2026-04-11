@@ -16,7 +16,7 @@ use upnp::{
 
 use crate::{
     app_state::AppState,
-    db::{self, DbActions},
+    db::{self, ContentFetchParams, DbActions},
 };
 
 #[derive(Clone)]
@@ -63,7 +63,14 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn all_shows(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
-        let shows = self.app_state.db.all_shows(requested_count).await?;
+        let shows = self
+            .app_state
+            .db
+            .all_shows(ContentFetchParams {
+                take: Some(requested_count),
+                ..Default::default()
+            })
+            .await?;
         let mut containers = Vec::with_capacity(shows.len());
         for show in shows {
             let poster_url = format!(
@@ -280,7 +287,14 @@ impl MediaServerContentDirectory {
     }
 
     pub async fn all_movies(&self, requested_count: i64) -> anyhow::Result<DidlResponse> {
-        let movies = self.app_state.db.all_movies(requested_count).await?;
+        let movies = self
+            .app_state
+            .db
+            .all_movies(ContentFetchParams {
+                take: Some(requested_count),
+                ..Default::default()
+            })
+            .await?;
         let mut items = Vec::with_capacity(movies.len());
         for movie in movies {
             let poster_url = format!(

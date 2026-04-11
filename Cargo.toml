@@ -16,7 +16,7 @@ tokio = { version = "1.49.0", features = ["full", "tracing"] }
 tokio-util = { version = "0.7.18", features = ["full"] }
 anyhow = "1.0.102"
 axum = { version = "0.8.8", features = ["macros", "tracing", "multipart"] }
-axum-extra = { version = "0.12.5", features = ["typed-header", "cookie", "file-stream"] }
+axum-extra = { version = "0.12.5", features = ["typed-header", "cookie", "file-stream", "query"] }
 time = { version = "0.3.37", features = [ "serde-human-readable" ] }
 tracing = "0.1.44"
 uuid = { version = "1.21.0", features = ["v4", "serde"] }

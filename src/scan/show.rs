@@ -295,7 +295,6 @@ where
                             let metadata_provider = metadata.metadata_provider;
                             let metadata_id = metadata.metadata_id.clone();
                             let content_id = tx.insert_content(&metadata.into_db_content()).await?;
-                            dbg!(&metadata);
                             if metadata.metadata_provider != MetadataProvider::Local {
                                 tx.insert_external_id(DbExternalId {
                                     metadata_provider,

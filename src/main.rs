@@ -144,10 +144,6 @@ async fn main() {
         .route("/local_movies", get(api::server::all_local_movies))
         .route("/local_season/{id}", delete(api::server::delete_season))
         .route("/local_show/{id}", delete(api::server::delete_show))
-        .route(
-            "/external_to_local/{id}",
-            get(api::server::external_to_local_id),
-        )
         .route("/external_ids/{id}", get(api::server::external_ids))
         .route("/movie/{movie_id}", get(api::server::get_movie))
         .route("/movie/{movie_id}", put(api::server::alter_movie_metadata))
@@ -265,6 +261,7 @@ async fn main() {
         .route("/history/{id}", delete(api::history::remove_history_item))
         .route("/history/{id}", put(api::history::update_history))
         .route("/actor/{id}/poster", get(api::server::actor_poster))
+        .route("/actor/list", get(api::server::actor_list))
         .route("/subtitles/{id}", delete(api::server::delete_subtitles))
         .route("/subtitles/{id}", get(api::server::get_subtitles))
         .route("/torrent/search", get(api::server::search_torrent))

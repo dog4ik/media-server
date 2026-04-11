@@ -1,16 +1,19 @@
 use crate::{
-    db::{DbActions, DbRole, DbTransaction}, ffmpeg, library::{
+    db::{DbActions, DbRole, DbTransaction},
+    ffmpeg,
+    library::{
         Source,
         assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
-    }, metadata::{ExternalIdMetadata, FetchParams, PersonMetadata}
+    },
+    metadata::{ExternalIdMetadata, FetchParams, PersonMetadata},
 };
 
 pub mod episode;
 pub mod fallback;
 mod merge;
 pub mod movie;
-pub mod show;
 pub mod scan_progress;
+pub mod show;
 
 #[derive(Debug, Clone)]
 enum MetadataLookup<T> {

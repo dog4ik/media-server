@@ -1,14 +1,17 @@
+use std::time::Duration;
+
 use crate::{
     api::{
         api_data::{
             api_types::{Actor, History},
             local_actor,
+            local_movie::{LocalMovieData, Movie},
             local_show::{Episode, LocalEpisodeData, LocalShowData, Show},
         },
         server::Intro,
     },
     db::{self, DbActor, DbQueryBuilder, DbRole},
-    metadata::{LocaleMetadata, MetadataProvider, PersonMetadata, RoleMetadata},
+    metadata::{LocaleMetadata, MetadataProvider},
 };
 
 #[derive(sqlx::FromRow, Debug)]
@@ -78,14 +81,6 @@ impl From<DbShowQuery> for Show {
     }
 }
 
-impl DbShowQuery {
-    pub const SQL_SELECT: &str = " shows.id, shows.backdrop,
-content.title, content.plot, content.poster, content.release_date,
-content.original_language, content.original_title,
-(SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as seasons,
-(SELECT COUNT(episodes.id) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as episode_count ";
-}
-
 #[derive(Debug, serde::Deserialize)]
 pub struct CastQueryJson {
     pub id: i64,
@@ -147,6 +142,44 @@ pub struct DbMovieQuery {
     pub history: db::DbHistory,
     #[sqlx(json, default, nullish)]
     pub cast: Option<Vec<CastQueryJson>>,
+}
+
+impl From<DbMovieQuery> for Movie {
+    fn from(
+        DbMovieQuery {
+            movie,
+            content,
+            history,
+            cast,
+        }: DbMovieQuery,
+    ) -> Self {
+        Self {
+            metadata_id: movie.id.unwrap().to_string(),
+            metadata_provider: MetadataProvider::Local,
+            poster: content.poster,
+            backdrop: movie.backdrop,
+            plot: content.plot,
+            release_date: content.release_date,
+            runtime: Some(Duration::from_secs(movie.duration as u64).into()),
+            title: content.title,
+            cast: cast.map(|c| c.into_iter().map(Into::into).collect()),
+            locale_metadata: content.original_title.zip(content.original_language).map(
+                |(original_title, original_language)| LocaleMetadata {
+                    original_title,
+                    original_language,
+                },
+            ),
+            local: Some(LocalMovieData {
+                id: movie.id.unwrap(),
+                history: history.id.map(|id| History {
+                    id,
+                    time: history.time,
+                    is_finished: history.is_finished,
+                    update_time: history.update_time.unwrap(),
+                }),
+            }),
+        }
+    }
 }
 
 impl DbMovieQuery {
@@ -218,37 +251,29 @@ impl DbHistoryQuery {
 pub struct DbActorsQuery {
     #[sqlx(flatten)]
     pub actor: db::DbActor,
-    #[sqlx(flatten)]
-    pub role: db::DbRole,
 }
 
 impl DbActorsQuery {
-    pub fn build(content_id: i64, builder: &mut DbQueryBuilder<'_>) {
-        builder
-            .push(format_args!(
-                "select {actor}, {role} from content
-join actors on actors.id = roles.actor_id
-",
-                actor = DbActor::SQL,
-                role = DbRole::SQL
-            ))
-            .push("where content.id = ")
-            .push_bind(content_id);
+    pub fn build(builder: &mut DbQueryBuilder<'_>) {
+        builder.push(format_args!(
+            "select {actor} from actors",
+            actor = DbActor::SQL,
+        ));
     }
 }
 
-impl From<DbActorsQuery> for PersonMetadata {
-    fn from(value: DbActorsQuery) -> Self {
+impl From<DbActorsQuery> for Actor {
+    fn from(DbActorsQuery { actor }: DbActorsQuery) -> Self {
         Self {
-            role: value.role.character.map(|character| RoleMetadata {
-                poster: None,
-                character,
+            metadata_id: actor.metadata_id,
+            metadata_provider: actor.metadata_provider,
+            local: Some(local_actor::LocalActorData {
+                id: actor.id.unwrap(),
             }),
-            metadata_id: value.actor.id.unwrap().to_string(),
-            metadata_provider: MetadataProvider::Local,
-            person_poster: value.actor.poster,
-            name: value.actor.name,
-            imdb_id: value.actor.imdb_id,
+            name: actor.name,
+            poster: actor.poster,
+            imdb_id: actor.imdb_id,
+            character: None,
         }
     }
 }

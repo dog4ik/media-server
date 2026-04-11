@@ -4,7 +4,10 @@ use serde::Serialize;
 
 use crate::{
     api::{
-        api_data::{LocalDataLookup, api_types::{Actor, History}},
+        api_data::{
+            LocalDataLookup,
+            api_types::{Actor, History},
+        },
         server::Intro,
     },
     metadata::{EpisodeMetadata, LocaleMetadata, MetadataProvider, SeasonMetadata, ShowMetadata},

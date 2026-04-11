@@ -149,7 +149,10 @@ impl LocalDataLookup {
     }
 
     #[tracing::instrument(skip_all)]
-    pub async fn extend_actors(&self, actor_metadata: Vec<PersonMetadata>) -> sqlx::Result<Vec<Actor>> {
+    pub async fn extend_actors(
+        &self,
+        actor_metadata: Vec<PersonMetadata>,
+    ) -> sqlx::Result<Vec<Actor>> {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
@@ -168,12 +171,12 @@ impl LocalDataLookup {
         .fetch_all(&self.db.pool)
         .await?
         .into_iter()
-        .map(|v| 
+        .map(|v| {
             (
                 (v.metadata_provider, v.metadata_id),
                 local_actor::LocalActorData { id: v.id },
             )
-        )
+        })
         .collect::<HashMap<_, _>>();
 
         Ok(actor_metadata
