@@ -70,9 +70,14 @@ pub struct FetchParams {
     pub lang: Language,
 }
 
+pub trait ProviderIdentifier {
+    /// Provider identifier
+    fn provider_identifier(&self) -> MetadataProvider;
+}
+
 /// This trait must be implemented by all movie metadata providers
 #[async_trait::async_trait]
-pub trait MovieMetadataProvider {
+pub trait MovieMetadataProvider: ProviderIdentifier {
     /// Query for movie
     #[allow(async_fn_in_trait)]
     async fn movie(
@@ -81,13 +86,18 @@ pub trait MovieMetadataProvider {
         params: FetchParams,
     ) -> Result<MovieMetadata, AppError>;
 
-    /// Provider identifier
-    fn provider_identifier(&self) -> MetadataProvider;
+    /// Movie search
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError>;
+
 }
 
 /// This trait must be implemented by all show metadata providers
 #[async_trait::async_trait]
-pub trait ShowMetadataProvider {
+pub trait ShowMetadataProvider: ProviderIdentifier {
     /// Query for show
     #[allow(async_fn_in_trait)]
     async fn show(
@@ -115,20 +125,6 @@ pub trait ShowMetadataProvider {
         fetch_params: FetchParams,
     ) -> Result<EpisodeMetadata, AppError>;
 
-    /// Provider identifier
-    fn provider_identifier(&self) -> MetadataProvider;
-}
-
-/// This trait must be implemented by all metadata providers with discovery capabilities
-#[async_trait::async_trait]
-pub trait DiscoverMetadataProvider {
-    /// Multi search
-    async fn multi_search(
-        &self,
-        query: &str,
-        fetch_params: FetchParams,
-    ) -> Result<Vec<MetadataSearchResult>, AppError>;
-
     /// Show search
     async fn show_search(
         &self,
@@ -136,12 +132,17 @@ pub trait DiscoverMetadataProvider {
         fetch_params: FetchParams,
     ) -> Result<Vec<ShowMetadata>, AppError>;
 
-    /// Movie search
-    async fn movie_search(
+}
+
+/// This trait must be implemented by all metadata providers with discovery capabilities
+#[async_trait::async_trait]
+pub trait DiscoverMetadataProvider: ProviderIdentifier {
+    /// Multi search
+    async fn multi_search(
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError>;
+    ) -> Result<Vec<MetadataSearchResult>, AppError>;
 
     /// External ids without self
     async fn external_ids(
@@ -149,9 +150,6 @@ pub trait DiscoverMetadataProvider {
         content_id: &str,
         content_hint: ContentType,
     ) -> Result<Vec<ExternalIdMetadata>, AppError>;
-
-    /// Provider identifier
-    fn provider_identifier(&self) -> MetadataProvider;
 }
 
 // types
@@ -249,6 +247,7 @@ pub struct MovieMetadata {
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<PersonMetadata>>,
+    pub external_ids: Option<Vec<ExternalIdMetadata>>,
 }
 
 /// The unified show data structure from any show provider
@@ -266,6 +265,7 @@ pub struct ShowMetadata {
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<PersonMetadata>>,
+    pub external_ids: Option<Vec<ExternalIdMetadata>>,
 }
 
 /// The unified season data structure from any show provider

@@ -96,11 +96,11 @@ impl MetadataProvidersStack {
     }
 
     pub async fn search_movie(&self, query: &str) -> anyhow::Result<Vec<MovieMetadata>> {
-        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
         let lang: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: lang.0 };
         let mut out = Vec::new();
-        let handles: Vec<_> = discover_providers
+        let handles: Vec<_> = movie_providers
             .into_iter()
             .map(|p| {
                 let query = query.to_string();
@@ -117,11 +117,11 @@ impl MetadataProvidersStack {
     }
 
     pub async fn search_show(&self, query: &str) -> anyhow::Result<Vec<ShowMetadata>> {
-        let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
+        let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
         let lang: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: lang.0 };
-        let handles: Vec<_> = discover_providers
+        let handles: Vec<_> = show_providers
             .into_iter()
             .map(|p| {
                 let query = query.to_string();

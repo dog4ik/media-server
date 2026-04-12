@@ -20,8 +20,8 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, MovieMetadata,
-        metadata_stack::MetadataProvidersStack,
+        DiscoverMetadataProvider, ExternalIdMetadata, MovieMetadata,
+        MovieMetadataProvider, metadata_stack::MetadataProvidersStack,
     },
     scan::insert_roles,
 };
@@ -71,9 +71,9 @@ impl MovieScanner {
                 .cmp(&b.identifier.title.to_lowercase())
         });
 
-        let discover_providers = self.providers.discover_providers();
-        let discover_providers: Arc<[&'static (dyn DiscoverMetadataProvider + Send + Sync)]> =
-            Arc::from(discover_providers.into_boxed_slice());
+        let movie_providers = self.providers.movie_providers();
+        let movie_providers: Arc<[&'static (dyn MovieMetadataProvider + Send + Sync)]> =
+            Arc::from(movie_providers.into_boxed_slice());
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_movie_concurrency));
         let mut handles: JoinSet<ResolvedMovie> = JoinSet::new();
@@ -86,12 +86,12 @@ impl MovieScanner {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let db = self.db.clone();
             let config = self.config.clone();
-            let discover_providers = discover_providers.clone();
+            let movie_providers = movie_providers.clone();
             let span = debug_span!("scan_movie", title = %title);
             handles.spawn(
                 async move {
                     let _permit = permit;
-                    fetch_single_movie_chunk(db, config, &title, &title_videos, &discover_providers)
+                    fetch_single_movie_chunk(db, config, &title, &title_videos, &movie_providers)
                         .await
                 }
                 .instrument(span),
@@ -248,7 +248,7 @@ async fn fetch_single_movie_chunk(
     config: ScanConfig,
     title: &str,
     videos: &[LibraryItem<MovieIdentifier>],
-    discover_providers: &[&'static (dyn DiscoverMetadataProvider + Send + Sync)],
+    movie_providers: &[&'static (dyn MovieMetadataProvider + Send + Sync)],
 ) -> ResolvedMovie {
     let first = videos.first().expect("movies are chunked");
     let db_movies = db.search_movie(title).await.unwrap_or_default();
@@ -257,7 +257,7 @@ async fn fetch_single_movie_chunk(
         || db_movies.first().unwrap().title.split_whitespace().count()
             != title.split_whitespace().count()
     {
-        for provider in discover_providers {
+        for provider in movie_providers {
             let Ok(search_results) = provider.movie_search(title, config.fetch_params).await else {
                 continue;
             };
@@ -283,11 +283,17 @@ async fn fetch_single_movie_chunk(
                         .fetch_duration()
                         .await
                         .unwrap_or_default();
-                    let mut external_ids = provider
-                        .external_ids(&first_result.metadata_id, ContentType::Movie)
+                    let Ok(mut movie_metadata) = provider
+                        .movie(&first_result.metadata_id, config.fetch_params)
                         .await
-                        .inspect_err(|e| tracing::error!("Failed to fetch external ids: {e}"))
-                        .unwrap_or_default();
+                    else {
+                        continue;
+                    };
+                    let mut external_ids = Vec::new();
+                    movie_metadata
+                        .external_ids
+                        .as_mut()
+                        .map(|v| external_ids.append(v));
                     external_ids.insert(
                         0,
                         ExternalIdMetadata {
@@ -297,7 +303,7 @@ async fn fetch_single_movie_chunk(
                     );
                     return ResolvedMovie {
                         lookup: MetadataLookupWithIds::New {
-                            metadata: first_result,
+                            metadata: movie_metadata,
                             external_ids,
                         },
                         duration,

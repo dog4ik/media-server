@@ -58,7 +58,7 @@ async fn main() {
         .expect("database to be found");
 
     let db = Box::leak(Box::new(db));
-    let port: config::Port = config::CONFIG.get_value();
+    let config::Port(port) = config::CONFIG.get_value();
     let show_dirs: config::ShowFolders = config::CONFIG.get_value();
     let movie_dirs: config::MovieFolders = config::CONFIG.get_value();
 
@@ -404,15 +404,15 @@ async fn main() {
         .fallback_service(assets_service)
         .with_state(app_state);
 
-    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port.0);
+    let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), port);
     let listener = match tokio::net::TcpListener::bind(addr).await {
         Ok(listener) => listener,
         Err(e) => {
-            tracing::error!("Failed to start server on port {}: {e}", port.0);
+            tracing::error!("Failed to start server on port {}: {e}", port);
             return;
         }
     };
-    tracing::info!("Starting server on port {}", port.0);
+    tracing::info!("Starting server on port {}", port);
 
     {
         let cancellation_token = cancellation_token.clone();

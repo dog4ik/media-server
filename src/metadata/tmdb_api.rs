@@ -10,7 +10,7 @@ use reqwest::{
 use serde::Deserialize;
 
 use crate::app_state::AppError;
-use crate::metadata::{PersonMetadata, RoleMetadata};
+use crate::metadata::{PersonMetadata, ProviderIdentifier, RoleMetadata};
 
 use super::{
     ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
@@ -302,7 +302,7 @@ impl TmdbApi {
             .push(&movie_id.to_string());
         url.query_pairs_mut()
             .append_pair("language", &lang.to_string())
-            .append_pair("append_to_response", "credits");
+            .append_pair("append_to_response", "credits,external_ids");
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
@@ -319,7 +319,8 @@ impl TmdbApi {
             .push("tv")
             .push(&show_id.to_string());
         url.query_pairs_mut()
-            .append_pair("language", &lang.to_string());
+            .append_pair("language", &lang.to_string())
+            .append_pair("append_to_response", "credits,external_ids");
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
@@ -368,6 +369,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
                 original_language,
             }),
             cast: None,
+            external_ids: None,
         }
     }
 }
@@ -397,6 +399,7 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             seasons: None,
             episodes_amount: None,
             cast: None,
+            external_ids: None,
         }
     }
 }
@@ -447,6 +450,12 @@ impl From<TmdbSeasonEpisode> for EpisodeMetadata {
     }
 }
 
+impl ProviderIdentifier for TmdbApi {
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tmdb
+    }
+}
+
 #[async_trait::async_trait]
 impl MovieMetadataProvider for TmdbApi {
     async fn movie(
@@ -460,8 +469,13 @@ impl MovieMetadataProvider for TmdbApi {
         Ok(movie.into())
     }
 
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tmdb
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError> {
+        let content = self.search_movie(query, fetch_params.lang).await?;
+        Ok(content.results.into_iter().map(Into::into).collect())
     }
 }
 
@@ -502,8 +516,13 @@ impl ShowMetadataProvider for TmdbApi {
             .map(Into::into)
     }
 
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tmdb
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
+        let shows = self.search_tv_show(query, fetch_params.lang).await?;
+        Ok(shows.results.into_iter().map(Into::into).collect())
     }
 }
 
@@ -520,24 +539,6 @@ impl DiscoverMetadataProvider for TmdbApi {
             .into_iter()
             .filter_map(|x| x.try_into().ok())
             .collect())
-    }
-
-    async fn show_search(
-        &self,
-        query: &str,
-        fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
-        let shows = self.search_tv_show(query, fetch_params.lang).await?;
-        Ok(shows.results.into_iter().map(Into::into).collect())
-    }
-
-    async fn movie_search(
-        &self,
-        query: &str,
-        fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
-        let content = self.search_movie(query, fetch_params.lang).await?;
-        Ok(content.results.into_iter().map(Into::into).collect())
     }
 
     async fn external_ids(
@@ -568,10 +569,6 @@ impl DiscoverMetadataProvider for TmdbApi {
 
         Ok(out)
     }
-
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tmdb
-    }
 }
 
 impl From<TmdbMovieDetails> for MovieMetadata {
@@ -601,6 +598,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             cast: val
                 .credits
                 .map(|credits| credits.cast.into_iter().map(Into::into).collect()),
+            external_ids: val.external_ids.map(Into::into),
         }
     }
 }
@@ -630,6 +628,7 @@ impl From<TmdbShowDetails> for ShowMetadata {
             cast: val
                 .credits
                 .map(|v| v.cast.into_iter().map(Into::into).collect()),
+            external_ids: val.external_ids.map(Into::into),
         }
     }
 }
@@ -704,6 +703,19 @@ impl From<TmdbCast> for PersonMetadata {
     }
 }
 
+impl From<TmdbExternalIds> for Vec<ExternalIdMetadata> {
+    fn from(TmdbExternalIds { imdb_id, .. }: TmdbExternalIds) -> Self {
+        imdb_id
+            .map(|id| {
+                vec![ExternalIdMetadata {
+                    provider: MetadataProvider::Imdb,
+                    id,
+                }]
+            })
+            .unwrap_or_default()
+    }
+}
+
 // Types
 
 #[derive(Debug, Clone, Deserialize)]
@@ -751,6 +763,7 @@ struct TmdbShowDetails {
     overview: String,
     poster_path: Option<String>,
     credits: Option<TmdbCredits>,
+    external_ids: Option<TmdbExternalIds>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -767,6 +780,7 @@ struct TmdbMovieDetails {
     runtime: Option<usize>,
     title: String,
     credits: Option<TmdbCredits>,
+    external_ids: Option<TmdbExternalIds>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

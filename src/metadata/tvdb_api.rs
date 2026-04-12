@@ -12,7 +12,10 @@ use reqwest::{
 };
 use serde::Deserialize;
 
-use crate::{app_state::AppError, metadata::LocaleMetadata};
+use crate::{
+    app_state::AppError,
+    metadata::{LocaleMetadata, ProviderIdentifier},
+};
 
 use super::{
     ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
@@ -164,6 +167,12 @@ impl TvdbApi {
     }
 }
 
+impl ProviderIdentifier for TvdbApi {
+    fn provider_identifier(&self) -> MetadataProvider {
+        MetadataProvider::Tvdb
+    }
+}
+
 #[async_trait::async_trait]
 impl MovieMetadataProvider for TvdbApi {
     async fn movie(
@@ -179,8 +188,17 @@ impl MovieMetadataProvider for TvdbApi {
         Ok(movie.into())
     }
 
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tvdb
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError> {
+        Ok(self
+            .search_movie(query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 }
 
@@ -254,8 +272,17 @@ impl ShowMetadataProvider for TvdbApi {
             .ok_or(AppError::not_found("episode is not found"))
     }
 
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tvdb
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
+        Ok(self
+            .search_series(query)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect())
     }
 }
 
@@ -271,32 +298,6 @@ impl DiscoverMetadataProvider for TvdbApi {
             .await?
             .into_iter()
             .filter_map(|r| r.try_into().ok())
-            .collect())
-    }
-
-    async fn show_search(
-        &self,
-        query: &str,
-        fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
-        Ok(self
-            .search_series(query)
-            .await?
-            .into_iter()
-            .map(Into::into)
-            .collect())
-    }
-
-    async fn movie_search(
-        &self,
-        query: &str,
-        fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
-        Ok(self
-            .search_movie(query)
-            .await?
-            .into_iter()
-            .map(Into::into)
             .collect())
     }
 
@@ -331,10 +332,6 @@ impl DiscoverMetadataProvider for TvdbApi {
                 .map(|x| x.remote_ids),
         }?;
         return Ok(retrieve_ids(fresh_ids));
-    }
-
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Tvdb
     }
 }
 
@@ -372,6 +369,7 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
             seasons: Some(seasons.into_iter().collect()),
             locale_metadata,
             cast: None,
+            external_ids: None,
         }
     }
 }
@@ -409,6 +407,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             title: self.name,
             locale_metadata,
             cast: None,
+            external_ids: None,
         }
     }
 }
@@ -434,6 +433,7 @@ impl From<TvdbSearchResult> for MovieMetadata {
             title: val.name,
             locale_metadata,
             cast: None,
+            external_ids: None,
         }
     }
 }

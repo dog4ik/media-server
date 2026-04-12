@@ -1152,6 +1152,7 @@ where (actors.metadata_provider = ? and actors.metadata_id = ?) or (? is not nul
                         title: m.title,
                         locale_metadata,
                         cast: None,
+                        external_ids: None,
                     }
                 })
                 .collect())
@@ -1205,6 +1206,7 @@ where (actors.metadata_provider = ? and actors.metadata_id = ?) or (? is not nul
                         title: show.title,
                         locale_metadata,
                         cast: None,
+                        external_ids: None,
                     }
                 })
                 .collect())
@@ -1355,54 +1357,6 @@ impl Db {
         .expect("insert upnp uuid");
 
         Ok(Self { pool })
-    }
-}
-
-#[async_trait::async_trait]
-impl DiscoverMetadataProvider for Db {
-    async fn multi_search(
-        &self,
-        query: &str,
-        _fetch_params: FetchParams,
-    ) -> Result<Vec<crate::metadata::MetadataSearchResult>, AppError> {
-        use rand::seq::SliceRandom;
-        let (movies, shows) =
-            tokio::try_join!(self.pool.search_movie(query), self.pool.search_show(query))?;
-        let mut out = Vec::with_capacity(movies.len() + shows.len());
-        out.extend(movies.into_iter().map(Into::into));
-        out.extend(shows.into_iter().map(Into::into));
-        let mut rng = rand::rng();
-        out.shuffle(&mut rng);
-        Ok(out)
-    }
-
-    async fn show_search(
-        &self,
-        query: &str,
-        _fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
-        self.pool.search_show(query).await
-    }
-
-    async fn movie_search(
-        &self,
-        query: &str,
-        _fetch_params: FetchParams,
-    ) -> Result<Vec<crate::metadata::MovieMetadata>, AppError> {
-        self.pool.search_movie(query).await
-    }
-
-    async fn external_ids(
-        &self,
-        content_id: &str,
-        content_hint: ContentType,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
-        self.get_external_ids(content_id.parse()?, content_hint)
-            .await
-    }
-
-    fn provider_identifier(&self) -> MetadataProvider {
-        MetadataProvider::Local
     }
 }
 

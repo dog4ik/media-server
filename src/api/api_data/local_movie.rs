@@ -36,6 +36,7 @@ impl From<Movie> for MovieMetadata {
             title: value.title,
             locale_metadata: value.locale_metadata,
             cast: None,
+            external_ids: None,
         }
     }
 }

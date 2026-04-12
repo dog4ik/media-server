@@ -21,7 +21,7 @@ use crate::{
         show::ShowIdentifier,
     },
     metadata::{
-        ContentType, DiscoverMetadataProvider, ExternalIdMetadata, MetadataProvider, ShowMetadata,
+        ContentType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
         metadata_stack::MetadataProvidersStack,
     },
     scan::{insert_roles, scan_progress::ScanProgressConsumer},
@@ -84,10 +84,10 @@ where
                 .cmp(&b.identifier.title.to_lowercase())
         });
 
-        let mut discover_providers = self.providers.discover_providers();
-        discover_providers.retain(|p| p.provider_identifier() != MetadataProvider::Local);
-        let discover_providers: Arc<[&'static (dyn DiscoverMetadataProvider + Send + Sync)]> =
-            Arc::from(discover_providers.into_boxed_slice());
+        let mut show_providers = self.providers.show_providers();
+        show_providers.retain(|p| p.provider_identifier() != MetadataProvider::Local);
+        let show_providers: Arc<[&'static (dyn ShowMetadataProvider + Send + Sync)]> =
+            Arc::from(show_providers.into_boxed_slice());
 
         let semaphore = Arc::new(Semaphore::new(self.config.max_show_concurrency));
         let mut handles: JoinSet<ShowChunk> = JoinSet::new();
@@ -100,13 +100,12 @@ where
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let db = self.db.clone();
             let config = self.config.clone();
-            let discover_providers = discover_providers.clone();
+            let show_providers = show_providers.clone();
             let span = debug_span!("scan_show", title = %title);
             handles.spawn(
                 async move {
                     let _permit = permit;
-                    let lookup =
-                        fetch_single_show_chunk(db, config, &title, &discover_providers).await;
+                    let lookup = fetch_single_show_chunk(db, config, &title, &show_providers).await;
                     ShowChunk {
                         lookup,
                         videos: title_videos,
@@ -384,7 +383,7 @@ async fn fetch_single_show_chunk(
     db: Db,
     config: ScanConfig,
     title: &str,
-    discover_providers: &[&'static (dyn DiscoverMetadataProvider + Send + Sync)],
+    show_providers: &[&'static (dyn ShowMetadataProvider + Send + Sync)],
 ) -> MetadataLookupWithIds<ShowMetadata> {
     let shows = db.search_show(title).await.unwrap_or_default();
 
@@ -392,7 +391,7 @@ async fn fetch_single_show_chunk(
         || shows.first().unwrap().title.split_whitespace().count()
             != title.split_whitespace().count()
     {
-        for provider in discover_providers {
+        for provider in show_providers {
             let Ok(search_results) = provider.show_search(title, config.fetch_params).await else {
                 continue;
             };
@@ -405,12 +404,14 @@ async fn fetch_single_show_chunk(
             {
                 Ok(Some(local_id)) => return MetadataLookupWithIds::Local(local_id),
                 Ok(None) | Err(_) => {
-                    let Ok(mut external_ids) = provider
-                        .external_ids(&first_result.metadata_id, ContentType::Show)
+                    let Ok(mut show_metadata) = provider
+                        .show(&first_result.metadata_id, config.fetch_params)
                         .await
                     else {
                         continue;
                     };
+                    let mut external_ids = Vec::new();
+                    show_metadata.external_ids.as_mut().map(|v| external_ids.append(v));
                     external_ids.insert(
                         0,
                         ExternalIdMetadata {
@@ -420,7 +421,7 @@ async fn fetch_single_show_chunk(
                     );
                     return MetadataLookupWithIds::New {
                         external_ids,
-                        metadata: first_result,
+                        metadata: show_metadata,
                     };
                 }
             }
