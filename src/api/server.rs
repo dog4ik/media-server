@@ -844,57 +844,6 @@ pub async fn local_episode(
 
 #[utoipa::path(
     get,
-    path = "/api/local_episode/by_video",
-    params(
-        IdQuery,
-    ),
-    responses(
-        (status = 200, description = "Local episode", body = Episode),
-    ),
-    tag = "Shows",
-)]
-/// Get local episode metadata by video's id
-pub async fn local_episode_by_video_id(
-    Query(IdQuery { id }): Query<IdQuery>,
-    State(db): State<Db>,
-) -> Result<Json<Episode>, AppError> {
-    let episode_id = sqlx::query!(
-        r#"SELECT episodes.id as "episode_id!: i64"
-    FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE videos.id = ?"#,
-        id
-    )
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(Json(db.get_episode_by_id(episode_id.episode_id).await?))
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/local_movie/by_video",
-    params(
-        IdQuery,
-    ),
-    responses(
-        (status = 200, description = "Local movie", body = Movie),
-    ),
-    tag = "Movies",
-)]
-/// Get local movie metadata by video's id
-pub async fn local_movie_by_video_id(
-    Query(IdQuery { id }): Query<IdQuery>,
-    State(db): State<Db>,
-) -> Result<Json<Movie>, AppError> {
-    let movie_id = sqlx::query!(
-        r#"SELECT movies.id as "movie_id!: i64" FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE videos.id = ?"#,
-        id
-    )
-    .fetch_one(&db.pool)
-    .await?;
-    Ok(Json(db.get_movie(movie_id.movie_id).await?))
-}
-
-#[utoipa::path(
-    get,
     path = "/api/local_movies",
     responses(
         (status = 200, description = "All local movies", body = CursoredResponse<Movie>),

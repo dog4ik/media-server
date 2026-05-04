@@ -5,7 +5,7 @@ use crate::{
         LocalDataLookup,
         api_types::{Actor, History},
     },
-    metadata::{LocaleMetadata, MetadataProvider, MovieMetadata},
+    metadata::{ExternalIdMetadata, LocaleMetadata, MetadataProvider, MovieMetadata},
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -19,6 +19,7 @@ pub struct Movie {
     pub runtime: Option<crate::MediaDuration>,
     pub title: String,
     pub cast: Option<Vec<Actor>>,
+    pub external_ids: Option<Vec<ExternalIdMetadata>>,
     pub locale_metadata: Option<LocaleMetadata>,
     pub local: Option<LocalMovieData>,
 }
@@ -77,6 +78,7 @@ impl Movie {
             title: meta.title,
             locale_metadata: meta.locale_metadata,
             cast: None,
+            external_ids: meta.external_ids,
             local,
         }
     }

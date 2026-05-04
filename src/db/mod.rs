@@ -806,9 +806,9 @@ where
             let mut conn = self.acquire().await?;
             let mut builder = DbQueryBuilder::default();
             query_builders::DbShowQuery::build(&mut builder);
-            builder
-                .push(" where shows.id = ")
-                .push_bind(show_id)
+            let query = builder.push(" where shows.id = ").push_bind(show_id);
+            tracing::debug!(sql = %query.sql(), "Fetching single show");
+            query
                 .build_query_as::<query_builders::DbShowQuery>()
                 .fetch_one(&mut *conn)
                 .await

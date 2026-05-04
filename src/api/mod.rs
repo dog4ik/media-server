@@ -37,8 +37,6 @@ pub mod torrent;
     paths(
         server::all_local_shows,
         server::local_episode,
-        server::local_episode_by_video_id,
-        server::local_movie_by_video_id,
         server::all_local_movies,
         server::external_ids,
         server::get_movie,

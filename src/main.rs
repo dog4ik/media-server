@@ -125,16 +125,8 @@ async fn main() {
         .route("/local_episode/{id}", get(api::server::local_episode))
         .route("/local_episode/{id}", delete(api::server::delete_episode))
         .route(
-            "/local_episode/by_video",
-            get(api::server::local_episode_by_video_id),
-        )
-        .route(
             "/local_episode/{episode_id}/watch",
             get(api::server::watch_episode),
-        )
-        .route(
-            "/local_movie/by_video",
-            get(api::server::local_movie_by_video_id),
         )
         .route("/local_movie/{id}", delete(api::server::delete_movie))
         .route(

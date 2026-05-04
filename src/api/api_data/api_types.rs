@@ -71,6 +71,29 @@ pub struct Actor {
     pub local: Option<LocalActorData>,
 }
 
+impl From<PersonMetadata> for Actor {
+    fn from(
+        PersonMetadata {
+            metadata_id,
+            metadata_provider,
+            person_poster,
+            name,
+            imdb_id,
+            role,
+        }: PersonMetadata,
+    ) -> Self {
+        Self {
+            name,
+            poster: person_poster,
+            metadata_id,
+            metadata_provider,
+            imdb_id,
+            character: role.map(|r| r.character),
+            local: None,
+        }
+    }
+}
+
 impl Actor {
     pub fn extend_meta(meta: PersonMetadata, local: Option<LocalActorData>) -> Self {
         Self {

@@ -10,7 +10,10 @@ use crate::{
         },
         server::Intro,
     },
-    metadata::{EpisodeMetadata, LocaleMetadata, MetadataProvider, SeasonMetadata, ShowMetadata},
+    metadata::{
+        EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider, SeasonMetadata,
+        ShowMetadata,
+    },
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -45,6 +48,7 @@ pub struct Show {
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<Actor>>,
+    pub external_ids: Option<Vec<ExternalIdMetadata>>,
     pub local: Option<LocalShowData>,
 }
 
@@ -72,7 +76,8 @@ impl Show {
             release_date: meta.release_date,
             title: meta.title,
             locale_metadata: meta.locale_metadata,
-            cast: None,
+            cast: meta.cast.map(|v| v.into_iter().map(Into::into).collect()),
+            external_ids: meta.external_ids,
             local,
         }
     }
