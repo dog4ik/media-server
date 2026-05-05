@@ -214,7 +214,7 @@ async fn main() {
         )
         .route(
             "/video/{id}/pull_subtitle",
-            get(api::server::pull_video_subtitle),
+            get(api::subtitles::pull_video_subtitle),
         )
         .route("/video/{id}/previews/{number}", get(api::server::previews))
         .route("/video/{id}/previews", post(api::server::generate_previews))
@@ -236,11 +236,11 @@ async fn main() {
         .route("/video/{id}/watch", get(api::server::watch))
         .route(
             "/video/{id}/upload_subtitles",
-            post(api::server::upload_subtitles),
+            post(api::subtitles::upload_subtitles),
         )
         .route(
             "/video/{id}/reference_subtitles",
-            post(api::server::reference_external_subtitles),
+            post(api::subtitles::reference_external_subtitles),
         )
         .route(
             "/video/{id}/variant/{variant_id}",
@@ -254,8 +254,8 @@ async fn main() {
         .route("/history/{id}", put(api::history::update_history))
         .route("/actor/{id}/poster", get(api::server::actor_poster))
         .route("/actor/list", get(api::server::actor_list))
-        .route("/subtitles/{id}", delete(api::server::delete_subtitles))
-        .route("/subtitles/{id}", get(api::server::get_subtitles))
+        .route("/subtitles/{id}", delete(api::subtitles::delete_subtitles))
+        .route("/subtitles/{id}", get(api::subtitles::get_subtitles))
         .route("/torrent/search", get(api::server::search_torrent))
         .route(
             "/torrent/resolve_magnet_link",

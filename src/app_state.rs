@@ -10,11 +10,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     config::{self},
-    db::{Db, DbActions, DbSubtitles},
-    ffmpeg::{self, FFmpegRunningJob, SubtitlesJob, TranscodeJob},
+    db::{Db, DbActions},
+    ffmpeg::{self, FFmpegRunningJob, TranscodeJob},
     library::{
         ContentIdentifier, Library, Source, TranscodePayload, Video,
-        assets::{AssetDir, FileAsset, SubtitlesDirAsset, VariantAsset},
+        assets::{AssetDir, FileAsset, VariantAsset},
         explore_movie_dirs, explore_show_dirs,
     },
     metadata::{FetchParams, metadata_stack::MetadataProvidersStack},
@@ -288,41 +288,6 @@ WHERE seasons.show_id = ?",
                 .position(|x| *x.path() == asset.path())
                 .map(|idx| source.variants.swap_remove(idx));
         };
-        Ok(())
-    }
-
-    /// TODO: this whole thing is wrong on so many levels
-    pub async fn extract_subs(&self, video_id: i64) -> Result<(), AppError> {
-        let source = self.get_source_by_id(video_id)?;
-        let mut jobs = Vec::new();
-        let subtitles_asset = SubtitlesDirAsset::new(video_id);
-        let subtitles_dir = subtitles_asset.path();
-        fs::create_dir_all(&subtitles_dir).await?;
-        let video_metadata = source.video.metadata().await?;
-        for track in video_metadata.subtitle_streams() {
-            if track.stream.codec.supports_text() {
-                let job =
-                    SubtitlesJob::from_source(&source.video, &subtitles_dir, track.index).await?;
-                let output_file = job.output_file_path.clone();
-                let job =
-                    FFmpegRunningJob::spawn(&job, video_metadata.duration(), output_file.clone())?;
-                jobs.push((job, &track.stream));
-            }
-        }
-        for (mut job, stream) in jobs {
-            if let Ok(status) = job.wait().await {
-                if status.success() {
-                    let db_subtitles = DbSubtitles {
-                        id: None,
-                        language: stream.language.clone(),
-                        external_path: None,
-                        video_id,
-                    };
-
-                    self.db.insert_subtitles(&db_subtitles).await?;
-                }
-            }
-        }
         Ok(())
     }
 

@@ -20,8 +20,8 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        DiscoverMetadataProvider, ExternalIdMetadata, MovieMetadata,
-        MovieMetadataProvider, metadata_stack::MetadataProvidersStack,
+        ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
+        metadata_stack::MetadataProvidersStack,
     },
     scan::insert_roles,
 };

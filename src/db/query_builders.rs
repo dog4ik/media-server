@@ -10,7 +10,7 @@ use crate::{
         },
         server::Intro,
     },
-    db::{self, DbActor, DbQueryBuilder, DbRole},
+    db::{self, DbActor, DbQueryBuilder},
     metadata::{ExternalIdMetadata, LocaleMetadata, MetadataProvider},
 };
 
@@ -369,13 +369,6 @@ impl From<DbEpisodeQuery> for Episode {
             intro,
         }: DbEpisodeQuery,
     ) -> Self {
-        let locale_metadata = content.original_language.zip(content.original_title).map(
-            |(original_language, original_title)| LocaleMetadata {
-                original_language,
-                original_title,
-            },
-        );
-
         Episode {
             metadata_id: episode.id.unwrap().to_string(),
             metadata_provider: MetadataProvider::Local,

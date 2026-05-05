@@ -27,6 +27,7 @@ use utoipa::OpenApi;
 /// This module defines the data types used by the API, as well as the methods required for their construction.
 pub mod api_data;
 pub mod file_browser;
+pub mod subtitles;
 pub mod history;
 pub mod server;
 /// Torrent client specific endpoints
@@ -63,11 +64,6 @@ pub mod torrent;
         server::contents_video,
         server::get_video_by_id,
         server::remove_video,
-        server::pull_video_subtitle,
-        server::upload_subtitles,
-        server::delete_subtitles,
-        server::get_subtitles,
-        server::reference_external_subtitles,
         server::previews,
         server::generate_previews,
         server::delete_previews,
@@ -141,6 +137,11 @@ pub mod torrent;
         history::update_history,
         history::suggest_movies,
         history::suggest_shows,
+        subtitles::pull_video_subtitle,
+        subtitles::upload_subtitles,
+        subtitles::delete_subtitles,
+        subtitles::get_subtitles,
+        subtitles::reference_external_subtitles,
         ws::ws,
     ),
     components(

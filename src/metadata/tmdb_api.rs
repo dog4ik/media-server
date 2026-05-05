@@ -27,6 +27,7 @@ pub struct TmdbApi {
 }
 
 #[derive(Debug, Clone, Default)]
+#[allow(unused)]
 enum PosterSizes {
     W92,
     W154,
@@ -66,10 +67,6 @@ impl TmdbImage {
             .push(size.get_size())
             .push(appendix);
         Self { url }
-    }
-
-    pub fn url(&self) -> &str {
-        self.url.as_ref()
     }
 }
 
@@ -209,7 +206,7 @@ impl TmdbApi {
         self.client.request(req).await
     }
 
-    pub async fn tv_show_season(
+    async fn tv_show_season(
         &self,
         tmdb_show_id: usize,
         season: usize,
@@ -233,7 +230,7 @@ impl TmdbApi {
         Ok(response)
     }
 
-    pub async fn tv_show_episode(
+    async fn tv_show_episode(
         &self,
         tmdb_show_id: usize,
         season: usize,
@@ -256,7 +253,7 @@ impl TmdbApi {
         self.client.request(req).await
     }
 
-    pub async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
+    async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("find").push(imdb_id);
         url.query_pairs_mut()
@@ -266,7 +263,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    pub async fn movie_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+    async fn movie_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -278,7 +275,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    pub async fn show_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+    async fn show_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -290,7 +287,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    pub async fn movie_details(
+    async fn movie_details(
         &self,
         movie_id: usize,
         lang: Language,
@@ -308,7 +305,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    pub async fn show_details(
+    async fn show_details(
         &self,
         show_id: usize,
         lang: Language,

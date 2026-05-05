@@ -12,9 +12,9 @@ use torrent::DownloadParams;
 use crate::{
     api::{
         api_data::{
-            api_types::{self, History},
-            local_movie::{LocalMovieData, Movie},
-            local_show::{Episode, LocalEpisodeData, LocalSeasonData, LocalShowData, Season, Show},
+            api_types::{self},
+            local_movie::Movie,
+            local_show::{Episode, LocalEpisodeData, LocalSeasonData, Season, Show},
         },
         server::Intro,
     },
@@ -23,8 +23,8 @@ use crate::{
     db::query_builders::{DbEpisodeQuery, DbMovieQuery},
     library::assets::{self, AssetDir},
     metadata::{
-        ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-        LocaleMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
+        ContentType, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider,
+        MovieMetadata, ShowMetadata,
     },
 };
 
@@ -294,10 +294,11 @@ where
             let mut conn = self.acquire().await?;
             let subtitles_query = sqlx::query!(
                 "INSERT INTO subtitles
-            (language, external_path, video_id)
-            VALUES (?, ?, ?) RETURNING id;",
+            (language, external_path, file_stem, video_id)
+            VALUES (?, ?, ?, ?) RETURNING id;",
                 db_subtitles.language,
                 db_subtitles.external_path,
+                db_subtitles.file_stem,
                 db_subtitles.video_id
             );
             subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
@@ -1532,6 +1533,7 @@ pub struct DbVideo {
 pub struct DbSubtitles {
     pub id: Option<i64>,
     pub language: Option<String>,
+    pub file_stem: String,
     /// This is a path "reference" on subtitles file specified by user.
     /// When this field is present, subtitles are not stored in the server's assets directory.
     pub external_path: Option<String>,
