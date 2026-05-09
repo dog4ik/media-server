@@ -245,6 +245,7 @@ pub struct MovieMetadata {
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<PersonMetadata>>,
+    pub genres: Option<Vec<Genre>>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
 }
 
@@ -263,6 +264,7 @@ pub struct ShowMetadata {
     pub title: String,
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<PersonMetadata>>,
+    pub genres: Option<Vec<Genre>>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
 }
 
@@ -496,6 +498,77 @@ impl PersonMetadata {
             metadata_id: self.metadata_id.clone(),
             metadata_provider: self.metadata_provider,
             poster: self.person_poster.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case")]
+#[repr(usize)]
+pub enum Genre {
+    Action = 0,
+    Adventure = 1,
+    Fantasy = 2,
+    History = 3,
+    Horror = 4,
+    Music = 5,
+    Mystery = 6,
+    Romance = 7,
+    ScienceFiction = 8,
+    Thriller = 9,
+    War = 10,
+    Western = 11,
+    ActionAdventure = 12,
+    Animation = 13,
+    Comedy = 14,
+    Crime = 15,
+    Documentary = 16,
+    Drama = 17,
+    Family = 18,
+    Kids = 19,
+    News = 20,
+    Reality = 21,
+    SciFiFantasy = 22,
+    Soap = 23,
+    Talk = 24,
+}
+
+impl From<Genre> for i64 {
+    fn from(g: Genre) -> i64 {
+        g as i64
+    }
+}
+
+impl TryFrom<i64> for Genre {
+    type Error = anyhow::Error;
+    fn try_from(v: i64) -> Result<Self, Self::Error> {
+        match v {
+            0 => Ok(Genre::Action),
+            1 => Ok(Genre::Adventure),
+            2 => Ok(Genre::Fantasy),
+            3 => Ok(Genre::History),
+            4 => Ok(Genre::Horror),
+            5 => Ok(Genre::Music),
+            6 => Ok(Genre::Mystery),
+            7 => Ok(Genre::Romance),
+            8 => Ok(Genre::ScienceFiction),
+            9 => Ok(Genre::Thriller),
+            10 => Ok(Genre::War),
+            11 => Ok(Genre::Western),
+            12 => Ok(Genre::ActionAdventure),
+            13 => Ok(Genre::Animation),
+            14 => Ok(Genre::Comedy),
+            15 => Ok(Genre::Crime),
+            16 => Ok(Genre::Documentary),
+            17 => Ok(Genre::Drama),
+            18 => Ok(Genre::Family),
+            19 => Ok(Genre::Kids),
+            20 => Ok(Genre::News),
+            21 => Ok(Genre::Reality),
+            22 => Ok(Genre::SciFiFantasy),
+            23 => Ok(Genre::Soap),
+            24 => Ok(Genre::Talk),
+            _ => Err(anyhow::anyhow!("Unknown genre id: {v}")),
         }
     }
 }

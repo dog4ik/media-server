@@ -173,6 +173,9 @@ impl MovieScanner {
                             })
                             .await;
                     }
+                    for genre in metadata.genres.into_iter().flatten() {
+                        let _ = tx.insert_content_genre(content_id, genre.into()).await;
+                    }
                     let first_source = videos.first().map(|v| v.source.clone());
                     if let Some(url) = poster {
                         let task_source = match first_source.clone() {

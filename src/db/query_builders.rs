@@ -11,7 +11,7 @@ use crate::{
         server::Intro,
     },
     db::{self, DbActor, DbQueryBuilder},
-    metadata::{ExternalIdMetadata, LocaleMetadata, MetadataProvider},
+    metadata::{ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider},
 };
 
 #[derive(sqlx::FromRow, Debug)]
@@ -26,12 +26,14 @@ pub struct DbShowQuery {
     pub cast: Option<Vec<CastQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub external_ids: Option<Vec<ExternalIdsQueryJson>>,
+    #[sqlx(json, default, nullish)]
+    pub genres: Option<Vec<GenreQueryJson>>,
 }
 
 impl DbShowQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {show}, {content}, {cast}, {external_ids},
+            "select {show}, {content}, {cast}, {external_ids}, {genres},
             (select count(episodes.id) from episodes join seasons on episodes.season_id = seasons.id where seasons.show_id = shows.id) as episode_count,
             (select group_concat(seasons.number) from seasons where seasons.show_id = shows.id) as seasons
             from shows
@@ -42,6 +44,7 @@ impl DbShowQuery {
             content = db::DbContent::SQL,
             cast = CastQueryJson::SQL_JSON_AGGR,
             external_ids = ExternalIdsQueryJson::SQL_JSON_AGGR,
+            genres = GenreQueryJson::SQL_JSON_AGGR,
         ));
     }
 }
@@ -55,6 +58,7 @@ impl From<DbShowQuery> for Show {
             content,
             cast,
             external_ids,
+            genres,
         }: DbShowQuery,
     ) -> Self {
         let locale_metadata = content.original_language.zip(content.original_title).map(
@@ -79,6 +83,11 @@ impl From<DbShowQuery> for Show {
             locale_metadata,
             cast: cast.map(|c| c.into_iter().map(Into::into).collect()),
             external_ids: external_ids.map(|ids| ids.into_iter().map(Into::into).collect()),
+            genres: genres.map(|gs| {
+                gs.into_iter()
+                    .filter_map(|g| Genre::try_from(g).ok())
+                    .collect()
+            }),
             local: Some(LocalShowData {
                 id: show.id.unwrap(),
             }),
@@ -172,6 +181,27 @@ impl From<ExternalIdsQueryJson> for ExternalIdMetadata {
     }
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct GenreQueryJson {
+    pub genre_id: i64,
+}
+
+impl GenreQueryJson {
+    pub const SQL_JSON_AGGR: &str = "coalesce((select json_group_array(json_object(
+'genre_id', content_genres.genre_id
+))
+from content_genres
+where content_genres.content_id = content.id
+having count(content_genres.id) > 0), json('null')) as genres ";
+}
+
+impl TryFrom<GenreQueryJson> for Genre {
+    type Error = anyhow::Error;
+    fn try_from(g: GenreQueryJson) -> Result<Self, Self::Error> {
+        Genre::try_from(g.genre_id)
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct DbMovieQuery {
     #[sqlx(flatten)]
@@ -184,6 +214,8 @@ pub struct DbMovieQuery {
     pub cast: Option<Vec<CastQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub external_ids: Option<Vec<ExternalIdsQueryJson>>,
+    #[sqlx(json, default, nullish)]
+    pub genres: Option<Vec<GenreQueryJson>>,
 }
 
 impl From<DbMovieQuery> for Movie {
@@ -194,6 +226,7 @@ impl From<DbMovieQuery> for Movie {
             history,
             cast,
             external_ids,
+            genres,
         }: DbMovieQuery,
     ) -> Self {
         Self {
@@ -207,6 +240,11 @@ impl From<DbMovieQuery> for Movie {
             title: content.title,
             cast: cast.map(|c| c.into_iter().map(Into::into).collect()),
             external_ids: external_ids.map(|ids| ids.into_iter().map(Into::into).collect()),
+            genres: genres.map(|gs| {
+                gs.into_iter()
+                    .filter_map(|g| Genre::try_from(g).ok())
+                    .collect()
+            }),
             locale_metadata: content.original_title.zip(content.original_language).map(
                 |(original_title, original_language)| LocaleMetadata {
                     original_title,
@@ -229,7 +267,7 @@ impl From<DbMovieQuery> for Movie {
 impl DbMovieQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {content}, {history}, {movie}, {actors}, {external_ids}
+            "select {content}, {history}, {movie}, {actors}, {external_ids}, {genres}
             from movies
             join content on content.id = movies.content_id
             join actors on actors.id = movies.content_id
@@ -239,6 +277,7 @@ impl DbMovieQuery {
             movie = db::DbMovie::SQL,
             actors = CastQueryJson::SQL_JSON_AGGR,
             external_ids = ExternalIdsQueryJson::SQL_JSON_AGGR,
+            genres = GenreQueryJson::SQL_JSON_AGGR,
         ));
     }
 }

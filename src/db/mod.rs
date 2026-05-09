@@ -343,6 +343,24 @@ where
         }
     }
 
+    fn insert_content_genre(
+        self,
+        content_id: i64,
+        genre_id: i64,
+    ) -> impl std::future::Future<Output = sqlx::Result<()>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "INSERT OR IGNORE INTO content_genres (genre_id, content_id) VALUES (?, ?)",
+                genre_id,
+                content_id,
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
     fn insert_intro(
         self,
         intro: DbIntro,
@@ -1153,6 +1171,7 @@ where (actors.metadata_provider = ? and actors.metadata_id = ?) or (? is not nul
                         title: m.title,
                         locale_metadata,
                         cast: None,
+                        genres: None,
                         external_ids: None,
                     }
                 })
@@ -1207,6 +1226,7 @@ where (actors.metadata_provider = ? and actors.metadata_id = ?) or (? is not nul
                         title: show.title,
                         locale_metadata,
                         cast: None,
+                        genres: None,
                         external_ids: None,
                     }
                 })
@@ -1680,6 +1700,24 @@ pub struct DbTorrentFile {
     pub priority: i64,
     pub idx: i64,
     pub relative_path: String,
+}
+
+/// `content_genres` table stores mapping between content and genres
+///
+/// Should be cleaned up manually.
+#[derive(Debug, Clone, FromRow, Serialize, Default)]
+pub struct DbContentGenres {
+    #[sqlx(rename = "content_genres_id")]
+    pub id: Option<i64>,
+    #[sqlx(rename = "content_genres_content_id")]
+    pub content_id: i64,
+    /// Genre id is a repr usize of the [crate::metadata::Genre]
+    #[sqlx(rename = "content_genres_genre_id")]
+    pub genre_id: i64,
+}
+
+impl DbContentGenres {
+    pub const SQL: &str = "content_genres.id as content_genres_id, content_genres.content_id as content_genres_content_id, content_genres.genre_id as content_genres_genre_id";
 }
 
 /// `system_id` table stores the single row: global `system_id`.

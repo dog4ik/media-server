@@ -34,7 +34,7 @@ pub mod assets;
 pub mod extras;
 /// Local files tokenizer
 pub mod identification;
-/// Libarry videos and it's components
+/// Library videos and it's components
 pub mod media;
 /// Identification for movie file names
 pub mod movie;

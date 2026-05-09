@@ -369,6 +369,7 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
             seasons: Some(seasons.into_iter().collect()),
             locale_metadata,
             cast: None,
+            genres: None,
             external_ids: None,
         }
     }
@@ -407,6 +408,7 @@ impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
             title: self.name,
             locale_metadata,
             cast: None,
+            genres: None,
             external_ids: None,
         }
     }
@@ -433,6 +435,7 @@ impl From<TvdbSearchResult> for MovieMetadata {
             title: val.name,
             locale_metadata,
             cast: None,
+            genres: None,
             external_ids: None,
         }
     }

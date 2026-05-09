@@ -11,8 +11,8 @@ use crate::{
         server::Intro,
     },
     metadata::{
-        EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider, SeasonMetadata,
-        ShowMetadata,
+        EpisodeMetadata, ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider,
+        SeasonMetadata, ShowMetadata,
     },
 };
 
@@ -49,6 +49,7 @@ pub struct Show {
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<Actor>>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
+    pub genres: Option<Vec<Genre>>,
     pub local: Option<LocalShowData>,
 }
 
@@ -78,6 +79,7 @@ impl Show {
             locale_metadata: meta.locale_metadata,
             cast: meta.cast.map(|v| v.into_iter().map(Into::into).collect()),
             external_ids: meta.external_ids,
+            genres: meta.genres,
             local,
         }
     }

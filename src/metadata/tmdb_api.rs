@@ -366,6 +366,7 @@ impl From<TmdbSearchMovieResult> for MovieMetadata {
                 original_language,
             }),
             cast: None,
+            genres: None,
             external_ids: None,
         }
     }
@@ -396,6 +397,7 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             seasons: None,
             episodes_amount: None,
             cast: None,
+            genres: None,
             external_ids: None,
         }
     }
@@ -576,6 +578,11 @@ impl From<TmdbMovieDetails> for MovieMetadata {
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
+        let genres = val.genres.map(|gs| {
+            gs.into_iter()
+                .filter_map(|g| super::Genre::try_from(g).ok())
+                .collect::<Vec<_>>()
+        });
         MovieMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -595,6 +602,7 @@ impl From<TmdbMovieDetails> for MovieMetadata {
             cast: val
                 .credits
                 .map(|credits| credits.cast.into_iter().map(Into::into).collect()),
+            genres,
             external_ids: val.external_ids.map(Into::into),
         }
     }
@@ -608,6 +616,11 @@ impl From<TmdbShowDetails> for ShowMetadata {
         let backdrop = val
             .backdrop_path
             .map(|b| TmdbImage::new(&b, PosterSizes::Original).to_string());
+        let genres = val.genres.map(|gs| {
+            gs.into_iter()
+                .filter_map(|g| super::Genre::try_from(g).ok())
+                .collect::<Vec<_>>()
+        });
         ShowMetadata {
             metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
@@ -625,6 +638,7 @@ impl From<TmdbShowDetails> for ShowMetadata {
             cast: val
                 .credits
                 .map(|v| v.cast.into_iter().map(Into::into).collect()),
+            genres,
             external_ids: val.external_ids.map(Into::into),
         }
     }
@@ -799,6 +813,43 @@ struct TmdbCast {
 struct TmdbGenre {
     id: usize,
     name: String,
+}
+
+impl TryFrom<TmdbGenre> for super::Genre {
+    type Error = anyhow::Error;
+    fn try_from(g: TmdbGenre) -> Result<Self, Self::Error> {
+        match g.id {
+            // TV genres
+            10759 => Ok(super::Genre::ActionAdventure),
+            10762 => Ok(super::Genre::Kids),
+            10763 => Ok(super::Genre::News),
+            10764 => Ok(super::Genre::Reality),
+            10765 => Ok(super::Genre::SciFiFantasy),
+            10766 => Ok(super::Genre::Soap),
+            10767 => Ok(super::Genre::Talk),
+            10768 => Ok(super::Genre::War),
+            // Movie genres
+            28 => Ok(super::Genre::Action),
+            12 => Ok(super::Genre::Adventure),
+            16 => Ok(super::Genre::Animation),
+            35 => Ok(super::Genre::Comedy),
+            80 => Ok(super::Genre::Crime),
+            99 => Ok(super::Genre::Documentary),
+            18 => Ok(super::Genre::Drama),
+            10751 => Ok(super::Genre::Family),
+            14 => Ok(super::Genre::Fantasy),
+            36 => Ok(super::Genre::History),
+            27 => Ok(super::Genre::Horror),
+            10402 => Ok(super::Genre::Music),
+            9648 => Ok(super::Genre::Mystery),
+            10749 => Ok(super::Genre::Romance),
+            878 => Ok(super::Genre::ScienceFiction),
+            53 => Ok(super::Genre::Thriller),
+            10752 => Ok(super::Genre::War),
+            37 => Ok(super::Genre::Western),
+            _ => Err(anyhow::anyhow!("Unknown TMDB genre id: {}", g.id)),
+        }
+    }
 }
 
 #[derive(Deserialize, Debug, Clone)]

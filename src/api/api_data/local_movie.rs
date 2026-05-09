@@ -5,7 +5,7 @@ use crate::{
         LocalDataLookup,
         api_types::{Actor, History},
     },
-    metadata::{ExternalIdMetadata, LocaleMetadata, MetadataProvider, MovieMetadata},
+    metadata::{ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider, MovieMetadata},
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -20,6 +20,7 @@ pub struct Movie {
     pub title: String,
     pub cast: Option<Vec<Actor>>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
+    pub genres: Option<Vec<Genre>>,
     pub locale_metadata: Option<LocaleMetadata>,
     pub local: Option<LocalMovieData>,
 }
@@ -36,6 +37,7 @@ impl From<Movie> for MovieMetadata {
             runtime: value.runtime,
             title: value.title,
             locale_metadata: value.locale_metadata,
+            genres: None,
             cast: None,
             external_ids: None,
         }
@@ -79,6 +81,7 @@ impl Movie {
             locale_metadata: meta.locale_metadata,
             cast: None,
             external_ids: meta.external_ids,
+            genres: meta.genres,
             local,
         }
     }

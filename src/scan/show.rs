@@ -226,6 +226,9 @@ where
                             );
                         }
                     }
+                    for genre in metadata.genres.into_iter().flatten() {
+                        let _ = tx.insert_content_genre(content_id, genre.into()).await;
+                    }
                     if let Some(url) = poster {
                         asset_tasks.push(AssetSaveTask {
                             kind: AssetKind::Poster(PosterAsset::new(
