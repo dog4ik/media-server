@@ -47,10 +47,12 @@ use crate::library::assets::{
     PreviewAsset, VariantAsset,
 };
 use crate::library::assets::{AssetDir, PreviewsDirAsset};
-use crate::library::{
-    AudioCodec, ContentIdentifier, Resolution, Source, SubtitlesCodec, VideoCodec,
-};
-use crate::library::{TranscodePayload, VideoContainer};
+use crate::library::media::Resolution;
+use crate::library::media::codec::audio::AudioCodec;
+use crate::library::media::codec::subtitles::SubtitlesCodec;
+use crate::library::media::codec::video::VideoCodec;
+use crate::library::media::container::VideoContainer;
+use crate::library::{ContentIdentifier, Source, TranscodePayload};
 use crate::metadata::{
     ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
@@ -346,7 +348,7 @@ impl From<&ffmpeg_abi::Chapter> for DetailedChapter {
 }
 
 impl DetailedVariant {
-    pub async fn from_video(video: &crate::library::Video) -> anyhow::Result<Self> {
+    pub async fn from_video(video: &crate::library::media::Video) -> anyhow::Result<Self> {
         let id = video
             .path()
             .file_stem()

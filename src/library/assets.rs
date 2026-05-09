@@ -17,7 +17,7 @@ use tokio_util::io::ReaderStream;
 
 use crate::config;
 
-use super::Video;
+use super::media::Video;
 
 pub(crate) trait FileAsset {
     fn relative_path(&self) -> &Path;

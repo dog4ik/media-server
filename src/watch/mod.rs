@@ -2,7 +2,7 @@ use hls_stream::{HlsStreamConfiguration, HlsTempPath, job::HlsJobHandle};
 use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
-    library::Video,
+    library::media::Video,
     progress::{ProgressDispatcher, TaskTrait},
 };
 

@@ -4,7 +4,10 @@ use std::{
     time::Instant,
 };
 
-use crate::library::{EXTRAS_FOLDERS, Video, VideoContainer, movie::MovieIdent, show::ShowIdent};
+use crate::library::{
+    EXTRAS_FOLDERS, media::Video, media::container::VideoContainer, movie::MovieIdent,
+    show::ShowIdent,
+};
 
 use super::{movie::MovieIdentifier, show::ShowIdentifier};
 

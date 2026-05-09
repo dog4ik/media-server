@@ -8,7 +8,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 
 use crate::{
     config,
-    library::Video,
+    library::media::Video,
     progress::ProgressDispatcher,
     watch::{WatchTask, hls_stream::command::CommandArgumentsParams},
 };

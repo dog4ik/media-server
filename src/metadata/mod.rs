@@ -92,7 +92,6 @@ pub trait MovieMetadataProvider: ProviderIdentifier {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<MovieMetadata>, AppError>;
-
 }
 
 /// This trait must be implemented by all show metadata providers
@@ -131,7 +130,6 @@ pub trait ShowMetadataProvider: ProviderIdentifier {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<ShowMetadata>, AppError>;
-
 }
 
 /// This trait must be implemented by all metadata providers with discovery capabilities

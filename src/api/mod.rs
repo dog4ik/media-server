@@ -27,9 +27,9 @@ use utoipa::OpenApi;
 /// This module defines the data types used by the API, as well as the methods required for their construction.
 pub mod api_data;
 pub mod file_browser;
-pub mod subtitles;
 pub mod history;
 pub mod server;
+pub mod subtitles;
 /// Torrent client specific endpoints
 pub mod torrent;
 
@@ -193,10 +193,10 @@ pub mod torrent;
             torrent_index::Torrent,
             db::DbExternalId,
             library::TranscodePayload,
-            library::AudioCodec,
-            library::VideoCodec,
-            library::SubtitlesCodec,
-            library::Resolution,
+            library::media::codec::audio::AudioCodec,
+            library::media::codec::video::VideoCodec,
+            library::media::codec::subtitles::SubtitlesCodec,
+            library::media::Resolution,
             config::AppResources,
             config::Capabilities,
             config::Codec,

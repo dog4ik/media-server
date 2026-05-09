@@ -13,9 +13,11 @@ use tokio::sync::Semaphore;
 use tokio_stream::StreamExt;
 
 use crate::config::{self};
-use crate::library::{
-    AudioCodec, Resolution, Source, SubtitlesCodec, TranscodePayload, Video, VideoCodec,
+use crate::library::media::{
+    Resolution, Video,
+    codec::{audio::AudioCodec, subtitles::SubtitlesCodec, video::VideoCodec},
 };
+use crate::library::{Source, TranscodePayload};
 use crate::progress::ProgressChunk;
 use crate::progress::ProgressDispatch;
 use crate::progress::ProgressStatus;

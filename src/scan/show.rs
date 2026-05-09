@@ -411,7 +411,10 @@ async fn fetch_single_show_chunk(
                         continue;
                     };
                     let mut external_ids = Vec::new();
-                    show_metadata.external_ids.as_mut().map(|v| external_ids.append(v));
+                    show_metadata
+                        .external_ids
+                        .as_mut()
+                        .map(|v| external_ids.append(v));
                     external_ids.insert(
                         0,
                         ExternalIdMetadata {

@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use crate::{
     config::{self, APP_RESOURCES},
-    library::{AudioCodec, VideoCodec},
+    library::media::codec::{audio::AudioCodec, video::VideoCodec},
 };
 
 pub mod command;

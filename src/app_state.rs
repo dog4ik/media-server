@@ -13,9 +13,10 @@ use crate::{
     db::{Db, DbActions},
     ffmpeg::{self, FFmpegRunningJob, TranscodeJob},
     library::{
-        ContentIdentifier, Library, Source, TranscodePayload, Video,
+        ContentIdentifier, Library, Source, TranscodePayload,
         assets::{AssetDir, FileAsset, VariantAsset},
         explore_movie_dirs, explore_show_dirs,
+        media::Video,
     },
     metadata::{FetchParams, metadata_stack::MetadataProvidersStack},
     progress::TaskResource,

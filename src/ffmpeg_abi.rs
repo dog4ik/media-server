@@ -4,7 +4,10 @@ use anyhow::Context;
 use ffmpeg_next::{codec, format::stream::Disposition, media};
 use tokio::sync::{OnceCell, Semaphore};
 
-use crate::library::{AudioCodec, Resolution, SubtitlesCodec, VideoCodec};
+use crate::library::media::{
+    Resolution,
+    codec::{audio::AudioCodec, subtitles::SubtitlesCodec, video::VideoCodec},
+};
 
 #[derive(Debug)]
 pub struct Chapter {
