@@ -478,13 +478,12 @@ where
             .fetch_optional(&mut *conn)
             .await?
             {
-                let sibling_count = sqlx::query!(
+                let sibling_count = sqlx::query_scalar!(
                     "SELECT COUNT(*) AS count FROM videos WHERE content_id = ?",
                     content_id
                 )
                 .fetch_one(&mut *conn)
-                .await?
-                .count;
+                .await?;
                 if sibling_count == 0 {
                     conn.remove_episode(episode_row.id).await?;
                 }
@@ -497,13 +496,12 @@ where
                     .fetch_optional(&mut *conn)
                     .await?
             {
-                let sibling_count = sqlx::query!(
+                let sibling_count = sqlx::query_scalar!(
                     "SELECT COUNT(*) AS count FROM videos WHERE content_id = ?",
                     content_id
                 )
                 .fetch_one(&mut *conn)
-                .await?
-                .count;
+                .await?;
                 if sibling_count == 0 {
                     conn.remove_movie(movie_row.id).await?;
                 }
@@ -533,13 +531,12 @@ where
                 .execute(&mut *conn)
                 .await?;
 
-            let siblings_count = sqlx::query!(
+            let siblings_count = sqlx::query_scalar!(
                 "SELECT COUNT(*) AS count FROM episodes WHERE season_id = ?",
                 episode.season_id
             )
             .fetch_one(&mut *conn)
-            .await?
-            .count;
+            .await?;
             tracing::debug!("Removed episode siblings count: {}", siblings_count);
             if siblings_count == 0 {
                 conn.remove_season(episode.season_id).await?;
@@ -582,13 +579,12 @@ where
                 .await?;
 
             let show_id = season.show_id;
-            let siblings_count = sqlx::query!(
+            let siblings_count = sqlx::query_scalar!(
                 "SELECT COUNT(*) AS count FROM seasons WHERE show_id = ?",
                 show_id
             )
             .fetch_one(&mut *conn)
-            .await?
-            .count;
+            .await?;
             if siblings_count == 0 {
                 conn.remove_show(show_id).await?;
             }
@@ -607,10 +603,10 @@ where
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing show");
 
-            let show_content_id = sqlx::query!("SELECT content_id FROM shows WHERE id = ?", id)
-                .fetch_one(&mut *conn)
-                .await?
-                .content_id;
+            let show_content_id =
+                sqlx::query_scalar!("SELECT content_id FROM shows WHERE id = ?", id)
+                    .fetch_one(&mut *conn)
+                    .await?;
 
             // Collect all episode content_ids
             let episode_content_ids: Vec<i64> = sqlx::query!(
@@ -925,7 +921,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
-            let season = sqlx::query!(
+            let season = sqlx::query_scalar!(
                 "SELECT seasons.id FROM seasons
             WHERE seasons.show_id = ? AND seasons.number = ?;",
                 show_id,
@@ -934,7 +930,7 @@ where
             .fetch_one(&mut *conn)
             .await?;
 
-            Ok(season.id)
+            Ok(season)
         }
     }
 
