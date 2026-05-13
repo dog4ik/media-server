@@ -115,22 +115,22 @@ impl Season {
             time: Option<i64>,
             update_time: Option<time::OffsetDateTime>,
             is_finished: Option<bool>,
-            metadata_provider: MetadataProvider,
-            metadata_id: String,
+            external_provider: MetadataProvider,
+            external_id: String,
             intro_id: Option<i64>,
             start_sec: Option<i64>,
             end_sec: Option<i64>,
         }
         let mut local_episodes = sqlx::QueryBuilder::new(
             "select episodes.id,
-            external_ids.metadata_id, external_ids.metadata_provider,
+            external_ids.external_id, external_ids.external_provider,
             history.id as history_id, history.time, history.update_time, history.is_finished,
             intros.id as intro_id, intros.start_sec, intros.end_sec
             from external_ids
-            join episodes on episodes.content_id = external_ids.content_id
+            join episodes on episodes.metadata_id = external_ids.metadata_id
             left join intros on intros.episode_id = episodes.id
-            left join history on history.content_id = episodes.content_id
-            where (external_ids.metadata_provider, external_ids.metadata_id) in",
+            left join history on history.metadata_id = episodes.metadata_id
+            where (external_ids.external_provider, external_ids.external_id) in",
         )
         .push_tuples(meta.episodes.iter(), |mut b, meta| {
             b.push_bind(meta.metadata_provider)
@@ -142,7 +142,7 @@ impl Season {
         .into_iter()
         .map(|r| {
             (
-                (r.metadata_provider, r.metadata_id),
+                (r.external_provider, r.external_id),
                 LocalEpisodeData {
                     id: r.id,
                     history: r.history_id.map(|id| History {

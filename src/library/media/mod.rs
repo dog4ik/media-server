@@ -68,7 +68,7 @@ impl Video {
             id: None,
             path: self.path.to_string_lossy().to_string(),
             size: self.file_size().await? as i64,
-            content_id: None,
+            metadata_id: None,
             is_prime: false,
             scan_date: now.to_string(),
         })

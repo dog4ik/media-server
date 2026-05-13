@@ -158,9 +158,9 @@ impl DetailedVideo {
         let id = source.id;
 
         let db_video = sqlx::query!(
-            r#"SELECT videos.scan_date, videos.path, videos.content_id AS video_content_id
+            r#"SELECT videos.scan_date, videos.path, videos.metadata_id AS video_content_id
         FROM videos
-        LEFT JOIN episodes ON episodes.content_id = videos.content_id
+        LEFT JOIN episodes ON episodes.metadata_id = videos.metadata_id
         WHERE videos.id = ?;"#,
             id
         )
@@ -414,7 +414,7 @@ pub async fn video_content_metadata(
         ContentIdentifier::Show(_) => {
             let query = sqlx::query!(
                 r#"SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM videos
-            JOIN episodes ON episodes.content_id = videos.content_id
+            JOIN episodes ON episodes.metadata_id = videos.metadata_id
             JOIN seasons ON seasons.id = episodes.season_id WHERE videos.id = ?;"#,
                 video_id
             )
@@ -431,7 +431,7 @@ pub async fn video_content_metadata(
         }
         ContentIdentifier::Movie(_) => {
             let query = sqlx::query!(
-                "SELECT movies.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE videos.id = ?;",
+                "SELECT movies.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE videos.id = ?;",
                 video_id
             )
             .fetch_one(&db.pool)
@@ -531,7 +531,7 @@ pub async fn watch_episode(
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
     let video_id = sqlx::query!(
-        "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?;",
+        "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?;",
         episode_id
     )
     .fetch_one(&state.db.pool)
@@ -562,7 +562,7 @@ pub async fn watch_movie(
     range: Option<TypedHeader<Range>>,
 ) -> Result<impl IntoResponse, AppError> {
     let video_id = sqlx::query!(
-        "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?;",
+        "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?;",
         movie_id
     )
     .fetch_one(&state.db.pool)
@@ -690,7 +690,7 @@ pub async fn contents_video(
         crate::metadata::ContentType::Movie => {
             sqlx::query_as!(
                 VideoId,
-                "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?",
+                "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?",
                 id
             )
             .fetch_all(&state.db.pool)
@@ -699,7 +699,7 @@ pub async fn contents_video(
         crate::metadata::ContentType::Show => {
             sqlx::query_as!(
                 VideoId,
-                "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+                "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
                 id
             )
             .fetch_all(&state.db.pool)
@@ -1489,7 +1489,7 @@ pub async fn alter_show_metadata(
     Json(metadata): Json<ShowMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE content SET title = ?, plot = ? WHERE id = (SELECT content_id FROM shows WHERE id = ?);",
+        "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM shows WHERE id = ?);",
         metadata.title,
         metadata.plot,
         show_id
@@ -1520,7 +1520,7 @@ pub async fn alter_season_metadata(
     Json(metadata): Json<SeasonMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE content SET plot = ? WHERE id = (SELECT content_id FROM seasons WHERE show_id = ? AND number = ?);",
+        "UPDATE metadata SET plot = ? WHERE id = (SELECT metadata_id FROM seasons WHERE show_id = ? AND number = ?);",
         metadata.plot,
         show_id,
         season
@@ -1552,9 +1552,9 @@ pub async fn alter_episode_metadata(
     Json(metadata): Json<EpisodeMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        r#"UPDATE content SET title = ?, plot = ?
+        r#"UPDATE metadata SET title = ?, plot = ?
         WHERE id = (
-            SELECT episodes.content_id FROM episodes
+            SELECT episodes.metadata_id FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
             WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?
         );"#,
@@ -1589,7 +1589,7 @@ pub async fn alter_movie_metadata(
     Json(metadata): Json<MovieMetadata>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "UPDATE content SET title = ?, plot = ? WHERE id = (SELECT content_id FROM movies WHERE id = ?);",
+        "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM movies WHERE id = ?);",
         metadata.title,
         metadata.plot,
         id
@@ -1640,9 +1640,9 @@ pub async fn fix_movie_metadata() -> Result<(), AppError> {
 /// Fix metadata match
 #[utoipa::path(
     post,
-    path = "/api/fix_metadata/{content_id}",
+    path = "/api/fix_metadata/{metadata_id}",
     params(
-        ("content_id", description = "Id of the content that needs to be fixed"),
+        ("metadata_id", description = "Id of the content that needs to be fixed"),
         ProviderQuery,
         StringIdQuery,
         ContentTypeQuery,
@@ -1693,9 +1693,9 @@ pub async fn reset_movie_metadata() -> Result<(), AppError> {
 /// Reset content's metadata
 #[utoipa::path(
     post,
-    path = "/api/reset_metadata/{content_id}",
+    path = "/api/reset_metadata/{metadata_id}",
     params(
-        ("content_id", description = "Id of the content that needs to be fixed"),
+        ("metadata_id", description = "Id of the content that needs to be fixed"),
         ContentTypeQuery,
     ),
     responses(
@@ -2478,7 +2478,7 @@ pub async fn video_intro(
         Intro,
         r#"SELECT intros.start_sec, intros.end_sec FROM intros
         JOIN episodes ON episodes.id = intros.episode_id
-        WHERE episodes.content_id = (SELECT content_id FROM videos WHERE id = ?)"#,
+        WHERE episodes.metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)"#,
         video_id,
     )
     .fetch_one(&db.pool)
@@ -2505,7 +2505,7 @@ pub async fn delete_video_intro(
 ) -> Result<(), AppError> {
     sqlx::query!(
         r#"DELETE FROM intros WHERE episode_id = (
-            SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?)
+            SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)
         ) RETURNING id"#,
         video_id,
     )
@@ -2627,7 +2627,7 @@ pub async fn update_video_intro(
 
     let update = sqlx::query!(
         r#"UPDATE intros SET start_sec = ?, end_sec = ?
-        WHERE episode_id = (SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?))
+        WHERE episode_id = (SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?))
         RETURNING id;"#,
         start,
         end,
@@ -2642,7 +2642,7 @@ pub async fn update_video_intro(
         }
         Err(sqlx::Error::RowNotFound) => {
             let episode_id = sqlx::query!(
-                "SELECT id FROM episodes WHERE content_id = (SELECT content_id FROM videos WHERE id = ?)",
+                "SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)",
                 video_id
             )
             .fetch_one(&db.pool)

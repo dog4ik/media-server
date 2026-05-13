@@ -61,13 +61,13 @@ impl LocalDataLookup {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
-            metadata_provider: MetadataProvider,
-            metadata_id: String,
+            external_provider: MetadataProvider,
+            external_id: String,
         }
         let mut local_map = QueryBuilder::new(
-            r#"select shows.id, external_ids.metadata_provider, external_ids.metadata_id from external_ids
-            join shows on shows.content_id = external_ids.content_id
-            where (external_ids.metadata_provider, external_ids.metadata_id) in"#,
+            r#"select shows.id, external_ids.external_provider, external_ids.external_id from external_ids
+            join shows on shows.metadata_id = external_ids.metadata_id
+            where (external_ids.external_provider, external_ids.external_id) in"#,
         )
             .push_tuples(shows.iter(), |mut b, meta| {
                 b.push_bind(meta.metadata_provider.to_string())
@@ -76,7 +76,7 @@ impl LocalDataLookup {
             .build_query_as::<Record>()
             .fetch_all(&self.db.pool).await?
             .into_iter()
-            .map(|v| ((v.metadata_provider, v.metadata_id), local_show::LocalShowData { id: v.id }))
+            .map(|v| ((v.external_provider, v.external_id), local_show::LocalShowData { id: v.id }))
             .collect::<HashMap<_, _>>();
 
         Ok(shows
@@ -93,12 +93,10 @@ impl LocalDataLookup {
         movies: Vec<MovieMetadata>,
     ) -> sqlx::Result<Vec<local_movie::Movie>> {
         #[derive(sqlx::FromRow)]
-        struct HistoryRecord {}
-        #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
-            metadata_provider: MetadataProvider,
-            metadata_id: String,
+            external_provider: MetadataProvider,
+            external_id: String,
             // history
             history_id: Option<i64>,
             time: Option<i64>,
@@ -108,12 +106,12 @@ impl LocalDataLookup {
         let mut local_map = QueryBuilder::new(
             r#"select
             movies.id,
-            external_ids.metadata_provider, external_ids.metadata_id,
+            external_ids.external_provider, external_ids.external_id,
             history.id as history_id, history.time, history.is_finished, history.update_time
             from external_ids
-            join movies on movies.content_id = external_ids.content_id
-            left join history on history.content_id = movies.content_id
-            where (external_ids.metadata_provider, external_ids.metadata_id) in"#,
+            join movies on movies.metadata_id = external_ids.metadata_id
+            left join history on history.metadata_id = movies.metadata_id
+            where (external_ids.external_provider, external_ids.external_id) in"#,
         )
         .push_tuples(movies.iter(), |mut b, meta| {
             b.push_bind(meta.metadata_provider.to_string())
@@ -125,7 +123,7 @@ impl LocalDataLookup {
         .into_iter()
         .map(|v| {
             (
-                (v.metadata_provider, v.metadata_id),
+                (v.external_provider, v.external_id),
                 local_movie::LocalMovieData {
                     id: v.id,
                     history: v.history_id.map(|id| History {
@@ -156,12 +154,12 @@ impl LocalDataLookup {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
-            metadata_provider: MetadataProvider,
-            metadata_id: String,
+            external_metadata_provider: MetadataProvider,
+            external_metadata_id: String,
         }
         let mut local_map = QueryBuilder::new(
-            r#"select actors.id, actors.metadata_provider, actors.metadata_id from actors
-            where (actors.metadata_provider, actors.metadata_id) in "#,
+            r#"select actors.id, actors.external_metadata_provider, actors.external_metadata_id from actors
+            where (actors.external_metadata_provider, actors.external_metadata_id) in "#,
         )
         .push_tuples(actor_metadata.iter(), |mut b, meta| {
             b.push_bind(meta.metadata_provider.to_string())
@@ -173,7 +171,7 @@ impl LocalDataLookup {
         .into_iter()
         .map(|v| {
             (
-                (v.metadata_provider, v.metadata_id),
+                (v.external_metadata_provider, v.external_metadata_id),
                 local_actor::LocalActorData { id: v.id },
             )
         })
@@ -203,7 +201,7 @@ impl LocalDataLookup {
         Ok(sqlx::query!(
                 r#"select movies.id,
             history.id as "history_id?", history.time, history.is_finished, history.update_time as history_update_time from movies
-            left join history on history.content_id = movies.content_id
+            left join history on history.metadata_id = movies.metadata_id
             where movies.id = ? limit 1"#,
                   id
         ).fetch_optional(&self.db.pool).await?.map(|r| local_movie::LocalMovieData {
@@ -273,7 +271,7 @@ impl LocalDataLookup {
             from episodes
             join seasons on seasons.id = episodes.season_id
             left join intros on intros.episode_id = episodes.id
-            left join history on history.content_id = episodes.content_id
+            left join history on history.metadata_id = episodes.metadata_id
             WHERE seasons.show_id = ? and seasons.number = ? and episodes.number = ? limit 1"#,
             local_id,
             season,

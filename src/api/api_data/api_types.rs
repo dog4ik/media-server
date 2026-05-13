@@ -21,7 +21,7 @@ impl From<db::DbHistory> for History {
             time,
             is_finished,
             update_time,
-            content_id: _,
+            metadata_id: _,
         }: db::DbHistory,
     ) -> Self {
         Self {
@@ -43,8 +43,8 @@ pub struct Content {
     pub locale_metadata: Option<LocaleMetadata>,
 }
 
-impl From<db::DbContent> for Content {
-    fn from(value: db::DbContent) -> Self {
+impl From<db::DbMetadata> for Content {
+    fn from(value: db::DbMetadata) -> Self {
         Self {
             poster: value.poster,
             plot: value.plot,

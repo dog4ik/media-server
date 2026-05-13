@@ -191,7 +191,7 @@ impl AppState {
     pub async fn delete_movie(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN movies ON movies.content_id = videos.content_id WHERE movies.id = ?",
+            "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?",
             id
         )
         .fetch_all(&mut *tx)
@@ -213,7 +213,7 @@ impl AppState {
     pub async fn delete_season(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.season_id = ?",
+            "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.season_id = ?",
             id
         )
         .fetch_all(&mut *tx)
@@ -236,7 +236,7 @@ impl AppState {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos
-JOIN episodes ON episodes.content_id = videos.content_id
+JOIN episodes ON episodes.metadata_id = videos.metadata_id
 JOIN seasons ON seasons.id = episodes.season_id
 WHERE seasons.show_id = ?",
             id
@@ -260,7 +260,7 @@ WHERE seasons.show_id = ?",
     pub async fn delete_episode(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
-            "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+            "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
             id
         )
         .fetch_all(&mut *tx)
@@ -412,7 +412,7 @@ WHERE seasons.show_id = ?",
         let video_ids = sqlx::query!(
             r#"SELECT min(videos.id) as "video_id!", episodes.id as "episode_id!" FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
-        JOIN videos ON videos.content_id = episodes.content_id
+        JOIN videos ON videos.metadata_id = episodes.metadata_id
         WHERE seasons.show_id = ? AND seasons.number = ?
         GROUP BY episodes.id;"#,
             show_id,
@@ -457,7 +457,7 @@ WHERE seasons.show_id = ?",
         let fetch_params = FetchParams { lang: language.0 };
 
         let db_movies_videos = sqlx::query!(
-            "SELECT videos.id FROM videos WHERE videos.content_id IN (SELECT movies.content_id FROM movies);"
+            "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT movies.metadata_id FROM movies);"
         )
         .fetch_all(&self.db.pool)
         .await?;
@@ -527,7 +527,7 @@ WHERE seasons.show_id = ?",
         };
 
         let db_episodes_videos = sqlx::query!(
-            "SELECT videos.id FROM videos WHERE videos.content_id IN (SELECT episodes.content_id FROM episodes);"
+            "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT episodes.metadata_id FROM episodes);"
         )
         .fetch_all(&self.db.pool)
         .await?;

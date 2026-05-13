@@ -2,7 +2,7 @@ use std::{fmt::Display, num::NonZero, str::FromStr, time::Duration};
 
 use crate::{
     app_state::AppError,
-    db::{DbContent, DbContentType, DbEpisode, DbMovie, DbSeason, DbShow},
+    db::{DbContentType, DbEpisode, DbMetadata, DbMovie, DbSeason, DbShow},
 };
 use serde::{Deserialize, Serialize};
 
@@ -355,7 +355,7 @@ impl From<ShowMetadata> for MetadataSearchResult {
 }
 
 impl ShowMetadata {
-    pub fn into_db_content(&self) -> DbContent {
+    pub fn into_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -367,7 +367,7 @@ impl ShowMetadata {
             None => (None, None),
         };
 
-        DbContent {
+        DbMetadata {
             id: None,
             content_type: DbContentType::Show,
             title: self.title.clone(),
@@ -379,20 +379,20 @@ impl ShowMetadata {
         }
     }
 
-    pub fn into_db_show(&self, content_id: i64) -> DbShow {
+    pub fn into_db_show(&self, metadata_id: i64) -> DbShow {
         let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
 
         DbShow {
             id: None,
-            content_id,
+            metadata_id,
             backdrop,
         }
     }
 }
 
 impl EpisodeMetadata {
-    pub fn into_db_content(&self) -> DbContent {
-        DbContent {
+    pub fn into_db_metadata(&self) -> DbMetadata {
+        DbMetadata {
             id: None,
             content_type: DbContentType::Episode,
             original_title: None,
@@ -406,13 +406,13 @@ impl EpisodeMetadata {
 
     pub fn into_db_episode(
         &self,
-        content_id: i64,
+        metadata_id: i64,
         season_id: i64,
         duration: Duration,
     ) -> DbEpisode {
         DbEpisode {
             id: None,
-            content_id,
+            metadata_id,
             season_id,
             number: self.number as i64,
             duration: duration.as_secs() as i64,
@@ -421,7 +421,7 @@ impl EpisodeMetadata {
 }
 
 impl SeasonMetadata {
-    pub fn into_db_content(&self) -> DbContent {
+    pub fn into_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -429,7 +429,7 @@ impl SeasonMetadata {
             poster = None;
         }
 
-        DbContent {
+        DbMetadata {
             id: None,
             content_type: DbContentType::Season,
             original_title: None,
@@ -444,10 +444,10 @@ impl SeasonMetadata {
         }
     }
 
-    pub fn into_db_season(&self, content_id: i64, show_id: i64) -> DbSeason {
+    pub fn into_db_season(&self, metadata_id: i64, show_id: i64) -> DbSeason {
         DbSeason {
             id: None,
-            content_id,
+            metadata_id,
             show_id,
             number: self.number as i64,
         }
@@ -455,7 +455,7 @@ impl SeasonMetadata {
 }
 
 impl MovieMetadata {
-    pub fn into_db_content(&self) -> DbContent {
+    pub fn into_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -467,7 +467,7 @@ impl MovieMetadata {
             Some(m) => (Some(m.original_language), Some(m.original_title)),
             None => (None, None),
         };
-        DbContent {
+        DbMetadata {
             id: None,
             content_type: DbContentType::Movie,
             title: self.title.clone(),
@@ -478,11 +478,11 @@ impl MovieMetadata {
             original_title,
         }
     }
-    pub fn into_db_movie(&self, content_id: i64, duration: Duration) -> DbMovie {
+    pub fn into_db_movie(&self, metadata_id: i64, duration: Duration) -> DbMovie {
         let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
         DbMovie {
             id: None,
-            content_id,
+            metadata_id,
             backdrop,
             duration: duration.as_secs() as i64,
         }
@@ -495,8 +495,8 @@ impl PersonMetadata {
             id: None,
             name: self.name.clone(),
             imdb_id: self.imdb_id.clone(),
-            metadata_id: self.metadata_id.clone(),
-            metadata_provider: self.metadata_provider,
+            external_metadata_id: self.metadata_id.clone(),
+            external_metadata_provider: self.metadata_provider,
             poster: self.person_poster.clone(),
         }
     }

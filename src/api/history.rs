@@ -24,7 +24,7 @@ use crate::{
 pub struct HistoryEntry {
     #[serde(flatten)]
     pub content: Content,
-    pub content_id: i64,
+    pub metadata_id: i64,
     pub runtime: crate::MediaDuration,
     #[serde(flatten)]
     pub history_content_type: HistoryContentType,
@@ -49,7 +49,7 @@ pub enum HistoryContentType {
 impl From<DbHistoryQuery> for HistoryEntry {
     fn from(
         DbHistoryQuery {
-            content,
+            metadata,
             history,
             episode,
             show_id,
@@ -74,8 +74,8 @@ impl From<DbHistoryQuery> for HistoryEntry {
             HistoryContentType::Movie { movie_id }
         };
         Self {
-            content_id: content.id.expect("content id is not null"),
-            content: Content::from(content),
+            metadata_id: metadata.id.expect("metadata id is not null"),
+            content: Content::from(metadata),
             runtime: Duration::from_secs(runtime as u64).into(),
             history_content_type,
             history: History::from(history),
@@ -155,8 +155,8 @@ pub struct ShowSuggestion {
 pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
-        history.content_id, movies.id AS movie_id FROM history
-    JOIN movies ON movies.content_id = history.content_id WHERE history.is_finished = false
+        history.metadata_id, movies.id AS movie_id FROM history
+    JOIN movies ON movies.metadata_id = history.metadata_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 3;"#
     )
     .fetch_all(&db.pool)
@@ -193,9 +193,9 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
 pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
-        history.content_id, episodes.number AS episode_number, seasons.show_id AS show_id,
+        history.metadata_id, episodes.number AS episode_number, seasons.show_id AS show_id,
         seasons.number AS season_number FROM history
-    JOIN episodes ON episodes.content_id = history.content_id
+    JOIN episodes ON episodes.metadata_id = history.metadata_id
     JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false
     ORDER BY history.update_time DESC LIMIT 50;"#
     )
@@ -313,8 +313,8 @@ pub async fn update_history(
         time = payload.time,
         "Updating history entry"
     );
-    let content_id = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING content_id;",
+    let metadata_id = sqlx::query!(
+        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING metadata_id;",
         payload.time,
         payload.is_finished,
         update_time,
@@ -322,13 +322,13 @@ pub async fn update_history(
     )
     .fetch_one(&db.pool)
     .await?
-    .content_id;
+    .metadata_id;
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
         let current_time = std::time::Duration::from_secs(payload.time as u64).into();
         if let Ok(Some(video)) = sqlx::query!(
-            "SELECT id FROM videos WHERE content_id = ? LIMIT 1",
-            content_id
+            "SELECT id FROM videos WHERE metadata_id = ? LIMIT 1",
+            metadata_id
         )
         .fetch_optional(&db.pool)
         .await
@@ -385,17 +385,17 @@ pub async fn update_video_history(
     }
     let update_time = time::OffsetDateTime::now_utc().into();
     tracing::trace!(video_id = id, time = payload.time, "Updating video history");
-    let content_id = sqlx::query!("SELECT content_id FROM videos WHERE id = ?", id)
+    let metadata_id = sqlx::query!("SELECT metadata_id FROM videos WHERE id = ?", id)
         .fetch_one(&db.pool)
         .await?
-        .content_id
+        .metadata_id
         .ok_or(AppError::not_found("Video has no associated content"))?;
     let query = sqlx::query!(
-        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE content_id = ? RETURNING id;",
+        "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE metadata_id = ? RETURNING id;",
         payload.time,
         payload.is_finished,
         update_time,
-        content_id,
+        metadata_id,
     );
     if let Err(err) = query.fetch_one(&db.pool).await {
         match err {
@@ -406,7 +406,7 @@ pub async fn update_video_history(
                         time: payload.time,
                         is_finished: payload.is_finished,
                         update_time: Some(update_time),
-                        content_id,
+                        metadata_id,
                     })
                     .await?;
                 return Ok(StatusCode::CREATED);
@@ -435,7 +435,7 @@ pub async fn remove_video_history(
     Path(id): Path<i64>,
 ) -> Result<(), AppError> {
     sqlx::query!(
-        "DELETE FROM history WHERE content_id = (SELECT content_id FROM videos WHERE id = ?);",
+        "DELETE FROM history WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?);",
         id
     )
     .execute(&db.pool)

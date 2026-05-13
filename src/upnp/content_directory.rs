@@ -104,7 +104,7 @@ impl MediaServerContentDirectory {
         for season in &seasons {
             let season = *season as i64;
             let season = sqlx::query!(
-                "SELECT seasons.id, content.plot FROM seasons JOIN content ON content.id = seasons.content_id WHERE seasons.show_id = ? AND seasons.number = ?",
+                "SELECT seasons.id, metadata.plot FROM seasons JOIN metadata ON metadata.id = seasons.metadata_id WHERE seasons.show_id = ? AND seasons.number = ?",
                 show_id,
                 season,
             )
@@ -150,7 +150,7 @@ impl MediaServerContentDirectory {
         let mut items = Vec::with_capacity(season.episodes.len());
         for episode in season.episodes {
             let Ok(video_ids) = sqlx::query!(
-                "SELECT videos.id FROM videos JOIN episodes ON episodes.content_id = videos.content_id WHERE episodes.id = ?",
+                "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
                 episode.metadata_id
             )
             .fetch_all(&db.pool)

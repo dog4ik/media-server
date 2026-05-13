@@ -350,11 +350,11 @@ async fn main() {
         .route("/ws", any(ws::ws))
         .route("/scan", post(api::server::reconciliate_lib))
         .route(
-            "/fix_metadata/{content_id}",
+            "/fix_metadata/{metadata_id}",
             post(api::server::fix_metadata),
         )
         .route(
-            "/reset_metadata/{content_id}",
+            "/reset_metadata/{metadata_id}",
             post(api::server::reset_metadata),
         )
         .route(

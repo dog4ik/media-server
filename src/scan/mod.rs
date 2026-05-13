@@ -129,7 +129,7 @@ async fn save_asset_from_url_with_frame_fallback(
 
 pub(super) async fn insert_roles(
     tx: &mut DbTransaction,
-    content_id: i64,
+    metadata_id: i64,
     cast: Vec<PersonMetadata>,
     asset_tasks: &mut Vec<AssetSaveTask>,
 ) -> sqlx::Result<()> {
@@ -161,7 +161,7 @@ pub(super) async fn insert_roles(
         tx.insert_role(&DbRole {
             id: None,
             actor_id,
-            content_id,
+            metadata_id,
             character: cast.role.as_ref().map(|r| r.character.clone()),
         })
         .await?;

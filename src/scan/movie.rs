@@ -148,33 +148,33 @@ impl MovieScanner {
                 videos,
             } = movie;
 
-            let content_id = match lookup {
+            let metadata_id = match lookup {
                 MetadataLookupWithIds::New {
                     metadata,
                     external_ids,
                 } => {
                     let poster = metadata.poster.clone();
                     let backdrop = metadata.backdrop.clone();
-                    let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                    let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
                     let movie_id = tx
-                        .insert_movie(&metadata.into_db_movie(content_id, duration))
+                        .insert_movie(&metadata.into_db_movie(metadata_id, duration))
                         .await?;
                     if let Some(cast) = metadata.cast {
-                        insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                        insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
                         let _ = tx
                             .insert_external_id(DbExternalId {
-                                metadata_provider: ext_id.provider,
-                                metadata_id: ext_id.id.clone(),
-                                content_id: Some(content_id),
+                                external_provider: ext_id.provider,
+                                external_id: ext_id.id.clone(),
+                                metadata_id: Some(metadata_id),
                                 is_prime: false.into(),
                                 ..Default::default()
                             })
                             .await;
                     }
                     for genre in metadata.genres.into_iter().flatten() {
-                        let _ = tx.insert_content_genre(content_id, genre.into()).await;
+                        let _ = tx.insert_content_genre(metadata_id, genre.into()).await;
                     }
                     let first_source = videos.first().map(|v| v.source.clone());
                     if let Some(url) = poster {
@@ -207,18 +207,18 @@ impl MovieScanner {
                             source: AssetTaskSource::Url(url),
                         });
                     }
-                    content_id
+                    metadata_id
                 }
                 MetadataLookupWithIds::Local(movie_id) => {
-                    sqlx::query!("SELECT content_id FROM movies WHERE id = ?", movie_id)
+                    sqlx::query!("SELECT metadata_id FROM movies WHERE id = ?", movie_id)
                         .fetch_one(&mut *tx)
                         .await?
-                        .content_id
+                        .metadata_id
                 }
             };
 
             for video in &videos {
-                tx.update_video_content_id(video.source.id, content_id)
+                tx.update_video_metadata_id(video.source.id, metadata_id)
                     .await?;
             }
         }

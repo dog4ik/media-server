@@ -205,17 +205,17 @@ where
                 } => {
                     let poster = metadata.poster.clone();
                     let backdrop = metadata.backdrop.clone();
-                    let content_id = tx.insert_content(&metadata.into_db_content()).await?;
-                    let show_id = tx.insert_show(&metadata.into_db_show(content_id)).await?;
+                    let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
+                    let show_id = tx.insert_show(&metadata.into_db_show(metadata_id)).await?;
                     if let Some(cast) = metadata.cast {
-                        insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                        insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
                         if let Err(e) = tx
                             .insert_external_id(DbExternalId {
-                                metadata_provider: ext_id.provider,
-                                metadata_id: ext_id.id.clone(),
-                                content_id: Some(content_id),
+                                external_provider: ext_id.provider,
+                                external_id: ext_id.id.clone(),
+                                metadata_id: Some(metadata_id),
                                 ..Default::default()
                             })
                             .await
@@ -227,7 +227,7 @@ where
                         }
                     }
                     for genre in metadata.genres.into_iter().flatten() {
-                        let _ = tx.insert_content_genre(content_id, genre.into()).await;
+                        let _ = tx.insert_content_genre(metadata_id, genre.into()).await;
                     }
                     if let Some(url) = poster {
                         asset_tasks.push(AssetSaveTask {
@@ -262,12 +262,12 @@ where
                 let season_id = match lookup {
                     MetadataLookup::New { metadata } => {
                         let poster = metadata.poster.clone();
-                        let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                        let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
                         let season_id = tx
-                            .insert_season(metadata.into_db_season(content_id, show_id))
+                            .insert_season(metadata.into_db_season(metadata_id, show_id))
                             .await?;
                         if let Some(cast) = metadata.cast {
-                            insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                            insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
                         }
                         if let Some(url) = poster {
                             asset_tasks.push(AssetSaveTask {
@@ -291,28 +291,31 @@ where
                         ..
                     } = resolved_episode;
 
-                    let content_id = match lookup {
+                    let metadata_id = match lookup {
                         MetadataLookup::New { metadata } => {
                             let poster = metadata.poster.clone();
-                            let metadata_provider = metadata.metadata_provider;
-                            let metadata_id = metadata.metadata_id.clone();
-                            let content_id = tx.insert_content(&metadata.into_db_content()).await?;
+                            let ext_provider = metadata.metadata_provider;
+                            let ext_id = metadata.metadata_id.clone();
+                            let metadata_id =
+                                tx.insert_metadata(&metadata.into_db_metadata()).await?;
                             if metadata.metadata_provider != MetadataProvider::Local {
                                 tx.insert_external_id(DbExternalId {
-                                    metadata_provider,
-                                    metadata_id,
-                                    content_id: Some(content_id),
+                                    external_provider: ext_provider,
+                                    external_id: ext_id,
+                                    metadata_id: Some(metadata_id),
                                     ..Default::default()
                                 })
                                 .await?;
                             }
                             let episode_id = tx
-                                .insert_episode(
-                                    &metadata.into_db_episode(content_id, season_id, duration),
-                                )
+                                .insert_episode(&metadata.into_db_episode(
+                                    metadata_id,
+                                    season_id,
+                                    duration,
+                                ))
                                 .await?;
                             if let Some(cast) = metadata.cast {
-                                insert_roles(&mut tx, content_id, cast, &mut asset_tasks).await?;
+                                insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
                             }
                             let first_source = videos.first().map(|v| v.source.clone());
                             if let Some(url) = poster {
@@ -339,19 +342,22 @@ where
                                     source: AssetTaskSource::VideoFrame(source),
                                 });
                             }
-                            content_id
+                            metadata_id
                         }
                         MetadataLookup::Local(episode_id) => {
                             dbg!(episode_id);
-                            sqlx::query!("SELECT content_id FROM episodes WHERE id = ?", episode_id)
-                                .fetch_one(&mut *tx)
-                                .await?
-                                .content_id
+                            sqlx::query!(
+                                "SELECT metadata_id FROM episodes WHERE id = ?",
+                                episode_id
+                            )
+                            .fetch_one(&mut *tx)
+                            .await?
+                            .metadata_id
                         }
                     };
 
                     for video in &videos {
-                        tx.update_video_content_id(video.source.id, content_id)
+                        tx.update_video_metadata_id(video.source.id, metadata_id)
                             .await?;
                     }
                 }
