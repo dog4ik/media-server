@@ -220,12 +220,12 @@ async fn main() {
         .route("/video/{id}/previews", post(api::server::generate_previews))
         .route("/video/{id}/previews", delete(api::server::delete_previews))
         .route(
-            "/video/{id}/history",
-            delete(api::history::remove_video_history),
+            "/metadata/{id}/history",
+            delete(api::history::remove_metadata_history),
         )
         .route(
-            "/video/{id}/history",
-            put(api::history::update_video_history),
+            "/metadata/{id}/history",
+            put(api::history::update_metadata_history),
         )
         .route("/video/{id}/transcode", post(api::server::transcode_video))
         .route(

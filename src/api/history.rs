@@ -335,25 +335,25 @@ pub async fn update_history(
     Ok(())
 }
 
-/// Update/Insert video history
+/// Update/Insert history for specific metadata item
 #[utoipa::path(
     put,
-    path = "/api/video/{id}/history",
+    path = "/api/metadata/{id}/history",
     params(
-        ("id", description = "Video id"),
+        ("id", description = "Metadata id"),
         OptionalUuidQuery,
     ),
     request_body = UpdateHistoryPayload,
     responses(
         (status = 200, description = "History entry is updated"),
         (status = 201, description = "History is created"),
-        (status = 404, description = "Video is not found", body = AppError),
+        (status = 404, description = "Metadata is not found", body = AppError),
     ),
-    tag = "Videos",
+    tag = "Metadata",
 )]
-pub async fn update_video_history(
+pub async fn update_metadata_history(
     State(app_state): State<AppState>,
-    Path(id): Path<i64>,
+    Path(metadata_id): Path<i64>,
     Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
     Json(payload): Json<UpdateHistoryPayload>,
 ) -> Result<StatusCode, AppError> {
@@ -368,12 +368,7 @@ pub async fn update_video_history(
         );
     }
     let update_time = time::OffsetDateTime::now_utc().into();
-    tracing::trace!(video_id = id, time = payload.time, "Updating video history");
-    let metadata_id = sqlx::query!("SELECT metadata_id FROM videos WHERE id = ?", id)
-        .fetch_one(&db.pool)
-        .await?
-        .metadata_id
-        .ok_or(AppError::not_found("Video has no associated content"))?;
+    tracing::trace!(%metadata_id, time = payload.time, "Updating history");
     let query = sqlx::query!(
         "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE metadata_id = ? RETURNING id;",
         payload.time,
@@ -381,22 +376,17 @@ pub async fn update_video_history(
         update_time,
         metadata_id,
     );
-    if let Err(err) = query.fetch_one(&db.pool).await {
-        match err {
-            sqlx::Error::RowNotFound => {
-                db.pool
-                    .insert_history(crate::db::DbHistory {
-                        id: None,
-                        time: payload.time,
-                        is_finished: payload.is_finished,
-                        update_time: Some(update_time),
-                        metadata_id,
-                    })
-                    .await?;
-                return Ok(StatusCode::CREATED);
-            }
-            rest => return Err(rest.into()),
-        };
+    if query.fetch_optional(&db.pool).await?.is_some() {
+        db.pool
+            .insert_history(crate::db::DbHistory {
+                id: None,
+                time: payload.time,
+                is_finished: payload.is_finished,
+                update_time: Some(update_time),
+                metadata_id,
+            })
+            .await?;
+        return Ok(StatusCode::CREATED);
     }
     Ok(StatusCode::OK)
 }
@@ -404,25 +394,25 @@ pub async fn update_video_history(
 /// Delete video history entry
 #[utoipa::path(
     delete,
-    path = "/api/video/{id}/history",
+    path = "/api/metadata/{id}/history",
     params(
-        ("id", description = "Video id"),
+        ("id", description = "Metadata id"),
     ),
     responses(
         (status = 200, description = "History entry is deleted"),
-        (status = 404, description = "Video is not found", body = AppError),
+        (status = 404, description = "Metadata is not found", body = AppError),
     ),
     tag = "Videos",
 )]
-pub async fn remove_video_history(
+pub async fn remove_metadata_history(
     State(db): State<Db>,
     Path(id): Path<i64>,
 ) -> Result<(), AppError> {
-    sqlx::query!(
-        "DELETE FROM history WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?);",
-        id
-    )
-    .execute(&db.pool)
-    .await?;
+    let rows = sqlx::query!("DELETE FROM history WHERE metadata_id = ?;", id)
+        .execute(&db.pool)
+        .await?;
+    if rows.rows_affected() == 0 {
+        return Err(AppError::not_found("Content not found"));
+    }
     Ok(())
 }
