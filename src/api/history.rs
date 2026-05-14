@@ -16,7 +16,7 @@ use crate::{
     app_state::{AppError, AppState},
     db::{self, Db, DbActions, query_builders::DbHistoryQuery},
     metadata::{EpisodeMetadata, MovieMetadata},
-    watch::{WatchIdentifier, WatchProgress},
+    watch::WatchProgress,
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -326,23 +326,11 @@ pub async fn update_history(
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
         let current_time = std::time::Duration::from_secs(payload.time as u64).into();
-        if let Ok(Some(video)) = sqlx::query!(
-            "SELECT id FROM videos WHERE metadata_id = ? LIMIT 1",
-            metadata_id
-        )
-        .fetch_optional(&db.pool)
-        .await
-        {
-            let identifier = WatchIdentifier { video_id: video.id };
-            let progress = WatchProgress { current_time };
-            watch_sessions.send_progress(
-                task_id,
-                crate::progress::ProgressChunk {
-                    identifier,
-                    status: crate::progress::ProgressStatus::Pending { progress },
-                },
-            );
-        }
+        let progress = WatchProgress { current_time };
+        watch_sessions.send_progress(
+            task_id,
+            crate::progress::ProgressStatus::Pending { progress },
+        );
     }
     Ok(())
 }
@@ -373,14 +361,10 @@ pub async fn update_video_history(
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
         let current_time = std::time::Duration::from_secs(payload.time as u64).into();
-        let identifier = WatchIdentifier { video_id: id };
         let progress = WatchProgress { current_time };
         watch_sessions.send_progress(
             task_id,
-            crate::progress::ProgressChunk {
-                identifier,
-                status: crate::progress::ProgressStatus::Pending { progress },
-            },
+            crate::progress::ProgressStatus::Pending { progress },
         );
     }
     let update_time = time::OffsetDateTime::now_utc().into();

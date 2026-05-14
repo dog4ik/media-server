@@ -10,6 +10,7 @@ use axum::{
     response::Response,
 };
 use axum_extra::{TypedHeader, headers};
+use tokio::sync::broadcast::error::RecvError;
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -129,9 +130,12 @@ async fn ws_handler_inner(connection: &mut Connection, app_state: AppState) -> a
                     handle_request(msg, connection, &app_state).await?;
                 }
             },
-            progress = progress.recv() => {
-                let progress = progress?;
-                connection.send(WsMessage::Progress{ progress }).await?;
+            result = progress.recv() => {
+                match result {
+                    Ok(progress) => connection.send(WsMessage::Progress { progress }).await?,
+                    Err(RecvError::Lagged(n)) => tracing::warn!("WebSocket client lagged, dropped {n} progress messages"),
+                    Err(e) => return Err(e.into()),
+                }
             }
             progress = torrent_progress.recv() => {
                 let progress = progress?;

@@ -8,22 +8,22 @@ use uuid::Uuid;
 
 use crate::{
     app_state::AppError,
-    ffmpeg::{PreviewsJob, TranscodeJob},
-    intro_detection::IntroJob,
+    ffmpeg::{PreviewsJob, TranscodeJob, VideoProgress},
+    intro_detection::{IntroJob, IntroProgress},
     scan::scan_progress,
-    torrent::PendingTorrent,
-    watch::WatchTask,
+    torrent::{CompactTorrentProgress, PendingTorrent},
+    watch::{WatchProgress, WatchTask},
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "task_type")]
 pub enum TaskProgress {
-    WatchSession(ProgressChunk<WatchTask>),
-    Transcode(ProgressChunk<TranscodeJob>),
-    Previews(ProgressChunk<PreviewsJob>),
-    Torrent(ProgressChunk<PendingTorrent>),
-    LibraryScan(ProgressChunk<LibraryScanTask>),
-    IntroDetection(ProgressChunk<IntroJob>),
+    WatchSession(ProgressStatus<WatchProgress>),
+    Transcode(ProgressStatus<VideoProgress>),
+    Previews(ProgressStatus<VideoProgress>),
+    Torrent(ProgressStatus<CompactTorrentProgress>),
+    LibraryScan(ProgressStatus<scan_progress::ProgressChunk>),
+    IntroDetection(ProgressStatus<IntroProgress>),
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -43,55 +43,15 @@ impl Notification {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum VideoTaskKind {
-    Transcode,
-    LiveTranscode,
-    Previews,
-    Subtitles,
-}
-
-impl Display for VideoTaskKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let msg = match self {
-            VideoTaskKind::Transcode => "Transcoding",
-            VideoTaskKind::LiveTranscode => "Live transcoding",
-            VideoTaskKind::Previews => "Previews generation",
-            VideoTaskKind::Subtitles => "Subtitles extraction",
-        };
-        write!(f, "{msg}")
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub struct VideoTask {
-    pub video_id: i64,
-    pub kind: VideoTaskKind,
-}
-
-impl Display for VideoTask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} for video: {}", self.kind, self.video_id)
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub struct LibraryScanTask;
 
 impl TaskTrait for LibraryScanTask {
-    type Identifier = LibraryScanTask;
-
     type Progress = scan_progress::ProgressChunk;
 
-    fn identifier(&self) -> Self::Identifier {
-        LibraryScanTask
-    }
-
-    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress {
-        TaskProgress::LibraryScan(chunk)
+    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress {
+        TaskProgress::LibraryScan(status)
     }
 }
 
@@ -99,8 +59,8 @@ impl TaskTrait for LibraryScanTask {
 ///
 /// It ensures there are no duplicate tasks.
 ///
-/// This is an absraction to store and manage notifications about tasks automatically
-/// Any operation on task will be dispatched to the clients
+/// This is an abstraction to store and manage notifications about tasks automatically.
+/// Any operation on task will be dispatched to the clients.
 #[derive(Debug)]
 pub struct TaskStorage<T: TaskTrait> {
     pub tasks: Mutex<Vec<Task<T>>>,
@@ -123,25 +83,18 @@ impl<T: TaskTrait> TaskStorage<T> {
 
     pub fn finish_task(&self, id: Uuid) -> Option<Task<T>> {
         let task = self.remove_task(id)?;
-        let ident = task.kind.identifier();
-        let chunk = ProgressChunk {
-            identifier: ident,
-            status: ProgressStatus::Finish,
-        };
-        self.send_progress(id, chunk);
+        self.send_progress(id, ProgressStatus::Finish);
         Some(task)
     }
 
     pub fn error_task(&self, id: Uuid, error: TaskError) -> Option<Task<T>> {
         let task = self.remove_task(id)?;
-        let ident = task.kind.identifier();
-        let chunk = ProgressChunk {
-            identifier: ident,
-            status: ProgressStatus::Error {
+        self.send_progress(
+            id,
+            ProgressStatus::Error {
                 message: Some(error.to_string()),
             },
-        };
-        self.send_progress(id, chunk);
+        );
         Some(task)
     }
 
@@ -149,23 +102,19 @@ impl<T: TaskTrait> TaskStorage<T> {
         let mut task = self.remove_task(id).ok_or(TaskError::NotFound)?;
         let cancel = task.cancel.take().ok_or(TaskError::NotCancelable)?;
         cancel.cancel();
-        let chunk = ProgressChunk {
-            identifier: task.kind.identifier(),
-            status: ProgressStatus::Cancel,
-        };
-        self.send_progress(id, chunk);
+        self.send_progress(id, ProgressStatus::Cancel);
         Ok(())
     }
 
-    pub fn send_progress(&self, task_id: Uuid, chunk: ProgressChunk<T>) {
+    pub fn send_progress(&self, task_id: Uuid, status: ProgressStatus<T::Progress>) {
         if let Ok(mut tasks) = self.tasks.try_lock() {
             if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                task.latest_progress = chunk.clone();
+                task.latest_progress = status.clone();
             };
         } else {
             tracing::warn!(%task_id, "Failed to lock task without blocking");
         }
-        let task_progress = T::into_progress(chunk);
+        let task_progress = T::into_progress(status);
         let notification = Notification {
             task_progress,
             activity_id: task_id,
@@ -186,7 +135,7 @@ impl<T: TaskTrait + PartialEq> TaskStorage<T> {
     }
 }
 
-impl<T: TaskTrait<Progress: Clone, Identifier: Clone> + PartialEq> TaskStorage<T> {
+impl<T: TaskTrait<Progress: Clone> + PartialEq> TaskStorage<T> {
     pub fn start_task(
         &self,
         kind: T,
@@ -203,9 +152,8 @@ impl<T: TaskTrait<Progress: Clone, Identifier: Clone> + PartialEq> TaskStorage<T
         cancellation_token: Option<CancellationToken>,
     ) -> Result<Uuid, TaskError> {
         let task = Task::new(kind, uuid, cancellation_token);
-        let latest_progress = task.latest_progress.clone();
         let id = self.add_task(task)?;
-        let task_progress = T::into_progress(latest_progress);
+        let task_progress = T::into_progress(ProgressStatus::Start);
         let notification = Notification {
             task_progress,
             activity_id: id,
@@ -229,30 +177,21 @@ impl<T: TaskTrait + Serialize> TaskStorage<T> {
 pub struct ProgressDispatcher<T: TaskTrait + 'static> {
     task_id: uuid::Uuid,
     task_storage: &'static TaskStorage<T>,
-    identifier: T::Identifier,
     active: bool,
 }
 
 impl<T: TaskTrait> ProgressDispatcher<T> {
-    pub fn new(
-        identifier: T::Identifier,
-        task_storage: &'static TaskStorage<T>,
-        task_id: uuid::Uuid,
-    ) -> Self {
+    pub fn new(task_storage: &'static TaskStorage<T>, task_id: uuid::Uuid) -> Self {
         Self {
             task_id,
-            identifier,
             task_storage,
             active: true,
         }
     }
 
     pub fn progress(&self, progress: T::Progress) {
-        let chunk = ProgressChunk {
-            identifier: self.identifier.clone(),
-            status: crate::progress::ProgressStatus::Pending { progress },
-        };
-        self.task_storage.send_progress(self.task_id, chunk);
+        self.task_storage
+            .send_progress(self.task_id, ProgressStatus::Pending { progress });
     }
 
     pub fn error(mut self, err: TaskError) {
@@ -293,7 +232,6 @@ where
         task: T,
         mut dispatch: P,
     ) -> Result<(), TaskError> {
-        let identifier = task.identifier();
         let child_token = CancellationToken::new();
         let id = self.start_task(task, Some(child_token.clone()))?;
 
@@ -308,14 +246,12 @@ where
                                     return Ok(());
                                 }
                                 ProgressStatus::Pending { .. } => {
-                                    let task_progress = ProgressChunk {
-                                        identifier: identifier.clone(),
-                                        status: progress,
-                                    };
-                                    self.send_progress(id, task_progress);
+                                    self.send_progress(id, progress);
                                 }
                                 ProgressStatus::Cancel => {
                                     let _ = dispatch.on_cancel().await;
+                                    self.cancel_task(id)?;
+                                    return Err(TaskError::Canceled);
                                 }
                                 _ => {}
                             }
@@ -337,36 +273,14 @@ where
     }
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema, PartialEq)]
-pub struct ProgressChunk<T: TaskTrait> {
-    #[serde(flatten)]
-    pub identifier: T::Identifier,
-    pub status: ProgressStatus<T::Progress>,
-}
-
-impl<T: TaskTrait> Clone for ProgressChunk<T> {
-    fn clone(&self) -> Self {
-        Self {
-            identifier: self.identifier.clone(),
-            status: self.status.clone(),
-        }
-    }
-}
-
 /// Trait implemented by all media server tasks.
 ///
-/// Type trait is implemented on will be send when user tries to fetch all tasks of a kind.
-///
-/// The reason why Identifier and Progress are not merged together is because we send Finished,
-/// Start, Errored statuses to the client with Identifier.
+/// The type this trait is implemented on will be sent when users fetch all tasks of a kind.
 pub trait TaskTrait {
-    /// This is unique identifier for the task. Client will use it to update Progress on task.
-    type Identifier: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
     /// This is the progress type of the task. Client will use it to show progress of the task.
     type Progress: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
 
-    fn identifier(&self) -> Self::Identifier;
-    fn into_progress(chunk: ProgressChunk<Self>) -> TaskProgress
+    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
     where
         Self: Sized;
 }
@@ -383,7 +297,7 @@ where
 pub struct Task<T: TaskTrait> {
     pub id: Uuid,
     pub kind: T,
-    pub latest_progress: ProgressChunk<T>,
+    pub latest_progress: ProgressStatus<T::Progress>,
     #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
@@ -397,16 +311,13 @@ impl<T: TaskTrait> Task<T> {
         Self {
             created: now,
             id,
-            latest_progress: ProgressChunk {
-                identifier: kind.identifier(),
-                status: ProgressStatus::Start,
-            },
+            latest_progress: ProgressStatus::Start,
             kind,
             cancel: cancel_token,
         }
     }
 
-    pub fn latest_progress(&self) -> ProgressChunk<T> {
+    pub fn latest_progress(&self) -> ProgressStatus<T::Progress> {
         self.latest_progress.clone()
     }
 
@@ -428,7 +339,6 @@ pub enum ProgressStatus<T> {
     Error {
         message: Option<String>,
     },
-    Pause,
 }
 
 #[derive(Debug)]
@@ -519,8 +429,7 @@ impl Default for ProgressChannel {
 
 impl ProgressChannel {
     pub fn new() -> Self {
-        let (tx, _) = broadcast::channel(10);
-
+        let (tx, _) = broadcast::channel(500);
         Self(tx)
     }
 }

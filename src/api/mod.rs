@@ -185,7 +185,6 @@ pub mod torrent;
             progress::Task<ffmpeg::TranscodeJob>,
             progress::Task<ffmpeg::PreviewsJob>,
             progress::Task<watch::WatchTask>,
-            progress::VideoTaskKind,
             progress::Notification,
             progress::ProgressStatus<f32>,
             progress::TaskProgress,

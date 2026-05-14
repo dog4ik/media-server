@@ -40,11 +40,6 @@ pub struct WatchProgress {
     pub current_time: crate::MediaDuration,
 }
 
-#[derive(Debug, Clone, utoipa::ToSchema, serde::Serialize, PartialEq)]
-pub struct WatchIdentifier {
-    pub video_id: i64,
-}
-
 /// Task for watch tracking.
 ///
 /// Be aware that currently watch tracking can be bypassed.
@@ -70,19 +65,12 @@ impl PartialEq for WatchTask {
 }
 
 impl TaskTrait for WatchTask {
-    /// Video id
-    type Identifier = WatchIdentifier;
-
     type Progress = WatchProgress;
 
-    fn identifier(&self) -> Self::Identifier {
-        WatchIdentifier {
-            video_id: self.video_id,
-        }
-    }
-
-    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress {
-        crate::progress::TaskProgress::WatchSession(chunk)
+    fn into_progress(
+        status: crate::progress::ProgressStatus<Self::Progress>,
+    ) -> crate::progress::TaskProgress {
+        crate::progress::TaskProgress::WatchSession(status)
     }
 }
 

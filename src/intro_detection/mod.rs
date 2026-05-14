@@ -14,20 +14,19 @@ pub struct IntroJob {
     pub season: usize,
 }
 
+#[derive(Debug, Clone, Copy, serde::Serialize, utoipa::ToSchema)]
+pub struct IntroProgress;
+
 impl TaskTrait for IntroJob {
-    type Identifier = Self;
+    type Progress = IntroProgress;
 
-    type Progress = ();
-
-    fn identifier(&self) -> Self::Identifier {
-        *self
-    }
-
-    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    fn into_progress(
+        status: crate::progress::ProgressStatus<Self::Progress>,
+    ) -> crate::progress::TaskProgress
     where
         Self: Sized,
     {
-        crate::progress::TaskProgress::IntroDetection(chunk)
+        crate::progress::TaskProgress::IntroDetection(status)
     }
 }
 

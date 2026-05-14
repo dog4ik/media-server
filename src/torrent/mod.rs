@@ -19,7 +19,7 @@ use crate::{
         ContentType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
         metadata_stack::MetadataProvidersStack,
     },
-    progress::{ProgressChunk, ProgressStatus, TaskResource, TaskTrait},
+    progress::{ProgressStatus, TaskResource, TaskTrait},
     utils,
 };
 
@@ -301,20 +301,6 @@ pub struct PendingTorrent {
     pub torrent_info: TorrentInfo,
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema, PartialEq)]
-pub struct TorrentTask {
-    /// Hex encoded info hash
-    pub info_hash: String,
-}
-
-impl TorrentTask {
-    pub fn new(info_hash: &[u8; 20]) -> Self {
-        Self {
-            info_hash: utils::stringify_info_hash(info_hash),
-        }
-    }
-}
-
 #[derive(Debug, Clone, Copy, Serialize, utoipa::ToSchema, PartialEq)]
 pub struct CompactTorrentProgress {
     percent: f32,
@@ -338,19 +324,13 @@ impl CompactTorrentProgress {
 }
 
 impl TaskTrait for PendingTorrent {
-    type Identifier = TorrentTask;
-
     type Progress = CompactTorrentProgress;
 
-    fn identifier(&self) -> Self::Identifier {
-        TorrentTask::new(&self.info_hash)
-    }
-
-    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    fn into_progress(status: ProgressStatus<Self::Progress>) -> crate::progress::TaskProgress
     where
         Self: Sized,
     {
-        crate::progress::TaskProgress::Torrent(chunk)
+        crate::progress::TaskProgress::Torrent(status)
     }
 }
 
@@ -585,28 +565,35 @@ async fn handle_progress(
                 };
             }
             new_pieces.clear();
-            let mut torrents = torrents.lock().unwrap();
-            let Some(pending_torrent) = torrents
-                .iter_mut()
-                .find(|t| t.info_hash == torrent.info_hash)
-            else {
-                tracing::error!(
-                    "Torrent with info_hash {} is not found",
-                    utils::stringify_info_hash(&torrent.info_hash)
-                );
-                continue;
+            let (progress, info_hash) = {
+                let torrents = torrents.lock().unwrap();
+                let Some(pending_torrent) =
+                    torrents.iter().find(|t| t.info_hash == torrent.info_hash)
+                else {
+                    tracing::error!(
+                        "Torrent with info_hash {} is not found",
+                        utils::stringify_info_hash(&torrent.info_hash)
+                    );
+                    continue;
+                };
+                (
+                    CompactTorrentProgress::new(torrent, pending_torrent.torrent_size),
+                    pending_torrent.info_hash,
+                )
             };
-            let ident = pending_torrent.identifier();
-
-            let progress = CompactTorrentProgress::new(torrent, pending_torrent.torrent_size);
-            let progress_chunk = ProgressChunk {
-                identifier: ident,
-                status: ProgressStatus::Pending { progress },
-            };
-            tasks
+            let task_id = tasks
                 .torrent_tasks
-                // fix this crap
-                .send_progress(uuid::Uuid::new_v4(), progress_chunk);
+                .tasks
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|t| t.kind.info_hash == info_hash)
+                .map(|t| t.id);
+            if let Some(task_id) = task_id {
+                tasks
+                    .torrent_tasks
+                    .send_progress(task_id, ProgressStatus::Pending { progress });
+            }
         }
     }
 }

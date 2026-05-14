@@ -61,7 +61,7 @@ use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult
 use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::watch::hls_stream::HlsStreamConfiguration;
-use crate::watch::{ClientType, WatchIdentifier, WatchTask};
+use crate::watch::{ClientType, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -2243,8 +2243,7 @@ pub async fn start_hls_stream(
     let total_duration = metadata.duration().into();
     let exit_token = app_state.tasks.parent_cancellation_token.child_token();
     let task_id = uuid::Uuid::new_v4();
-    let identifier = WatchIdentifier { video_id };
-    let dispatcher = ProgressDispatcher::<WatchTask>::new(identifier, watch_sessions, task_id);
+    let dispatcher = ProgressDispatcher::<WatchTask>::new(watch_sessions, task_id);
     let configuration = HlsStreamConfiguration::new(
         payload.video_codec,
         payload.audio_codec,

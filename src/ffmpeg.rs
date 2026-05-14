@@ -18,13 +18,10 @@ use crate::library::media::{
     codec::{audio::AudioCodec, subtitles::SubtitlesCodec, video::VideoCodec},
 };
 use crate::library::{Source, TranscodePayload};
-use crate::progress::ProgressChunk;
 use crate::progress::ProgressDispatch;
 use crate::progress::ProgressStatus;
 use crate::progress::TaskProgress;
 use crate::progress::TaskTrait;
-use crate::progress::VideoTask;
-use crate::progress::VideoTaskKind;
 use crate::utils;
 use anyhow::{Context, anyhow};
 
@@ -418,30 +415,19 @@ pub trait FFmpegTask {
 }
 
 impl TaskTrait for TranscodeJob {
-    type Identifier = VideoTask;
     type Progress = VideoProgress;
 
-    fn identifier(&self) -> Self::Identifier {
-        VideoTask {
-            video_id: self.video_id,
-            kind: VideoTaskKind::Transcode,
-        }
-    }
-
-    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
     where
         Self: Sized,
     {
-        TaskProgress::Transcode(ProgressChunk {
-            identifier: chunk.identifier,
-            status: chunk.status,
-        })
+        TaskProgress::Transcode(status)
     }
 }
 
 impl<T> ProgressDispatch<T> for FFmpegRunningJob<T>
 where
-    T: FFmpegTask + TaskTrait<Progress = VideoProgress, Identifier = VideoTask> + Send,
+    T: FFmpegTask + TaskTrait<Progress = VideoProgress> + Send,
 {
     async fn progress(
         &mut self,
@@ -517,24 +503,13 @@ impl FFmpegTask for PreviewsJob {
 }
 
 impl TaskTrait for PreviewsJob {
-    type Identifier = VideoTask;
     type Progress = VideoProgress;
 
-    fn identifier(&self) -> Self::Identifier {
-        VideoTask {
-            video_id: self.video_id,
-            kind: VideoTaskKind::Previews,
-        }
-    }
-
-    fn into_progress(chunk: crate::progress::ProgressChunk<Self>) -> crate::progress::TaskProgress
+    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
     where
         Self: Sized,
     {
-        TaskProgress::Previews(ProgressChunk {
-            identifier: chunk.identifier,
-            status: chunk.status,
-        })
+        TaskProgress::Previews(status)
     }
 }
 
