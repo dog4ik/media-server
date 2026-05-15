@@ -455,7 +455,7 @@ where
     }
 }
 
-#[derive(Debug, Eq, PartialEq, utoipa::ToSchema, Serialize)]
+#[derive(Debug, Eq, PartialEq, Clone, utoipa::ToSchema, Serialize)]
 pub struct PreviewsJob {
     video_id: i64,
     #[schema(value_type = Vec<String>)]
@@ -583,7 +583,7 @@ impl FFmpegTask for SubtitlesJob {
     }
 }
 
-#[derive(Debug, utoipa::ToSchema, Serialize, PartialEq)]
+#[derive(Debug, utoipa::ToSchema, Clone, Serialize, PartialEq)]
 pub struct TranscodeJob {
     video_id: i64,
     #[schema(value_type = Vec<String>)]

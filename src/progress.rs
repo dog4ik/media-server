@@ -354,6 +354,23 @@ pub struct TaskResource {
     pub watch_sessions: TaskStorage<WatchTask>,
 }
 
+/// State snapshot of all the running tasks
+#[derive(Debug, Clone, utoipa::ToSchema, Serialize)]
+pub struct TasksSnapshot {
+    #[schema(value_type = Vec<Task<TranscodeJob>>)]
+    pub transcode_tasks: serde_json::Value,
+    #[schema(value_type = Vec<Task<PreviewsJob>>)]
+    pub previews_tasks: serde_json::Value,
+    #[schema(value_type = Vec<Task<LibraryScanTask>>)]
+    pub library_scan_tasks: serde_json::Value,
+    #[schema(value_type = Vec<Task<PendingTorrent>>)]
+    pub torrent_tasks: serde_json::Value,
+    #[schema(value_type = Vec<Task<IntroJob>>)]
+    pub intro_detection_tasks: serde_json::Value,
+    #[schema(value_type = Vec<Task<WatchTask>>)]
+    pub watch_sessions: serde_json::Value,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum TaskError {
     Failure,
@@ -414,6 +431,18 @@ impl TaskResource {
             watch_sessions: TaskStorage::new(progress_channel.clone()),
             tracker: TaskTracker::new(),
             progress_channel,
+        }
+    }
+
+    /// Get the copy of the current state of all tasks
+    pub fn snapshot(&self) -> TasksSnapshot {
+        TasksSnapshot {
+            transcode_tasks: self.transcode_tasks.tasks(),
+            previews_tasks: self.previews_tasks.tasks(),
+            library_scan_tasks: self.library_scan_tasks.tasks(),
+            torrent_tasks: self.torrent_tasks.tasks(),
+            intro_detection_tasks: self.intro_detection_tasks.tasks(),
+            watch_sessions: self.watch_sessions.tasks(),
         }
     }
 }

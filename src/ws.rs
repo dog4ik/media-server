@@ -1,6 +1,10 @@
 use std::{net::SocketAddr, sync::Arc, time::Duration};
 
-use crate::{app_state::AppState, progress::Notification, torrent::TorrentProgress};
+use crate::{
+    app_state::AppState,
+    progress::{Notification, TasksSnapshot},
+    torrent::TorrentProgress,
+};
 use anyhow::Context;
 use axum::{
     extract::{
@@ -11,6 +15,7 @@ use axum::{
 };
 use axum_extra::{TypedHeader, headers};
 use tokio::sync::broadcast::error::RecvError;
+use tokio_stream::StreamExt;
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -38,7 +43,9 @@ pub enum WsMessage {
     Progress {
         progress: Notification,
     },
-    Connected,
+    Connected {
+        state: TasksSnapshot,
+    },
     TorrentUnsubscribe,
 }
 
@@ -120,7 +127,11 @@ async fn ws_handler_inner(connection: &mut Connection, app_state: AppState) -> a
     let mut progress = app_state.tasks.progress_channel.0.subscribe();
     let mut torrent_progress = app_state.torrent_client.progress_broadcast.subscribe();
 
-    connection.send(WsMessage::Connected).await?;
+    connection
+        .send(WsMessage::Connected {
+            state: app_state.tasks.snapshot(),
+        })
+        .await?;
 
     loop {
         tokio::select! {
