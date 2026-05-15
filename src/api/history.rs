@@ -376,7 +376,7 @@ pub async fn update_metadata_history(
         update_time,
         metadata_id,
     );
-    if query.fetch_optional(&db.pool).await?.is_some() {
+    if query.fetch_optional(&db.pool).await?.is_none() {
         db.pool
             .insert_history(crate::db::DbHistory {
                 id: None,
