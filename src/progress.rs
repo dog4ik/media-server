@@ -8,11 +8,11 @@ use uuid::Uuid;
 
 use crate::{
     app_state::AppError,
-    ffmpeg::{PreviewsJob, TranscodeJob, VideoProgress},
-    intro_detection::{IntroJob, IntroProgress},
+    ffmpeg::{PreviewsJob, TranscodeJob},
+    intro_detection::IntroJob,
     scan::scan_progress,
-    torrent::{CompactTorrentProgress, PendingTorrent},
-    watch::{WatchProgress, WatchTask},
+    torrent::PendingTorrent,
+    watch::WatchTask,
 };
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

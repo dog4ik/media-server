@@ -10,7 +10,6 @@ use identification::{walk_movie_dirs, walk_show_dirs};
 use serde::{Deserialize, Serialize};
 
 use self::media::codec::audio::AudioCodec;
-use self::media::codec::subtitles::SubtitlesCodec;
 use self::media::codec::video::VideoCodec;
 use self::media::container::VideoContainer;
 use self::media::{Resolution, Video};

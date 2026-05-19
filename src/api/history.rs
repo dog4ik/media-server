@@ -313,7 +313,7 @@ pub async fn update_history(
         time = payload.time,
         "Updating history entry"
     );
-    let metadata_id = sqlx::query!(
+    sqlx::query_scalar!(
         "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING metadata_id;",
         payload.time,
         payload.is_finished,
@@ -321,8 +321,7 @@ pub async fn update_history(
         id,
     )
     .fetch_one(&db.pool)
-    .await?
-    .metadata_id;
+    .await?;
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
         let current_time = std::time::Duration::from_secs(payload.time as u64).into();

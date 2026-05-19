@@ -15,7 +15,6 @@ use axum::{
 use axum_extra::{TypedHeader, headers::Range};
 use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeStruct};
 use std::{
-    convert::Infallible,
     fmt::Display,
     io::SeekFrom,
     path::{Path, PathBuf},
