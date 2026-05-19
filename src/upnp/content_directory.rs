@@ -76,9 +76,9 @@ impl MediaServerContentDirectory {
             let poster_url = format!(
                 "{server_url}/api/show/{show_id}/poster",
                 server_url = self.server_location,
-                show_id = show.metadata_id
+                show_id = show.provider_id
             );
-            let show_id = show.metadata_id.parse().expect("db ids to be integers");
+            let show_id = show.provider_id.parse().expect("db ids to be integers");
             let mut container = Container::new(
                 ContentId::Show(show_id).to_string(),
                 ContentId::AllShows.to_string(),
@@ -151,7 +151,7 @@ impl MediaServerContentDirectory {
         for episode in season.episodes {
             let Ok(video_ids) = sqlx::query!(
                 "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
-                episode.metadata_id
+                episode.provider_id
             )
             .fetch_all(&db.pool)
             .await
@@ -159,7 +159,7 @@ impl MediaServerContentDirectory {
                 continue;
             };
             let title = format!("Ep {}: {}", episode.number, episode.title);
-            let id = &episode.metadata_id;
+            let id = &episode.provider_id;
             let poster_url = format!(
                 "{server_url}/api/episode/{episode_id}/poster",
                 server_url = self.server_location,
@@ -256,7 +256,7 @@ impl MediaServerContentDirectory {
         let watch_url = format!(
             "{server_url}/api/local_episode/{episode_id}/watch",
             server_url = self.server_location,
-            episode_id = episode_metadata.metadata_id
+            episode_id = episode_metadata.provider_id
         );
         let item_id = ContentId::Episode {
             show_id,
@@ -300,15 +300,15 @@ impl MediaServerContentDirectory {
             let poster_url = format!(
                 "{server_url}/api/movie/{movie_id}/poster",
                 server_url = self.server_location,
-                movie_id = movie.metadata_id
+                movie_id = movie.provider_id
             );
             let watch_url = format!(
                 "{server_url}/api/local_movie/{movie_id}/watch",
                 server_url = self.server_location,
-                movie_id = movie.metadata_id
+                movie_id = movie.provider_id
             );
             let container_id =
-                ContentId::Movie(movie.metadata_id.parse().expect("local ids to be integers"));
+                ContentId::Movie(movie.provider_id.parse().expect("local ids to be integers"));
             let mut item = Item::new(
                 container_id.to_string(),
                 ContentId::AllMovies.to_string(),
@@ -360,12 +360,12 @@ impl MediaServerContentDirectory {
         let poster_url = format!(
             "{server_url}/api/movie/{movie_id}/poster",
             server_url = self.server_location,
-            movie_id = movie.metadata_id
+            movie_id = movie.provider_id
         );
         let watch_url = format!(
             "{server_url}/api/local_movie/{movie_id}/watch",
             server_url = self.server_location,
-            movie_id = movie.metadata_id
+            movie_id = movie.provider_id
         );
         let movie_id = ContentId::Movie(movie_id);
         let mut item = Item::new(
@@ -392,7 +392,7 @@ impl MediaServerContentDirectory {
         let poster_url = format!(
             "{server_url}/api/show/{show_id}/poster",
             server_url = self.server_location,
-            show_id = show.metadata_id
+            show_id = show.provider_id
         );
         let show_id = ContentId::Show(show_id);
         let mut container = Container::new(

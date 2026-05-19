@@ -71,8 +71,8 @@ impl From<DbShowQuery> for Show {
         let mut seasons: Vec<_> = seasons.split(',').filter_map(|x| x.parse().ok()).collect();
         seasons.sort_unstable();
         Show {
-            metadata_id: show.id.unwrap().to_string(),
-            metadata_provider: MetadataProvider::Local,
+            provider_id: show.id.unwrap().to_string(),
+            provider: MetadataProvider::Local,
             poster: metadata.poster,
             backdrop: show.backdrop,
             plot: metadata.plot,
@@ -90,6 +90,7 @@ impl From<DbShowQuery> for Show {
             }),
             local: Some(LocalShowData {
                 id: show.id.unwrap(),
+                metadata_id: metadata.id.unwrap(),
             }),
         }
     }
@@ -230,8 +231,8 @@ impl From<DbMovieQuery> for Movie {
         }: DbMovieQuery,
     ) -> Self {
         Self {
-            metadata_id: movie.id.unwrap().to_string(),
-            metadata_provider: MetadataProvider::Local,
+            provider_id: movie.id.unwrap().to_string(),
+            provider: MetadataProvider::Local,
             poster: metadata.poster,
             backdrop: movie.backdrop,
             plot: metadata.plot,
@@ -253,6 +254,7 @@ impl From<DbMovieQuery> for Movie {
             ),
             local: Some(LocalMovieData {
                 id: movie.id.unwrap(),
+                metadata_id: metadata.id.unwrap(),
                 history: history.id.map(|id| History {
                     id,
                     time: history.time,
@@ -408,8 +410,8 @@ impl From<DbEpisodeQuery> for Episode {
         }: DbEpisodeQuery,
     ) -> Self {
         Episode {
-            metadata_id: episode.id.unwrap().to_string(),
-            metadata_provider: MetadataProvider::Local,
+            provider_id: episode.id.unwrap().to_string(),
+            provider: MetadataProvider::Local,
             poster: metadata.poster,
             plot: metadata.plot,
             release_date: metadata.release_date,
@@ -420,6 +422,7 @@ impl From<DbEpisodeQuery> for Episode {
             season_number: season_number as usize,
             local: Some(LocalEpisodeData {
                 id: episode.id.unwrap(),
+                metadata_id: metadata.id.unwrap(),
                 intro: intro.id.map(|_| Intro {
                     start_sec: intro.start_sec,
                     end_sec: intro.end_sec,

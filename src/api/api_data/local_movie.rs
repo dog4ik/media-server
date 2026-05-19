@@ -10,8 +10,8 @@ use crate::{
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Movie {
-    pub metadata_id: String,
-    pub metadata_provider: MetadataProvider,
+    pub provider_id: String,
+    pub provider: MetadataProvider,
     pub poster: Option<String>,
     pub backdrop: Option<String>,
     pub plot: Option<String>,
@@ -28,8 +28,8 @@ pub struct Movie {
 impl From<Movie> for MovieMetadata {
     fn from(value: Movie) -> Self {
         Self {
-            metadata_id: value.metadata_id,
-            metadata_provider: value.metadata_provider,
+            metadata_id: value.provider_id,
+            metadata_provider: value.provider,
             poster: value.poster,
             backdrop: value.backdrop,
             plot: value.plot,
@@ -47,6 +47,7 @@ impl From<Movie> for MovieMetadata {
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalMovieData {
     pub id: i64,
+    pub metadata_id: i64,
     pub history: Option<History>,
 }
 
@@ -70,8 +71,8 @@ impl Movie {
 
     pub fn extend_meta(meta: MovieMetadata, local: Option<LocalMovieData>) -> Self {
         Self {
-            metadata_id: meta.metadata_id,
-            metadata_provider: meta.metadata_provider,
+            provider_id: meta.metadata_id,
+            provider: meta.metadata_provider,
             poster: meta.poster,
             backdrop: meta.backdrop,
             plot: meta.plot,

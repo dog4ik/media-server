@@ -61,11 +61,12 @@ impl LocalDataLookup {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
+            metadata_id: i64,
             external_provider: MetadataProvider,
             external_id: String,
         }
         let mut local_map = QueryBuilder::new(
-            r#"select shows.id, external_ids.external_provider, external_ids.external_id from external_ids
+            r#"select shows.id, shows.metadata_id, external_ids.external_provider, external_ids.external_id from external_ids
             join shows on shows.metadata_id = external_ids.metadata_id
             where (external_ids.external_provider, external_ids.external_id) in"#,
         )
@@ -76,7 +77,7 @@ impl LocalDataLookup {
             .build_query_as::<Record>()
             .fetch_all(&self.db.pool).await?
             .into_iter()
-            .map(|v| ((v.external_provider, v.external_id), local_show::LocalShowData { id: v.id }))
+            .map(|v| ((v.external_provider, v.external_id), local_show::LocalShowData { id: v.id, metadata_id: v.metadata_id }))
             .collect::<HashMap<_, _>>();
 
         Ok(shows
@@ -95,6 +96,7 @@ impl LocalDataLookup {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
+            metadata_id: i64,
             external_provider: MetadataProvider,
             external_id: String,
             // history
@@ -105,7 +107,7 @@ impl LocalDataLookup {
         }
         let mut local_map = QueryBuilder::new(
             r#"select
-            movies.id,
+            movies.id, movies.metadata_id,
             external_ids.external_provider, external_ids.external_id,
             history.id as history_id, history.time, history.is_finished, history.update_time
             from external_ids
@@ -126,6 +128,7 @@ impl LocalDataLookup {
                 (v.external_provider, v.external_id),
                 local_movie::LocalMovieData {
                     id: v.id,
+                    metadata_id: v.metadata_id,
                     history: v.history_id.map(|id| History {
                         id,
                         time: v.time.unwrap(),
@@ -199,13 +202,14 @@ impl LocalDataLookup {
         };
 
         Ok(sqlx::query!(
-                r#"select movies.id,
+                r#"select movies.id, movies.metadata_id,
             history.id as "history_id?", history.time, history.is_finished, history.update_time as history_update_time from movies
             left join history on history.metadata_id = movies.metadata_id
             where movies.id = ? limit 1"#,
                   id
         ).fetch_optional(&self.db.pool).await?.map(|r| local_movie::LocalMovieData {
             id: r.id,
+            metadata_id: r.metadata_id,
             history: r.history_id.map(|id| api_types::History { id,
                 time: r.time.unwrap(),
                 is_finished: r.is_finished.unwrap(),
@@ -219,9 +223,23 @@ impl LocalDataLookup {
         external_provider: MetadataProvider,
         external_id: &str,
     ) -> sqlx::Result<Option<local_show::LocalShowData>> {
-        self.crossreference_show(external_provider, external_id)
-            .await
-            .map(|v| v.map(|local_id| local_show::LocalShowData { id: local_id }))
+        let Some(show_id) = self
+            .crossreference_show(external_provider, external_id)
+            .await?
+        else {
+            return Ok(None);
+        };
+
+        Ok(sqlx::query!(
+            r#"select shows.id, shows.metadata_id from shows where shows.id = ? limit 1"#,
+            show_id
+        )
+        .fetch_optional(&self.db.pool)
+        .await?
+        .map(|r| local_show::LocalShowData {
+            id: r.id,
+            metadata_id: r.metadata_id,
+        }))
     }
 
     async fn season_data(
@@ -239,13 +257,13 @@ impl LocalDataLookup {
         };
 
         Ok(sqlx::query!(
-            "SELECT seasons.id from seasons WHERE seasons.show_id = ? and seasons.number = ?",
+            "SELECT seasons.id, seasons.metadata_id from seasons WHERE seasons.show_id = ? and seasons.number = ?",
             local_id,
             season,
         )
         .fetch_optional(&self.db.pool)
         .await?
-        .map(|v| local_show::LocalSeasonData { id: v.id }))
+        .map(|v| local_show::LocalSeasonData { id: v.id, metadata_id: v.metadata_id }))
     }
 
     async fn episode_data(
@@ -265,7 +283,7 @@ impl LocalDataLookup {
         };
 
         Ok(sqlx::query!(
-                r#"select episodes.id as episode_id,
+                r#"select episodes.id as episode_id, episodes.metadata_id,
             history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
             intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
             from episodes
@@ -282,6 +300,7 @@ impl LocalDataLookup {
             .map(|r|
                 local_show::LocalEpisodeData {
                     id: r.episode_id,
+                    metadata_id: r.metadata_id,
                     history: r.history_id.map(|id| api_types::History {
                         id,
                         time: r.history_time.unwrap(),

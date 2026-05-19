@@ -820,7 +820,7 @@ where
 
             let episodes: Vec<_> = sqlx::query!(
                 r#"SELECT episodes.id, episodes.number, episodes.duration, episodes.season_id,
-                metadata.title, metadata.plot, metadata.poster, metadata.release_date,
+                metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
                 seasons.number AS season_number,
                 history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
                 intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
@@ -838,6 +838,7 @@ where
             .map(|db_episode| {
                 let local = LocalEpisodeData {
                     id: db_episode.id,
+                    metadata_id: db_episode.metadata_id,
                     history: db_episode.history_id.map(|id| api_types::History {
                         id,
                         time: db_episode.history_time.map(Into::into).unwrap(),
@@ -850,8 +851,8 @@ where
                         .map(|(start_sec, end_sec)| Intro { start_sec, end_sec }),
                 };
                 Episode {
-                    metadata_id: db_episode.id.to_string(),
-                    metadata_provider: MetadataProvider::Local,
+                    provider_id: db_episode.id.to_string(),
+                    provider: MetadataProvider::Local,
                     release_date: db_episode.release_date,
                     number: db_episode.number as usize,
                     title: db_episode.title,
@@ -874,7 +875,10 @@ where
                 poster: season_row.poster,
                 title: Some(season_row.title),
                 number: season_row.number as usize,
-                local: Some(LocalSeasonData { id: season_row.id }),
+                local: Some(LocalSeasonData {
+                    id: season_row.id,
+                    metadata_id: season_row.metadata_id,
+                }),
             })
         }
     }
@@ -979,7 +983,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             let mut conn = self.acquire().await?;
             let episode = sqlx::query!(
                 r#"SELECT episodes.id, episodes.number, episodes.duration,
-                metadata.title, metadata.plot, metadata.poster, metadata.release_date,
+                metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
                 seasons.number AS season_number,
                 history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
                 intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
@@ -996,6 +1000,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
 
             let local = LocalEpisodeData {
                 id: episode.id,
+                metadata_id: episode.metadata_id,
                 history: episode.history_id.map(|id| api_types::History {
                     id,
                     time: episode.history_time.unwrap(),
@@ -1009,8 +1014,8 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             };
 
             Ok(Episode {
-                metadata_id: episode.id.to_string(),
-                metadata_provider: MetadataProvider::Local,
+                provider_id: episode.id.to_string(),
+                provider: MetadataProvider::Local,
                 release_date: episode.release_date,
                 plot: episode.plot,
                 poster: episode.poster,
@@ -1241,7 +1246,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         async move {
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
-            let show_id = sqlx::query!(
+            sqlx::query_scalar!(
                 r#"SELECT shows.id as "show_id!" FROM external_ids
                 JOIN shows ON shows.metadata_id = external_ids.metadata_id
                 WHERE external_ids.external_provider = ? AND external_ids.external_id = ?"#,
@@ -1249,9 +1254,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
                 metadata_id
             )
             .fetch_optional(&mut *conn)
-            .await?
-            .map(|r| r.show_id);
-            Ok(show_id)
+            .await
         }
     }
 
@@ -1263,7 +1266,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         async move {
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
-            let movie_id = sqlx::query!(
+            sqlx::query_scalar!(
                 r#"SELECT movies.id as "movie_id!" FROM external_ids
                 JOIN movies ON movies.metadata_id = external_ids.metadata_id
                 WHERE external_ids.external_provider = ? AND external_ids.external_id = ?"#,
@@ -1271,9 +1274,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
                 metadata_id
             )
             .fetch_optional(&mut *conn)
-            .await?
-            .map(|r| r.movie_id);
-            Ok(movie_id)
+            .await
         }
     }
 }

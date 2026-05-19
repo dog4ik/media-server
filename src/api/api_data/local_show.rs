@@ -19,16 +19,19 @@ use crate::{
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalShowData {
     pub id: i64,
+    pub metadata_id: i64,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalSeasonData {
     pub id: i64,
+    pub metadata_id: i64,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalEpisodeData {
     pub id: i64,
+    pub metadata_id: i64,
     pub history: Option<super::api_types::History>,
     pub intro: Option<Intro>,
 }
@@ -36,8 +39,8 @@ pub struct LocalEpisodeData {
 /// Show API data structure
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Show {
-    pub metadata_id: String,
-    pub metadata_provider: MetadataProvider,
+    pub provider_id: String,
+    pub provider: MetadataProvider,
     pub poster: Option<String>,
     pub backdrop: Option<String>,
     pub plot: Option<String>,
@@ -67,8 +70,8 @@ impl Show {
 
     pub fn extend_meta(meta: ShowMetadata, local: Option<LocalShowData>) -> Self {
         Self {
-            metadata_id: meta.metadata_id,
-            metadata_provider: meta.metadata_provider,
+            provider_id: meta.metadata_id,
+            provider: meta.metadata_provider,
             poster: meta.poster,
             backdrop: meta.backdrop,
             plot: meta.plot,
@@ -111,6 +114,7 @@ impl Season {
         #[derive(sqlx::FromRow)]
         struct Record {
             id: i64,
+            metadata_id: i64,
             history_id: Option<i64>,
             time: Option<i64>,
             update_time: Option<time::OffsetDateTime>,
@@ -122,7 +126,7 @@ impl Season {
             end_sec: Option<i64>,
         }
         let mut local_episodes = sqlx::QueryBuilder::new(
-            "select episodes.id,
+            "select episodes.id, episodes.metadata_id,
             external_ids.external_id, external_ids.external_provider,
             history.id as history_id, history.time, history.update_time, history.is_finished,
             intros.id as intro_id, intros.start_sec, intros.end_sec
@@ -144,6 +148,7 @@ impl Season {
             (
                 (r.external_provider, r.external_id),
                 LocalEpisodeData {
+                    metadata_id: r.metadata_id,
                     id: r.id,
                     history: r.history_id.map(|id| History {
                         id,
@@ -161,8 +166,8 @@ impl Season {
         .collect::<HashMap<_, _>>();
         for episode_meta in meta.episodes {
             let local_episode = Episode {
-                metadata_id: episode_meta.metadata_id.clone(),
-                metadata_provider: episode_meta.metadata_provider,
+                provider_id: episode_meta.metadata_id.clone(),
+                provider: episode_meta.metadata_provider,
                 release_date: episode_meta.release_date,
                 number: episode_meta.number,
                 title: episode_meta.title,
@@ -193,8 +198,8 @@ impl Season {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct Episode {
-    pub metadata_id: String,
-    pub metadata_provider: MetadataProvider,
+    pub provider_id: String,
+    pub provider: MetadataProvider,
     pub release_date: Option<String>,
     pub number: usize,
     pub title: String,
@@ -225,8 +230,8 @@ impl Episode {
             None
         };
         Ok(Episode {
-            metadata_id: meta.metadata_id,
-            metadata_provider: meta.metadata_provider,
+            provider_id: meta.metadata_id,
+            provider: meta.metadata_provider,
             release_date: meta.release_date,
             number: meta.number,
             title: meta.title,
