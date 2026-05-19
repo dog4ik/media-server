@@ -326,7 +326,7 @@ impl CompactTorrentProgress {
 impl TaskTrait for PendingTorrent {
     type Progress = CompactTorrentProgress;
 
-    fn into_progress(status: ProgressStatus<Self::Progress>) -> crate::progress::TaskProgress
+    fn into_progress(status: ProgressStatus<Self>) -> crate::progress::TaskProgress
     where
         Self: Sized,
     {

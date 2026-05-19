@@ -20,9 +20,7 @@ pub struct IntroProgress;
 impl TaskTrait for IntroJob {
     type Progress = IntroProgress;
 
-    fn into_progress(
-        status: crate::progress::ProgressStatus<Self::Progress>,
-    ) -> crate::progress::TaskProgress
+    fn into_progress(status: crate::progress::ProgressStatus<Self>) -> crate::progress::TaskProgress
     where
         Self: Sized,
     {

@@ -186,7 +186,6 @@ pub mod torrent;
             progress::Task<ffmpeg::PreviewsJob>,
             progress::Task<watch::WatchTask>,
             progress::Notification,
-            progress::ProgressStatus<f32>,
             progress::TaskProgress,
             crate::tracing::JsonTracingEvent,
             torrent_index::Torrent,

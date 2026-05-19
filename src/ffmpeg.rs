@@ -417,7 +417,7 @@ pub trait FFmpegTask {
 impl TaskTrait for TranscodeJob {
     type Progress = VideoProgress;
 
-    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
+    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress
     where
         Self: Sized,
     {
@@ -429,9 +429,7 @@ impl<T> ProgressDispatch<T> for FFmpegRunningJob<T>
 where
     T: FFmpegTask + TaskTrait<Progress = VideoProgress> + Send,
 {
-    async fn progress(
-        &mut self,
-    ) -> Result<ProgressStatus<VideoProgress>, crate::progress::TaskError> {
+    async fn progress(&mut self) -> Result<ProgressStatus<T>, crate::progress::TaskError> {
         tokio::select! {
             Some(progress) = self.stdout.next_progress_chunk() => {
                 let progress = VideoProgress {
@@ -505,7 +503,7 @@ impl FFmpegTask for PreviewsJob {
 impl TaskTrait for PreviewsJob {
     type Progress = VideoProgress;
 
-    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
+    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress
     where
         Self: Sized,
     {

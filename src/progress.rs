@@ -18,12 +18,12 @@ use crate::{
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "task_type")]
 pub enum TaskProgress {
-    WatchSession(ProgressStatus<WatchProgress>),
-    Transcode(ProgressStatus<VideoProgress>),
-    Previews(ProgressStatus<VideoProgress>),
-    Torrent(ProgressStatus<CompactTorrentProgress>),
-    LibraryScan(ProgressStatus<scan_progress::ProgressChunk>),
-    IntroDetection(ProgressStatus<IntroProgress>),
+    WatchSession(ProgressStatus<WatchTask>),
+    Transcode(ProgressStatus<TranscodeJob>),
+    Previews(ProgressStatus<PreviewsJob>),
+    Torrent(ProgressStatus<PendingTorrent>),
+    LibraryScan(ProgressStatus<LibraryScanTask>),
+    IntroDetection(ProgressStatus<IntroJob>),
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -50,7 +50,7 @@ pub struct LibraryScanTask;
 impl TaskTrait for LibraryScanTask {
     type Progress = scan_progress::ProgressChunk;
 
-    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress {
+    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress {
         TaskProgress::LibraryScan(status)
     }
 }
@@ -106,13 +106,15 @@ impl<T: TaskTrait> TaskStorage<T> {
         Ok(())
     }
 
-    pub fn send_progress(&self, task_id: Uuid, status: ProgressStatus<T::Progress>) {
-        if let Ok(mut tasks) = self.tasks.try_lock() {
-            if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
-                task.latest_progress = status.clone();
-            };
-        } else {
-            tracing::warn!(%task_id, "Failed to lock task without blocking");
+    pub fn send_progress(&self, task_id: Uuid, status: ProgressStatus<T>) {
+        if let ProgressStatus::Pending { progress } = &status {
+            if let Ok(mut tasks) = self.tasks.try_lock() {
+                if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
+                    task.latest_progress = Some(progress.clone());
+                };
+            } else {
+                tracing::warn!(%task_id, "Failed to lock task without blocking");
+            }
         }
         let task_progress = T::into_progress(status);
         let notification = Notification {
@@ -152,8 +154,9 @@ impl<T: TaskTrait<Progress: Clone> + PartialEq> TaskStorage<T> {
         cancellation_token: Option<CancellationToken>,
     ) -> Result<Uuid, TaskError> {
         let task = Task::new(kind, uuid, cancellation_token);
+        let json = serde_json::to_value(&task).unwrap();
         let id = self.add_task(task)?;
-        let task_progress = T::into_progress(ProgressStatus::Start);
+        let task_progress = T::into_progress(ProgressStatus::Start { task: json });
         let notification = Notification {
             task_progress,
             activity_id: id,
@@ -276,11 +279,11 @@ where
 /// Trait implemented by all media server tasks.
 ///
 /// The type this trait is implemented on will be sent when users fetch all tasks of a kind.
-pub trait TaskTrait {
+pub trait TaskTrait: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug {
     /// This is the progress type of the task. Client will use it to show progress of the task.
     type Progress: Serialize + Clone + utoipa::ToSchema + std::fmt::Debug;
 
-    fn into_progress(status: ProgressStatus<Self::Progress>) -> TaskProgress
+    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress
     where
         Self: Sized;
 }
@@ -297,7 +300,9 @@ where
 pub struct Task<T: TaskTrait> {
     pub id: Uuid,
     pub kind: T,
-    pub latest_progress: ProgressStatus<T::Progress>,
+    /// Its useful for client to know the current progress of the task without waiting for
+    /// the next progress chunk
+    pub latest_progress: Option<T::Progress>,
     #[serde(with = "time::serde::rfc3339")]
     pub created: OffsetDateTime,
     #[serde(serialize_with = "ser_bool_option", rename = "cancelable")]
@@ -311,14 +316,10 @@ impl<T: TaskTrait> Task<T> {
         Self {
             created: now,
             id,
-            latest_progress: ProgressStatus::Start,
+            latest_progress: None,
             kind,
             cancel: cancel_token,
         }
-    }
-
-    pub fn latest_progress(&self) -> ProgressStatus<T::Progress> {
-        self.latest_progress.clone()
     }
 
     pub fn is_cancelable(&self) -> bool {
@@ -326,14 +327,17 @@ impl<T: TaskTrait> Task<T> {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, utoipa::ToSchema, Eq, PartialEq)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema, Eq, PartialEq)]
 #[serde(rename_all = "lowercase", tag = "progress_type")]
-pub enum ProgressStatus<T> {
-    #[default]
-    Start,
+pub enum ProgressStatus<T: TaskTrait> {
+    Start {
+        /// Use serde_json::Value since we just need the serialized payload
+        #[schema(value_type = Task<T>)]
+        task: serde_json::Value,
+    },
     Finish,
     Pending {
-        progress: T,
+        progress: T::Progress,
     },
     Cancel,
     Error {
@@ -411,7 +415,7 @@ pub trait ProgressDispatch<T: TaskTrait> {
     /// Required method. Must be cancellation safe
     fn progress(
         &mut self,
-    ) -> impl std::future::Future<Output = Result<ProgressStatus<T::Progress>, TaskError>> + Send;
+    ) -> impl std::future::Future<Output = Result<ProgressStatus<T>, TaskError>> + Send;
 
     fn on_cancel(&mut self) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
         std::future::ready(Ok(()))

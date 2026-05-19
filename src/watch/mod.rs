@@ -68,7 +68,7 @@ impl TaskTrait for WatchTask {
     type Progress = WatchProgress;
 
     fn into_progress(
-        status: crate::progress::ProgressStatus<Self::Progress>,
+        status: crate::progress::ProgressStatus<Self>,
     ) -> crate::progress::TaskProgress {
         crate::progress::TaskProgress::WatchSession(status)
     }

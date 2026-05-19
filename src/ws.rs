@@ -15,7 +15,6 @@ use axum::{
 };
 use axum_extra::{TypedHeader, headers};
 use tokio::sync::broadcast::error::RecvError;
-use tokio_stream::StreamExt;
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
