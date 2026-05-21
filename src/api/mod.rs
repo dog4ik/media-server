@@ -28,6 +28,7 @@ use utoipa::OpenApi;
 pub mod api_data;
 pub mod file_browser;
 pub mod history;
+pub mod intros;
 pub mod server;
 pub mod subtitles;
 /// Torrent client specific endpoints
@@ -88,7 +89,6 @@ pub mod torrent;
         server::cancel_transcode_task,
         server::previews_tasks,
         server::cancel_previews_task,
-        server::watch_sessions,
         server::stop_watch_session,
         server::progress,
         server::reconciliate_lib,
@@ -98,13 +98,12 @@ pub mod torrent;
         server::hls_manifest,
         server::hls_segment,
         server::hls_init,
-        server::detect_intros,
-        server::update_video_intro,
-        server::delete_season_intros,
-        server::delete_episode_intros,
-        server::delete_video_intro,
-        server::video_intro,
-        server::intro_detection_tasks,
+        intros::detect_intros,
+        intros::update_video_intro,
+        intros::delete_season_intros,
+        intros::delete_episode_intros,
+        intros::delete_video_intro,
+        intros::video_intro,
         server::video_content_metadata,
         server::delete_episode,
         server::delete_season,
@@ -164,7 +163,6 @@ pub mod torrent;
             server::DetailedSubtitleTrack,
             server::DetailedVariant,
             server::VideoContentMetadata,
-            server::Intro,
             server::ProviderOrder,
             history::UpdateHistoryPayload,
             history::ShowSuggestion,

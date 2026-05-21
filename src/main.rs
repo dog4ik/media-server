@@ -167,7 +167,7 @@ async fn main() {
         .route("/show/{show_id}/{season}", get(api::server::get_season))
         .route(
             "/show/{show_id}/{season}/detect_intros",
-            post(api::server::detect_intros),
+            post(api::intros::detect_intros),
         )
         .route(
             "/season/{season_id}/poster",
@@ -175,7 +175,7 @@ async fn main() {
         )
         .route(
             "/season/{season_id}/intros",
-            delete(api::server::delete_season_intros),
+            delete(api::intros::delete_season_intros),
         )
         .route(
             "/show/{show_id}/{season}",
@@ -187,7 +187,7 @@ async fn main() {
         )
         .route(
             "/episode/{episode_id}/intros",
-            delete(api::server::delete_episode_intros),
+            delete(api::intros::delete_episode_intros),
         )
         .route(
             "/show/{show_id}/{season}/{episode}",
@@ -205,9 +205,9 @@ async fn main() {
         .route("/video/by_content", get(api::server::contents_video))
         .route("/video/{id}", get(api::server::get_video_by_id))
         .route("/video/{id}", delete(api::server::remove_video))
-        .route("/video/{id}/intro", put(api::server::update_video_intro))
-        .route("/video/{id}/intro", get(api::server::video_intro))
-        .route("/video/{id}/intro", delete(api::server::delete_video_intro))
+        .route("/video/{id}/intro", put(api::intros::update_video_intro))
+        .route("/video/{id}/intro", get(api::intros::video_intro))
+        .route("/video/{id}/intro", delete(api::intros::delete_video_intro))
         .route(
             "/video/{id}/metadata",
             get(api::server::video_content_metadata),
@@ -337,14 +337,9 @@ async fn main() {
             "/tasks/previews/{id}",
             delete(api::server::cancel_previews_task),
         )
-        .route("/tasks/watch_sessions", get(api::server::watch_sessions))
         .route(
             "/tasks/watch_session/{id}",
             delete(api::server::stop_watch_session),
-        )
-        .route(
-            "/tasks/intro_detection",
-            get(api::server::intro_detection_tasks),
         )
         .route("/tasks/progress", get(api::server::progress))
         .route("/ws", any(ws::ws))
