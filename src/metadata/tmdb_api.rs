@@ -677,7 +677,6 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                 original_title = show.original_name;
                 original_language = show.original_language;
             }
-            Self::Episode(_) => return Err(anyhow!("Episode is not implemented")),
             Self::Other {} => return Err(anyhow!("Other is not implemented")),
         };
         Ok(MetadataSearchResult {
@@ -730,6 +729,7 @@ impl From<TmdbExternalIds> for Vec<ExternalIdMetadata> {
 // Types
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(unused)]
 struct TmdbFindByIdResult {
     movie_results: Vec<TmdbSearchMovieResult>,
     tv_results: Vec<TmdbSearchShowResult>,
@@ -743,29 +743,29 @@ struct TmdbFindByIdResult {
 enum TmdbFindMultiResult {
     Movie(TmdbSearchMovieResult),
     Show(TmdbSearchShowResult),
-    Episode(TmdbSeasonEpisode),
+    // Episode(TmdbSeasonEpisode),
     Other {},
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct TmdbExternalIds {
-    id: Option<usize>,
+    // id: Option<usize>,
     imdb_id: Option<String>,
-    freebase_mid: Option<String>,
-    freebase_id: Option<String>,
+    // freebase_mid: Option<String>,
+    // freebase_id: Option<String>,
     tvdb_id: Option<usize>,
-    tvrage_id: Option<usize>,
-    wikidata_id: Option<String>,
+    // tvrage_id: Option<usize>,
+    // wikidata_id: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct TmdbShowDetails {
-    adult: bool,
+    // adult: bool,
     backdrop_path: Option<String>,
     first_air_date: Option<String>,
     genres: Option<Vec<TmdbGenre>>,
     id: usize,
-    last_air_date: Option<String>,
+    // last_air_date: Option<String>,
     name: String,
     number_of_episodes: usize,
     number_of_seasons: usize,
@@ -782,7 +782,7 @@ struct TmdbMovieDetails {
     backdrop_path: Option<String>,
     genres: Option<Vec<TmdbGenre>>,
     id: usize,
-    imdb_id: Option<String>,
+    // imdb_id: Option<String>,
     original_language: String,
     original_title: String,
     overview: String,
@@ -803,16 +803,16 @@ struct TmdbCredits {
 struct TmdbCast {
     id: usize,
     name: String,
-    original_name: Option<String>,
+    // original_name: Option<String>,
     profile_path: Option<String>,
     character: Option<String>,
-    order: usize,
+    // order: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
 struct TmdbGenre {
     id: usize,
-    name: String,
+    // name: String,
 }
 
 impl TryFrom<TmdbGenre> for super::Genre {
@@ -853,6 +853,7 @@ impl TryFrom<TmdbGenre> for super::Genre {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(unused)]
 struct TmdbEpisodeToAir {
     id: usize,
     name: String,
@@ -866,6 +867,7 @@ struct TmdbEpisodeToAir {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(unused)]
 struct TmdbCrew {
     id: Option<usize>,
     credit_id: Option<String>,
@@ -881,6 +883,7 @@ struct TmdbCrew {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(unused)]
 struct TmdbGuestStars {
     adult: Option<bool>,
     gender: Option<usize>,
@@ -894,12 +897,13 @@ struct TmdbGuestStars {
     order: Option<usize>,
     profile_path: Option<String>,
 }
+
 #[derive(Deserialize, Debug, Clone)]
 struct TmdbSeasonEpisode {
     air_date: Option<String>,
     episode_number: usize,
-    crew: Vec<Option<TmdbCrew>>,
-    guest_stars: Vec<Option<TmdbGuestStars>>,
+    // crew: Vec<Option<TmdbCrew>>,
+    // guest_stars: Vec<Option<TmdbGuestStars>>,
     name: String,
     overview: Option<String>,
     id: usize,
@@ -936,10 +940,10 @@ pub struct TmdbSearchShowResult {
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct TmdbSearch<T> {
-    page: usize,
     pub results: Vec<T>,
-    total_results: usize,
-    total_pages: usize,
+    // page: usize,
+    // total_results: usize,
+    // total_pages: usize,
 }
 
 #[derive(Deserialize, Debug, Clone)]
