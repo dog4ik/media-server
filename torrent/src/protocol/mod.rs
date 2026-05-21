@@ -8,8 +8,6 @@ use std::{
 use serde::{Deserialize, Serialize, de::Visitor};
 use sha1::{Digest, Sha1};
 
-#[allow(unused)]
-pub mod dht;
 pub mod extension;
 pub mod peer;
 /// Peer Exchange (PEX) BEP 11
