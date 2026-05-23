@@ -661,22 +661,8 @@ impl Download {
         //    }
         //}
 
-        self.scheduler.pending_pieces.retain(|pending_piece| {
-            let piece = &mut self.scheduler.piece_table[*pending_piece];
-            let blocks = piece.pending_blocks.as_mut().unwrap();
-            let is_full = blocks.is_full();
-            if is_full {
-                let pending_blocks = piece.pending_blocks.take().unwrap();
-                piece.is_saving = true;
-                if pending_blocks.is_sub_rational() {
-                    self.scheduler.sub_rational_amount -= 1;
-                }
-                self.storage
-                    .try_save_piece(*pending_piece, pending_blocks.as_bytes())
-                    // no available capacity
-                    .unwrap();
-            }
-            !is_full
+        self.scheduler.tick_pending_pieces(|piece_idx, bytes| {
+            self.storage.try_save_piece(piece_idx, bytes).unwrap();
         });
 
         // 3. Once we have everyone's performance up to date we change our choke status if

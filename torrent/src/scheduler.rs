@@ -2,6 +2,7 @@ use std::{
     cmp::{Ordering, Reverse},
     fmt::Display,
     ops::Range,
+    time::{Duration, Instant},
 };
 
 use anyhow::ensure;
@@ -107,6 +108,9 @@ pub struct PendingPiece {
 pub struct PendingBlock {
     pub scheduled_to: Vec<Uuid>,
     pub data: Option<Bytes>,
+    /// When this block was first popped from the queue and sent to a peer.
+    /// `None` means the block is still waiting in the queue.
+    pub requested_at: Option<Instant>,
 }
 
 impl Default for PendingBlock {
@@ -114,6 +118,7 @@ impl Default for PendingBlock {
         Self {
             scheduled_to: Vec::with_capacity(1),
             data: None,
+            requested_at: None,
         }
     }
 }
@@ -168,6 +173,7 @@ impl PendingPiece {
         let index = block.offset / BLOCK_LENGTH;
         let pending_block = &mut self.piece[index as usize];
         pending_block.scheduled_to.push(sender);
+        pending_block.requested_at = Some(Instant::now());
         Some(block)
     }
 
@@ -201,6 +207,8 @@ impl PendingPiece {
     }
 
     pub fn unpend_block(&mut self, block: BlockPosition) {
+        let index = block.offset / BLOCK_LENGTH;
+        self.piece[index as usize].requested_at = None;
         self.blocks_queue.push(block);
     }
 
@@ -347,6 +355,9 @@ pub const BLOCK_LENGTH: u32 = 16 * 1024;
 ///// Maximum amount of peers allowed to schedule one block.
 ///// 4 will be good fit because vec reallocates with capacity 4 after first push.
 //const MAX_SCHEDULED_TO: usize = 4;
+
+/// How long a block can remain outstanding before being re-requested from another peer.
+pub const BLOCK_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Max amount of peers that allowed to be unchoked
 pub const UNCHOKE_SLOTS: usize = 5;
@@ -631,6 +642,7 @@ impl Scheduler {
                     if let Some(peer_idx) = block.scheduled_to.iter().position(|p| p == &peer_id) {
                         block.scheduled_to.swap_remove(peer_idx);
                         if block.scheduled_to.is_empty() {
+                            block.requested_at = None;
                             let offset = block_idx as u32 * BLOCK_LENGTH;
                             let length = if block_idx == blocks_amount - 1 {
                                 piece_size - offset
@@ -879,6 +891,89 @@ impl Scheduler {
         );
         self.picker.set_strategy(strategy);
         self.picker.rebuild_queue(&self.piece_table);
+    }
+
+    pub fn tick_pending_pieces(&mut self, mut on_piece_ready: impl FnMut(usize, Vec<Bytes>)) {
+        let piece_table = &mut self.piece_table;
+        let peers = &mut self.peers;
+        let piece_length_measurer = &self.piece_length_measurer;
+        let sub_rational_amount = &mut self.sub_rational_amount;
+
+        self.pending_pieces.retain(|&piece_idx| {
+            let piece_size = piece_length_measurer.piece_length(piece_idx);
+            let pending_piece = piece_table[piece_idx].pending_blocks.as_mut().unwrap();
+            let blocks_amount = pending_piece.piece.len();
+
+            for block_idx in 0..blocks_amount {
+                let position = {
+                    let block = &pending_piece.piece[block_idx];
+                    if block.data.is_some() || block.scheduled_to.is_empty() {
+                        continue;
+                    }
+                    let Some(ra) = block.requested_at else {
+                        continue;
+                    };
+                    if ra.elapsed() < BLOCK_TIMEOUT {
+                        continue;
+                    }
+                    let offset = block_idx as u32 * BLOCK_LENGTH;
+                    let length = if block_idx == blocks_amount - 1 {
+                        piece_size - offset
+                    } else {
+                        BLOCK_LENGTH
+                    };
+                    BlockPosition { offset, length }
+                };
+
+                let scheduled_to = &pending_piece.piece[block_idx].scheduled_to;
+                let Some(peer_idx) = peers.iter().position(|p| {
+                    p.bitfield.has(piece_idx)
+                        && !p.in_status.is_choked()
+                        && !scheduled_to.contains(&p.id)
+                }) else {
+                    tracing::trace!(
+                        piece_idx,
+                        block_idx,
+                        "No peer available for timed out block"
+                    );
+                    continue;
+                };
+
+                let peer_id = peers[peer_idx].id;
+
+                let pb = &mut pending_piece.piece[block_idx];
+                pb.scheduled_to.push(peer_id);
+                pb.requested_at = Some(Instant::now());
+
+                let block = Block::from_position(piece_idx as u32, position);
+                peers[peer_idx].pending_blocks += 1;
+                let _ = peers[peer_idx]
+                    .message_tx
+                    .try_send(PeerCommandMessage::Request(vec![block]));
+
+                tracing::trace!(
+                    piece = piece_idx,
+                    offset = position.offset,
+                    peer = %peer_id,
+                    "Rescheduled timed-out block"
+                );
+            }
+
+            let is_full = piece_table[piece_idx]
+                .pending_blocks
+                .as_ref()
+                .unwrap()
+                .is_full();
+            if is_full {
+                let pending_blocks = piece_table[piece_idx].pending_blocks.take().unwrap();
+                piece_table[piece_idx].is_saving = true;
+                if pending_blocks.is_sub_rational() {
+                    *sub_rational_amount -= 1;
+                }
+                on_piece_ready(piece_idx, pending_blocks.as_bytes());
+            }
+            !is_full
+        });
     }
 
     pub fn rechoke_peer(&mut self) {
