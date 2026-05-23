@@ -8,7 +8,7 @@ use crate::protocol::Info;
 pub struct TorrentFile {
     pub info: Info,
     /// The URL of the tracker.
-    pub announce: String,
+    pub announce: Option<String>,
     pub encoding: Option<String>,
     /// List of trackers
     pub announce_list: Option<Vec<Vec<String>>>,
@@ -80,7 +80,6 @@ impl bendy::decoding::FromBencode for TorrentFile {
             }
         }
 
-        let announce = announce.ok_or_else(|| Error::missing_field("announce"))?;
         let info = info.ok_or_else(|| Error::missing_field("info"))?;
 
         Ok(Self {
@@ -110,20 +109,12 @@ impl TorrentFile {
 
     /// Get all trackers contained in file
     pub fn all_trackers(&self) -> Vec<Url> {
-        let mut trackers =
-            Vec::with_capacity(1 + self.announce_list.as_ref().map_or(0, |l| l.len()));
-        if let Ok(url) = Url::parse(&self.announce) {
-            trackers.push(url);
-        } else {
-            tracing::error!(
-                self.announce,
-                "failed to parce announce url in .torrent file"
-            );
-        }
-        if let Some(list) = &self.announce_list {
-            trackers.extend(list.iter().flatten().filter_map(|url| Url::parse(url).ok()));
-        };
-        trackers
+        self.announce
+            .as_ref()
+            .into_iter()
+            .chain(self.announce_list.as_ref().into_iter().flatten().flatten())
+            .filter_map(|announce| Url::parse(&announce).ok())
+            .collect()
     }
 }
 
@@ -136,8 +127,8 @@ mod tests {
     fn parse_torrent_file() {
         let torrent_file = TorrentFile::from_bytes(include_bytes!("../sample.torrent")).unwrap();
         assert_eq!(
-            torrent_file.announce,
-            "http://bittorrent-test-tracker.codecrafters.io/announce"
+            torrent_file.announce.as_deref(),
+            Some("http://bittorrent-test-tracker.codecrafters.io/announce"),
         );
         assert_eq!(torrent_file.info.name, "sample.txt");
         assert_eq!(torrent_file.created_by.unwrap(), "mktorrent 1.1");
