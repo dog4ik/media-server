@@ -1,6 +1,7 @@
 use std::{
     io::IsTerminal,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
 use clap::{ArgGroup, Parser, Subcommand};
@@ -46,6 +47,14 @@ enum Commands {
         /// List of enabled files indexes, separated by commas
         #[arg(long, value_delimiter = ',')]
         files: Option<Vec<usize>>,
+    },
+    Validate {
+        /// Path to a .torrent file
+        #[arg(long)]
+        torrent: PathBuf,
+        /// Path to a torrent contents
+        #[arg(long)]
+        save_location: PathBuf,
     },
 }
 
@@ -177,6 +186,31 @@ async fn main() {
             }
             client.shutdown().await;
             println!("Done");
+        }
+        Commands::Validate {
+            torrent,
+            save_location,
+        } => {
+            let torrent = TorrentFile::from_path(torrent).unwrap();
+            let total_pieces = torrent.info.pieces.len();
+            let mut full_bitfield = torrent::BitField::empty(total_pieces);
+            for piece in 0..torrent.info.pieces.len() {
+                full_bitfield.add(piece).unwrap();
+            }
+            let files = vec![Priority::default(); torrent.info.files_amount()];
+            let params = DownloadParams {
+                bitfield: full_bitfield,
+                trackers: torrent.all_trackers(),
+                info: torrent.info,
+                files,
+                save_location,
+            };
+            let start = Instant::now();
+            let validated_bitfield = client.validate(params).await.unwrap();
+            println!("Validation took: {:?}", start.elapsed());
+            if validated_bitfield.is_full(total_pieces) {
+                println!("Torrent contents are valid!")
+            }
         }
     }
 }
