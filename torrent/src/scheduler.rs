@@ -400,8 +400,7 @@ impl Scheduler {
         let peer = &mut self.peers[peer_idx];
         let mut schedule_batch = ScheduleBatch::new(schedule_amount);
 
-        // First we try to schedule pending pieces.
-        // NOTE: We can merge it with endgame mode logic
+        // Phase 1: schedule blocks from already-pending pieces.
         for i in self
             .pending_pieces
             .iter()
@@ -422,9 +421,7 @@ impl Scheduler {
             }
         }
 
-        // We know that pending pieces are not enough to fulfill peer capabilities.
-        // We should try to add new pending piece for this peer.
-
+        // Phase 2: pull new pieces from the picker for this peer.
         loop {
             match self.picker.peek_next() {
                 // Next piece is rational and peer can share it
@@ -447,16 +444,15 @@ impl Scheduler {
                         };
                     }
                 }
-                // Peer does not have next piece we should schedule sub-optional blocks
-                // TODO: use configurable f32 threshold
+                // Peer does not have next piece; schedule sub-rational if within threshold
                 Some(_)
                     if self.sub_rational_amount as f32 / self.pending_pieces.len() as f32
                         <= 0.3 =>
                 {
                     let Some(new_piece) = self.picker.pop_closest_for_bitfield(&peer.bitfield)
                     else {
-                        schedule_batch.send(&peer)?;
-                        return Ok(stat);
+                        // No piece available for this peer's bitfield. Fall through to endgame
+                        break;
                     };
                     let piece_len = self.piece_length_measurer.piece_length(new_piece);
                     let pending_piece = PendingPiece::new_sub_rational(piece_len);
@@ -476,45 +472,39 @@ impl Scheduler {
                         };
                     }
                 }
-                // Endgame mode
-                None => {
-                    let mut rng = rand::rng();
-                    // shuffle pending pieces so pick distribution is even
-                    self.pending_pieces.shuffle(&mut rng);
-                    for piece_idx in self
-                        .pending_pieces
-                        .iter()
-                        .filter(|p| peer.bitfield.has(**p))
-                    {
-                        let pending_piece = &mut self.piece_table[*piece_idx];
-                        let pending_blocks = pending_piece.pending_blocks.as_mut().unwrap();
-                        for (position, pending_block) in pending_blocks
-                            .pend_blocks_endgame(peer.id)
-                            .take(schedule_batch.left())
-                        {
-                            let block = Block::from_position(*piece_idx as u32, position);
-                            stat.endgame += 1;
-                            pending_block.scheduled_to.push(peer.id);
-                            peer.pending_blocks += 1;
-                            schedule_batch.add_block(block);
-                        }
-                        if schedule_batch.left() == 0 {
-                            schedule_batch.send(&peer)?;
-                            return Ok(stat);
-                        }
-                    }
-                    // We tried everything at this point
-                    schedule_batch.send(&peer)?;
-                    return Ok(stat);
-                }
-                // Peer don't have next piece and no sub-optional slots are available
-                // There is nothing we can do but let it go
-                Some(_) => {
-                    schedule_batch.send(&peer)?;
-                    return Ok(stat);
-                }
+                // Picker exhausted OR peer can't contribute to any remaining piece:
+                // fall through to endgame in both cases so we re-request outstanding blocks.
+                None | Some(_) => break,
             }
         }
+
+        // Phase 3: endgame — re-request blocks that are outstanding but not yet received.
+        let mut rng = rand::rng();
+        self.pending_pieces.shuffle(&mut rng);
+        for piece_idx in self
+            .pending_pieces
+            .iter()
+            .filter(|p| peer.bitfield.has(**p))
+        {
+            let pending_piece = &mut self.piece_table[*piece_idx];
+            let pending_blocks = pending_piece.pending_blocks.as_mut().unwrap();
+            for (position, pending_block) in pending_blocks
+                .pend_blocks_endgame(peer.id)
+                .take(schedule_batch.left())
+            {
+                let block = Block::from_position(*piece_idx as u32, position);
+                stat.endgame += 1;
+                pending_block.scheduled_to.push(peer.id);
+                peer.pending_blocks += 1;
+                schedule_batch.add_block(block);
+            }
+            if schedule_batch.left() == 0 {
+                schedule_batch.send(&peer)?;
+                return Ok(stat);
+            }
+        }
+        schedule_batch.send(&peer)?;
+        Ok(stat)
     }
 
     pub fn save_block(&mut self, sender_idx: usize, data_block: DataBlock) {
@@ -925,18 +915,35 @@ impl Scheduler {
                     BlockPosition { offset, length }
                 };
 
-                let scheduled_to = &pending_piece.piece[block_idx].scheduled_to;
-                let Some(peer_idx) = peers.iter().position(|p| {
-                    p.bitfield.has(piece_idx)
-                        && !p.in_status.is_choked()
-                        && !scheduled_to.contains(&p.id)
-                }) else {
-                    tracing::trace!(
-                        piece_idx,
-                        block_idx,
-                        "No peer available for timed out block"
-                    );
-                    continue;
+                let alt_peer_idx = {
+                    let scheduled_to = &pending_piece.piece[block_idx].scheduled_to;
+                    peers.iter().position(|p| {
+                        p.bitfield.has(piece_idx)
+                            && !p.in_status.is_choked()
+                            && !scheduled_to.contains(&p.id)
+                    })
+                };
+
+                let peer_idx = match alt_peer_idx {
+                    Some(idx) => idx,
+                    None => {
+                        // No alternative peer — reset the block so it can be rescheduled
+                        // via schedule_next once a peer becomes available.
+                        let pb = &mut pending_piece.piece[block_idx];
+                        for peer_id in pb.scheduled_to.drain(..) {
+                            if let Some(peer) = peers.iter_mut().find(|p| p.id == peer_id) {
+                                peer.pending_blocks = peer.pending_blocks.saturating_sub(1);
+                            }
+                        }
+                        pb.requested_at = None;
+                        pending_piece.blocks_queue.push(position);
+                        tracing::trace!(
+                            piece_idx,
+                            block_idx,
+                            "No peer available for timed out block, reset to queue"
+                        );
+                        continue;
+                    }
                 };
 
                 let peer_id = peers[peer_idx].id;
