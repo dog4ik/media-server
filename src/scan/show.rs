@@ -66,7 +66,9 @@ where
 
     pub async fn scan(&self, videos: Vec<LibraryItem<ShowIdentifier>>) -> anyhow::Result<()> {
         let chunks = self.fetch_show_chunks(videos).await;
+        tracing::debug!(total_chunks = %chunks.len(), "Resolved show chunks");
         let merged = self.merge_show_chunks(chunks);
+        tracing::debug!(total_chunks = %merged.len(), "Merged show chunks");
         let resolved = self.resolve_seasons_episodes(merged).await;
         let asset_tasks = self.flush_to_db(resolved).await?;
         self.save_assets(asset_tasks).await;
