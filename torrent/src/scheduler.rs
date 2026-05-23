@@ -55,7 +55,7 @@ impl PendingFiles {
             let length = file.length();
             let end = offset + length;
             let start_piece = offset / piece_length as u64;
-            let end_piece = end / piece_length as u64;
+            let end_piece = (end - 1) / piece_length as u64;
             files.push(PendingFile {
                 priority: enabled_files[i],
                 start_piece: start_piece as usize,
