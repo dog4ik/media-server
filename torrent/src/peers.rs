@@ -441,14 +441,11 @@ impl Peer {
                     }
                 },
                 Ok(command_msg) = ipc.message_rx.recv_async() => {
-                    if let PeerCommandMessage::Request(blocks) = &command_msg {
-                        self.in_flight += blocks.len();
-                        if self.in_flight > reqq {
-                            tracing::warn!(reqq, in_flight = self.in_flight, "Excessing reqq size");
-                        }
-                    }
                     if let Err(e) = self.send_peer_msg(command_msg).await {
                         break 'outer Err(e);
+                    }
+                    if self.in_flight > reqq {
+                        tracing::warn!(reqq, in_flight = self.in_flight, "Excessing reqq size");
                     }
                 },
                 Some(Ok(peer_msg)) = self.stream.next() => {
@@ -484,11 +481,14 @@ impl Peer {
     }
 
     pub async fn send_peer_msg(&mut self, peer_msg: PeerCommandMessage) -> Result<(), PeerError> {
-        let is_block = matches!(peer_msg, PeerCommandMessage::Request(_));
+        let block_count = match &peer_msg {
+            PeerCommandMessage::Request(blocks) => blocks.len(),
+            _ => 0,
+        };
         let socket = self.stream.get_mut();
         match peer_msg.write_message(socket).await {
             Ok(_) => {
-                self.in_flight += is_block as usize;
+                self.in_flight += block_count;
                 Ok(())
             }
             Err(e) => {
