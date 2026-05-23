@@ -37,9 +37,7 @@ impl DbShowQuery {
             (select count(episodes.id) from episodes join seasons on episodes.season_id = seasons.id where seasons.show_id = shows.id) as episode_count,
             (select group_concat(seasons.number) from seasons where seasons.show_id = shows.id) as seasons
             from shows
-            join metadata on metadata.id = shows.metadata_id
-            join seasons on seasons.show_id = shows.id
-            ",
+            join metadata on metadata.id = shows.metadata_id",
             show = db::DbShow::SQL,
             metadata = db::DbMetadata::SQL,
             cast = CastQueryJson::SQL_JSON_AGGR,
@@ -387,7 +385,7 @@ impl DbEpisodeQuery {
             join metadata on metadata.id = episodes.metadata_id
             left join history on history.metadata_id = episodes.metadata_id
             left join intros on intros.episode_id = episodes.id
-            join seasons on seasons.show_id = episodes.season_id
+            join seasons on seasons.id = episodes.season_id
             ",
             episode = db::DbEpisode::SQL,
             metadata = db::DbMetadata::SQL,
