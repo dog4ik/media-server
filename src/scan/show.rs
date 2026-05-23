@@ -195,9 +195,8 @@ where
 
         let mut asset_tasks = Vec::new();
 
+        let mut tx = self.db.begin().await?;
         for resolved in resolved_shows {
-            let mut tx = self.db.begin().await?;
-
             let show_id = match resolved.show_lookup {
                 MetadataLookupWithIds::New {
                     metadata,
@@ -362,9 +361,8 @@ where
                     }
                 }
             }
-
-            tx.commit().await?;
         }
+        tx.commit().await?;
 
         Ok(asset_tasks)
     }
