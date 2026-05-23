@@ -6,7 +6,7 @@ use tokio::{
     io::{self, AsyncReadExt, AsyncSeekExt, AsyncWriteExt},
 };
 
-use crate::utils::LengthCalculator;
+use crate::length_calculator::LengthCalculator;
 
 /// My attpmpt to store only parts of piece that are not in enabled files in .parts file
 #[allow(unused)]

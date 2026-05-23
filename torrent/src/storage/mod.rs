@@ -12,8 +12,8 @@ use tokio::{
 use tokio_util::task::TaskTracker;
 
 use crate::{
-    DownloadParams, Priority, bitfield::BitField, protocol::OutputFile, scheduler::BLOCK_LENGTH,
-    storage::revalidation::TorrentValidator, utils::LengthCalculator,
+    DownloadParams, Priority, bitfield::BitField, length_calculator::LengthCalculator,
+    protocol::OutputFile, scheduler::BLOCK_LENGTH, storage::revalidation::TorrentValidator,
 };
 
 mod error;
@@ -444,11 +444,11 @@ fn split_bytes(bytes: Bytes) -> Vec<Bytes> {
 mod tests {
     use super::split_bytes;
     use crate::{
+        length_calculator::LengthCalculator,
         scheduler::BLOCK_LENGTH,
         storage::{
             StorageFile, TorrentStorage, memory_store::AsyncInMemoryBlock, parts::PartsFile,
         },
-        utils::LengthCalculator,
     };
     use bytes::Bytes;
 

@@ -18,13 +18,14 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     BitField, Info,
+    length_calculator::LengthCalculator,
     progress::events,
     protocol::tracker::{
         TrackerEvent, UdpTrackerMessage, UdpTrackerMessageType, UdpTrackerRequest,
         UdpTrackerRequestType,
     },
     session::tick_context::TickContext,
-    utils::{self, LengthCalculator},
+    utils,
 };
 
 pub const ID: [u8; 20] = *b"00112233445566778899";

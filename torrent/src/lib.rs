@@ -22,10 +22,10 @@ use tracker::{DownloadTracker, TrackerResponse, TrackerType, UdpTrackerChannel, 
 
 use crate::{
     download::Download,
+    length_calculator::LengthCalculator,
     session::{Session, session_message::SessionHandle},
     storage::{hash_verification::Hasher, parts::PartsPath, revalidation::TorrentValidator},
     tracker::{DownloadStat, Tracker},
-    utils::LengthCalculator,
 };
 
 /// Data structure that holds list of banned peers
@@ -36,6 +36,7 @@ mod bitfield;
 mod download;
 /// Torrent file parsing
 mod file;
+mod length_calculator;
 /// Magnet link parsing
 mod magnet;
 mod metric;

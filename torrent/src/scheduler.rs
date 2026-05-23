@@ -16,11 +16,11 @@ use crate::{
         self, Block, BlockPosition, DataBlock,
         peer::{ActivePeer, Performance},
     },
+    length_calculator::LengthCalculator,
     peers::PeerCommandMessage,
     piece_picker::{PiecePicker, Priority, ScheduleStrategy},
     protocol::{Info, OutputFile, ut_metadata::UtMetadata},
     session::tick_context::TickContext,
-    utils::LengthCalculator,
 };
 
 #[derive(Debug, Clone, Copy)]
