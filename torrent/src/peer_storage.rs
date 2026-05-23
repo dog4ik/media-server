@@ -328,6 +328,7 @@ impl PeerStorage {
     }
 
     pub fn set_my_ip(&mut self, ip: Option<SocketAddr>) {
+        debug_assert!(self.my_ip.is_none(), "ip should be set only when unknown");
         self.my_ip = ip;
         if let Some(ip) = ip {
             let mut old_heap = BinaryHeap::with_capacity(self.best_peers.len());
