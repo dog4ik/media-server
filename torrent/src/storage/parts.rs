@@ -151,12 +151,10 @@ mod unstable {
                 file_bounds.windows(2).map(|v| (v[0], v[1])).enumerate()
             {
                 if file_end != next_start {
-                    println!("Skipping aligned files: {} {}", i, i + 1);
                     // skip if files are aligned
                     continue;
                 }
                 if !bf.has(file_end) {
-                    println!("We don't have border piece: {file_end}");
                     continue;
                 }
                 if enabled_files[i] ^ enabled_files[i + 1] {

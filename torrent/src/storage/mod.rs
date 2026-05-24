@@ -250,11 +250,9 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
         for (file_idx, file) in self.files.iter().enumerate() {
             let file_start = file.offset;
             let file_end = file.end();
-            if dbg!(file_start) >= dbg!(piece_end) || dbg!(file_end) <= dbg!(piece_start) {
-                println!("skipping file handle {file_idx}\n");
+            if file_start >= piece_end || file_end <= piece_start {
                 continue;
             }
-            println!("creating file handle for index {file_idx}\n");
 
             let file_end_piece = file.end_piece(self.base_piece_length());
             let file_start_piece = file.start_piece(self.base_piece_length());
