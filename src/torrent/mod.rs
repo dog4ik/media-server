@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     path::Path,
     sync::{Arc, Mutex},
-    time::Instant,
 };
 
 use anyhow::Context;
@@ -11,6 +10,7 @@ use tokio::{sync::broadcast, task::JoinSet};
 use torrent::{DownloadHandle, DownloadParams, Info, MagnetLink, OutputFile};
 
 use crate::{
+    api::torrent::InfoHash,
     db::{Db, DbActions, DbTorrentFile},
     library::{
         ContentIdentifier, Media, is_format_supported, movie::MovieIdentifier, show::ShowIdentifier,
@@ -66,7 +66,7 @@ impl TryFrom<usize> for Priority {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum Action {
     Validate,
@@ -360,6 +360,10 @@ pub trait TorrentManager {
     async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()>;
     async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()>;
     async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()>;
+    async fn delete_torrents(
+        &self,
+        hashes: impl Iterator<Item = &'_ [u8; 20]>,
+    ) -> anyhow::Result<()>;
     async fn update_files_priority(
         &self,
         hash: &[u8; 20],
@@ -436,6 +440,22 @@ impl TorrentManager for Db {
 
     async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()> {
         self.remove_torrent(hash).await?;
+        Ok(())
+    }
+
+    async fn delete_torrents(
+        &self,
+        hashes: impl Iterator<Item = &'_ [u8; 20]>,
+    ) -> anyhow::Result<()> {
+        let mut tx = self.pool.begin().await?;
+        for hash in hashes {
+            let hash = &hash[..];
+            // files are removed automatically by database constraint
+            sqlx::query!("DELETE FROM torrents WHERE info_hash = ?", hash)
+                .execute(&mut *tx)
+                .await?;
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -622,9 +642,8 @@ impl TorrentClient {
         })
     }
 
+    #[tracing::instrument(skip_all)]
     pub async fn load_torrents(&self) -> anyhow::Result<()> {
-        let start = Instant::now();
-        let mut count = 0;
         for torrent in self.manager.read_torrents().await? {
             let mut files = Vec::new();
             let mut file_offset = 0;
@@ -659,7 +678,6 @@ impl TorrentClient {
                         torrent_info,
                     };
                     self.torrents.lock().unwrap().push(torrent);
-                    count += 1;
                 }
                 Err(e) => {
                     tracing::error!("Failed to open torrent: {e}");
@@ -668,7 +686,7 @@ impl TorrentClient {
             };
         }
 
-        tracing::info!(took = ?start.elapsed(), "Loaded {count} torrents");
+        tracing::info!(count = %self.torrents.lock().unwrap().len(), "Loaded torrents");
         Ok(())
     }
 
@@ -712,6 +730,24 @@ impl TorrentClient {
         let handle = torrent.handle();
         self.torrents.lock().unwrap().push(torrent);
         Ok(handle)
+    }
+
+    pub async fn remove_downloads(&self, info_hashes: &[InfoHash]) {
+        {
+            let mut downloads = self.torrents.lock().unwrap();
+            for hash in info_hashes {
+                if let Some(idx) = downloads.iter().position(|x| x.info_hash == hash.0) {
+                    downloads.swap_remove(idx);
+                }
+            }
+        }
+        if let Err(e) = self
+            .manager
+            .delete_torrents(info_hashes.iter().map(AsRef::as_ref))
+            .await
+        {
+            tracing::error!("Failed to remove torrents from db: {e}");
+        }
     }
 
     pub async fn remove_download(&self, info_hash: [u8; 20]) -> Option<PendingTorrent> {

@@ -511,6 +511,9 @@ pub async fn batch_action(
     State(client): State<&'static TorrentClient>,
     Json(BatchActionPayload { hashes, action }): Json<BatchActionPayload>,
 ) -> Result<StatusCode, AppError> {
+    if action == Action::Abort {
+        client.remove_downloads(&hashes).await;
+    }
     client
         .client
         .handle()
