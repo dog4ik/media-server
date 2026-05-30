@@ -1,5 +1,3 @@
-use std::net::Ipv4Addr;
-
 use tokio::sync::mpsc;
 
 use crate::{
@@ -25,10 +23,8 @@ mod torrent_list;
 #[derive(Debug)]
 pub struct Session<P = ()> {
     torrent_list: torrent_list::TorrentList,
-    speed_limit: Option<Performance>,
     ban_list: BanList,
     config: config::SessionConfiguration,
-    ip: Option<Ipv4Addr>,
     tick_num: usize,
     metrics: Performance,
     running_performance: metric::RollingSpeedMeter,
@@ -42,9 +38,7 @@ impl<T: ProgressConsumer> Session<T> {
         let session = Self {
             torrent_list: torrent_list::TorrentList::new(),
             ban_list: BanList::new(),
-            speed_limit: None,
             config,
-            ip: None,
             tick_num: 0,
             metrics: Performance::default(),
             running_performance: metric::RollingSpeedMeter::new(),

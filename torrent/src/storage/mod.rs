@@ -80,7 +80,7 @@ impl FileHandles {
 }
 
 #[derive(Debug, Clone)]
-struct StorageFile {
+pub struct StorageFile {
     offset: u64,
     length: u64,
     path: PathBuf,
@@ -233,11 +233,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
 
     /// saves piece filling file with null bytes
     /// WARN: this will not validate piece hash
-    pub async fn save_piece(
-        &mut self,
-        piece_i: usize,
-        blocks: ReadyPiece,
-    ) -> std::result::Result<(), error::StorageError> {
+    pub async fn save_piece(&mut self, piece_i: usize, blocks: ReadyPiece) -> Result<()> {
         let piece_length = blocks.len() as u64;
         debug_assert_eq!(
             piece_length as u32,
@@ -297,10 +293,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
     }
 
     /// retrieve piece from preallocated file
-    pub async fn retrieve_piece(
-        &mut self,
-        piece_i: usize,
-    ) -> std::result::Result<Bytes, error::StorageError> {
+    pub async fn retrieve_piece(&mut self, piece_i: usize) -> Result<Bytes> {
         if !self.bitfield.has(piece_i) {
             return Err(error::StorageError::MissingPiece);
         };

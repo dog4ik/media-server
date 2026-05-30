@@ -5,8 +5,6 @@ use tokio::io::{AsyncRead, AsyncSeek, AsyncWrite};
 use crate::storage::memory_store::AsyncInMemoryBlock;
 use crate::storage::{FileHandles, StorageFile};
 
-pub trait Sink: AsyncWrite + AsyncRead + AsyncSeek + Unpin {}
-
 /// Store of write/read/seek compatible items that are accessed in Storage
 pub trait StorageSink {
     type Sink: AsyncWrite + AsyncRead + AsyncSeek + Unpin;
