@@ -435,6 +435,7 @@ fn split_bytes(bytes: Bytes) -> Vec<Bytes> {
 mod tests {
     use super::split_bytes;
     use crate::{
+        StorageError,
         length_calculator::LengthCalculator,
         scheduler::BLOCK_LENGTH,
         storage::{
@@ -530,7 +531,10 @@ mod tests {
                     super::ReadyPiece(split_bytes(Bytes::copy_from_slice(data_slice))),
                 )
                 .await?;
-            self.storage.bitfield.add(piece).unwrap();
+            assert!(
+                self.storage.bitfield().has(piece),
+                "bitfild does contain just inserted piece"
+            );
 
             let data = self.storage.retrieve_piece(piece).await?;
 
@@ -586,7 +590,22 @@ mod tests {
 
     #[tokio::test]
     async fn out_of_bounds_access_errors() {
-        todo!()
+        use std::assert_matches;
+        let contents: Vec<_> = (0..5).map(|v| v).collect();
+
+        let mut t = TestBuilder::new(3, &contents).add_file(5).build().await;
+
+        t.checked_insert(0).await.unwrap();
+        t.checked_insert(1).await.unwrap();
+        assert!(
+            t.storage.retrieve_piece(1).await.is_ok(),
+            "in bound piece should succeed",
+        );
+        assert_matches!(
+            t.storage.retrieve_piece(2).await,
+            Err(StorageError::MissingPiece),
+            "out of bounds retrieve should fail with error"
+        );
     }
 
     #[test]
