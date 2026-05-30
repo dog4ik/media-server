@@ -1,8 +1,6 @@
-use std::sync::Mutex;
-use std::{collections::HashMap, time::Duration};
+use std::time::Duration;
 
 use anyhow::anyhow;
-use lru::LruCache;
 use reqwest::{
     Client, Method, Request, Url,
     header::{ACCEPT_ENCODING, AUTHORIZATION, HeaderMap, HeaderValue},
@@ -17,13 +15,12 @@ use super::{
     MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
     ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
-use super::{FetchParams, Language, METADATA_CACHE_SIZE, provod_agent};
+use super::{FetchParams, Language, provod_agent};
 
 #[derive(Debug)]
 pub struct TmdbApi {
     pub base_url: Url,
     client: LimitedRequestClient,
-    episodes_cache: Mutex<LruCache<usize, HashMap<usize, Vec<TmdbSeasonEpisode>>>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -118,7 +115,6 @@ impl TmdbApi {
             LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
         Ok(Self {
             client: limited_client,
-            episodes_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),
             base_url,
         })
     }
@@ -225,8 +221,6 @@ impl TmdbApi {
         let req = Request::new(Method::GET, url);
         let response: TmdbShowSeason = self.client.request(req).await?;
 
-        self.update_cache(tmdb_show_id, season, response.episodes.clone());
-
         Ok(response)
     }
 
@@ -321,24 +315,6 @@ impl TmdbApi {
         let req = Request::new(Method::GET, url);
         let res = self.client.request(req).await?;
         Ok(res)
-    }
-
-    fn update_cache(&self, tmdb_show_id: usize, season: usize, episodes: Vec<TmdbSeasonEpisode>) {
-        let mut episodes_cache = self.episodes_cache.lock().unwrap();
-        let entry = episodes_cache.get_or_insert_mut(tmdb_show_id, HashMap::new);
-        entry.insert(season, episodes);
-    }
-
-    fn get_from_cache(
-        &self,
-        tmdb_show_id: usize,
-        season: usize,
-        episode: usize,
-    ) -> Option<TmdbSeasonEpisode> {
-        let mut episodes_cache = self.episodes_cache.lock().unwrap();
-        let show = episodes_cache.get(&tmdb_show_id)?;
-        let season = show.get(&season)?;
-        season.get(episode.saturating_sub(1)).cloned()
     }
 }
 
