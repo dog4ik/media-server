@@ -8,7 +8,7 @@ use tokio::{sync::mpsc, task::JoinSet};
 use crate::{download::PEER_CONNECT_TIMEOUT, peer_listener::NewPeer, peers::Peer};
 
 const MAX_PEERLIST_SIZE: usize = 1_000;
-const MAX_FAILCOUNT: u32 = 10;
+const MAX_FAILCOUNT: u16 = 10;
 const MIN_RECONNECT_SECS: u64 = 60;
 const CANDIDATE_SCAN_SIZE: usize = 300;
 const CANDIDATE_CACHE_SIZE: usize = 10;
@@ -31,6 +31,29 @@ fn addr_ord(a: &SocketAddr, b: &SocketAddr) -> std::cmp::Ordering {
     }
 }
 
+#[derive(Debug, Eq, PartialEq)]
+struct ConnectCandiatate {
+    failcount: u16,
+    last_connected: Option<Instant>,
+    bep40_priority: u32,
+    ip: SocketAddr,
+}
+
+impl Ord for ConnectCandiatate {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.failcount
+            .cmp(&other.failcount)
+            .then(self.last_connected.cmp(&other.last_connected))
+            .then(other.bep40_priority.cmp(&self.bep40_priority))
+    }
+}
+
+impl PartialOrd for ConnectCandiatate {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PeerStatus {
     Stored,
@@ -42,7 +65,7 @@ enum PeerStatus {
 #[derive(Debug)]
 struct TorrentPeer {
     ip: SocketAddr,
-    failcount: u32,
+    failcount: u16,
     last_connected: Option<Instant>,
     status: PeerStatus,
 }
@@ -60,7 +83,7 @@ impl TorrentPeer {
     fn banned(ip: SocketAddr) -> Self {
         Self {
             ip,
-            failcount: u32::MAX,
+            failcount: 0,
             last_connected: None,
             status: PeerStatus::Banned,
         }
@@ -175,8 +198,7 @@ impl PeerStorage {
         let start = self.round_robin % len;
         let my_ip = self.my_ip;
 
-        // (failcount, last_connected, bep40_priority, ip)
-        let mut candidates: Vec<(u32, Option<Instant>, u32, SocketAddr)> = Vec::new();
+        let mut candidates = Vec::new();
 
         for i in 0..scan {
             let peer = &self.peers[(start + i) % len];
@@ -186,19 +208,23 @@ impl PeerStorage {
             let priority = my_ip.map_or(100, |my| {
                 crate::protocol::peer::canonical_peer_priority(peer.ip, my)
             });
-            candidates.push((peer.failcount, peer.last_connected, priority, peer.ip));
+            candidates.push(ConnectCandiatate {
+                failcount: peer.failcount,
+                last_connected: peer.last_connected,
+                bep40_priority: priority,
+                ip: peer.ip,
+            });
         }
 
         self.round_robin = (start + scan) % len.max(1);
 
-        // Best-first: low failcount, oldest last_connected (None < Some), high BEP40 priority.
-        candidates.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)).then(b.2.cmp(&a.2)));
+        candidates.sort();
 
         // Reversed so pop_back() yields the best candidate.
         self.candidate_cache = candidates
             .into_iter()
             .rev()
-            .map(|e| e.3)
+            .map(|candidate| candidate.ip)
             .take(CANDIDATE_CACHE_SIZE)
             .collect();
     }
@@ -382,8 +408,8 @@ mod tests {
     };
 
     use crate::peer_storage::{
-        CANDIDATE_SCAN_SIZE, MAX_FAILCOUNT, MAX_PEERLIST_SIZE, MIN_RECONNECT_SECS, PeerStatus,
-        PeerStorage, TorrentPeer, addr_ord,
+        CANDIDATE_SCAN_SIZE, ConnectCandiatate, MAX_FAILCOUNT, MAX_PEERLIST_SIZE,
+        MIN_RECONNECT_SECS, PeerStatus, PeerStorage, TorrentPeer, addr_ord,
     };
 
     const INFO_HASH: [u8; 20] = [0u8; 20];
@@ -635,5 +661,71 @@ mod tests {
         // Drive it past the list length to force a wrap
         s.round_robin = 11;
         s.find_connect_candidates();
+    }
+
+    // ConnectCandiatate ordering
+
+    fn candidate(
+        failcount: u16,
+        last_connected: Option<Instant>,
+        bep40_priority: u32,
+    ) -> ConnectCandiatate {
+        ConnectCandiatate {
+            failcount,
+            last_connected,
+            bep40_priority,
+            ip: ip(10, 0, 0, 1),
+        }
+    }
+
+    #[test]
+    fn candidate_lower_failcount_is_less() {
+        let good = candidate(0, None, 0);
+        let bad = candidate(3, None, 0);
+        assert!(good < bad);
+    }
+
+    #[test]
+    fn candidate_older_last_connected_is_less() {
+        let old = candidate(0, Some(Instant::now() - Duration::from_secs(200)), 0);
+        let recent = candidate(0, Some(Instant::now()), 0);
+        assert!(old < recent);
+    }
+
+    #[test]
+    fn candidate_never_connected_is_less_than_old_connection() {
+        let never = candidate(0, None, 0);
+        let old = candidate(0, Some(Instant::now() - Duration::from_secs(1000)), 0);
+        assert!(never < old);
+    }
+
+    #[test]
+    fn candidate_higher_bep40_priority_is_less() {
+        let high_prio = candidate(0, None, 100);
+        let low_prio = candidate(0, None, 10);
+        assert!(high_prio < low_prio);
+    }
+
+    #[test]
+    fn candidate_failcount_dominates_last_connected() {
+        // Lower failcount wins even with a less favourable last_connected.
+        let low_fc = candidate(1, Some(Instant::now()), 0);
+        let high_fc = candidate(3, None, 0);
+        assert!(low_fc < high_fc);
+    }
+
+    #[test]
+    fn candidate_last_connected_dominates_bep40() {
+        // Older last_connected wins over higher bep40 priority.
+        let old = candidate(0, Some(Instant::now() - Duration::from_secs(200)), 0);
+        let recent_high = candidate(0, Some(Instant::now()), 100);
+        assert!(old < recent_high);
+    }
+
+    #[test]
+    fn candidate_equal_is_not_less() {
+        let a = candidate(1, None, 50);
+        let b = candidate(1, None, 50);
+        assert!(!(a < b) && !(b < a));
     }
 }
