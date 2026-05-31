@@ -2,27 +2,55 @@ use crate::{
     db::{DbActions, DbRole, DbTransaction},
     ffmpeg,
     library::{
-        Source,
+        LibraryItem, Media, Source,
         assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
     },
     metadata::{ExternalIdMetadata, FetchParams, PersonMetadata},
+    scan::scan_progress::MetadataProgressEmitter,
 };
 
 pub mod episode;
 pub mod fallback;
 mod merge;
 pub mod movie;
+pub mod reconcile;
 pub mod scan_progress;
 pub mod show;
 
+/// Common interface for content scanners (shows, movies): fetch metadata for a batch of
+/// library videos, then flush the resolved tree into the database.
+// Used only with static dispatch within this crate; auto-trait bounds on the returned
+// futures are inferred at the call sites, so the `async fn` desugaring is fine here.
+#[allow(async_fn_in_trait)]
+pub trait ContentScanner {
+    type Identifier: Media;
+    type Resolved;
+
+    /// Resolve metadata for the given videos. Reports per-video progress through `progress`,
+    /// counting fallbacks as failures.
+    async fn resolve(
+        &self,
+        videos: Vec<LibraryItem<Self::Identifier>>,
+        progress: MetadataProgressEmitter,
+    ) -> Vec<Self::Resolved>;
+
+    /// Flush resolved metadata to the database, queueing asset downloads into `asset_tasks`.
+    async fn flush_to_db(
+        &self,
+        tx: &mut DbTransaction,
+        asset_tasks: &mut Vec<AssetSaveTask>,
+        resolved: Vec<Self::Resolved>,
+    ) -> sqlx::Result<()>;
+}
+
 #[derive(Debug, Clone)]
-enum MetadataLookup<T> {
+pub enum MetadataLookup<T> {
     New { metadata: T },
     Local(i64),
 }
 
 #[derive(Debug, Clone)]
-enum MetadataLookupWithIds<T> {
+pub enum MetadataLookupWithIds<T> {
     New {
         metadata: T,
         external_ids: Vec<ExternalIdMetadata>,
@@ -34,6 +62,9 @@ enum MetadataLookupWithIds<T> {
 #[derive(Clone)]
 pub struct ScanConfig {
     pub fetch_params: FetchParams,
+    /// Try to use season's episodes list to resolve episodes metadata
+    /// It will speed up metadata fetch for newly added season, but episodes will end up with partially incomplete metadata
+    pub use_season_episodes: bool,
     pub max_show_concurrency: usize,
     pub max_movie_concurrency: usize,
     pub max_asset_concurrency: usize,
@@ -44,6 +75,7 @@ impl Default for ScanConfig {
         Self {
             fetch_params: FetchParams::default(),
             max_show_concurrency: 4,
+            use_season_episodes: false,
             max_movie_concurrency: 8,
             max_asset_concurrency: 16,
         }

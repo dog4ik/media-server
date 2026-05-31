@@ -710,7 +710,7 @@ where
         self,
         video_id: i64,
         metadata_id: i64,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<()>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             sqlx::query!(

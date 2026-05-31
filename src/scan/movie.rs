@@ -9,11 +9,10 @@
 use std::{sync::Arc, time::Duration};
 
 use tokio::{sync::Semaphore, task::JoinSet};
-use tokio_util::task::TaskTracker;
 use tracing::{Instrument, debug_span};
 
 use crate::{
-    db::{Db, DbActions, DbExternalId},
+    db::{Db, DbActions, DbExternalId, DbTransaction},
     library::{
         LibraryItem,
         assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
@@ -23,7 +22,7 @@ use crate::{
         ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
         metadata_stack::MetadataProvidersStack,
     },
-    scan::insert_roles,
+    scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
 };
 
 use super::{
@@ -31,7 +30,7 @@ use super::{
     fallback::movie_fallback, merge::try_merge_chunks,
 };
 
-struct ResolvedMovie {
+pub struct ResolvedMovie {
     lookup: MetadataLookupWithIds<MovieMetadata>,
     duration: Duration,
     videos: Vec<LibraryItem<MovieIdentifier>>,
@@ -52,17 +51,10 @@ impl MovieScanner {
         }
     }
 
-    pub async fn scan(&self, videos: Vec<LibraryItem<MovieIdentifier>>) -> anyhow::Result<()> {
-        let resolved = self.fetch_movie_chunks(videos).await;
-        let merged = self.merge_movie_chunks(resolved);
-        let tasks = self.flush_to_db(merged).await?;
-        self.save_assets(tasks).await;
-        Ok(())
-    }
-
     async fn fetch_movie_chunks(
         &self,
         mut videos: Vec<LibraryItem<MovieIdentifier>>,
+        progress: MetadataProgressEmitter,
     ) -> Vec<ResolvedMovie> {
         videos.sort_unstable_by(|a, b| {
             a.identifier
@@ -87,12 +79,20 @@ impl MovieScanner {
             let db = self.db.clone();
             let config = self.config.clone();
             let movie_providers = movie_providers.clone();
+            let progress = progress.clone();
             let span = debug_span!("scan_movie", title = %title);
             handles.spawn(
                 async move {
                     let _permit = permit;
-                    fetch_single_movie_chunk(db, config, &title, &title_videos, &movie_providers)
-                        .await
+                    fetch_single_movie_chunk(
+                        db,
+                        config,
+                        &title,
+                        &title_videos,
+                        &movie_providers,
+                        &progress,
+                    )
+                    .await
                 }
                 .instrument(span),
             );
@@ -130,16 +130,29 @@ impl MovieScanner {
             })
             .collect()
     }
+}
+
+impl ContentScanner for MovieScanner {
+    type Identifier = MovieIdentifier;
+    type Resolved = ResolvedMovie;
+
+    async fn resolve(
+        &self,
+        videos: Vec<LibraryItem<MovieIdentifier>>,
+        progress: MetadataProgressEmitter,
+    ) -> Vec<ResolvedMovie> {
+        let resolved = self.fetch_movie_chunks(videos, progress).await;
+        self.merge_movie_chunks(resolved)
+    }
 
     async fn flush_to_db(
         &self,
+        tx: &mut DbTransaction,
+        asset_tasks: &mut Vec<AssetSaveTask>,
         resolved: Vec<ResolvedMovie>,
-    ) -> anyhow::Result<Vec<AssetSaveTask>> {
+    ) -> sqlx::Result<()> {
         let span = debug_span!("flush_movies", count = resolved.len());
         let _enter = span.enter();
-
-        let mut asset_tasks = Vec::new();
-        let mut tx = self.db.begin().await?;
 
         for movie in resolved {
             let ResolvedMovie {
@@ -160,7 +173,7 @@ impl MovieScanner {
                         .insert_movie(&metadata.into_db_movie(metadata_id, duration))
                         .await?;
                     if let Some(cast) = metadata.cast {
-                        insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
+                        insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
                         let _ = tx
@@ -211,7 +224,7 @@ impl MovieScanner {
                 }
                 MetadataLookupWithIds::Local(movie_id) => {
                     sqlx::query!("SELECT metadata_id FROM movies WHERE id = ?", movie_id)
-                        .fetch_one(&mut *tx)
+                        .fetch_one(&mut **tx)
                         .await?
                         .metadata_id
                 }
@@ -223,26 +236,7 @@ impl MovieScanner {
             }
         }
 
-        tx.commit().await?;
-        Ok(asset_tasks)
-    }
-
-    async fn save_assets(&self, tasks: Vec<AssetSaveTask>) {
-        let span = debug_span!("save_assets", count = tasks.len());
-        let _enter = span.enter();
-        let semaphore = Arc::new(Semaphore::new(self.config.max_asset_concurrency));
-        let tracker = TaskTracker::new();
-        for task in tasks {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            tracker.spawn(async move {
-                let _permit = permit;
-                if let Err(e) = task.execute().await {
-                    tracing::warn!("Asset save task failed: {e}");
-                }
-            });
-        }
-        tracker.close();
-        tracker.wait().await;
+        Ok(())
     }
 }
 
@@ -252,6 +246,7 @@ async fn fetch_single_movie_chunk(
     title: &str,
     videos: &[LibraryItem<MovieIdentifier>],
     movie_providers: &[&'static (dyn MovieMetadataProvider + Send + Sync)],
+    progress: &MetadataProgressEmitter,
 ) -> ResolvedMovie {
     let first = videos.first().expect("movies are chunked");
     let db_movies = db.search_movie(title).await.unwrap_or_default();
@@ -273,6 +268,7 @@ async fn fetch_single_movie_chunk(
             {
                 Ok(Some(local_id)) => {
                     tracing::debug!(movie_title = first_result.title, "Using local movie ref");
+                    progress.dispatch_success(videos.len());
                     return ResolvedMovie {
                         lookup: MetadataLookupWithIds::Local(local_id),
                         duration: Duration::ZERO,
@@ -304,6 +300,7 @@ async fn fetch_single_movie_chunk(
                             id: first_result.metadata_id.clone(),
                         },
                     );
+                    progress.dispatch_success(videos.len());
                     return ResolvedMovie {
                         lookup: MetadataLookupWithIds::New {
                             metadata: movie_metadata,
@@ -323,6 +320,7 @@ async fn fetch_single_movie_chunk(
             .fetch_duration()
             .await
             .unwrap_or_default();
+        progress.dispatch_fail(videos.len());
         ResolvedMovie {
             lookup: movie_fallback(title),
             duration,
@@ -330,6 +328,7 @@ async fn fetch_single_movie_chunk(
         }
     } else {
         let local_id = db_movies.first().unwrap().metadata_id.parse().unwrap();
+        progress.dispatch_success(videos.len());
         ResolvedMovie {
             lookup: MetadataLookupWithIds::Local(local_id),
             duration: Duration::ZERO,

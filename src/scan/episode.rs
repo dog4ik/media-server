@@ -12,48 +12,55 @@ use crate::{
 use super::{
     MetadataLookup, MetadataLookupWithIds, ScanConfig,
     fallback::{episode_fallback, season_fallback},
+    scan_progress::MetadataProgressEmitter,
 };
 
 /// Provider ID pair derived from a show's external_ids after show lookup.
-pub(super) struct ShowProvider {
+pub struct ShowProvider {
     pub provider: &'static (dyn ShowMetadataProvider + Send + Sync),
     pub id: String,
 }
 
 /// Episode resolved to full metadata or existing local ID.
-pub(super) struct ResolvedEpisode {
+pub struct ResolvedEpisode {
     pub lookup: MetadataLookup<EpisodeMetadata>,
     pub duration: Duration,
     pub videos: Vec<LibraryItem<ShowIdentifier>>,
 }
 
 /// Season resolved to full metadata or existing local ID.
-pub(super) struct ResolvedSeason {
-    pub season_number: usize,
+pub struct ResolvedSeason {
     pub lookup: MetadataLookup<SeasonMetadata>,
     pub episodes: Vec<ResolvedEpisode>,
 }
 
 /// Carries everything needed to flush a complete show tree to the database.
-pub(super) struct ResolvedShow {
+pub struct ResolvedShow {
     pub show_lookup: MetadataLookupWithIds<ShowMetadata>,
     pub seasons: Vec<ResolvedSeason>,
 }
 
 /// Fetches seasons and episodes for a single show group.
 #[derive(Clone)]
-pub(super) struct EpisodeScanner {
+pub struct EpisodeScanner {
     db: Db,
     providers: Arc<[ShowProvider]>,
     config: ScanConfig,
+    progress: MetadataProgressEmitter,
 }
 
 impl EpisodeScanner {
-    pub(super) fn new(db: Db, providers: Arc<[ShowProvider]>, config: ScanConfig) -> Self {
+    pub(super) fn new(
+        db: Db,
+        providers: Arc<[ShowProvider]>,
+        config: ScanConfig,
+        progress: MetadataProgressEmitter,
+    ) -> Self {
         Self {
             db,
             providers,
             config,
+            progress,
         }
     }
 
@@ -107,9 +114,9 @@ impl EpisodeScanner {
             self.fetch_season_metadata(season_number).await
         };
 
-        let season_id = match &season_lookup {
-            MetadataLookup::Local(id) => Some(*id),
-            MetadataLookup::New { .. } => None,
+        let fresh_season_episodes = match &season_lookup {
+            MetadataLookup::Local(_) => None,
+            MetadataLookup::New { metadata } => Some(&metadata.episodes),
         };
 
         season_videos.sort_unstable_by_key(|v| v.identifier.episode);
@@ -120,20 +127,41 @@ impl EpisodeScanner {
             .map(Vec::from)
         {
             let episode_number = episode_videos.first().unwrap().identifier.episode as usize;
-            let resolved = self
-                .resolve_episode(
-                    show_id,
-                    season_id,
-                    season_number,
-                    episode_number,
-                    episode_videos,
-                )
-                .await;
+            let resolved = match self.config.use_season_episodes {
+                true if let Some(fresh_episode) = fresh_season_episodes
+                    .into_iter()
+                    .flatten()
+                    .find(|ep| ep.number == episode_number) =>
+                {
+                    let duration = if let Some(first) = episode_videos.first() {
+                        first
+                            .source
+                            .video
+                            .fetch_duration()
+                            .await
+                            .unwrap_or_default()
+                    } else {
+                        Duration::ZERO
+                    };
+
+                    self.progress.dispatch_success(episode_videos.len());
+                    ResolvedEpisode {
+                        lookup: MetadataLookup::New {
+                            metadata: fresh_episode.clone(),
+                        },
+                        duration,
+                        videos: episode_videos,
+                    }
+                }
+                _ => {
+                    self.resolve_episode(show_id, season_number, episode_number, episode_videos)
+                        .await
+                }
+            };
             episodes.push(resolved);
         }
 
         ResolvedSeason {
-            season_number,
             lookup: season_lookup,
             episodes,
         }
@@ -157,7 +185,6 @@ impl EpisodeScanner {
     async fn resolve_episode(
         &self,
         show_id: Option<i64>,
-        _season_id: Option<i64>,
         season_number: usize,
         episode_number: usize,
         videos: Vec<LibraryItem<ShowIdentifier>>,
@@ -168,6 +195,7 @@ impl EpisodeScanner {
                 .get_episode_id(show_id, season_number, episode_number)
                 .await
             {
+                self.progress.dispatch_success(videos.len());
                 return ResolvedEpisode {
                     lookup: MetadataLookup::Local(local_id),
                     duration: Duration::ZERO,
@@ -198,6 +226,7 @@ impl EpisodeScanner {
                 )
                 .await
             {
+                self.progress.dispatch_success(videos.len());
                 return ResolvedEpisode {
                     lookup: MetadataLookup::New { metadata: episode },
                     duration,
@@ -211,6 +240,7 @@ impl EpisodeScanner {
             episode = episode_number,
             "Using episode metadata fallback"
         );
+        self.progress.dispatch_fail(videos.len());
         ResolvedEpisode {
             lookup: episode_fallback(episode_number, season_number),
             duration,

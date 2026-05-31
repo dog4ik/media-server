@@ -1,11 +1,7 @@
-use std::{
-    collections::HashMap, error::Error, fmt::Display, num::ParseIntError, sync::Mutex,
-    time::Instant,
-};
+use std::{collections::HashMap, error::Error, fmt::Display, num::ParseIntError, sync::Mutex};
 
-use anyhow::Context;
 use axum::{Json, extract::FromRef, http::StatusCode, response::IntoResponse};
-use tokio::{fs, task::JoinSet};
+use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
@@ -19,7 +15,7 @@ use crate::{
         media::Video,
     },
     metadata::{FetchParams, metadata_stack::MetadataProvidersStack},
-    progress::TaskResource,
+    progress::{ProgressDispatcher, TaskResource},
     scan,
     torrent::TorrentClient,
 };
@@ -450,150 +446,20 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
-    pub async fn reconciliate_library(&self) -> Result<(), AppError> {
+    pub async fn reconciliate_library(&self, task_id: uuid::Uuid) -> Result<(), AppError> {
         self.partial_refresh().await;
-        let start = Instant::now();
-        let language: config::MetadataLanguage = config::CONFIG.get_value();
-        let fetch_params = FetchParams { lang: language.0 };
-
-        let db_movies_videos = sqlx::query!(
-            "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT movies.metadata_id FROM movies);"
+        let progress = scan::scan_progress::ScanProgressEmitter::new(ProgressDispatcher::new(
+            &self.tasks.library_scan_tasks,
+            task_id,
+        ));
+        scan::reconcile::LibraryReconciler::new(
+            self.library,
+            self.db,
+            self.providers_stack,
+            progress,
         )
-        .fetch_all(&self.db.pool)
-        .await?;
-
-        let new_movies = {
-            let movies: Vec<_> = {
-                let library = self.library.lock().unwrap();
-                library.movies().collect()
-            };
-
-            let missing_movies = db_movies_videos
-                .iter()
-                .filter(|d| !movies.iter().any(|x| x.source.id == d.id));
-
-            for missing_movie in missing_movies {
-                let mut tx = self.db.begin().await.context("begin movies removal tx")?;
-                match tx.remove_video(missing_movie.id).await {
-                    Ok(_) => {
-                        let _ = tx.commit().await;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to remove video: {e}");
-                    }
-                };
-            }
-
-            let mut new_movies = Vec::new();
-            let mut set = JoinSet::new();
-            for new_movie in movies
-                .into_iter()
-                .filter(|l| !db_movies_videos.iter().any(|d| d.id == l.source.id))
-            {
-                set.spawn(async move {
-                    match new_movie.source.video.metadata().await {
-                        Ok(_) => Ok(new_movie),
-                        Err(e) => {
-                            tracing::warn!(
-                                path = ?new_movie.source.video.path().display(), "Skipping invalid video: {e}",
-                            );
-                            Err(e)
-                        },
-                    }
-                });
-            }
-
-            while let Some(v) = set.join_next().await {
-                match v {
-                    Ok(Ok(movie)) => new_movies.push(movie),
-                    Ok(Err(_)) => {}
-                    Err(e) => panic!("metadata retrieve panicked: {}", e),
-                }
-            }
-
-            new_movies
-        };
-
-        let config = scan::ScanConfig {
-            fetch_params,
-            ..scan::ScanConfig::default()
-        };
-        if let Err(e) =
-            scan::movie::MovieScanner::new(self.db.clone(), self.providers_stack, config.clone())
-                .scan(new_movies)
-                .await
-        {
-            tracing::error!("Movie scan failed: {e}");
-        };
-
-        let db_episodes_videos = sqlx::query!(
-            "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT episodes.metadata_id FROM episodes);"
-        )
-        .fetch_all(&self.db.pool)
-        .await?;
-
-        let new_episodes = {
-            let episodes: Vec<_> = {
-                let library = self.library.lock().unwrap();
-                library.episodes().collect()
-            };
-
-            let missing_episodes = db_episodes_videos
-                .iter()
-                .filter(|d| !episodes.iter().any(|x| x.source.id == d.id));
-
-            for missing_episode in missing_episodes {
-                let mut tx = self.db.begin().await.context("begin episodes removal tx")?;
-                match tx.remove_video(missing_episode.id).await {
-                    Ok(_) => {
-                        let _ = tx.commit().await;
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to remove video: {e}");
-                    }
-                };
-            }
-
-            let mut new_episodes = Vec::new();
-            let mut set = JoinSet::new();
-            for new_episode in episodes
-                .into_iter()
-                .filter(|l| !db_episodes_videos.iter().any(|d| d.id == l.source.id))
-            {
-                set.spawn(async move {
-                    match new_episode.source.video.metadata().await {
-                        Ok(_) => Ok(new_episode),
-                        Err(e) => {
-                            tracing::warn!(
-                                path = ?new_episode.source.video.path().display(), "Skipping invalid video: {e}",
-                            );
-                            Err(e)
-                        },
-                    }
-                });
-            }
-
-            while let Some(v) = set.join_next().await {
-                match v {
-                    Ok(Ok(episode)) => new_episodes.push(episode),
-                    Ok(Err(_)) => {}
-                    Err(e) => panic!("metadata retrieve panicked: {}", e),
-                }
-            }
-
-            new_episodes
-        };
-
-        if let Err(e) =
-            scan::show::ShowScanner::new(self.db.clone(), self.providers_stack, config, |_| {})
-                .scan(new_episodes)
-                .await
-        {
-            tracing::error!("Failed to scan episodes: {e}");
-        };
-
-        tracing::info!(took = ?start.elapsed(), "Finished library reconciliation");
-        Ok(())
+        .reconciliate()
+        .await
     }
 
     pub async fn partial_refresh(&self) {

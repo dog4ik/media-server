@@ -247,6 +247,7 @@ impl TmdbApi {
         self.client.request(req).await
     }
 
+    #[allow(unused)]
     async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("find").push(imdb_id);

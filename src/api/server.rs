@@ -1279,7 +1279,7 @@ pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<Statu
     let tasks = app_state.tasks;
     let task_id = tasks.library_scan_tasks.start_task(LibraryScanTask, None)?;
     tokio::spawn(async move {
-        match app_state.reconciliate_library().await {
+        match app_state.reconciliate_library(task_id).await {
             Ok(_) => {
                 tasks.library_scan_tasks.finish_task(task_id);
             }

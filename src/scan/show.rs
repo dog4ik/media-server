@@ -10,11 +10,10 @@
 use std::sync::Arc;
 
 use tokio::{sync::Semaphore, task::JoinSet};
-use tokio_util::task::TaskTracker;
 use tracing::{Instrument, debug_span};
 
 use crate::{
-    db::{Db, DbActions, DbExternalId},
+    db::{Db, DbActions, DbExternalId, DbTransaction},
     library::{
         LibraryItem,
         assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
@@ -24,7 +23,7 @@ use crate::{
         ContentType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
         metadata_stack::MetadataProvidersStack,
     },
-    scan::{insert_roles, scan_progress::ScanProgressConsumer},
+    scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
 };
 
 use super::{
@@ -39,40 +38,19 @@ struct ShowChunk {
     videos: Vec<LibraryItem<ShowIdentifier>>,
 }
 
-pub struct ShowScanner<T> {
+pub struct ShowScanner {
     db: Db,
     providers: &'static MetadataProvidersStack,
     config: ScanConfig,
-    progress_consumer: T,
 }
 
-impl<T> ShowScanner<T>
-where
-    T: ScanProgressConsumer,
-{
-    pub fn new(
-        db: Db,
-        providers: &'static MetadataProvidersStack,
-        config: ScanConfig,
-        progress_consumer: T,
-    ) -> Self {
+impl ShowScanner {
+    pub fn new(db: Db, providers: &'static MetadataProvidersStack, config: ScanConfig) -> Self {
         Self {
             db,
             providers,
             config,
-            progress_consumer,
         }
-    }
-
-    pub async fn scan(&self, videos: Vec<LibraryItem<ShowIdentifier>>) -> anyhow::Result<()> {
-        let chunks = self.fetch_show_chunks(videos).await;
-        tracing::debug!(total_chunks = %chunks.len(), "Resolved show chunks");
-        let merged = self.merge_show_chunks(chunks);
-        tracing::debug!(total_chunks = %merged.len(), "Merged show chunks");
-        let resolved = self.resolve_seasons_episodes(merged).await;
-        let asset_tasks = self.flush_to_db(resolved).await?;
-        self.save_assets(asset_tasks).await;
-        Ok(())
     }
 
     async fn fetch_show_chunks(
@@ -134,7 +112,11 @@ where
             .collect()
     }
 
-    async fn resolve_seasons_episodes(&self, chunks: Vec<ShowChunk>) -> Vec<ResolvedShow> {
+    async fn resolve_seasons_episodes(
+        &self,
+        chunks: Vec<ShowChunk>,
+        progress: MetadataProgressEmitter,
+    ) -> Vec<ResolvedShow> {
         let semaphore = Arc::new(Semaphore::new(self.config.max_show_concurrency));
         let show_providers = self.providers.show_providers();
         let mut handles: JoinSet<ResolvedShow> = JoinSet::new();
@@ -143,6 +125,7 @@ where
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let db = self.db.clone();
             let config = self.config.clone();
+            let progress = progress.clone();
 
             let external_ids: Vec<ExternalIdMetadata> = match &chunk.lookup {
                 MetadataLookupWithIds::New { external_ids, .. } => external_ids.clone(),
@@ -177,7 +160,7 @@ where
             handles.spawn(
                 async move {
                     let _permit = permit;
-                    EpisodeScanner::new(db, providers, config)
+                    EpisodeScanner::new(db, providers, config, progress)
                         .resolve_show(show_lookup, videos)
                         .await
                 }
@@ -187,17 +170,33 @@ where
 
         handles.join_all().await
     }
+}
+
+impl ContentScanner for ShowScanner {
+    type Identifier = ShowIdentifier;
+    type Resolved = ResolvedShow;
+
+    async fn resolve(
+        &self,
+        videos: Vec<LibraryItem<ShowIdentifier>>,
+        progress: MetadataProgressEmitter,
+    ) -> Vec<ResolvedShow> {
+        let chunks = self.fetch_show_chunks(videos).await;
+        tracing::debug!(total_chunks = %chunks.len(), "Resolved show chunks");
+        let merged = self.merge_show_chunks(chunks);
+        tracing::debug!(total_chunks = %merged.len(), "Merged show chunks");
+        self.resolve_seasons_episodes(merged, progress).await
+    }
 
     async fn flush_to_db(
         &self,
+        tx: &mut DbTransaction,
+        asset_tasks: &mut Vec<AssetSaveTask>,
         resolved_shows: Vec<ResolvedShow>,
-    ) -> anyhow::Result<Vec<AssetSaveTask>> {
+    ) -> sqlx::Result<()> {
         let span = debug_span!("flush_shows", count = resolved_shows.len());
         let _enter = span.enter();
 
-        let mut asset_tasks = Vec::new();
-
-        let mut tx = self.db.begin().await?;
         for resolved in resolved_shows {
             let show_id = match resolved.show_lookup {
                 MetadataLookupWithIds::New {
@@ -209,7 +208,7 @@ where
                     let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
                     let show_id = tx.insert_show(&metadata.into_db_show(metadata_id)).await?;
                     if let Some(cast) = metadata.cast {
-                        insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
+                        insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
                         if let Err(e) = tx
@@ -254,11 +253,7 @@ where
             };
 
             for resolved_season in resolved.seasons {
-                let ResolvedSeason {
-                    season_number: _,
-                    lookup,
-                    episodes,
-                } = resolved_season;
+                let ResolvedSeason { lookup, episodes } = resolved_season;
 
                 let season_id = match lookup {
                     MetadataLookup::New { metadata } => {
@@ -268,7 +263,7 @@ where
                             .insert_season(metadata.into_db_season(metadata_id, show_id))
                             .await?;
                         if let Some(cast) = metadata.cast {
-                            insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
+                            insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                         }
                         if let Some(url) = poster {
                             asset_tasks.push(AssetSaveTask {
@@ -316,7 +311,7 @@ where
                                 ))
                                 .await?;
                             if let Some(cast) = metadata.cast {
-                                insert_roles(&mut tx, metadata_id, cast, &mut asset_tasks).await?;
+                                insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                             }
                             let first_source = videos.first().map(|v| v.source.clone());
                             if let Some(url) = poster {
@@ -346,12 +341,11 @@ where
                             metadata_id
                         }
                         MetadataLookup::Local(episode_id) => {
-                            dbg!(episode_id);
                             sqlx::query!(
                                 "SELECT metadata_id FROM episodes WHERE id = ?",
                                 episode_id
                             )
-                            .fetch_one(&mut *tx)
+                            .fetch_one(&mut **tx)
                             .await?
                             .metadata_id
                         }
@@ -364,27 +358,8 @@ where
                 }
             }
         }
-        tx.commit().await?;
 
-        Ok(asset_tasks)
-    }
-
-    async fn save_assets(&self, tasks: Vec<AssetSaveTask>) {
-        let span = debug_span!("save_assets", count = tasks.len());
-        let _enter = span.enter();
-        let semaphore = Arc::new(Semaphore::new(self.config.max_asset_concurrency));
-        let tracker = TaskTracker::new();
-        for task in tasks {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            tracker.spawn(async move {
-                let _permit = permit;
-                if let Err(e) = task.execute().await {
-                    tracing::warn!("Asset save task failed: {e}");
-                }
-            });
-        }
-        tracker.close();
-        tracker.wait().await;
+        Ok(())
     }
 }
 

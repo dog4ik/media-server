@@ -136,26 +136,34 @@ pub async fn spawn_tray_icon(app_state: AppState) {
     std::thread::spawn(move || windows_tray_icon(tx.clone()));
 
     while let Some(pressed_btn) = rx.recv().await {
+        tracing::trace!(btn = ?pressed_btn, "Tray button pressed");
         match pressed_btn {
             ButtonType::RefreshLibrary => {
                 tracing::trace!("Exit tray button pressed");
-                app_state.reconciliate_library().await.unwrap();
+                match app_state
+                    .tasks
+                    .library_scan_tasks
+                    .start_task(crate::progress::LibraryScanTask, None)
+                    .await
+                {
+                    Ok(task_id) => {
+                        let _ = app_state.reconciliate_library(task_id).await;
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to start library reconcillation from tray: {e}");
+                    }
+                }
             }
             ButtonType::Exit => {
                 tracing::trace!("Exit tray button pressed");
                 app_state.cancelation_token.cancel();
-            }
-            ButtonType::IconDoubleClick => {
-                tracing::trace!("Icon doubleclicked");
-            }
-            ButtonType::IconLeftClick => {
-                tracing::trace!("Icon leftclicked");
             }
             ButtonType::Open => {
                 tracing::trace!("Open tray button pressed");
                 let port: config::Port = config::CONFIG.get_value();
                 open::that(format!("http://127.0.0.1:{}", port.0)).unwrap();
             }
+            _ => {}
         }
     }
 }
