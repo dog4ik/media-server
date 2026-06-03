@@ -402,6 +402,7 @@ impl<T: ScpdService> ScpdClient<T> {
             .ok_or(ActionCallError::NotSupported)
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(action = %action.name, control_url = %self.control_url()))]
     pub async fn run_action<A: ScannableArguments>(
         &self,
         action: &Action,
@@ -416,7 +417,7 @@ impl<T: ScpdService> ScpdClient<T> {
             .body(payload)
             .send()
             .await?;
-        tracing::trace!("{} action response status: {}", action.name, res.status());
+        tracing::trace!(status = %res.status(), "Received action response");
         let text = res.text().await?;
         let mut reader = quick_xml::Reader::from_str(&text);
         let res = SoapMessage::<Result<ActionResponse<InArgumentPayload>, ActionError>>::read_xml(

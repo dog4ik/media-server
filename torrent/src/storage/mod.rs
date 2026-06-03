@@ -1,4 +1,4 @@
-use std::{io::SeekFrom, ops::Range, path::PathBuf, time::Instant};
+use std::{io::SeekFrom, ops::Range, path::PathBuf};
 
 use anyhow::Context;
 use bytes::{Bytes, BytesMut};
@@ -10,6 +10,7 @@ use tokio::{
     sync::mpsc,
 };
 use tokio_util::task::TaskTracker;
+use tracing::Instrument;
 
 use crate::{
     DownloadParams, Priority, bitfield::BitField, length_calculator::LengthCalculator,
@@ -211,6 +212,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
         self.piece_length_measurer.piece_length as u64
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(file_index = file_idx))]
     pub async fn enable_file(&mut self, file_idx: usize) {
         let file = &mut self.files[file_idx];
         file.is_enabled = true;
@@ -233,6 +235,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
 
     /// saves piece filling file with null bytes
     /// WARN: this will not validate piece hash
+    #[tracing::instrument(level = "debug", skip_all, fields(piece_index = piece_i))]
     pub async fn save_piece(&mut self, piece_i: usize, blocks: ReadyPiece) -> Result<()> {
         let piece_length = blocks.len() as u64;
         debug_assert_eq!(
@@ -293,6 +296,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
     }
 
     /// retrieve piece from preallocated file
+    #[tracing::instrument(level = "debug", skip(self), fields(piece_index = piece_i))]
     pub async fn retrieve_piece(&mut self, piece_i: usize) -> Result<Bytes> {
         if !self.bitfield.has(piece_i) {
             return Err(error::StorageError::MissingPiece);
@@ -344,7 +348,9 @@ pub async fn spawn(
     let mut hasher = Hasher::new(download_params.info.pieces.clone());
     let file_handles = FileHandles::new();
     let mut storage = TorrentStorage::new(file_handles, parts, download_params);
-    tracker.spawn(async move {
+    let worker_span = tracing::info_span!("storage", info_hash = %download_params.info.hex_hash());
+    tracker.spawn(
+        async move {
         loop {
             tokio::select! {
                 message = message_rx.recv() => match message {
@@ -386,9 +392,7 @@ pub async fn spawn(
                     let piece_i = result.piece_i;
                     if result.is_verified {
                         let is_old = storage.bitfield.has(piece_i);
-                        let start = Instant::now();
                         let save_result = storage.save_piece(piece_i, ReadyPiece(result.blocks)).await;
-                        tracing::trace!(took = ?start.elapsed(), "Saved piece {piece_i} on the disk");
                         match save_result {
                             Ok(_) => {
                                 // Stupid hack to avoid sending saved message when the file gets enabled.
@@ -411,7 +415,9 @@ pub async fn spawn(
             },
             }
         }
-    });
+        }
+        .instrument(worker_span),
+    );
     Ok(StorageHandle { message_tx })
 }
 

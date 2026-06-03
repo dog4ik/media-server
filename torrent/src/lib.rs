@@ -239,6 +239,7 @@ impl Client {
         Ok(storage.bitfield().to_owned())
     }
 
+    #[tracing::instrument(name = "resolve_magnet_link", skip_all, fields(info_hash = %hex::encode(link.hash())))]
     pub async fn resolve_magnet_link(&self, link: &MagnetLink) -> anyhow::Result<Info> {
         let info_hash = link.hash();
         let Some(ref tracker_list) = link.announce_list else {

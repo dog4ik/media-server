@@ -5,6 +5,7 @@ use axum::{
     routing::{get, post},
 };
 use axum_extra::headers::{self, HeaderMapExt};
+use tracing::Instrument;
 
 #[derive(Debug)]
 pub struct UpnpRouter<S> {
@@ -61,45 +62,55 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
         let scpd_path = format!("{base_path}/scpd.xml");
         let service = UpnpService::new(service);
 
-        let action_handler = |headers: HeaderMap, body: String| async move {
-            let mut header = headers
-                .get("soapaction")
-                .context("get soapaction header")?
-                .to_str()
-                .context("convert header to string")?;
-            if let Some(stripped) = header.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
-                header = stripped;
+        let action_handler = |headers: HeaderMap, body: String| {
+            let span = tracing::info_span!(
+                "soap_action",
+                service = %S::URN,
+                action = tracing::field::Empty,
+            );
+            async move {
+                let mut header = headers
+                    .get("soapaction")
+                    .context("get soapaction header")?
+                    .to_str()
+                    .context("convert header to string")?;
+                if let Some(stripped) = header.strip_prefix('"').and_then(|s| s.strip_suffix('"')) {
+                    header = stripped;
+                }
+                let (_urn, action_name) =
+                    header.split_once('#').context("split soapaction header")?;
+                tracing::Span::current().record("action", action_name);
+                tracing::info!("Action invoked");
+                let action: SoapMessage<ActionPayload<InArgumentPayload>> =
+                    SoapMessage::from_xml(body.as_bytes())?;
+                let action = action.into_inner();
+
+                if action.name() != action_name {
+                    tracing::warn!(
+                        "Inconsintence in soapaction header and action_payload: {} vs {}",
+                        action_name,
+                        action.name(),
+                    );
+                }
+                let expected_action = service.find_action(action_name)?;
+                let scanner = expected_action.input_scanner(action.arguments);
+
+                let out_arguments = service
+                    .s
+                    .control_handler(action_name, scanner)
+                    .await?
+                    .into_value_list();
+
+                let args = expected_action.map_out_variables(out_arguments);
+
+                let action_response = ActionResponse {
+                    service_urn: S::URN,
+                    action_name: action_name.to_string(),
+                    args,
+                };
+                Ok::<_, ActionError>(action_response)
             }
-            let (_urn, action_name) = header.split_once('#').context("split soapaction header")?;
-            tracing::info!("Action {action_name} invoked");
-            let action: SoapMessage<ActionPayload<InArgumentPayload>> =
-                SoapMessage::from_xml(body.as_bytes())?;
-            let action = action.into_inner();
-
-            if action.name() != action_name {
-                tracing::warn!(
-                    "Inconsintence in soapaction header and action_payload: {} vs {}",
-                    action_name,
-                    action.name(),
-                );
-            }
-            let expected_action = service.find_action(action_name)?;
-            let scanner = expected_action.input_scanner(action.arguments);
-
-            let out_arguments = service
-                .s
-                .control_handler(action_name, scanner)
-                .await?
-                .into_value_list();
-
-            let args = expected_action.map_out_variables(out_arguments);
-
-            let action_response = ActionResponse {
-                service_urn: S::URN,
-                action_name: action_name.to_string(),
-                args,
-            };
-            Ok::<_, ActionError>(action_response)
+            .instrument(span)
         };
         let scpd = S::service_description()
             .into_xml()

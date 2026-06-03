@@ -2604,6 +2604,7 @@ dependencies = [
  "dotenvy",
  "ffmpeg-next",
  "image",
+ "log",
  "lru",
  "media-intro",
  "notify",

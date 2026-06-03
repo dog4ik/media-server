@@ -68,6 +68,7 @@ impl SearchClient {
         Ok(response)
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     async fn fetch_xml(
         client: &reqwest::Client,
         url: impl reqwest::IntoUrl,
@@ -102,6 +103,7 @@ impl SearchClient {
         Ok(ScpdClient::new(service_scpd, control_url))
     }
 
+    #[tracing::instrument(name = "ssdp_search", level = "debug", skip_all, fields(service = %T::URN))]
     pub async fn search_for<T: ScpdService>(
         &self,
         options: SearchOptions,

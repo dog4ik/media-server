@@ -168,6 +168,7 @@ impl AppState {
             .cloned()
     }
 
+    #[tracing::instrument(skip(self, id), fields(video_id = id))]
     pub async fn remove_video(&self, id: i64) -> Result<(), AppError> {
         let source = self.get_source_by_id(id)?;
         source
@@ -184,6 +185,7 @@ impl AppState {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, id), fields(movie_id = id))]
     pub async fn delete_movie(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
@@ -206,6 +208,7 @@ impl AppState {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, id), fields(season_id = id))]
     pub async fn delete_season(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
@@ -228,6 +231,7 @@ impl AppState {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, id), fields(show_id = id))]
     pub async fn delete_show(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
@@ -253,6 +257,7 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
+    #[tracing::instrument(skip(self, id), fields(episode_id = id))]
     pub async fn delete_episode(&self, id: i64) -> Result<(), AppError> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
@@ -275,6 +280,7 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> Result<(), AppError> {
         let asset = VariantAsset::new(video_id, variant_id.to_string());
         asset.delete_file().await?;
@@ -289,6 +295,7 @@ WHERE seasons.show_id = ?",
     }
 
     /// Get subtitle track from video file without saving it. Takes some time to run ffmpeg
+    #[tracing::instrument(skip(self))]
     pub async fn pull_subtitle_from_video(
         &self,
         video_id: i64,
@@ -309,6 +316,7 @@ WHERE seasons.show_id = ?",
         Ok(subtitle)
     }
 
+    #[tracing::instrument(skip(self, payload))]
     pub async fn transcode_video(
         &self,
         video_id: i64,
@@ -365,6 +373,7 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn generate_previews(&self, video_id: i64) -> Result<(), AppError> {
         let source = self.get_source_by_id(video_id)?;
         let video_metadata = source.video.metadata().await?;
@@ -403,6 +412,7 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
         let AppState { db, library, .. } = self;
         let video_ids = sqlx::query!(
@@ -446,6 +456,7 @@ WHERE seasons.show_id = ?",
         Ok(())
     }
 
+    #[tracing::instrument(skip(self), fields(%task_id))]
     pub async fn reconciliate_library(&self, task_id: uuid::Uuid) -> Result<(), AppError> {
         self.partial_refresh().await;
         let progress = scan::scan_progress::ScanProgressEmitter::new(ProgressDispatcher::new(
@@ -462,6 +473,7 @@ WHERE seasons.show_id = ?",
         .await
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn partial_refresh(&self) {
         tracing::info!("Partially refreshing library");
         let mut videos = HashMap::new();

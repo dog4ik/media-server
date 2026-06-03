@@ -2,7 +2,6 @@ use std::{
     collections::HashMap,
     ffi::OsStr,
     path::{Path, PathBuf},
-    time::Instant,
 };
 
 use anyhow::Context;
@@ -74,6 +73,7 @@ pub fn is_format_supported(path: &impl AsRef<Path>) -> bool {
     !is_extra && supports_extension
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(folders = folders.len()))]
 pub async fn explore_show_dirs(
     folders: Vec<PathBuf>,
     db: &crate::db::Db,
@@ -82,7 +82,6 @@ pub async fn explore_show_dirs(
 ) {
     let videos = walk_show_dirs(folders);
     let mut tx = db.begin().await.expect("transaction to begin");
-    let start = Instant::now();
     for (video, identifier) in videos {
         let path = video.path();
         if exclude.iter().any(|p| p == path) {
@@ -101,9 +100,10 @@ pub async fn explore_show_dirs(
     }
 
     tx.commit().await.expect("if it fails, we are cooked");
-    tracing::debug!(took = ?start.elapsed(), "Finished video reconcilliation");
+    tracing::debug!("Finished show videos reconcilliation");
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(folders = folders.len()))]
 pub async fn explore_movie_dirs(
     folders: Vec<PathBuf>,
     db: &crate::db::Db,
@@ -221,6 +221,7 @@ pub struct Source {
 }
 
 impl Source {
+    #[tracing::instrument(level = "debug", skip_all, fields(path = %video.path().display()))]
     pub async fn from_video(
         video: Video,
         db: &mut crate::db::DbTransaction,
@@ -240,6 +241,7 @@ impl Source {
             variants: variants_videos,
         })
     }
+    #[tracing::instrument(level = "debug", skip(db), fields(path = %path.as_ref().display()))]
     pub async fn from_path(
         path: impl AsRef<Path>,
         db: &mut crate::db::DbTransaction,
@@ -325,6 +327,7 @@ impl Library {
         Self { videos }
     }
 
+    #[tracing::instrument(name = "library_init", skip_all, fields(show_dirs = show_dirs.len(), movie_dirs = movie_dirs.len()))]
     pub async fn init_from_folders(
         show_dirs: Vec<PathBuf>,
         movie_dirs: Vec<PathBuf>,

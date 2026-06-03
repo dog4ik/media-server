@@ -4,7 +4,7 @@
 //! videos through the show/movie scanners, flushes the resolved trees to the database, and
 //! saves the associated assets to disk.
 
-use std::{collections::HashSet, sync::Arc, sync::Mutex, time::Instant};
+use std::{collections::HashSet, sync::Arc, sync::Mutex};
 
 use anyhow::Context;
 use tokio::{sync::Semaphore, task::JoinSet};
@@ -48,8 +48,8 @@ impl LibraryReconciler {
         }
     }
 
+    #[tracing::instrument(name = "reconcile", skip_all)]
     pub async fn reconciliate(self) -> Result<(), AppError> {
-        let start = Instant::now();
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: language.0 };
 
@@ -120,7 +120,7 @@ impl LibraryReconciler {
         self.save_assets(max_asset_concurrency, assets_progress, tasks)
             .await;
         self.progress.finish_scan();
-        tracing::info!(took = ?start.elapsed(), "Finished library reconciliation");
+        tracing::info!("Finished library reconciliation");
         Ok(())
     }
 

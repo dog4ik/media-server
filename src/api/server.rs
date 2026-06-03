@@ -483,6 +483,7 @@ pub async fn previews(
     ),
     tag = "Videos",
 )]
+#[tracing::instrument(skip_all, fields(%video_id))]
 pub async fn watch(
     Path(video_id): Path<i64>,
     variant: Query<VariantQuery>,
@@ -523,6 +524,7 @@ pub async fn watch(
     ),
     tag = "Shows",
 )]
+#[tracing::instrument(skip_all, fields(%episode_id))]
 pub async fn watch_episode(
     Path(episode_id): Path<i64>,
     variant: Query<VariantQuery>,
@@ -554,6 +556,7 @@ pub async fn watch_episode(
     ),
     tag = "Movies",
 )]
+#[tracing::instrument(skip_all, fields(%movie_id))]
 pub async fn watch_movie(
     Path(movie_id): Path<i64>,
     variant: Query<VariantQuery>,
@@ -1142,6 +1145,7 @@ pub async fn get_episode(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all, fields(query = %search))]
 pub async fn search_torrent(
     Query(SearchQuery { search }): Query<SearchQuery>,
     Query(content_type): Query<OptionalContentTypeQuery>,
@@ -1240,6 +1244,7 @@ pub async fn get_trending_movies(
     ),
     tag = "Search",
 )]
+#[tracing::instrument(skip_all, fields(query = %query.search))]
 pub async fn search_content(
     Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
@@ -2165,6 +2170,7 @@ pub struct StartWatchSessionResponse {
     ),
     tag = "Watch",
 )]
+#[tracing::instrument(skip_all, fields(%video_id))]
 pub async fn start_direct_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
@@ -2204,6 +2210,7 @@ pub async fn start_direct_stream(
     ),
     tag = "Watch",
 )]
+#[tracing::instrument(skip_all, fields(%video_id))]
 pub async fn start_hls_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
@@ -2379,6 +2386,7 @@ pub async fn hls_init(
     ),
     tag = "Watch",
 )]
+#[tracing::instrument(level = "debug", skip(tasks), fields(%stream_id))]
 pub async fn hls_segment(
     Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
     State(tasks): State<&'static TaskResource>,

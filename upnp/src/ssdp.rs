@@ -107,6 +107,7 @@ impl SsdpListener {
         })
     }
 
+    #[tracing::instrument(name = "ssdp_listener", skip_all, fields(uuid = %self.uuid))]
     pub async fn listen(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         let default_announce = Announce {
             cache_control: CACHE_CONTROL,

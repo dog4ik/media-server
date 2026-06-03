@@ -773,6 +773,7 @@ impl ScpdClient<InternetGatewayClient> {
     /// This action creates a new port mapping or overwrites an existing mapping with the same internal client. If
     /// the [ExternalPort] and [PortMappingProtocol] pair is already mapped to another internal client, an error is
     /// returned.
+    #[tracing::instrument(level = "debug", skip_all, fields(external_port = external_port, internal_port = internal_port, ?proto))]
     pub async fn add_port_mapping(
         &self,
         external_addr: Option<Ipv4Addr>,
@@ -805,6 +806,7 @@ impl ScpdClient<InternetGatewayClient> {
     /// As each entry is deleted, the array is compacted,
     /// the evented variable [PortMappingNumberOfEntries] is decremented and the evented variable
     /// [SystemUpdateID] is incremented.
+    #[tracing::instrument(level = "debug", skip_all, fields(external_port = external_port, ?proto))]
     pub async fn delete_port_mapping(
         &self,
         proto: PortMappingProtocol,

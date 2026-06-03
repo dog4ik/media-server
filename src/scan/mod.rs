@@ -120,6 +120,7 @@ impl AssetTaskSource {
     }
 }
 
+#[tracing::instrument(level = "debug", skip_all, fields(asset = %asset.path().display()))]
 async fn save_asset_from_frame(asset: impl FileAsset, source: &Source) -> anyhow::Result<()> {
     use tokio::fs;
     let asset_path = asset.path();
@@ -129,6 +130,7 @@ async fn save_asset_from_frame(asset: impl FileAsset, source: &Source) -> anyhow
     Ok(())
 }
 
+#[tracing::instrument(level = "debug", skip(asset), fields(asset = %asset.path().display()))]
 async fn save_asset_from_url(url: reqwest::Url, asset: impl FileAsset) -> anyhow::Result<()> {
     use std::io::{Error, ErrorKind};
     use tokio_stream::StreamExt;
@@ -143,6 +145,7 @@ async fn save_asset_from_url(url: reqwest::Url, asset: impl FileAsset) -> anyhow
     Ok(())
 }
 
+#[tracing::instrument(level = "debug", skip(asset, source), fields(asset = %asset.path().display()))]
 async fn save_asset_from_url_with_frame_fallback(
     url: reqwest::Url,
     asset: impl FileAsset,

@@ -1,4 +1,5 @@
 use tokio::sync::mpsc;
+use tracing::Instrument;
 
 use crate::{
     ban_list::BanList,
@@ -45,7 +46,10 @@ impl<T: ProgressConsumer> Session<T> {
             progress_consumer,
             peer_connections: 0,
         };
-        tokio::spawn(async move { session.work(rx).await });
+        tokio::spawn(
+            async move { session.work(rx).await }
+                .instrument(tracing::info_span!("torrent_session")),
+        );
         SessionHandle::new(tx)
     }
 

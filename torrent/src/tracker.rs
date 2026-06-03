@@ -1,3 +1,5 @@
+use tracing::Instrument;
+
 use std::{
     collections::HashMap,
     net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4},
@@ -420,6 +422,7 @@ impl Tracker {
         (handle, tracker)
     }
 
+    #[tracing::instrument(name = "tracker", skip_all, fields(url = %self.url, info_hash = %hex::encode(self.announce_payload.info_hash)))]
     pub async fn work(&mut self, cancellation_token: CancellationToken) -> anyhow::Result<()> {
         while let Some(command) = self.commands.recv().await {
             match command {
@@ -443,7 +446,7 @@ impl Tracker {
                             self.status = TrackerStatus::Working;
                         }
                         Some(Ok(Err(e))) => {
-                            tracing::warn!(url = %self.url, "Announce request failed: {e}");
+                            tracing::warn!("Announce request failed: {e}");
                             self.status = TrackerStatus::Error(e.to_string());
                             self.send_response(TrackerResponse::Failure {
                                 reason: e.to_string(),
@@ -451,7 +454,7 @@ impl Tracker {
                             .await?;
                         }
                         Some(Err(_)) => {
-                            tracing::warn!(url = %self.url, "Announce request timed out");
+                            tracing::warn!("Announce request timed out");
                             self.status = TrackerStatus::Error("Time out".to_owned());
                             self.send_response(TrackerResponse::Failure {
                                 reason: "Tracker announce timed out".to_string(),
@@ -468,23 +471,22 @@ impl Tracker {
         self.quit().await
     }
 
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn announce(&mut self) -> anyhow::Result<()> {
-        tracing::debug!("Announcing tracker {}", self.url);
+        tracing::debug!("Announcing tracker");
         let announce_result = match &self.tracker_type {
             TrackerType::Http => self.announce_payload.announce_http().await,
             TrackerType::Udp(chan) => {
                 let conn_id = match &mut self.udp_connection_state {
                     Some(state) if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION => {
-                        tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
+                        tracing::trace!("Refreshing upd tracker connection_id");
                         let addr = lookup_host(&self.url).await?;
                         state.set_id(chan.connect(addr).await?);
                         state.id()
                     }
                     Some(state) => state.id(),
                     None => {
-                        tracing::debug!(
-                            url = %self.url, "Trying to get connection id from udp tracker",
-                        );
+                        tracing::debug!("Trying to get connection id from udp tracker");
                         let addr = lookup_host(&self.url).await?;
                         let id = chan.connect(addr).await?;
                         self.udp_connection_state = Some(UdpConnectionState::new(id));
@@ -510,17 +512,14 @@ impl Tracker {
                             Some(state)
                                 if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION =>
                             {
-                                tracing::trace!(url = %self.url, "Refreshing upd tracker connection_id");
+                                tracing::trace!("Refreshing upd tracker connection_id");
                                 let addr = lookup_host(&self.url).await?;
                                 state.set_id(chan.connect(addr).await?);
                                 state.id()
                             }
                             Some(state) => state.id,
                             None => {
-                                tracing::debug!(
-                                    "Trying to get connection id from udp tracker {}",
-                                    self.url
-                                );
+                                tracing::debug!("Trying to get connection id from udp tracker");
                                 let addr = lookup_host(&self.url).await?;
                                 let id = chan.connect(addr).await?;
                                 self.udp_connection_state = Some(UdpConnectionState::new(id));
@@ -641,7 +640,10 @@ impl UdpTrackerWorker {
 
     pub async fn spawn(self) -> anyhow::Result<UdpTrackerChannel> {
         let (data_tx, data_rx) = mpsc::channel(100);
-        tokio::spawn(self.udp_tracker_worker(data_rx));
+        tokio::spawn(
+            self.udp_tracker_worker(data_rx)
+                .instrument(tracing::info_span!("udp_tracker_worker")),
+        );
         let channel = UdpTrackerChannel::new(data_tx);
         Ok(channel)
     }

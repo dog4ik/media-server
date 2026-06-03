@@ -52,6 +52,7 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
 }
 
 impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
+    #[tracing::instrument(level = "debug", skip_all, fields(%object_id, %browse_flag, start_index = start_index, requested_count = requested_count))]
     async fn browse(
         &self,
         object_id: String,
@@ -62,15 +63,7 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         sort_criteria: String,
     ) -> anyhow::Result<(String, u32, u32, u32)> {
         let update_id = self.handler.system_update_id().await;
-        tracing::debug!(
-            object_id,
-            %browse_flag,
-            %filter,
-            start_index,
-            requested_count,
-            sort_criteria,
-            "Invoking browse action"
-        );
+        tracing::debug!(%filter, sort_criteria, "Invoking browse action");
         let mut result = match browse_flag {
             BrowseFlag::BrowseDirectChildren => {
                 self.handler

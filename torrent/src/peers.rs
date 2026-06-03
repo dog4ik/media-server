@@ -192,6 +192,7 @@ pub struct Peer {
 
 impl Peer {
     /// Connect to peer and perform the handshake
+    #[tracing::instrument(level = "debug", skip(socket), fields(info_hash = %hex::encode(info_hash)))]
     pub async fn new(mut socket: TcpStream, info_hash: [u8; 20]) -> anyhow::Result<Self> {
         let my_handshake = HandShake::new(info_hash).as_bytes();
         let peer_ip = socket.peer_addr().context("get peer ip addr")?;
@@ -357,6 +358,7 @@ impl Peer {
         })
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(%ip, info_hash = %hex::encode(info_hash)))]
     pub async fn new_from_ip(ip: SocketAddr, info_hash: [u8; 20]) -> anyhow::Result<Self> {
         let socket = TcpStream::connect(ip).await?;
         let peer = Self::new(socket, info_hash).await?;
@@ -422,6 +424,7 @@ impl Peer {
         Info::from_bytes(&ut_metadata.as_bytes())
     }
 
+    #[tracing::instrument(name = "peer", skip_all, fields(peer_uuid = %self.uuid, peer_ip = %self.peer_ip, info_hash = %hex::encode(self.handshake.info_hash)))]
     pub async fn download(
         mut self,
         ipc: PeerIPC,
@@ -456,21 +459,21 @@ impl Peer {
                         match self.in_flight.checked_sub(1) {
                             Some(v) => self.in_flight = v,
                             None => {
-                                tracing::warn!(ip = %self.ip(), %piece, "Received unexpected block");
+                                tracing::warn!(%piece, "Received unexpected block");
                             },
                         };
                     }
                     if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
-                        tracing::error!(ip = %self.ip(), "Peer -> scheduler channel is closed");
+                        tracing::error!("Peer -> scheduler channel is closed");
                         break Err(PeerError::timeout("Channel is closed or overflowed"));
                     };
                 },
                 _ = cancellation_token.cancelled() => {
-                    tracing::debug!(ip = %self.ip(), "Peer quit using cancellation token");
+                    tracing::debug!("Peer quit using cancellation token");
                     break Ok(());
                 }
                 else => {
-                    tracing::debug!(ip = %self.ip(), "Peer tcp stream closed");
+                    tracing::debug!("Peer tcp stream closed");
                     break Ok(());
                 }
             };

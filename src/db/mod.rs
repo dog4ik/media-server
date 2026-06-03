@@ -2,8 +2,8 @@ use std::{ops::Deref, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
-    Acquire, Error, Execute, FromRow, Pool, QueryBuilder, Sqlite, SqliteConnection, SqlitePool,
-    Transaction,
+    Acquire, ConnectOptions, Error, Execute, FromRow, Pool, QueryBuilder, Sqlite, SqliteConnection,
+    SqlitePool, Transaction,
     migrate::{MigrateError, Migrator},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
 };
@@ -1285,11 +1285,19 @@ impl Deref for Db {
 static MIGRATOR: Migrator = sqlx::migrate!();
 
 impl Db {
+    #[tracing::instrument(level = "debug", skip_all)]
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, sqlx::Error> {
         let url = path_to_url(path.as_ref());
+        // sqlx emits a tracing event (target `sqlx::query`) per executed statement
+        // carrying the statement summary, rows affected/returned and elapsed time.
+        // These events attach to whatever span is currently active, so they nest
+        // under the semantic spans created at the call sites. Surface them with
+        // e.g. `RUST_LOG=...,sqlx::query=debug`; slow queries are logged at warn.
         let options = SqliteConnectOptions::from_str(&url)
             .unwrap()
-            .busy_timeout(Duration::from_secs(10));
+            .busy_timeout(Duration::from_secs(10))
+            .log_statements(log::LevelFilter::Debug)
+            .log_slow_statements(log::LevelFilter::Warn, Duration::from_millis(300));
         let pool = SqlitePoolOptions::new()
             .max_connections(30)
             .connect_with(options.clone())

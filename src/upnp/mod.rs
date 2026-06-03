@@ -89,6 +89,7 @@ async fn run_retry_ssdp(
 }
 
 impl Upnp {
+    #[tracing::instrument(name = "upnp_init", skip_all)]
     pub async fn init(app_state: AppState) -> Self {
         let os = &config::APP_RESOURCES.os;
         let os_version = &config::APP_RESOURCES.os_version;

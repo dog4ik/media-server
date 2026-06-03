@@ -95,6 +95,7 @@ impl MetadataProvidersStack {
         self.order_torrent_indexes(torrent_order.0);
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn search_movie(&self, query: &str) -> anyhow::Result<Vec<MovieMetadata>> {
         let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
         let lang: config::MetadataLanguage = config::CONFIG.get_value();
@@ -116,6 +117,7 @@ impl MetadataProvidersStack {
         Ok(out)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn search_show(&self, query: &str) -> anyhow::Result<Vec<ShowMetadata>> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
@@ -137,6 +139,7 @@ impl MetadataProvidersStack {
         Ok(out)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn multi_search(&self, query: &str) -> anyhow::Result<Vec<MetadataSearchResult>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
         let mut out = Vec::with_capacity(discover_providers.len());
@@ -158,6 +161,7 @@ impl MetadataProvidersStack {
         Ok(out)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_movie(
         &self,
         movie_id: &str,
@@ -175,6 +179,7 @@ impl MetadataProvidersStack {
         provider.movie(movie_id, fetch_params).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_show(
         &self,
         show_id: &str,
@@ -190,6 +195,7 @@ impl MetadataProvidersStack {
         provider.show(show_id, fetch_params).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_season(
         &self,
         show_id: &str,
@@ -206,6 +212,7 @@ impl MetadataProvidersStack {
         provider.season(show_id, season, fetch_params).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_episode(
         &self,
         show_id: &str,
@@ -225,6 +232,7 @@ impl MetadataProvidersStack {
             .await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_external_ids(
         &self,
         id: &str,
@@ -239,6 +247,7 @@ impl MetadataProvidersStack {
         provider.external_ids(id, content_type).await
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     pub async fn get_torrents(
         &self,
         query: &str,

@@ -51,6 +51,7 @@ base64 = "0.22.1"
 bytes = "1.11.1"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
+log = "0.4"
 notify = { version = "8.2.0", default-features = false, features = ["macos_kqueue"] }
 serde_json = "1.0.149"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }

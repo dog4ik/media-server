@@ -188,6 +188,7 @@ pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all, fields(%info_hash))]
 pub async fn set_files_priority(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
@@ -223,6 +224,7 @@ pub async fn set_files_priority(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all)]
 pub async fn open_torrent(
     State(AppState {
         providers_stack,
@@ -364,6 +366,7 @@ pub async fn open_torrent_file(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all)]
 pub async fn resolve_magnet_link(
     State(app_state): State<AppState>,
     Query(payload): Query<ResolveMagnetLinkPayload>,
@@ -424,6 +427,7 @@ pub async fn index_magnet_link(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all, fields(%info_hash))]
 pub async fn torrent_state(
     State(client): State<&'static TorrentClient>,
     Path(info_hash): Path<InfoHash>,
@@ -474,6 +478,7 @@ pub async fn updates(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all, fields(%info_hash))]
 pub async fn validate_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
@@ -535,6 +540,7 @@ pub async fn batch_action(
     ),
     tag = "Torrent",
 )]
+#[tracing::instrument(skip_all, fields(%info_hash))]
 pub async fn delete_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,

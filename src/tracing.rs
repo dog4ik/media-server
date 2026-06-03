@@ -175,6 +175,9 @@ impl<S: Subscriber> Layer<S> for PublicTracerLayer {
         _ctx: tracing_subscriber::layer::Context<'_, S>,
     ) -> bool {
         let target = metadata.target();
+        // These targets are excluded from the public SSE stream only (too noisy
+        // for the UI). They still reach the fmt + file layers when enabled via
+        // RUST_LOG, e.g. `sqlx::query=debug` for per-query timing.
         let exclude_patterns = ["hyper", "mio", "notify", "sqlx", "reqwest", "tokio_util"];
         !exclude_patterns
             .iter()
