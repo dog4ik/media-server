@@ -44,22 +44,48 @@ fn path_to_url(path: &Path) -> String {
     format!("sqlite://{}", path)
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ContentFetchParams {
     pub take: Option<i64>,
     pub cursor: Option<String>,
     pub search: Option<String>,
     /// List of actor id's
     pub actors: Option<Vec<i64>>,
+    /// Only include content that has at least one local video file.
+    pub only_local: bool,
+}
+
+impl Default for ContentFetchParams {
+    fn default() -> Self {
+        Self {
+            take: None,
+            cursor: None,
+            search: None,
+            actors: None,
+            only_local: true,
+        }
+    }
 }
 
 impl ContentFetchParams {
     pub fn build<'a>(&'a self, content_type: DbContentType, builder: &mut DbQueryBuilder<'a>) {
         let content_table = content_type.table_name();
+
+        if self.actors.is_some() {
+            builder.push(" join roles on roles.metadata_id = metadata.id ");
+        }
+
+        // Tracks whether the `where` keyword has already been emitted so that
+        // every subsequent condition is chained with `and`.
+        let mut has_where = false;
+        let mut push_connector = |builder: &mut DbQueryBuilder<'a>| {
+            builder.push(if has_where { " and " } else { " where " });
+            has_where = true;
+        };
+
         if let Some(actors) = &self.actors {
-            builder
-                .push(" join roles on roles.metadata_id = metadata.id ")
-                .push("where roles.actor_id in (");
+            push_connector(builder);
+            builder.push("roles.actor_id in (");
             let mut separated = builder.separated(", ");
             for actor in actors {
                 separated.push_bind(actor);
@@ -68,30 +94,27 @@ impl ContentFetchParams {
         }
 
         if let Some(cursor) = &self.cursor {
-            if self.actors.is_none() {
-                builder.push(" where ");
-            } else {
-                builder.push(" and ");
-            }
+            push_connector(builder);
             builder
                 .push(format_args!("{content_table}.id < "))
                 .push_bind(cursor);
         }
 
         if let Some(search) = &self.search {
-            if self.actors.is_none() && self.cursor.is_none() {
-                builder.push(" where ");
-            } else {
-                builder.push(" and ");
-            }
+            push_connector(builder);
             builder
                 .push("metadata.title like ")
                 .push_bind(format!("%{search}%"));
         }
 
+        if self.only_local {
+            push_connector(builder);
+            builder.push(content_type.local_exists_clause());
+        }
+
         builder
             .push(&format_args!(" order by {content_table}.id desc limit "))
-            .push_bind(self.take.unwrap_or(50));
+            .push_bind(self.take.unwrap_or(DEFAULT_LIMIT));
     }
 }
 
@@ -450,56 +473,16 @@ where
         }
     }
 
-    fn remove_video(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+    fn remove_video(
+        self,
+        id: i64,
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<i64>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing video");
-            let remove_result =
-                sqlx::query!("DELETE FROM videos WHERE id = ? RETURNING metadata_id;", id)
-                    .fetch_one(&mut *conn)
-                    .await?;
-
-            let Some(metadata_id) = remove_result.metadata_id else {
-                return Ok(());
-            };
-
-            if let Some(episode_row) = sqlx::query!(
-                "SELECT id, season_id FROM episodes WHERE metadata_id = ?",
-                metadata_id
-            )
-            .fetch_optional(&mut *conn)
-            .await?
-            {
-                let sibling_count = sqlx::query_scalar!(
-                    "SELECT COUNT(*) FROM videos WHERE metadata_id = ?",
-                    metadata_id
-                )
+            sqlx::query_scalar!("DELETE FROM videos WHERE id = ? RETURNING metadata_id;", id)
                 .fetch_one(&mut *conn)
-                .await?;
-                if sibling_count == 0 {
-                    conn.remove_episode(episode_row.id).await?;
-                }
-                return Ok(());
-            }
-
-            if let Some(movie_row) =
-                sqlx::query!("SELECT id FROM movies WHERE metadata_id = ?", metadata_id)
-                    .fetch_optional(&mut *conn)
-                    .await?
-            {
-                let sibling_count = sqlx::query_scalar!(
-                    "SELECT COUNT(*) FROM videos WHERE metadata_id = ?",
-                    metadata_id
-                )
-                .fetch_one(&mut *conn)
-                .await?;
-                if sibling_count == 0 {
-                    conn.remove_movie(movie_row.id).await?;
-                }
-                return Ok(());
-            }
-
-            Ok(())
+                .await
         }
     }
 
@@ -1369,6 +1352,31 @@ impl DbContentType {
             DbContentType::Show => "shows",
             DbContentType::Season => "seasons",
             DbContentType::Episode => "episodes",
+        }
+    }
+
+    /// SQL predicate that is true when the content row has at least one local
+    /// video file associated with it. Used to keep watchlist/download
+    /// metadata out of the local library listings.
+    fn local_exists_clause(&self) -> &'static str {
+        match self {
+            DbContentType::Movie => {
+                "exists (select 1 from videos where videos.metadata_id = movies.metadata_id)"
+            }
+            DbContentType::Show => {
+                "exists (select 1 from episodes
+                join seasons on episodes.season_id = seasons.id
+                join videos on videos.metadata_id = episodes.metadata_id
+                where seasons.show_id = shows.id)"
+            }
+            DbContentType::Season => {
+                "exists (select 1 from episodes
+                join videos on videos.metadata_id = episodes.metadata_id
+                where episodes.season_id = seasons.id)"
+            }
+            DbContentType::Episode => {
+                "exists (select 1 from videos where videos.metadata_id = episodes.metadata_id)"
+            }
         }
     }
 }

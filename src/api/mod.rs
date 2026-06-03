@@ -236,6 +236,8 @@ pub struct ContentFilterQuery {
     pub search: Option<String>,
     pub take: Option<i64>,
     pub cursor: Option<String>,
+    /// Only include content with at least one local video file. Defaults to `true`.
+    pub only_local: Option<bool>,
 }
 
 impl From<ContentFilterQuery> for db::ContentFetchParams {
@@ -245,6 +247,7 @@ impl From<ContentFilterQuery> for db::ContentFetchParams {
             cursor: filter.cursor,
             search: filter.search,
             actors: (!filter.actors.is_empty()).then_some(filter.actors),
+            only_local: filter.only_local.unwrap_or(true),
         }
     }
 }
