@@ -117,27 +117,35 @@ mod tests {
 
     use crate::library::{identification::Parser, movie::MovieIdent};
 
-    #[test]
-    fn identify_movies() {
-        let tests = [
-            (
-                "Inception.2010.1080p.BluRay.x264.YIFY",
-                MovieIdent {
-                    title: "Inception".into(),
-                    year: Some(2010),
-                },
-            ),
-            (
-                "The.Matrix.1999.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ",
-                MovieIdent {
-                    title: "The Matrix".into(),
-                    year: Some(1999),
-                },
-            ),
-        ];
-        for (input, expected) in tests {
-            let identifier = Parser::parse_filename(Path::new(input), MovieIdent::default());
-            assert_eq!(identifier, expected);
-        }
+    macro_rules! movie_tests {
+        ($($name:ident: ($input:expr, $title:expr, $year:expr);)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let id = Parser::parse_filename(Path::new($input), MovieIdent::default());
+                    let expected = MovieIdent { title: $title.into(), year: $year };
+                    assert_eq!(expected, id, "mismatch for {:?}", $input);
+                }
+            )*
+        };
+    }
+
+    movie_tests! {
+        inception_2010: ("Inception.2010.1080p.BluRay.x264.YIFY", "Inception", Some(2010));
+        the_matrix_1999: ("The.Matrix.1999.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ", "The Matrix", Some(1999));
+
+        lib_blade_runner_2049: ("Blade.Runner.2049.2017.2160p.UHD.BluRay.x265.10bit.HDR.TrueHD.7.1.Atmos-TERMiNAL.mp4", "Blade Runner 2049", Some(2017));
+        // Digit embedded inside a title word (`Se7en`).
+        lib_se7en: ("Se7en.1995.REMASTERED.1080p.BluRay.x264-AMIABLE.mp4", "Se7en", Some(1995));
+        // Title starts with a number.
+        lib_12_angry_men: ("12 Angry Men (1957)/12.Angry.Men.1957.1080p.BluRay.x264-CtrlHD.mp4", "12 Angry Men", Some(1957));
+        // Hyphenated title (`Spider-Man`, `Spider-Verse`).
+        lib_spider_man: ("Spider-Man Into the Spider-Verse (2018)/Spider-Man.Into.the.Spider-Verse.2018.2160p.UHD.BluRay.x265.10bit.HDR.DTS-HD.MA.5.1-SWTYBLZ.mp4", "Spider Man Into the Spider Verse", Some(2018));
+        // Filename title (romaji) differs from the directory title.
+        lib_kimi_no_na_wa: ("Your Name (2016)/Kimi.no.Na.wa.2016.1080p.BluRay.x264.DTS-WiKi.mp4", "Kimi no Na wa", Some(2016));
+        // Long multi-part title with an `EXTENDED` edition tag.
+        lib_lotr_extended: ("The.Lord.of.the.Rings.The.Fellowship.of.the.Ring.2001.EXTENDED.2160p.UHD.BluRay.x265-BOREDOR.mp4", "The Lord of the Rings The Fellowship of the Ring", Some(2001));
+        // Newer codec/audio tags (`AV1`, `OPUS`) and capitalised `1080P`.
+        lib_resident_evil_av1: ("Resident.Evil.Vendetta.2017.Bluray.1080P.AV1.OPUS.5.1-DECK.mkv", "Resident Evil Vendetta", Some(2017));
     }
 }

@@ -286,374 +286,243 @@ mod tests {
 
     use crate::library::{identification::Parser, show::ShowIdent};
 
+    macro_rules! episode_tests {
+        ($($name:ident: ($input:expr, $title:expr, $season:expr, $episode:expr);)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let id = Parser::parse_filename(Path::new($input), ShowIdent::default());
+                    assert_eq!($title, id.title, "title mismatch for {:?}: {:?}", $input, id);
+                    assert_eq!($season, id.season, "season mismatch for {:?}: {:?}", $input, id);
+                    assert_eq!($episode, id.episode, "episode mismatch for {:?}: {:?}", $input, id);
+                }
+            )*
+        };
+    }
+
+    macro_rules! title_tests {
+        ($($name:ident: ($input:expr, $title:expr);)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let id = Parser::parse_filename(Path::new($input), ShowIdent::default());
+                    assert_eq!($title, id.title, "title mismatch for {:?}: {:?}", $input, id);
+                }
+            )*
+        };
+    }
+
+    macro_rules! season_tests {
+        ($($name:ident: ($input:expr, $season:expr);)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let id = Parser::parse_filename(Path::new($input), ShowIdent::default());
+                    assert_eq!($season, id.season, "season mismatch for {:?}: {:?}", $input, id);
+                }
+            )*
+        };
+    }
+
+    macro_rules! single_episode_tests {
+        ($($name:ident: ($input:expr, $episode:expr);)*) => {
+            $(
+                #[test]
+                fn $name() {
+                    let id = Parser::parse_filename(Path::new($input), ShowIdent::default());
+                    assert_eq!($episode, id.episode, "episode mismatch for {:?}: {:?}", $input, id);
+                }
+            )*
+        };
+    }
+
     // Jellyfin tests
-    #[test]
-    fn simple_episodes_tests() {
-        fn test_simple_episode(
-            (input, show_name, season, episode): (&str, &str, Option<u16>, Option<u16>),
-        ) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(show_name, identifier.title);
-            assert_eq!(season, identifier.season);
-            assert_eq!(episode, identifier.episode);
-        }
-        let tests = [
-            ("/server/anything_s01e02.mp4", "anything", Some(1), Some(2)),
-            ("/server/anything_s1e2.mp4", "anything", Some(1), Some(2)),
-            ("/server/anything_s01.e02.mp4", "anything", Some(1), Some(2)),
-            // This one is supported but blocks `Season 2/One piece 1001`.
-            ("/server/anything_102.mp4", "anything", Some(1), Some(2)),
-            ("/server/anything_1x02.mp4", "anything", Some(1), Some(2)),
-            (
-                "/server/The Walking Dead 4x01.mp4",
-                "The Walking Dead",
-                Some(4),
-                Some(1),
-            ),
-            (
-                "/server/the_simpsons-s02e01_18536.mp4",
-                "the simpsons",
-                Some(2),
-                Some(1),
-            ),
-            ("/server/Temp/S01E02 foo.mp4", "Temp", Some(1), Some(2)),
-            ("Series/4x12 - The Woman.mp4", "Series", Some(4), Some(12)),
-            // Current implementation thinks '.' is separator so resulting filename does not
-            // contain it
-            // ("Series/LA X, Pt. 1_s06e32.mp4", "LA X, Pt. 1", Some(6), Some(32)),
-            (
-                "[Baz-BarF,oo - [1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv",
-                "Foo",
-                None,
-                Some(5),
-            ),
-            (
-                "/Foo/The.Series.Name.S01E04.WEBRip.x264-Baz[Bar/,the.series.name.s01e04.webrip.x264-Baz[Bar].mkv",
-                "the series name",
-                Some(1),
-                Some(4),
-            ),
-            (
-                "Love.Death.and.Robots.S01.1080p.NF.WEB-DL.DDP5.1.x264-NTG/Love.Death.and.Robots.S01E01.Sonnies.Edge.1080p.NF.WEB-DL.DDP5.1.x264-NTG.mkv",
-                "Love Death and Robots",
-                Some(1),
-                Some(1),
-            ),
-            // We cannot know if text after explicit separator is the continuation of show name
-            // ("[YuiSubs ,Tensura Nikki - Tensei Shitara Slime Datta Ken/[YuiSubs] Tensura Nikki - Tensei Shitara Slime Datta Ken - 12 (NVENC H.265 1080p).mkv", "Tensura Nikki Tensei Shitara Slime Datta Ken", None, Some(12)),
-            (
-                "[Baz-BarF,oo - 01 - 12[1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv",
-                "Foo",
-                None,
-                Some(5),
-            ),
-            ("Series/4-12 - The Woman.mp4", "Series", Some(4), Some(12)),
-        ];
-        for test in tests {
-            test_simple_episode(test);
-        }
+    episode_tests! {
+        simple_s01e02: ("/server/anything_s01e02.mp4", "anything", Some(1), Some(2));
+        simple_s1e2: ("/server/anything_s1e2.mp4", "anything", Some(1), Some(2));
+        simple_s01_dot_e02: ("/server/anything_s01.e02.mp4", "anything", Some(1), Some(2));
+        // This one is supported but blocks `Season 2/One piece 1001`.
+        simple_102: ("/server/anything_102.mp4", "anything", Some(1), Some(2));
+        simple_1x02: ("/server/anything_1x02.mp4", "anything", Some(1), Some(2));
+        simple_walking_dead_4x01: ("/server/The Walking Dead 4x01.mp4", "The Walking Dead", Some(4), Some(1));
+        simple_simpsons_s02e01: ("/server/the_simpsons-s02e01_18536.mp4", "the simpsons", Some(2), Some(1));
+        simple_temp_s01e02: ("/server/Temp/S01E02 foo.mp4", "Temp", Some(1), Some(2));
+        simple_series_4x12: ("Series/4x12 - The Woman.mp4", "Series", Some(4), Some(12));
+        // Current implementation thinks '.' is separator so resulting filename does not
+        // contain it
+        // simple_la_x: ("Series/LA X, Pt. 1_s06e32.mp4", "LA X, Pt. 1", Some(6), Some(32));
+        simple_baz_bar_foo_05: ("[Baz-BarF,oo - [1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", None, Some(5));
+        simple_series_name_s01e04: ("/Foo/The.Series.Name.S01E04.WEBRip.x264-Baz[Bar/,the.series.name.s01e04.webrip.x264-Baz[Bar].mkv", "the series name", Some(1), Some(4));
+        simple_love_death_robots_s01e01: ("Love.Death.and.Robots.S01.1080p.NF.WEB-DL.DDP5.1.x264-NTG/Love.Death.and.Robots.S01E01.Sonnies.Edge.1080p.NF.WEB-DL.DDP5.1.x264-NTG.mkv", "Love Death and Robots", Some(1), Some(1));
+        // We cannot know if text after explicit separator is the continuation of show name
+        // simple_tensura: ("[YuiSubs ,Tensura Nikki - Tensei Shitara Slime Datta Ken/[YuiSubs] Tensura Nikki - Tensei Shitara Slime Datta Ken - 12 (NVENC H.265 1080p).mkv", "Tensura Nikki Tensei Shitara Slime Datta Ken", None, Some(12));
+        simple_baz_bar_foo_05_alt: ("[Baz-BarF,oo - 01 - 12[1080p][Multiple Subtitle]/[Baz-Bar] Foo - 05 [1080p][Multiple Subtitle].mkv", "Foo", None, Some(5));
+        simple_series_4_12: ("Series/4-12 - The Woman.mp4", "Series", Some(4), Some(12));
     }
 
-    #[test]
-    fn show_resolver_test() {
-        fn test_show_resolver((input, expected): (&str, &str)) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(expected, identifier.title, "{:?}", identifier);
-        }
-        let tests = [
-            ("The.Show.S01", "The Show"),
-            ("The.Show.S01.COMPLETE", "The Show"),
-            // ("S.H.O.W.S01", "S.H.O.W"),
-            // ("The.Show.P.I.S01", "The Show P.I"),
-            ("The_Show_Season_1", "The Show"),
-            ("/something/The_Show/Season 10", "The Show"),
-            ("The Show", "The Show"),
-            ("/some/path/The Show", "The Show"),
-            ("/some/path/The Show s02e10 720p hdtv", "The Show"),
-            (
-                "/some/path/The Show s02e10 the episode 720p hdtv",
-                "The Show",
-            ),
-        ];
-        for test in tests {
-            test_show_resolver(test);
-        }
+    title_tests! {
+        resolver_show_s01: ("The.Show.S01", "The Show");
+        resolver_show_s01_complete: ("The.Show.S01.COMPLETE", "The Show");
+        // resolver_show_acronym: ("S.H.O.W.S01", "S.H.O.W");
+        // resolver_show_pi: ("The.Show.P.I.S01", "The Show P.I");
+        resolver_show_season_1: ("The_Show_Season_1", "The Show");
+        resolver_show_season_10: ("/something/The_Show/Season 10", "The Show");
+        resolver_show_plain: ("The Show", "The Show");
+        resolver_show_path: ("/some/path/The Show", "The Show");
+        resolver_show_s02e10: ("/some/path/The Show s02e10 720p hdtv", "The Show");
+        resolver_show_s02e10_episode_title: ("/some/path/The Show s02e10 the episode 720p hdtv", "The Show");
     }
 
-    #[test]
-    fn season_path_test() {
-        fn test_season_path((input, expected): (&str, Option<u16>)) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(expected, identifier.season, "{:?}", identifier);
-        }
-
-        let tests = [
-            ("/Drive/Season 1", Some(1)),
-            ("/Drive/s1", Some(1)),
-            ("/Drive/S1", Some(1)),
-            ("/Drive/Season 2", Some(2)),
-            ("/Drive/Season 02", Some(2)),
-            ("/Drive/Seinfeld/S02", Some(2)),
-            // ("/Drive/Seinfeld/2", Some(2)),
-            ("/Drive/Seinfeld - S02", Some(2)),
-            // ("/Drive/Season 2009", Some(2009)),
-            // ("/Drive/Season1", Some(1)),
-            (
-                "The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH",
-                Some(4),
-            ),
-            ("/Drive/Season 7 (2016)", Some(7)),
-            // ("/Drive/Staffel 7 (2016)", Some(7)),
-            ("/Drive/Season (8)", None),
-            // ("/Drive/3.Staffel", Some(3)),
-            // ("/Drive/s06e05", None),
-            (
-                "/Drive/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv",
-                None,
-            ),
-            ("/Drive/extras", None),
-            ("/Drive/specials", None),
-        ];
-        for test in tests {
-            test_season_path(test);
-        }
+    season_tests! {
+        season_path_season_1: ("/Drive/Season 1", Some(1));
+        season_path_s1: ("/Drive/s1", Some(1));
+        season_path_s1_upper: ("/Drive/S1", Some(1));
+        season_path_season_2: ("/Drive/Season 2", Some(2));
+        season_path_season_02: ("/Drive/Season 02", Some(2));
+        season_path_seinfeld_s02: ("/Drive/Seinfeld/S02", Some(2));
+        // season_path_seinfeld_bare: ("/Drive/Seinfeld/2", Some(2));
+        season_path_seinfeld_dash_s02: ("/Drive/Seinfeld - S02", Some(2));
+        // season_path_season_2009: ("/Drive/Season 2009", Some(2009));
+        // season_path_season1_joined: ("/Drive/Season1", Some(1));
+        season_path_wonder_years_s04: ("The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH", Some(4));
+        season_path_season_7_year: ("/Drive/Season 7 (2016)", Some(7));
+        // season_path_staffel_7: ("/Drive/Staffel 7 (2016)", Some(7));
+        season_path_season_paren_8: ("/Drive/Season (8)", None);
+        // season_path_staffel_3: ("/Drive/3.Staffel", Some(3));
+        // season_path_s06e05: ("/Drive/s06e05", None);
+        season_path_condor_heroes_none: ("/Drive/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv", None);
+        season_path_extras: ("/Drive/extras", None);
+        season_path_specials: ("/Drive/specials", None);
     }
 
-    #[test]
-    fn seasons_number_tests() {
-        fn test_seasons_number((input, season): (&str, u16)) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(Some(season), identifier.season);
-        }
-        let tests = [
-            (
-                "The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv",
-                25,
-            ),
-            ("/Show/Season 02/S02E03 blah.avi", 2),
-            ("Season 1/seriesname S01x02 blah.avi", 1),
-            ("Season 1/S01x02 blah.avi", 1),
-            ("Season 1/seriesname S01xE02 blah.avi", 1),
-            ("Season 1/01x02 blah.avi", 1),
-            ("Season 1/S01E02 blah.avi", 1),
-            ("Season 1/S01xE02 blah.avi", 1),
-            ("Season 1/seriesname 01x02 blah.avi", 1),
-            ("Season 1/seriesname S01E02 blah.avi", 1),
-            (
-                "Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4",
-                2,
-            ),
-            ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", 2),
-            ("Season 2/02x03-04-15 - Ep Name.mp4", 2),
-            ("Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", 2),
-            ("Season 02/02x03-E15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03-E15 - Ep Name.mp4", 2),
-            ("Season 02/02x03 - x04 - x15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", 2),
-            ("Season 02/02x03x04x15 - Ep Name.mp4", 2),
-            ("Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", 2),
-            ("Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", 1),
-            ("Season 1/S01E23-E24-E26 - The Woman.mp4", 1),
-            ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", 25),
-            (
-                "The Simpsons/The Simpsons.S25E09.Steal this episode.mp4",
-                25,
-            ),
-            ("2016/Season s2016e1.mp4", 2016),
-            ("2016/Season 2016x1.mp4", 2016),
-            ("Season 2009/2009x02 blah.avi", 2009),
-            ("Season 2009/S2009x02 blah.avi", 2009),
-            ("Season 2009/S2009E02 blah.avi", 2009),
-            ("Season 2009/S2009xE02 blah.avi", 2009),
-            ("Season 2009/seriesname 2009x02 blah.avi", 2009),
-            ("Season 2009/seriesname S2009x02 blah.avi", 2009),
-            ("Season 2009/seriesname S2009E02 blah.avi", 2009),
-            (
-                "Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4",
-                2009,
-            ),
-            (
-                "Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4",
-                2009,
-            ),
-            ("Season 2009/2009x03-04-15 - Ep Name.mp4", 2009),
-            (
-                "Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4",
-                2009,
-            ),
-            ("Season 2009/2009x03x04x15 - Ep Name.mp4", 2009),
-            ("Season 2009/Elementary - 2009x03x04x15 - Ep Name.mp4", 2009),
-            (
-                "Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4",
-                2009,
-            ),
-            ("Season 2009/S2009E23-E24-E26 - The Woman.mp4", 2009),
-            ("Series/1-12 - The Woman.mp4", 1),
-            ("Running Man/Running Man S2017E368.mkv", 2017),
-            // ("Case Closed (1996-2007)/Case Closed - 317.mkv", 3),
-            // ("Seinfeld/Seinfeld 0807 The Checks.avi", 8),
-        ];
-        for test in tests {
-            test_seasons_number(test);
-        }
+    season_tests! {
+        season_num_daily_show_25x22: ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", Some(25));
+        season_num_s02e03: ("/Show/Season 02/S02E03 blah.avi", Some(2));
+        season_num_name_s01x02: ("Season 1/seriesname S01x02 blah.avi", Some(1));
+        season_num_s01x02: ("Season 1/S01x02 blah.avi", Some(1));
+        season_num_name_s01xe02: ("Season 1/seriesname S01xE02 blah.avi", Some(1));
+        season_num_01x02: ("Season 1/01x02 blah.avi", Some(1));
+        season_num_s01e02: ("Season 1/S01E02 blah.avi", Some(1));
+        season_num_s01xe02: ("Season 1/S01xE02 blah.avi", Some(1));
+        season_num_name_01x02: ("Season 1/seriesname 01x02 blah.avi", Some(1));
+        season_num_name_s01e02: ("Season 1/seriesname S01E02 blah.avi", Some(1));
+        season_num_elementary_multi_02x: ("Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", Some(2));
+        season_num_multi_02x: ("Season 2/02x03 - 02x04 - 02x15 - Ep Name.mp4", Some(2));
+        season_num_02x03_04_15: ("Season 2/02x03-04-15 - Ep Name.mp4", Some(2));
+        season_num_elementary_02x03_04_15: ("Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", Some(2));
+        season_num_02x03_e15: ("Season 02/02x03-E15 - Ep Name.mp4", Some(2));
+        season_num_elementary_02x03_e15: ("Season 02/Elementary - 02x03-E15 - Ep Name.mp4", Some(2));
+        season_num_02x03_x04_x15: ("Season 02/02x03 - x04 - x15 - Ep Name.mp4", Some(2));
+        season_num_elementary_02x03_x04_x15: ("Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", Some(2));
+        season_num_02x03x04x15: ("Season 02/02x03x04x15 - Ep Name.mp4", Some(2));
+        season_num_elementary_02x03x04x15: ("Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", Some(2));
+        season_num_elementary_s01e23_multi: ("Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", Some(1));
+        season_num_s01e23_multi: ("Season 1/S01E23-E24-E26 - The Woman.mp4", Some(1));
+        season_num_simpsons_s25e09: ("Season 25/The Simpsons.S25E09.Steal this episode.mp4", Some(25));
+        season_num_simpsons_dir_s25e09: ("The Simpsons/The Simpsons.S25E09.Steal this episode.mp4", Some(25));
+        season_num_s2016e1: ("2016/Season s2016e1.mp4", Some(2016));
+        season_num_2016x1: ("2016/Season 2016x1.mp4", Some(2016));
+        season_num_2009x02: ("Season 2009/2009x02 blah.avi", Some(2009));
+        season_num_s2009x02: ("Season 2009/S2009x02 blah.avi", Some(2009));
+        season_num_s2009e02: ("Season 2009/S2009E02 blah.avi", Some(2009));
+        season_num_s2009xe02: ("Season 2009/S2009xE02 blah.avi", Some(2009));
+        season_num_name_2009x02: ("Season 2009/seriesname 2009x02 blah.avi", Some(2009));
+        season_num_name_s2009x02: ("Season 2009/seriesname S2009x02 blah.avi", Some(2009));
+        season_num_name_s2009e02: ("Season 2009/seriesname S2009E02 blah.avi", Some(2009));
+        season_num_elementary_2009x_multi: ("Season 2009/Elementary - 2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", Some(2009));
+        season_num_2009x_multi: ("Season 2009/2009x03 - 2009x04 - 2009x15 - Ep Name.mp4", Some(2009));
+        season_num_2009x03_04_15: ("Season 2009/2009x03-04-15 - Ep Name.mp4", Some(2009));
+        season_num_elementary_2009x03_x04_x15: ("Season 2009/Elementary - 2009x03 - x04 - x15 - Ep Name.mp4", Some(2009));
+        season_num_2009x03x04x15: ("Season 2009/2009x03x04x15 - Ep Name.mp4", Some(2009));
+        season_num_elementary_2009x03x04x15: ("Season 2009/Elementary - 2009x03x04x15 - Ep Name.mp4", Some(2009));
+        season_num_elementary_s2009e23_multi: ("Season 2009/Elementary - S2009E23-E24-E26 - The Woman.mp4", Some(2009));
+        season_num_s2009e23_multi: ("Season 2009/S2009E23-E24-E26 - The Woman.mp4", Some(2009));
+        season_num_series_1_12: ("Series/1-12 - The Woman.mp4", Some(1));
+        season_num_running_man_s2017e368: ("Running Man/Running Man S2017E368.mkv", Some(2017));
+        // season_num_case_closed_317: ("Case Closed (1996-2007)/Case Closed - 317.mkv", Some(3));
+        // season_num_seinfeld_0807: ("Seinfeld/Seinfeld 0807 The Checks.avi", Some(8));
     }
 
-    #[test]
-    fn episodes_path_test() {
-        fn test_simple_episode(
-            (input, show_name, season, episode): (&str, &str, Option<u16>, Option<u16>),
-        ) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(show_name, identifier.title);
-            assert_eq!(season, identifier.season);
-            assert_eq!(episode, identifier.episode);
-        }
-        let tests = [
-            ("/media/Foo/Foo-S01E01", "Foo", Some(1), Some(1)),
-            ("/media/Foo - S04E011", "Foo", Some(4), Some(11)),
-            ("/media/Foo/Foo s01x01", "Foo", Some(1), Some(1)),
-            (
-                "/media/Foo (2019)/Season 4/Foo (2019).S04E03.mp4",
-                "Foo",
-                Some(4),
-                Some(3),
-            ),
-            (
-                "/Season 2/Elementary - 02x03-04-15 - Ep Name.mp4",
-                "Elementary",
-                Some(2),
-                Some(3),
-            ),
-            (
-                "/Season 1/seriesname S01E02 blah.avi",
-                "seriesname",
-                Some(1),
-                Some(2),
-            ),
-            (
-                "/Running Man/Running Man S2017E368.mkv",
-                "Running Man",
-                Some(2017),
-                Some(368),
-            ),
-            (
-                "/Season 1/seriesname 01x02 blah.avi",
-                "seriesname",
-                Some(1),
-                Some(2),
-            ),
-            (
-                "/Season 25/The Simpsons.S25E09.Steal this episode.mp4",
-                "The Simpsons",
-                Some(25),
-                Some(9),
-            ),
-            (
-                "/Season 1/seriesname S01x02 blah.avi",
-                "seriesname",
-                Some(1),
-                Some(2),
-            ),
-            (
-                "/Season 1/seriesname S01xE02 blah.avi",
-                "seriesname",
-                Some(1),
-                Some(2),
-            ),
-            // Multi episodes are not yet supported!
-            //("/Season 2/Elementary - 02x03 - 02x04 - 02x15 - Ep Name.mp4", "Elementary", 2, 3),
-            //("/Season 02/Elementary - 02x03 - x04 - x15 - Ep Name.mp4", "Elementary", 2, 3),
-            //("/Season 02/Elementary - 02x03x04x15 - Ep Name.mp4", "Elementary", 2, 3),
-            //("/Season 02/Elementary - 02x03-E15 - Ep Name.mp4", "Elementary", 2, 3),
-            //("/Season 1/Elementary - S01E23-E24-E26 - The Woman.mp4", "Elementary", 1, 23),
-            (
-                "/The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi",
-                "The Wonder Years",
-                Some(4),
-                Some(7),
-            ),
-            (
-                "/The.Sopranos/Season 3/The Sopranos Season 3 Episode 09 - The Telltale Moozadell.avi",
-                "The Sopranos",
-                Some(3),
-                Some(9),
-            ),
-            (
-                "/Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv",
-                "Castle Rock",
-                Some(2),
-                Some(1),
-            ),
-            (
-                "/After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv",
-                "After Life",
-                Some(1),
-                Some(6),
-            ),
-            (
-                "/Season 4/Uchuu.Senkan.Yamato.2199.E03.avi",
-                "Uchuu Senkan Yamato",
-                Some(4),
-                Some(3),
-            ),
-            (
-                "The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv",
-                "The Daily Show",
-                Some(25),
-                Some(22),
-            ),
-            (
-                "Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv",
-                "Watchmen",
-                Some(1),
-                Some(3),
-            ),
-            // ??? where the heck is season in this test
-            //("/The.Legend.of.Condor.Heroes.2017.V2.web-dl.1080p.h264.aac-hdctv/The.Legend.of.Condor.Heroes.2017.E07.V2.web-dl.1080p.h264.aac-hdctv.mkv", "The Legend of Condor Heroes", 1, 7),
-            (
-                "[SOFCJ-Raws] Death Note - 14 (BDRip 1920x1080 x264 VFR 10bit FLAC)_combined.mkv",
-                "Death Note",
-                None,
-                Some(14),
-            ),
-            (
-                "boring shows/Cool Show/Season 4/14.mkv",
-                "Cool Show",
-                Some(4),
-                Some(14),
-            ),
-        ];
-        for test in tests {
-            test_simple_episode(test);
-        }
+    episode_tests! {
+        path_foo_s01e01: ("/media/Foo/Foo-S01E01", "Foo", Some(1), Some(1));
+        path_foo_s04e011: ("/media/Foo - S04E011", "Foo", Some(4), Some(11));
+        path_foo_s01x01: ("/media/Foo/Foo s01x01", "Foo", Some(1), Some(1));
+        path_foo_2019_s04e03: ("/media/Foo (2019)/Season 4/Foo (2019).S04E03.mp4", "Foo", Some(4), Some(3));
+        path_elementary_02x03: ("/Season 2/Elementary - 02x03-04-15 - Ep Name.mp4", "Elementary", Some(2), Some(3));
+        path_seriesname_s01e02: ("/Season 1/seriesname S01E02 blah.avi", "seriesname", Some(1), Some(2));
+        path_running_man_s2017e368: ("/Running Man/Running Man S2017E368.mkv", "Running Man", Some(2017), Some(368));
+        path_seriesname_01x02: ("/Season 1/seriesname 01x02 blah.avi", "seriesname", Some(1), Some(2));
+        path_simpsons_s25e09: ("/Season 25/The Simpsons.S25E09.Steal this episode.mp4", "The Simpsons", Some(25), Some(9));
+        path_seriesname_s01x02: ("/Season 1/seriesname S01x02 blah.avi", "seriesname", Some(1), Some(2));
+        path_seriesname_s01xe02: ("/Season 1/seriesname S01xE02 blah.avi", "seriesname", Some(1), Some(2));
+        path_wonder_years_s04e07: ("/The Wonder Years/The.Wonder.Years.S04.PDTV.x264-JCH/The Wonder Years s04e07 Christmas Party NTSC PDTV.avi", "The Wonder Years", Some(4), Some(7));
+        path_sopranos_s03e09: ("/The.Sopranos/Season 3/The Sopranos Season 3 Episode 09 - The Telltale Moozadell.avi", "The Sopranos", Some(3), Some(9));
+        path_castle_rock_2x01: ("/Castle Rock 2x01 Que el rio siga su cursor [WEB-DL HULU 1080p h264 Dual DD5.1 Subs].mkv", "Castle Rock", Some(2), Some(1));
+        path_after_life_1x06: ("/After Life 1x06 Episodio 6 [WEB-DL NF 1080p h264 Dual DD 5.1 Sub].mkv", "After Life", Some(1), Some(6));
+        path_yamato_e03: ("/Season 4/Uchuu.Senkan.Yamato.2199.E03.avi", "Uchuu Senkan Yamato", Some(4), Some(3));
+        path_daily_show_25x22: ("The Daily Show/The Daily Show 25x22 - [WEBDL-720p][AAC 2.0][x264] Noah Baumbach-TBS.mkv", "The Daily Show", Some(25), Some(22));
+        path_watchmen_1x03: ("Watchmen (2019)/Watchmen 1x03 [WEBDL-720p][EAC3 5.1][h264][-TBS] - She Was Killed by Space Junk.mkv", "Watchmen", Some(1), Some(3));
+        path_death_note_14_combined: ("[SOFCJ-Raws] Death Note - 14 (BDRip 1920x1080 x264 VFR 10bit FLAC)_combined.mkv", "Death Note", None, Some(14));
+        path_cool_show_14: ("boring shows/Cool Show/Season 4/14.mkv", "Cool Show", Some(4), Some(14));
+        // Real library: absolute episode number with explicit SxxExx in a group, parent
+        // directory carries the season number.
+        path_frieren_s02e10: ("[9volt] Sousou no Frieren - Season 2 (WEB 1080p HEVC EAC-3 Dual Audio)/[9volt] Sousou no Frieren - 38 (S02E10) (Dual Audio) (WEB 1080p HEVC EAC-3) [DA50C6DF].mkv", "Sousou no Frieren", Some(2), Some(10));
+        path_frieren_s02e01: ("[9volt] Sousou no Frieren - Season 2 (WEB 1080p HEVC EAC-3 Dual Audio)/[9volt] Sousou no Frieren - 29 (S02E01) (Dual Audio) (WEB 1080p HEVC EAC-3) [E15A4F27].mkv", "Sousou no Frieren", Some(2), Some(1));
+        // Real library: absolute episode number, no season anywhere -> best case is season 1.
+        path_death_note_s01e14: ("Death Note/[SOFCJ-Raws] Death Note - 14 Friend (BDRip 1920x1080 x264 VFR 10bit FLAC).mp4", "Death Note", Some(1), Some(14));
+        path_death_note_s01e01: ("Death Note/[SOFCJ-Raws] Death Note - 01 Rebirth (BDRip 1920x1080 x264 VFR 10bit FLAC).mp4", "Death Note", Some(1), Some(1));
     }
 
-    #[test]
-    fn episodes_without_season_test() {
-        fn test_episodes_without_season((input, episode): (&str, u16)) {
-            let identifier = Parser::parse_filename(Path::new(input), ShowIdent::default());
-            assert_eq!(Some(episode), identifier.episode);
-        }
-        let tests = [
-            ("The Simpsons/The Simpsons.S25E08.Steal this episode.mp4", 8),
-            ("The Simpsons/The Simpsons - 02 - Ep Name.avi", 2),
-            ("The Simpsons/02.avi", 2),
-            ("The Simpsons/02 - Ep Name.avi", 2),
-            ("The Simpsons/02-Ep Name.avi", 2),
-            ("The Simpsons/02.EpName.avi", 2),
-            ("The Simpsons/The Simpsons - 02.avi", 2),
-            ("The Simpsons/The Simpsons - 02 Ep Name.avi", 2),
-            ("GJ Club (2013)/GJ Club - 07.mkv", 7),
-            // WOW, HOW???
-            // ("Case Closed (1996-2007)/Case Closed - 317.mkv", 17),
-            ("The Simpsons/The Simpsons 5 - 02 - Ep Name.avi", 2),
-            ("The Simpsons/The Simpsons 5 - 02 Ep Name.avi", 2),
-            // ("Seinfeld/Seinfeld 0807 The Checks.avi", 7),
-            ("Case Closed (1996-2007)/Case Closed - 13.mkv", 13),
-        ];
-        for test in tests {
-            test_episodes_without_season(test);
-        }
+    episode_tests! {
+        // `[a]` group tag glued to the name, underscores used as separators.
+        lib_cowboy_bebop_underscores: ("[a]Cowboy_Bebop/[a]Cowboy_Bebop_01_[1080p_FLAC].mp4", "Cowboy Bebop", None, Some(1));
+        // Lowercase ` x ` inside the title must not be read as an `NxNN` episode marker.
+        lib_spy_x_family: ("[ASW] SPY x FAMILY - 01 [1080p HEVC x265 10Bit][AAC].mp4", "SPY x FAMILY", None, Some(1));
+        // Semicolon inside the title is preserved.
+        lib_steins_gate: ("[Commie] Steins;Gate/[Commie] Steins;Gate - 01 [BD 1080p FLAC] [1AE0722F].mp4", "Steins;Gate", None, Some(1));
+        // Episode title made of bare numbers (`1 23 45`) must not hijack the episode number.
+        lib_chernobyl_numeric_title: ("Chernobyl (2019)/Season 1/Chernobyl 1x01 - 1 23 45 [WEBDL-1080p][EAC3 5.1][h265]-TBS.mp4", "Chernobyl", Some(1), Some(1));
+        // Hyphen inside a group tag (`[Erai-raws]`).
+        lib_vinland_saga: ("[Erai-raws] Vinland Saga/[Erai-raws] Vinland Saga - 01 [1080p][Multiple Subtitle].mp4", "Vinland Saga", None, Some(1));
+        // Capital `X` as a real word in the title.
+        lib_hunter_x_hunter: ("Hunter X Hunter (2011)/Season 1/[HorribleSubs] Hunter X Hunter - 01 [720p].mp4", "Hunter X Hunter", Some(1), Some(1));
+        // Zero-padded three digit absolute episode number.
+        lib_naruto_001: ("Naruto Shippuden/Naruto Shippuden - 001 [720p].mp4", "Naruto Shippuden", None, Some(1));
+        // `title - NN - episode title` layout.
+        lib_evangelion_01: ("[NERV] Neon Genesis Evangelion/[NERV] Neon Genesis Evangelion - 01 - Angel Attack [BD 1080p HEVC FLAC].mp4", "Neon Genesis Evangelion", None, Some(1));
+        // Bare `S02` season directory plus dash-delimited filename.
+        lib_seinfeld_s02_dir: ("Seinfeld/S02/Seinfeld - S02E01 - The Ex-Girlfriend.mp4", "Seinfeld", Some(2), Some(1));
+        // Alternate title in parentheses lives in the directory name only.
+        lib_shingeki_alt_title: ("[SubsPlease] Shingeki no Kyojin (Attack on Titan)/Season 1/[SubsPlease] Shingeki no Kyojin - 01 (1080p) [BATCH].mp4", "Shingeki no Kyojin", Some(1), Some(1));
+        // `(US)` country suffix in the directory, `US` repeated in the filename.
+        lib_office_us: ("The Office (US)/Season 1/The.Office.US.S01E01.Pilot.720p.BluRay.x264.mp4", "The Office US", Some(1), Some(1));
+        // Verbose `Season N Episode NN` where the episode title repeats the show name.
+        lib_sopranos_verbose: ("The Sopranos/Season 1/The Sopranos Season 1 Episode 01 - The Sopranos.mp4", "The Sopranos", Some(1), Some(1));
+        // `DD+5.1` audio tag next to the episode marker.
+        lib_fleabag_ddplus: ("Fleabag.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-NTb.mp4", "Fleabag", Some(1), Some(1));
+        // Release metadata in parentheses on the directory name.
+        lib_fma_brotherhood: ("[Judas] Fullmetal Alchemist Brotherhood (BD 1080p x265 HEVC)/[Judas] Fullmetal Alchemist Brotherhood - 01 [BD 1080p HEVC x265 10bit FLAC].mp4", "Fullmetal Alchemist Brotherhood", None, Some(1));
+        // KNOWN FAIL: 4-digit absolute number `1001` is split as `10x01`, overriding the
+        // `Season 21` directory. Best case should be season 21, episode 1001.
+        // lib_one_piece_1001: ("One Piece/Season 21/One Piece 1001.mp4", "One Piece", Some(21), Some(1001));
+    }
+
+    single_episode_tests! {
+        no_season_simpsons_s25e08: ("The Simpsons/The Simpsons.S25E08.Steal this episode.mp4", Some(8));
+        no_season_simpsons_02_ep_name: ("The Simpsons/The Simpsons - 02 - Ep Name.avi", Some(2));
+        no_season_simpsons_02: ("The Simpsons/02.avi", Some(2));
+        no_season_02_ep_name: ("The Simpsons/02 - Ep Name.avi", Some(2));
+        no_season_02_dash_ep_name: ("The Simpsons/02-Ep Name.avi", Some(2));
+        no_season_02_dot_epname: ("The Simpsons/02.EpName.avi", Some(2));
+        no_season_simpsons_dash_02: ("The Simpsons/The Simpsons - 02.avi", Some(2));
+        no_season_simpsons_02_space_ep_name: ("The Simpsons/The Simpsons - 02 Ep Name.avi", Some(2));
+        no_season_gj_club_07: ("GJ Club (2013)/GJ Club - 07.mkv", Some(7));
+        // WOW, HOW???
+        // no_season_case_closed_317: ("Case Closed (1996-2007)/Case Closed - 317.mkv", Some(17));
+        no_season_simpsons_5_02: ("The Simpsons/The Simpsons 5 - 02 - Ep Name.avi", Some(2));
+        no_season_simpsons_5_02_space: ("The Simpsons/The Simpsons 5 - 02 Ep Name.avi", Some(2));
+        // no_season_seinfeld_0807: ("Seinfeld/Seinfeld 0807 The Checks.avi", Some(7));
+        no_season_case_closed_13: ("Case Closed (1996-2007)/Case Closed - 13.mkv", Some(13));
     }
 
     // This test contains a lot of multiepisode videos which are currently not supported
