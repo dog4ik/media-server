@@ -188,6 +188,16 @@ impl ShowIdent {
                 }
                 Token::GroupStart => {
                     in_group = true;
+                    // A group whose sole content is an explicit `SxxExx` marker (e.g. `(S02E10)`)
+                    if let (Some(Token::Unknown(t)), Some(Token::GroupEnd)) =
+                        (tokens.get(i + 1), tokens.get(i + 2))
+                    {
+                        if let Some((s, e)) = parse_se_format(t) {
+                            season = Some(s);
+                            episode = Some(e);
+                            past_name = true;
+                        }
+                    }
                 }
                 Token::GroupEnd => {
                     in_group = false;
