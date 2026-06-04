@@ -69,7 +69,7 @@ impl PeerListener {
                 };
             }
             tracing::debug!("Closed peer listener");
-        }.instrument(tracing::info_span!("peer_listener", %port)));
+        }.instrument(tracing::info_span!(parent: None, "peer_listener", %port)));
         Ok(Self {
             new_torrent_channel: tx,
         })
@@ -141,7 +141,7 @@ impl PeerListener {
                 };
             }
             tracing::debug!("Closed peer listener");
-        }.instrument(tracing::info_span!("peer_listener", %port)));
+        }.instrument(tracing::info_span!(parent: None, "peer_listener", %port)));
         Ok(Self {
             new_torrent_channel: tx,
         })

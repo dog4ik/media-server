@@ -1,6 +1,6 @@
 #![windows_subsystem = "windows"]
+use axum::Router;
 use axum::routing::{any, delete, get, patch, post, put};
-use axum::{Extension, Router};
 use clap::Parser;
 use dotenvy::dotenv;
 use media_server::api::{self, OpenApiDoc};
@@ -9,13 +9,9 @@ use media_server::config::{self, APP_RESOURCES, AppResources, Args, ConfigFile};
 use media_server::db::Db;
 use media_server::library::Library;
 use media_server::metadata::metadata_stack::MetadataProvidersStack;
-use media_server::metadata::tmdb_api::TmdbApi;
-use media_server::metadata::tvdb_api::TvdbApi;
 use media_server::progress::TaskResource;
 use media_server::torrent::TorrentClient;
-use media_server::torrent_index::rutracker::ProvodRuTrackerAdapter;
-use media_server::torrent_index::tpb::TpbApi;
-use media_server::tracing::{LogChannel, init_tracer};
+use media_server::tracing::init_tracer;
 use media_server::upnp::Upnp;
 use media_server::{ffmpeg_abi, ws};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -35,29 +31,37 @@ async fn main() {
     if let Err(err) = AppResources::initiate() {
         panic!("Could not initiate app resources: {err}");
     };
-    let log_channel = init_tracer();
+    // Load the dotfile and config file before initializing tracing: the otel
+    // exporter is gated on the `otel_endpoint` config value, so the config must
+    // be resolved first.
+    let dotenv_path = dotenv().ok();
+    let config_error = match ConfigFile::open_and_read().await {
+        Ok(toml) => {
+            config::CONFIG.apply_toml_settings(toml);
+            None
+        }
+        Err(err) => Some(err),
+    };
+
+    let config::OtelEndpoint(otel_endpoint) = config::CONFIG.get_value();
+    let _guard = init_tracer(otel_endpoint.as_deref());
+
+    match dotenv_path {
+        Some(path) => tracing::info!("Loaded env variables from: {}", path.display()),
+        None => tracing::warn!("Could not load env variables from dotfile"),
+    }
+    if let Some(err) = config_error {
+        tracing::error!("Failed to read config file: {err}");
+    }
+    match &otel_endpoint {
+        Some(endpoint) => tracing::info!("OpenTelemetry enabled, exporting to {endpoint}"),
+        None => tracing::info!("OpenTelemetry disabled (set `otel_endpoint` to enable)"),
+    }
     tracing::info!("Using log file location: {}", AppResources::log().display());
 
-    // The whole boot sequence runs inside a single `startup` span so every init
-    // phase below nests under it; the span's CLOSE event records total boot time.
+    // The whole boot sequence runs inside a single `startup` span
     let (cancellation_token, tracker, torrent_client) = async move {
-        if let Ok(path) = dotenv() {
-            tracing::info!("Loaded env variables from: {}", path.display());
-        } else {
-            tracing::warn!("Could not load env variables from dotfile");
-        }
-
-        match ConfigFile::open_and_read()
-            .instrument(info_span!("load_config"))
-            .await
-        {
-            Ok(toml) => config::CONFIG.apply_toml_settings(toml),
-            Err(err) => tracing::error!("Failed to read config file: {err}"),
-        };
-
-        tokio::spawn(
-            ffmpeg_abi::get_or_init_gpu_accelated_apis().instrument(info_span!("init_gpu_apis")),
-        );
+        tokio::spawn(ffmpeg_abi::get_or_init_gpu_accelated_apis());
 
         let cancellation_token = CancellationToken::new();
 
@@ -73,39 +77,8 @@ async fn main() {
         let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
         let library = Box::leak(Box::new(Mutex::new(library)));
 
-        let providers_stack = info_span!("init_metadata_providers").in_scope(|| {
-            let mut providers_stack = MetadataProvidersStack::new();
-
-            match TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0) {
-                Ok(tmdb_api) => {
-                    let tmdb_api: &'static _ = Box::leak(Box::new(tmdb_api));
-                    providers_stack.tmdb = Some(tmdb_api);
-                }
-                Err(e) => tracing::warn!("Failed to initialize TMDB api: {e}"),
-            };
-
-            let tpb_api = TpbApi::new();
-            let tpb_api = Box::leak(Box::new(tpb_api));
-            providers_stack.tpb = Some(tpb_api);
-
-            match ProvodRuTrackerAdapter::new() {
-                Ok(rutracker_api) => {
-                    let rutracker_api: &'static _ = Box::leak(Box::new(rutracker_api));
-                    providers_stack.rutracker = Some(&rutracker_api);
-                }
-                Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
-            }
-
-            match TvdbApi::new(config::CONFIG.get_value::<config::TvdbKey>().0.as_deref()) {
-                Ok(tvdb_api) => {
-                    let tvdb_api: &'static _ = Box::leak(Box::new(tvdb_api));
-                    providers_stack.tvdb = Some(tvdb_api);
-                }
-                Err(e) => tracing::warn!("Failed to initialize TVDB api: {e}"),
-            }
-            providers_stack.apply_config_order();
-            providers_stack
-        });
+        let mut providers_stack = MetadataProvidersStack::new();
+        providers_stack.setup_providers();
         let providers_stack = Box::leak(Box::new(providers_stack));
 
         let tasks = TaskResource::new(cancellation_token.clone());
@@ -337,7 +310,6 @@ async fn main() {
                 "/configuration/providers",
                 get(api::server::get_providers_order),
             )
-            .route("/log/latest", get(api::server::latest_log))
             .route("/tasks/transcode", get(api::server::transcode_tasks))
             .route(
                 "/tasks/transcode/{id}",
@@ -391,8 +363,6 @@ async fn main() {
 
         let http_trace = tower_http::trace::TraceLayer::new_for_http();
         let app = Router::new()
-            .route("/api/log", get(LogChannel::into_sse_stream))
-            .layer(Extension(log_channel))
             .nest("/api", server_api)
             .nest("/debug", debug_api)
             .merge(

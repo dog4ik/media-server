@@ -58,13 +58,14 @@ pub async fn bind_udp_socket(mut addr: SocketAddrV4) -> anyhow::Result<UdpSocket
 const RESOLVE_IP_TIMEOUT: Duration = Duration::from_millis(400);
 
 /// Fetch client's external ip
+#[tracing::instrument(skip_all)]
 pub async fn external_ip(
     upnp_client: Option<&ScpdClient<InternetGatewayClient>>,
 ) -> anyhow::Result<Ipv4Addr> {
     if let Some(client) = upnp_client {
         match tokio::time::timeout(RESOLVE_IP_TIMEOUT, upnp_ip(client)).await {
             Ok(Ok(ip)) => {
-                tracing::info!(%ip, "Resolved external ip addr using ipfy service");
+                tracing::info!(%ip, "Resolved external ip addr using upnp internet gateway device");
                 return Ok(ip);
             }
             Ok(Err(e)) => {
@@ -80,7 +81,7 @@ pub async fn external_ip(
 
 async fn upnp_ip(client: &ScpdClient<InternetGatewayClient>) -> anyhow::Result<Ipv4Addr> {
     let ip = client.get_external_ip_addr().await?;
-    // TODO: use IpAddrV4::is_global when it becomes stable
+    // NOTE: use IpAddrV4::is_global if it becomes stable
     anyhow::ensure!(
         !ip.is_unspecified() && !ip.is_link_local() && !ip.is_multicast() && !ip.is_loopback()
     );

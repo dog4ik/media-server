@@ -18,7 +18,6 @@ use base64::Engine;
 use serde::ser::SerializeStruct;
 use serde::{Deserialize, Serialize};
 use sqlx::FromRow;
-use tokio::io::{AsyncBufReadExt, AsyncSeekExt};
 use tokio_stream::{Stream, StreamExt};
 use tokio_util::io::ReaderStream;
 use uuid::Uuid;
@@ -1048,13 +1047,10 @@ pub async fn actor_list(
         builder.push(" where actors.id < ").push_bind(cursor);
     }
 
-    builder
+    let actors: Vec<Actor> = builder
         .push(" order by actors.id desc ")
         .push("limit ")
-        .push_bind(take.unwrap_or(50));
-    tracing::debug!("Actor list sql: {}", builder.sql());
-
-    let actors: Vec<Actor> = builder
+        .push_bind(take.unwrap_or(50))
         .build_query_as::<DbActorsQuery>()
         .fetch_all(&db.pool)
         .await?
@@ -1899,50 +1895,6 @@ pub async fn progress(
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-/// Latest log
-#[utoipa::path(
-    get,
-    path = "/api/log/latest",
-    responses(
-        (status = 200, body = Vec<crate::tracing::JsonTracingEvent>, content_type = "application/json"),
-    ),
-    tag = "Logs",
-)]
-pub async fn latest_log() -> Result<(TypedHeader<headers::ContentType>, String), AppError> {
-    use tokio::fs;
-    use tokio::io;
-    let log_path = &APP_RESOURCES.log_path;
-    let file = fs::File::open(log_path).await?;
-    let take = 40_000;
-    let length = file.metadata().await?.len();
-    let start = std::cmp::min(length, take) as i64;
-    let mut reader = io::BufReader::new(file);
-    let mut buffer = String::new();
-    reader
-        .seek(io::SeekFrom::End(-start))
-        .await
-        .expect("start is not bigger then file");
-    let mut json = String::from('[');
-    reader.read_line(&mut buffer).await.unwrap();
-    if length < take {
-        json.push_str(&buffer);
-        json.push(',');
-    }
-    buffer.clear();
-    while let Ok(amount) = reader.read_line(&mut buffer).await {
-        if amount == 0 {
-            break;
-        }
-        json.push_str(&buffer);
-        json.push(',');
-        buffer.clear();
-    }
-    // remove trailing comma xd
-    json.pop();
-    json.push(']');
-    Ok((TypedHeader(headers::ContentType::json()), json))
 }
 
 /// Server configuration

@@ -735,7 +735,6 @@ where
             let mut query = DbQueryBuilder::default();
             query_builders::DbShowQuery::build(&mut query);
             params.build(DbContentType::Show, &mut query);
-            tracing::debug!(sql = %query.sql(), "All shows sql query");
 
             Ok(query
                 .build_query_as::<query_builders::DbShowQuery>()
@@ -752,10 +751,9 @@ where
             let mut conn = self.acquire().await?;
             let mut query = DbQueryBuilder::default();
             query_builders::DbMovieQuery::build(&mut query);
-            query.push(" where movies.id = ").push_bind(id);
-            tracing::debug!(sql = %query.sql(), "Get movie sql query");
-
             query
+                .push(" where movies.id = ")
+                .push_bind(id)
                 .build_query_as::<query_builders::DbMovieQuery>()
                 .fetch_one(&mut *conn)
                 .await
@@ -771,9 +769,9 @@ where
             let mut conn = self.acquire().await?;
             let mut builder = DbQueryBuilder::default();
             query_builders::DbShowQuery::build(&mut builder);
-            let query = builder.push(" where shows.id = ").push_bind(show_id);
-            tracing::debug!(sql = %query.sql(), "Fetching single show");
-            query
+            builder
+                .push(" where shows.id = ")
+                .push_bind(show_id)
                 .build_query_as::<query_builders::DbShowQuery>()
                 .fetch_one(&mut *conn)
                 .await

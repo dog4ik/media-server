@@ -8,19 +8,17 @@ pub struct TorrentValidator<'a, T, P> {
     pub hasher: &'a mut Hasher,
 }
 
+const CONCURRENCY: usize = 10;
+
 impl<S: StorageSink, P: PartsResource> TorrentValidator<'_, S, P> {
+    #[tracing::instrument(level = "debug", skip_all, fields(total_pieces = self.hasher.hashes.len()))]
     pub async fn revalidate<T>(&mut self, mut on_progress: T)
     where
         T: AsyncFnMut(usize, bool) -> anyhow::Result<()> + 'static,
     {
         let mut current_piece = 0;
         let total_pieces = self.hasher.hashes.len();
-        const CONCURRENCY: usize = 10;
-        tracing::debug!(
-            total_pieces,
-            concurrency = CONCURRENCY,
-            "Started torrent validation"
-        );
+        tracing::debug!(concurrency = CONCURRENCY, "Started torrent validation");
 
         while current_piece < total_pieces {
             if self.hasher.len() < CONCURRENCY {
@@ -36,6 +34,11 @@ impl<S: StorageSink, P: PartsResource> TorrentValidator<'_, S, P> {
                 };
             } else {
                 while let Some(res) = self.hasher.join_next().await {
+                    tracing::trace!(
+                        is_verified = res.is_verified,
+                        piece_i = res.piece_i,
+                        "Piece validation result"
+                    );
                     if res.is_verified {
                         self.storage.bitfield.add(res.piece_i).unwrap();
                     } else {

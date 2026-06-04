@@ -348,7 +348,8 @@ pub async fn spawn(
     let mut hasher = Hasher::new(download_params.info.pieces.clone());
     let file_handles = FileHandles::new();
     let mut storage = TorrentStorage::new(file_handles, parts, download_params);
-    let worker_span = tracing::info_span!("storage", info_hash = %download_params.info.hex_hash());
+    let worker_span =
+        tracing::info_span!(parent: None, "storage", info_hash = %download_params.info.hex_hash());
     tracker.spawn(
         async move {
         loop {

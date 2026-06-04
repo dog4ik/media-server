@@ -84,7 +84,6 @@ pub mod torrent;
         server::server_capabilities,
         server::order_providers,
         server::get_providers_order,
-        server::latest_log,
         server::transcode_tasks,
         server::cancel_transcode_task,
         server::previews_tasks,

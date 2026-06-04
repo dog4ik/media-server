@@ -18,7 +18,7 @@ anyhow = "1.0.102"
 axum = { version = "0.8.8", features = ["macros", "tracing", "multipart"] }
 axum-extra = { version = "0.12.5", features = ["typed-header", "cookie", "file-stream", "query"] }
 time = { version = "0.3.37", features = [ "serde-human-readable" ] }
-tracing = "0.1.44"
+tracing = { version = "0.1.44", features = ["release_max_level_info"] }
 uuid = { version = "1.21.0", features = ["v4", "serde"] }
 reqwest = { version = "0.13.2", features = ["json", "stream"] }
 serde = { version = "1.0.228", features = ["serde_derive"] }
@@ -32,6 +32,16 @@ clap = { version = "4.5.60", features = ["derive"] }
 test-log = "0.2.19"
 
 [dependencies]
+# Windows dependencies
+tray-icon = { version = "0.21.3", optional = true }
+open = { version = "5.3.3", optional = true }
+image = { version = "0.25.9", optional = true }
+winit = { version = "0.30.12", optional = true }
+
+torrent = { path = "./torrent" }
+upnp = { path = "./upnp" }
+media-intro = { path = "./media-intro" }
+
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true, features = ["full"] }
 anyhow = { workspace = true }
@@ -51,7 +61,7 @@ base64 = "0.22.1"
 bytes = "1.11.1"
 dirs = "6.0.0"
 dotenvy = "0.15.7"
-log = "0.4"
+log = { version = "0.4", features = ["release_max_level_info"] }
 notify = { version = "8.2.0", default-features = false, features = ["macos_kqueue"] }
 serde_json = "1.0.149"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "macros", "time", "uuid", "sqlite"] }
@@ -63,12 +73,8 @@ utoipa = { version = "5.4.0", features = ["axum_extras", "time", "url", "uuid"] 
 utoipa-swagger-ui = { version = "9.0.2", features = ["axum"] }
 serde_plain = "1.0.2"
 ffmpeg-next = { version = "8.1.0" }
-torrent = { path = "./torrent" }
-upnp = { path = "./upnp" }
-media-intro = { path = "./media-intro" }
-
-# Windows dependencies
-tray-icon = { version = "0.21.3", optional = true }
-open = { version = "5.3.3", optional = true }
-image = { version = "0.25.9", optional = true }
-winit = { version = "0.30.12", optional = true }
+tracing-opentelemetry = "0.33.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+opentelemetry-semantic-conventions = { version = "0.32.0", features = ["semconv_experimental"] }
+opentelemetry-otlp = { version = "0.32.0", features = ["metrics", "grpc-tonic"] }

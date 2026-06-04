@@ -642,7 +642,7 @@ impl UdpTrackerWorker {
         let (data_tx, data_rx) = mpsc::channel(100);
         tokio::spawn(
             self.udp_tracker_worker(data_rx)
-                .instrument(tracing::info_span!("udp_tracker_worker")),
+                .instrument(tracing::info_span!(parent: None, "udp_tracker_worker")),
         );
         let channel = UdpTrackerChannel::new(data_tx);
         Ok(channel)

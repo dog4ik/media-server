@@ -1,35 +1,35 @@
-use std::convert::Infallible;
 use std::fmt::{self};
 use std::fs::OpenOptions;
 use std::io::{LineWriter, Write};
 use std::path::Path;
 
-use axum::Extension;
-use axum::response::Sse;
-use axum::response::sse::{Event, KeepAlive};
+use opentelemetry::{KeyValue, global, trace::TracerProvider as _};
+use opentelemetry_otlp::WithExportConfig as _;
+use opentelemetry_sdk::{
+    Resource,
+    metrics::{MeterProviderBuilder, PeriodicReader, SdkMeterProvider},
+    trace::{RandomIdGenerator, Sampler, SdkTracerProvider},
+};
+use opentelemetry_semantic_conventions::{
+    SCHEMA_URL,
+    attribute::{DEPLOYMENT_ENVIRONMENT_NAME, SERVICE_VERSION},
+};
 use serde_json::{Map, Number, Value};
-use tokio::sync::{broadcast, mpsc};
-use tokio_stream::{Stream, StreamExt};
-use tracing::Subscriber;
+use tokio::sync::mpsc;
 use tracing::field::{Field, Visit};
+use tracing::{Level, Subscriber};
+use tracing_opentelemetry::{MetricsLayer, OpenTelemetryLayer};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::{Layer, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::config::AppResources;
 
+/// File logging layer: serializes every event to JSON-lines in the log file.
 #[derive(Debug)]
 pub struct FileLoggingLayer {
     pub sender: mpsc::Sender<JsonTracingEvent>,
 }
-
-#[derive(Debug)]
-struct PublicTracerLayer {
-    channel: broadcast::Sender<JsonTracingEvent>,
-}
-
-#[derive(Debug, Clone)]
-pub struct LogChannel(pub broadcast::Sender<JsonTracingEvent>);
 
 impl FileLoggingLayer {
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, std::io::Error> {
@@ -43,30 +43,6 @@ impl FileLoggingLayer {
             }
         });
         Ok(Self { sender: tx })
-    }
-}
-
-impl LogChannel {
-    pub async fn into_sse_stream(
-        Extension(channel): Extension<LogChannel>,
-    ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
-        let receiver = channel.0.subscribe();
-        let stream = tokio_stream::wrappers::BroadcastStream::new(receiver).map(|item| {
-            if let Ok(item) = item {
-                Ok(Event::default().json_data(item).unwrap())
-            } else {
-                Ok(Event::default())
-            }
-        });
-
-        Sse::new(stream).keep_alive(KeepAlive::default())
-    }
-}
-
-impl PublicTracerLayer {
-    fn new() -> Self {
-        let (tx, _) = broadcast::channel(100);
-        Self { channel: tx }
     }
 }
 
@@ -168,44 +144,117 @@ impl<S: Subscriber> Layer<S> for FileLoggingLayer {
     }
 }
 
-impl<S: Subscriber> Layer<S> for PublicTracerLayer {
-    fn enabled(
-        &self,
-        metadata: &tracing::Metadata<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) -> bool {
-        let target = metadata.target();
-        // These targets are excluded from the public SSE stream only (too noisy
-        // for the UI). They still reach the fmt + file layers when enabled via
-        // RUST_LOG, e.g. `sqlx::query=debug` for per-query timing.
-        let exclude_patterns = ["hyper", "mio", "notify", "sqlx", "reqwest", "tokio_util"];
-        !exclude_patterns
-            .iter()
-            .any(|pattern| target.starts_with(pattern))
-    }
+/// Resource that captures information about the entity for which telemetry is recorded.
+fn resource() -> Resource {
+    Resource::builder()
+        .with_service_name(env!("CARGO_PKG_NAME"))
+        .with_schema_url(
+            [
+                KeyValue::new(SERVICE_VERSION, env!("CARGO_PKG_VERSION")),
+                KeyValue::new(DEPLOYMENT_ENVIRONMENT_NAME, "develop"),
+            ],
+            SCHEMA_URL,
+        )
+        .build()
+}
 
-    fn on_event(
-        &self,
-        event: &tracing::Event<'_>,
-        _ctx: tracing_subscriber::layer::Context<'_, S>,
-    ) {
-        if self.channel.receiver_count() > 0 {
-            let json = JsonTracingEvent::from_event(event);
-            let _ = self.channel.send(json);
+/// Construct MeterProvider for the metrics layer, exporting to `endpoint`.
+fn init_meter_provider(endpoint: &str) -> SdkMeterProvider {
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .with_temporality(opentelemetry_sdk::metrics::Temporality::default())
+        .build()
+        .unwrap();
+
+    let reader = PeriodicReader::builder(exporter)
+        .with_interval(std::time::Duration::from_secs(30))
+        .build();
+
+    let meter_provider = MeterProviderBuilder::default()
+        .with_resource(resource())
+        .with_reader(reader)
+        .build();
+
+    global::set_meter_provider(meter_provider.clone());
+
+    meter_provider
+}
+
+/// Construct TracerProvider for the OpenTelemetry layer, exporting to `endpoint`.
+fn init_tracer_provider(endpoint: &str) -> SdkTracerProvider {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .unwrap();
+
+    SdkTracerProvider::builder()
+        // Customize sampling strategy
+        .with_sampler(Sampler::ParentBased(Box::new(Sampler::TraceIdRatioBased(
+            1.0,
+        ))))
+        // If export trace to AWS X-Ray, you can use XrayIdGenerator
+        .with_id_generator(RandomIdGenerator::default())
+        .with_resource(resource())
+        .with_batch_exporter(exporter)
+        .build()
+}
+
+struct Providers {
+    tracer_provider: SdkTracerProvider,
+    meter_provider: SdkMeterProvider,
+}
+
+/// Held for the lifetime of the process; flushes and shuts down the OTel
+/// providers on drop so buffered spans/metrics are exported before exit.
+pub struct OtelGuard {
+    providers: Option<Providers>,
+}
+
+impl Drop for OtelGuard {
+    fn drop(&mut self) {
+        let Some(providers) = &self.providers else {
+            return;
+        };
+        if let Err(err) = providers.tracer_provider.shutdown() {
+            eprintln!("{err:?}");
+        }
+        if let Err(err) = providers.meter_provider.shutdown() {
+            eprintln!("{err:?}");
         }
     }
 }
 
-pub fn init_tracer() -> LogChannel {
-    let log_path = AppResources::log();
+/// Install the global tracing subscriber
+/// OpenTelemetry export is added only when `otel_endpoint` is set
+pub fn init_tracer(otel_endpoint: Option<&str>) -> OtelGuard {
+    let file_logger = FileLoggingLayer::from_path(AppResources::log()).unwrap();
 
-    let pub_tracer = PublicTracerLayer::new();
-    let file_logger = FileLoggingLayer::from_path(log_path).unwrap();
-    let log_channel = LogChannel(pub_tracer.channel.clone());
-    let sub = tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env())
-        .with_span_events(FmtSpan::CLOSE)
-        .finish();
-    sub.with(pub_tracer).with(file_logger).init();
-    log_channel
+    let env_filter = EnvFilter::builder()
+        .with_default_directive(Level::INFO.into())
+        .from_env_lossy();
+
+    let providers = otel_endpoint.map(|endpoint| Providers {
+        tracer_provider: init_tracer_provider(endpoint),
+        meter_provider: init_meter_provider(endpoint),
+    });
+
+    let otel_layer = providers.as_ref().map(|p| {
+        let tracer = p.tracer_provider.tracer("tracing-otel-subscriber");
+        OpenTelemetryLayer::new(tracer)
+    });
+    let metrics_layer = providers
+        .as_ref()
+        .map(|p| MetricsLayer::new(p.meter_provider.clone()));
+
+    tracing_subscriber::registry()
+        .with(env_filter)
+        .with(tracing_subscriber::fmt::layer().with_span_events(FmtSpan::CLOSE))
+        .with(file_logger)
+        .with(metrics_layer)
+        .with(otel_layer)
+        .init();
+
+    OtelGuard { providers }
 }

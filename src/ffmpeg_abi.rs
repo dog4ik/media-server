@@ -685,6 +685,7 @@ impl std::fmt::Display for GpuEncodingApi {
 
 static GPU_ACCEL_APIS: OnceCell<Box<[GpuEncodingApi]>> = OnceCell::const_new();
 
+#[tracing::instrument(name = "init_gpu_apis")]
 pub async fn get_or_init_gpu_accelated_apis() -> &'static [GpuEncodingApi] {
     GPU_ACCEL_APIS
         .get_or_init(async move || {

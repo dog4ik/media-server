@@ -251,6 +251,7 @@ impl ConfigStore {
         store.register_value::<TvdbKey>();
         store.register_value::<ProvodKey>();
         store.register_value::<ProvodUrl>();
+        store.register_value::<OtelEndpoint>();
         store.register_value::<IntroMinDuration>();
         store.register_value::<IntroDetectionFfmpegBuild>();
         store.register_value::<WebUiPath>();
@@ -527,6 +528,7 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<TmdbKey>::schema())
             .item(UtoipaConfigValue::<TvdbKey>::schema())
             .item(UtoipaConfigValue::<ProvodUrl>::schema())
+            .item(UtoipaConfigValue::<OtelEndpoint>::schema())
             .item(UtoipaConfigValue::<ProvodKey>::schema())
             .item(UtoipaConfigValue::<FFmpegPath>::schema())
             .item(UtoipaConfigValue::<FFprobePath>::schema())
@@ -732,6 +734,15 @@ impl ConfigValue for ProvodKey {
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 pub struct ProvodUrl(pub Option<String>);
 impl ConfigValue for ProvodUrl {}
+
+/// OTLP endpoint for OpenTelemetry export (traces + metrics), e.g.
+/// `http://localhost:4317`. When unset, OpenTelemetry is disabled.
+#[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+pub struct OtelEndpoint(pub Option<String>);
+impl ConfigValue for OtelEndpoint {
+    const ENV_KEY: Option<&str> = Some("OTEL_EXPORTER_OTLP_ENDPOINT");
+    const REQUIRE_RESTART: bool = true;
+}
 
 impl AsRef<Option<String>> for TmdbKey {
     fn as_ref(&self) -> &Option<String> {

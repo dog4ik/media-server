@@ -524,6 +524,12 @@ impl Download {
         Ok(())
     }
 
+    #[tracing::instrument(
+        level = "debug",
+        name = "torrent_download_tick",
+        skip_all,
+        fields(info_hash = %hex::encode(self.info_hash), tick_num = %ctx.tick_num),
+    )]
     pub fn tick(&mut self, ctx: &mut TickContext) {
         // 1. We must remove dropped clients.
 
