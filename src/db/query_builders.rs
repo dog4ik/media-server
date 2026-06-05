@@ -181,16 +181,15 @@ impl From<ExternalIdsQueryJson> for ExternalIdMetadata {
 }
 
 #[derive(Debug, serde::Deserialize)]
+#[serde(transparent)]
 pub struct GenreQueryJson {
     pub genre_id: i64,
 }
 
 impl GenreQueryJson {
-    pub const SQL_JSON_AGGR: &str = "coalesce((select json_group_array(json_object(
-'genre_id', content_genres.genre_id
-))
-from content_genres
-where content_genres.metadata_id = metadata.id
+    pub const SQL_JSON_AGGR: &str = "coalesce((select json_group_array(content_genres.genre_id) \
+from content_genres \
+where content_genres.metadata_id = metadata.id \
 having count(content_genres.id) > 0), json('null')) as genres ";
 }
 
