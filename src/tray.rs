@@ -144,7 +144,6 @@ pub async fn spawn_tray_icon(app_state: AppState) {
                     .tasks
                     .library_scan_tasks
                     .start_task(crate::progress::LibraryScanTask, None)
-                    .await
                 {
                     Ok(task_id) => {
                         let _ = app_state.reconciliate_library(task_id).await;
