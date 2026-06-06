@@ -1044,6 +1044,38 @@ pub struct AppResources {
 
 pub static APP_RESOURCES: LazyLock<AppResources> = LazyLock::new(AppResources::new);
 
+/// Service directory environment variables exported by systemd when the unit
+/// declares the matching `*Directory=` option. systemd creates the directories
+/// with the correct ownership, so a system service stores its data under the FHS
+/// locations (e.g. `/var/lib/media-server`) instead of an XDG path under the
+/// service account's home directory.
+///
+/// systemd is Linux-only, so this is gated to `target_os = "linux"`.
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, Copy)]
+enum SystemdDirectory {
+    /// Persistent service state, e.g. the database (`StateDirectory=`).
+    State,
+    /// Service configuration files (`ConfigurationDirectory=`).
+    Configuration,
+    /// Non-essential cached/temporary data (`CacheDirectory=`).
+    Cache,
+    /// Service log files (`LogsDirectory=`).
+    Logs,
+}
+
+#[cfg(target_os = "linux")]
+impl SystemdDirectory {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::State => "STATE_DIRECTORY",
+            Self::Configuration => "CONFIGURATION_DIRECTORY",
+            Self::Cache => "CACHE_DIRECTORY",
+            Self::Logs => "LOGS_DIRECTORY",
+        }
+    }
+}
+
 impl AppResources {
     pub const APP_NAME: &'static str = "media-server";
 
@@ -1075,8 +1107,22 @@ impl AppResources {
         }
     }
 
+    /// First path from a colon-separated systemd directory environment variable
+    /// or `None` when the variable is unset (i.e. the process is not running under a systemd unit that declares the directory).
+    #[cfg(target_os = "linux")]
+    fn systemd_dir(dir: SystemdDirectory) -> Option<PathBuf> {
+        let value = std::env::var_os(dir.as_str())?;
+        std::env::split_paths(&value)
+            .next()
+            .filter(|p| !p.as_os_str().is_empty())
+    }
+
     fn data_storage() -> PathBuf {
         if Self::is_prod() {
+            #[cfg(target_os = "linux")]
+            if let Some(dir) = Self::systemd_dir(SystemdDirectory::State) {
+                return dir;
+            }
             dirs::data_local_dir()
                 .expect("target to have data directory")
                 .join(Self::APP_NAME)
@@ -1091,6 +1137,10 @@ impl AppResources {
 
     pub fn default_config_path() -> PathBuf {
         if Self::is_prod() {
+            #[cfg(target_os = "linux")]
+            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Configuration) {
+                return dir.join("configuration.toml");
+            }
             dirs::config_local_dir()
                 .expect("target supports config dir")
                 .join(Self::APP_NAME)
@@ -1101,6 +1151,12 @@ impl AppResources {
     }
 
     fn temp_storage() -> PathBuf {
+        #[cfg(target_os = "linux")]
+        if Self::is_prod() {
+            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Cache) {
+                return dir;
+            }
+        }
         Self::data_storage().join("tmp")
     }
 
@@ -1117,6 +1173,12 @@ impl AppResources {
     }
 
     pub fn log() -> PathBuf {
+        #[cfg(target_os = "linux")]
+        if Self::is_prod() {
+            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Logs) {
+                return dir.join("log.log");
+            }
+        }
         Self::data_storage().join("log.log")
     }
 

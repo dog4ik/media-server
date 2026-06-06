@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,\n        history.metadata_id, movies.id AS movie_id FROM history\n    JOIN movies ON movies.metadata_id = history.metadata_id WHERE history.is_finished = false\n    ORDER BY history.update_time DESC LIMIT 3;",
+  "describe": {
+    "columns": [
+      {
+        "name": "history_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "time",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_finished",
+        "ordinal": 2,
+        "type_info": "Bool"
+      },
+      {
+        "name": "update_time",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "movie_id",
+        "ordinal": 5,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "3d38cbf7ba390a8c3a690b3fe852afab8dcfd9218e927cd4c1ca4a9c6b3cb214"
+}

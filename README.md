@@ -1,11 +1,8 @@
 # Media server
 
-The project is designed to be a media server with easy searching and downloading any media content.
+The project is designed to let you explore, download and watch content using a single app.
 
-It uses different metadata providers to find or group local media files in shows, seasons and movies.
-The goal is to let you search for a movie/show and download it in a single step.
-
-## How to use
+## How it works
 
 ### 1. You Tell It Where Your Files Are
 
@@ -14,18 +11,13 @@ When setting up your media server, you'll point it to the folders where your fil
 - A folder named Movies for your films
 - A folder named TV Shows with subfolders for each series
 
-You can keep using the same folder structure you already use. The server just needs to know where to look.
+You can keep using the same folder structure you already have. The server just needs to know where to look.
 
 ### 2. It Scans and Organizes Everything
 
-Once you add your folders, the server scans them and matches each file with information from online databases. It tries to identify:
-
-- Movie titles and posters
-- Tv shows, episodes and seasons.
-
-This process is called metadata fetching and makes your collection look polished and professional, like something from Netflix or Spotify.
-
-It simplifies the management of your library and provides additional nice features, like intro skip in TV Shows.
+Once you add your folders, the server scans them and matches each file with information from online databases
+This makes your collection look polished and professional, like something from Netflix or Spotify.
+It also simplifies the management of your library and provides additional nice features, like intro skip in TV Shows.
 
 ### 3. You Stream to Any Device
 
@@ -34,16 +26,8 @@ After setup, you can browse and play your content from almost anywhere:
 - Smart TVs
 - Web browsers
 - Mobile apps
-- Streaming sticks (like Roku, Fire Stick, or Chromecast)
 
 Feel free to try out demo [here](https://demo.provod.rs)
-
-## Key Features
-
-- [x] Metadata fetching
-- [x] Torrent client
-- [x] Media transcoding
-- [x] UPnP capabilities
 
 ## Supported metadata providers
 
@@ -57,46 +41,60 @@ Feel free to try out demo [here](https://demo.provod.rs)
 
 # Installation
 
-## Pacman
+## Arch Linux
 
-### Install PKGBUILD manually
+Install from the AUR (e.g. `paru -S media-server`), or build the
+[PKGBUILD](https://github.com/dog4ik/media-server-aur) manually with `makepkg -si`.
 
-`OUT="$HOME/msbuild" SRCDEST="$OUT/src" SRCPKGDEST="$OUT" PKGDEST="$OUT" LOGDEST="$OUT" BUILDDIR="$OUT" makepkg -si`
+## Ubuntu / Debian
+
+Download the `.deb` from the [latest release](https://github.com/dog4ik/media-server/releases)
+and install it:
+
+```sh
+sudo apt install ./media-server_*_amd64.deb
+```
+
+This installs the necessary components. Start it with:
+
+```sh
+sudo systemctl enable --now media-server
+```
+
+## Windows
+
+1. Download the installer (`media-server-setup-win-x64.exe`) from the
+   [latest release](https://github.com/dog4ik/media-server/releases).
+2. Run it and follow the instructions.
+
+## Docker
+
+You can build and run docker container
+
+`docker build -t media-server:latest .`
+
+`docker run --name media-server -p 6969:6969 media-server:latest`
+
+An container image is published to Docker Hub as `dog4ik/media-server`.
 
 ## Build from source
 
-#### MSRV: 1.88.0
+The MSRV is **1.95.0**.
 
-#### Required dependencies
+### Dependencies
 
-- `ffmpeg` and `ffprobe` are required. `--enable-chromaprint` ffmpeg build flag is required for intro detection feature.
+`ffmpeg` and `ffprobe` are required at runtime. An ffmpeg build with `--enable-chromaprint` is required for the intro-detection feature.
 
-##### Arch Linux
+- **Arch Linux:** `pacman -S pkgconf ffmpeg clang`
+- **Ubuntu/Debian:** `apt install pkg-config ffmpeg clang libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev`
 
-`pacman -S pkgconf ffmpeg clang`
+### Build
 
-##### Ubuntu
+```sh
+cargo build --release
+```
 
-`apt install pkg-config ffmpeg libavcodec-dev libavformat-dev libavfilter-dev libavutil-dev libavdevice-dev libswscale-dev clang`
-
-1. Install sqlx-cli with `cargo install sqlx-cli`
-2. Set `DATABASE_URL` environment variable to `sqlite://db/database.sqlite`.
-3. Create database directory `db`
-4. Install required dependencies and run database migrations `sqlx database setup`.
-5. Run `cargo build --release`. To build with tray icon for Windows run `cargo build --release --features windows-tray`
-
-## Windows installation
-
-1. Download installer from [releases](https://github.com/dog4ik/media-server/releases).
-2. Run installer and follow instructions
-
-## Browser codec support
-
-Many videos might not work because of browser limited codecs support. Your options are to either transcode / remux video
-or try using a different browser.
-
-You can download [Electron Client](https://github.com/dog4ik/media-server-electron/releases), built with flag `enable_platform_ac3_eac3_audio` enabled.
-It supports a wider range of formats natively, eliminating the need for transcoding / remuxing.
+To build with the Windows tray menu run: `cargo build --release --features windows-tray`.
 
 ## API Documentation
 

@@ -1,0 +1,116 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT episodes.id, episodes.number, episodes.duration, episodes.season_id,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,\n                seasons.number AS season_number,\n                history.id as \"history_id?\", history.is_finished, history.time as history_time, history.update_time as history_update_time,\n                intros.id as \"intro_id?\", intros.start_sec as intro_start, intros.end_sec as intro_end\n                FROM episodes\n                JOIN seasons ON seasons.id = episodes.season_id\n                JOIN metadata ON metadata.id = episodes.metadata_id\n                LEFT JOIN intros ON intros.episode_id = episodes.id\n                LEFT JOIN history ON history.metadata_id = episodes.metadata_id\n                WHERE episodes.season_id = ? ORDER BY episodes.number ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "number",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "duration",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "season_id",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "plot",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "season_number",
+        "ordinal": 9,
+        "type_info": "Integer"
+      },
+      {
+        "name": "history_id?",
+        "ordinal": 10,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_finished",
+        "ordinal": 11,
+        "type_info": "Bool"
+      },
+      {
+        "name": "history_time",
+        "ordinal": 12,
+        "type_info": "Integer"
+      },
+      {
+        "name": "history_update_time",
+        "ordinal": 13,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "intro_id?",
+        "ordinal": 14,
+        "type_info": "Integer"
+      },
+      {
+        "name": "intro_start",
+        "ordinal": 15,
+        "type_info": "Integer"
+      },
+      {
+        "name": "intro_end",
+        "ordinal": 16,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "242f4b0d348a0b25f294015bfc5e88f05fe6f3ee2cbba803ac0963734f9fc476"
+}

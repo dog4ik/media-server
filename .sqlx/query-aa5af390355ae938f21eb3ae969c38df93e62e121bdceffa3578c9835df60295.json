@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE metadata SET plot = ? WHERE id = (SELECT metadata_id FROM seasons WHERE show_id = ? AND number = ?);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "aa5af390355ae938f21eb3ae969c38df93e62e121bdceffa3578c9835df60295"
+}

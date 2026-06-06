@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,\n        history.metadata_id, episodes.number AS episode_number, seasons.show_id AS show_id,\n        seasons.number AS season_number FROM history\n    JOIN episodes ON episodes.metadata_id = history.metadata_id\n    JOIN seasons ON seasons.id = episodes.season_id WHERE history.is_finished = false\n    ORDER BY history.update_time DESC LIMIT 50;",
+  "describe": {
+    "columns": [
+      {
+        "name": "history_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "time",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_finished",
+        "ordinal": 2,
+        "type_info": "Bool"
+      },
+      {
+        "name": "update_time",
+        "ordinal": 3,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode_number",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "show_id",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "season_number",
+        "ordinal": 7,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "393eb92ddbc92db1da4431f7706ca8765eade91ac286bb7df1a53cf315115d9f"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO upnp_uuid (id, uuid) VALUES (0, ?);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "eaa3f27bb9db44a26cdeaec315ef3f4161bbdc79f1d2de5cd3765eb2b7eca1a0"
+}

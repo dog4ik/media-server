@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR IGNORE INTO content_genres (genre_id, metadata_id) VALUES (?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c31a7b286f99bae768699ee34980aaa8fd732401b2b3f1099b330ed48c34b716"
+}

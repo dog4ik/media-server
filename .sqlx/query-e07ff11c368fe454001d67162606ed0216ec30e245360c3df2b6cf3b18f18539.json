@@ -1,0 +1,32 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT videos.scan_date, videos.path, videos.metadata_id AS video_content_id\n        FROM videos\n        LEFT JOIN episodes ON episodes.metadata_id = videos.metadata_id\n        WHERE videos.id = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "scan_date",
+        "ordinal": 0,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "path",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "video_content_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "e07ff11c368fe454001d67162606ed0216ec30e245360c3df2b6cf3b18f18539"
+}

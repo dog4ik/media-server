@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT video_id, external_path FROM subtitles WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "video_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "external_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "de1cbdc2dc21bb888fc076c9208d904ef81ae7b81f0528f11fe0573eb14e9e03"
+}

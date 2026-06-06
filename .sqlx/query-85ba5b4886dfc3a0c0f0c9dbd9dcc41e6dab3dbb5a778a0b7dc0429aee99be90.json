@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO torrents\n            (info_hash, bitfield, trackers, save_location, bencoded_info)\n            VALUES (?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "85ba5b4886dfc3a0c0f0c9dbd9dcc41e6dab3dbb5a778a0b7dc0429aee99be90"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM episodes WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "3974fc9a150b9d1feb9401f7c8075a774d0570104d0b089fd2e5ed2e85e66f0c"
+}

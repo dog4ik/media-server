@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT external_ids.* FROM external_ids\n                        JOIN shows ON shows.metadata_id = external_ids.metadata_id\n                        WHERE shows.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "external_provider",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "external_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_prime",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7a2f88ecff2e1089bba2de1bf35a6ca28ebd624accf7c8f1ebaf594964a04bbd"
+}

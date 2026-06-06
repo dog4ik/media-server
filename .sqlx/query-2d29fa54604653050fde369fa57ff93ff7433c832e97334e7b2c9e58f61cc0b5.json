@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM movies WHERE id = ?);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2d29fa54604653050fde369fa57ff93ff7433c832e97334e7b2c9e58f61cc0b5"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE intros SET start_sec = ?, end_sec = ?\n        WHERE episode_id = (SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?))\n        RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6607aca47e1749ffb78d2e81cd99049d67972f988275501b46ec521c7d5c7675"
+}

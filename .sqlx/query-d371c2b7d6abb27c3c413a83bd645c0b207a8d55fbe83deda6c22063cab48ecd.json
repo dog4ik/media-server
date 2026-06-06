@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT show_id FROM seasons WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "show_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d371c2b7d6abb27c3c413a83bd645c0b207a8d55fbe83deda6c22063cab48ecd"
+}

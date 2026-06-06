@@ -2604,7 +2604,7 @@ version = "0.1.0"
 
 [[package]]
 name = "media-server"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "anyhow",
  "async-trait",

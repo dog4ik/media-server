@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.id as \"movie_id!\" FROM external_ids\n                JOIN movies ON movies.metadata_id = external_ids.metadata_id\n                WHERE external_ids.external_provider = ? AND external_ids.external_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "movie_id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "251f54f11a977b246b14c5442d937006b80f3d4513cef71d57e25c74803fa74a"
+}

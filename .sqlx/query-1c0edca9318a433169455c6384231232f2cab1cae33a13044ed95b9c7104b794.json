@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        DELETE FROM metadata;\n        DELETE FROM videos;\n        DELETE FROM subtitles;\n        ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "1c0edca9318a433169455c6384231232f2cab1cae33a13044ed95b9c7104b794"
+}
