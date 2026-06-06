@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM intros WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9e0d9aff737358b941765b2b65de7d1e2f5c1d9f321dc1cbdf11b00aa44d117d"
+}

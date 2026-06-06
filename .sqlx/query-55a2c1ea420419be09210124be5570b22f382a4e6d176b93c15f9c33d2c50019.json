@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM torrents WHERE info_hash = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "55a2c1ea420419be09210124be5570b22f382a4e6d176b93c15f9c33d2c50019"
+}

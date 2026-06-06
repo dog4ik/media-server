@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE history SET time = ?, is_finished = ?, update_time = ? WHERE id = ? RETURNING metadata_id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "metadata_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "19bc780bf49aa802c2a5077280389168cc60e6b8c2f4fe72042070c5c28a05e7"
+}

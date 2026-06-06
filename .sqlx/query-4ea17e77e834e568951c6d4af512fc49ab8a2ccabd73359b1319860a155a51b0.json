@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE metadata SET title = ?, plot = ?\n        WHERE id = (\n            SELECT episodes.metadata_id FROM episodes\n            JOIN seasons ON seasons.id = episodes.season_id\n            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?\n        );",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "4ea17e77e834e568951c6d4af512fc49ab8a2ccabd73359b1319860a155a51b0"
+}

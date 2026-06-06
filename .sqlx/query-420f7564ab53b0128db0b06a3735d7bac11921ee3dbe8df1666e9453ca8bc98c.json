@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "select actors.id from actors\nwhere (actors.external_metadata_provider = ? and actors.external_metadata_id = ?) or (? is not null and actors.imdb_id = ?)",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "420f7564ab53b0128db0b06a3735d7bac11921ee3dbe8df1666e9453ca8bc98c"
+}

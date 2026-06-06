@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT min(videos.id) as \"video_id!\", episodes.id as \"episode_id!\" FROM episodes\n        JOIN seasons ON seasons.id = episodes.season_id\n        JOIN videos ON videos.metadata_id = episodes.metadata_id\n        WHERE seasons.show_id = ? AND seasons.number = ?\n        GROUP BY episodes.id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "video_id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episode_id!",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "53f973a16f8b4730763fd5549a600b21839d26cf27a69bd940f68c5bc23e745d"
+}

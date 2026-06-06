@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM subtitles WHERE id = ? RETURNING video_id, external_path",
+  "describe": {
+    "columns": [
+      {
+        "name": "video_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "external_path",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "6679836ec5bec7b1ac83c2ddc04874068b43e9da20e2d5f526503377247f8059"
+}

@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM torrent_files WHERE torrent_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "torrent_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "priority",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "idx",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "relative_path",
+        "ordinal": 5,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "45f4e7323bfa30296c5fd62a975bf609522565a36c2cb70bbae80c7cc2646c78"
+}

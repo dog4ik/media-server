@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE torrent_files SET priority = ? WHERE torrent_id = ? AND idx = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "5a0a076b28f5539ef5520a61b82cca00669a49a0b42a325a5d69c08c4dfbfcfb"
+}

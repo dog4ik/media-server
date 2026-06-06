@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM intros WHERE episode_id = (\n            SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)\n        ) RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "98b0179012bbe950bf24b281db04df35876aa6cdd5e0b584aea93c6adb9551e5"
+}

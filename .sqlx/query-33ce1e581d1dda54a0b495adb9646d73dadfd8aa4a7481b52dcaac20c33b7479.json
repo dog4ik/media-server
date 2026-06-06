@@ -1,0 +1,68 @@
+{
+  "db_name": "SQLite",
+  "query": "select episodes.id as episode_id, episodes.metadata_id,\n            history.id as \"history_id?\", history.is_finished, history.time as history_time, history.update_time as history_update_time,\n            intros.id as \"intro_id?\", intros.start_sec as intro_start, intros.end_sec as intro_end\n            from episodes\n            join seasons on seasons.id = episodes.season_id\n            left join intros on intros.episode_id = episodes.id\n            left join history on history.metadata_id = episodes.metadata_id\n            WHERE seasons.show_id = ? and seasons.number = ? and episodes.number = ? limit 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "episode_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "history_id?",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_finished",
+        "ordinal": 3,
+        "type_info": "Bool"
+      },
+      {
+        "name": "history_time",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "history_update_time",
+        "ordinal": 5,
+        "type_info": "Datetime"
+      },
+      {
+        "name": "intro_id?",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "intro_start",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "intro_end",
+        "ordinal": 8,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "33ce1e581d1dda54a0b495adb9646d73dadfd8aa4a7481b52dcaac20c33b7479"
+}

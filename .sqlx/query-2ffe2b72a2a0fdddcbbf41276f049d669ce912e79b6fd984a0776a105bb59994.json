@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT episodes.id AS episode_id, seasons.show_id AS show_id FROM videos\n            JOIN episodes ON episodes.metadata_id = videos.metadata_id\n            JOIN seasons ON seasons.id = episodes.season_id WHERE videos.id = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "episode_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "show_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "2ffe2b72a2a0fdddcbbf41276f049d669ce912e79b6fd984a0776a105bb59994"
+}

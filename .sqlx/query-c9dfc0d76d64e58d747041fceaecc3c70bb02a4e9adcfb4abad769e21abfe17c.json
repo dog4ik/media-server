@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM torrents WHERE torrents.info_hash = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "bencoded_info",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "bitfield",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "save_location",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "trackers",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 5,
+        "type_info": "Blob"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "c9dfc0d76d64e58d747041fceaecc3c70bb02a4e9adcfb4abad769e21abfe17c"
+}

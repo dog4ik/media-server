@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO torrent_files\n            (torrent_id, relative_path, priority, idx)\n            VALUES (?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "6481b5031dd85c742c0958296b06b9cdd296208f4e4ef7fdcf790e15d7fb9547"
+}

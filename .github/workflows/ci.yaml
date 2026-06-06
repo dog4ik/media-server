@@ -1,0 +1,77 @@
+name: Rust CI
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Format, build and test. Builds use the committed `.sqlx` cache via
+  # SQLX_OFFLINE, so no database or sqlx-cli is needed here.
+  build:
+    runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+        ffmpeg \
+        pkg-config \
+        clang \
+        libavcodec-dev \
+        libavformat-dev \
+        libavfilter-dev \
+        libavutil-dev \
+        libavdevice-dev \
+        libswscale-dev
+    - name: Check spelling
+      uses: crate-ci/typos@master
+    - name: Rust setup
+      run: rustup component add rustfmt
+    - name: Check code formatting
+      run: cargo fmt --check
+    - name: Build
+      run: cargo build --workspace --verbose
+    - name: Run tests
+      run: cargo test --workspace --verbose
+
+  # Verify the committed `.sqlx` query cache is in sync with the source. This is
+  # the only job that needs sqlx-cli and a live database. It fails if a query was
+  # changed without running `cargo sqlx prepare --workspace`.
+  sqlx-check:
+    runs-on: ubuntu-latest
+    env:
+      DATABASE_URL: "sqlite://db/database.sqlite"
+      # Force online mode so the check connects to the database and compares the
+      # freshly derived metadata against the committed cache.
+      SQLX_OFFLINE: "false"
+    steps:
+    - uses: actions/checkout@v4
+    - name: Install FFmpeg
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+        ffmpeg \
+        pkg-config \
+        clang \
+        libavcodec-dev \
+        libavformat-dev \
+        libavfilter-dev \
+        libavutil-dev \
+        libavdevice-dev \
+        libswscale-dev
+    - name: Install sqlx-cli
+      run: cargo install sqlx-cli --no-default-features --features sqlite,rustls
+    - name: Set up database
+      run: |
+        mkdir -p db
+        sqlx database setup
+    - name: Verify sqlx offline cache is up to date
+      run: cargo sqlx prepare --workspace --check

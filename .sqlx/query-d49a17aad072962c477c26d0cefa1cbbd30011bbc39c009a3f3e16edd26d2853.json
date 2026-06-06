@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT episodes.metadata_id FROM episodes);",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "d49a17aad072962c477c26d0cefa1cbbd30011bbc39c009a3f3e16edd26d2853"
+}

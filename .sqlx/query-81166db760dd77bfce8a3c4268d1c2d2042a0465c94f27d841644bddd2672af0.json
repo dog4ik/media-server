@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT seasons.id, seasons.number, seasons.metadata_id,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date\n                FROM seasons\n                JOIN metadata ON metadata.id = seasons.metadata_id\n                WHERE seasons.show_id = ? AND seasons.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "number",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "plot",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date",
+        "ordinal": 6,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "81166db760dd77bfce8a3c4268d1c2d2042a0465c94f27d841644bddd2672af0"
+}

@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, language, external_path, file_stem FROM subtitles WHERE video_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "language",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "external_path",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "file_stem",
+        "ordinal": 3,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "f3f343870c83a8019630bc0bf86349466dbc71873ca4e57de3e39ee9a09e01d7"
+}

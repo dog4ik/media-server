@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE subtitles SET language = ?, video_id = ?, external_path = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "fc7c5f403a8078bb35c9d857409955c8b07afc836989abb5c0c75169bf142ccf"
+}

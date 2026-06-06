@@ -1,0 +1,115 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+# Allow the jobs to create/update the GitHub Release for the tag and upload assets.
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build the Ubuntu/Debian package and attach it to the release.
+  linux-deb:
+    runs-on: ubuntu-latest
+    env:
+      SQLX_OFFLINE: "true"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install FFmpeg dev libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+          ffmpeg \
+          pkg-config \
+          clang \
+          libavcodec-dev \
+          libavformat-dev \
+          libavfilter-dev \
+          libavutil-dev \
+          libavdevice-dev \
+          libswscale-dev
+      - name: Install cargo-deb
+        run: cargo install cargo-deb --locked
+      - name: Fetch matching web client dist
+        run: |
+          MINOR_VERSION=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\).*/\1/p' Cargo.toml)
+          FRONTEND_VERSION=$(curl -fsSL https://api.github.com/repos/dog4ik/media-server-web/releases \
+            | jq -r "[.[] | select(.tag_name | startswith(\"v${MINOR_VERSION}\"))] | last | .tag_name")
+          echo "Using web client release: ${FRONTEND_VERSION}"
+          curl -fsSL "https://github.com/dog4ik/media-server-web/releases/download/${FRONTEND_VERSION}/dist.tar.gz" | tar -xz
+      - name: Build release binary
+        run: cargo build --release --bin media-server
+      - name: Build .deb package
+        run: cargo deb --no-build
+      - name: Upload .deb to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: target/debian/*.deb
+
+  # Build the Windows binary and NSIS installer, and attach it to the release.
+  windows-installer:
+    runs-on: windows-latest
+    env:
+      SQLX_OFFLINE: "true"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout server
+        uses: actions/checkout@v4
+        with:
+          path: media-server
+      - name: Checkout installer
+        uses: actions/checkout@v4
+        with:
+          repository: dog4ik/media-server-installer
+          path: installer
+      - name: Install build tooling (LLVM for bindgen, NSIS)
+        run: |
+          choco install llvm nsis -y --no-progress
+      - name: Download FFmpeg shared build
+        run: |
+          curl -fsSL -o ffmpeg.zip \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-win64-gpl-shared.zip
+          7z x ffmpeg.zip -offmpeg-dist >/dev/null
+          # The archive contains a single versioned top-level directory; flatten it.
+          FFDIR=$(find "$PWD/ffmpeg-dist" -mindepth 1 -maxdepth 1 -type d | head -n1)
+          mv "$FFDIR" "$PWD/ffmpeg"
+          echo "FFMPEG_DIR=$(cygpath -w "$PWD/ffmpeg")" >> "$GITHUB_ENV"
+          echo "LIBCLANG_PATH=C:\\Program Files\\LLVM\\bin" >> "$GITHUB_ENV"
+      - name: Build server
+        working-directory: media-server
+        run: cargo build --release --features windows-tray --bin media-server
+      - name: Fetch matching web client dist
+        working-directory: media-server
+        run: |
+          MINOR_VERSION=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\).*/\1/p' Cargo.toml)
+          FRONTEND_VERSION=$(curl -fsSL https://api.github.com/repos/dog4ik/media-server-web/releases \
+            | jq -r "[.[] | select(.tag_name | startswith(\"v${MINOR_VERSION}\"))] | last | .tag_name")
+          echo "Using web client release: ${FRONTEND_VERSION}"
+          curl -fsSL "https://github.com/dog4ik/media-server-web/releases/download/${FRONTEND_VERSION}/dist.tar.gz" | tar -xz
+      - name: Assemble installer inputs
+        run: |
+          # The .nsi expects, relative to its own directory: media-server/target/release/media-server.exe,
+          # media-server/LICENSE, ffmpeg/bin/*, media-server-web/dist/.
+          mkdir -p installer/media-server/target/release
+          cp media-server/target/release/media-server.exe installer/media-server/target/release/
+          cp media-server/LICENSE installer/media-server/LICENSE
+          mkdir -p installer/media-server-web
+          cp -r media-server/dist installer/media-server-web/dist
+          mkdir -p installer/ffmpeg/bin
+          cp "$PWD/ffmpeg"/bin/*.dll installer/ffmpeg/bin/
+      - name: Build installer
+        working-directory: installer
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          makensis "/DVERSION=${VERSION}" media_server.nsi
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: installer/*.exe
