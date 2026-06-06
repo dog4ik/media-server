@@ -587,11 +587,11 @@ impl_tuples_into_value_list! {
     (A, B, C, D, E, F, G, H, I, J, K, L)
 }
 
-pub trait WriteableArguments {
+pub trait WritableArguments {
     fn append_argument<'a>(
         self,
         names: impl Iterator<Item = &'a str>,
-        writeable: &mut WritableAction,
+        writable: &mut WritableAction,
     ) -> anyhow::Result<()>;
 }
 
@@ -601,17 +601,17 @@ macro_rules! impl_tuples_writable_argument {
     ($(($($types:ident),*)),*) => {
         $(
             #[allow(non_snake_case, unused_variables)]
-            impl<$($types: IntoXml),*> WriteableArguments for ($($types,)*) {
+            impl<$($types: IntoXml),*> WritableArguments for ($($types,)*) {
                 fn append_argument<'a>(
                     self,
                     mut names: impl Iterator<Item = &'a str>,
-                    writeable: &mut WritableAction,
+                    writable: &mut WritableAction,
                 ) -> anyhow::Result<()> {
                     use anyhow::Context;
                     let ($($types,)*) = self;
                     $(
                         let name = names.next().context("get next name")?;
-                        writeable.write_argument(name, $types)?;
+                        writable.write_argument(name, $types)?;
                     )*
                     Ok(())
                 }

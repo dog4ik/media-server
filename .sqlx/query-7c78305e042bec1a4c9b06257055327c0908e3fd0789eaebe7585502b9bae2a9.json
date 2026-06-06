@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT seasons.id, metadata.plot FROM seasons JOIN metadata ON metadata.id = seasons.metadata_id WHERE seasons.show_id = ? AND seasons.number = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "plot",
+        "ordinal": 1,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "7c78305e042bec1a4c9b06257055327c0908e3fd0789eaebe7585502b9bae2a9"
+}

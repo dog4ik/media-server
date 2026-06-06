@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO metadata (content_type, title, release_date, poster, plot, original_language, original_title)\n                VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "85c5d004b8d0ccaf91ec4acb4e656114ba4550f9ec43c90e9364b951063e373b"
+}

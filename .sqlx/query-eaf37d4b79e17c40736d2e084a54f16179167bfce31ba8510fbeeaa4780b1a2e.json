@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "select shows.id, shows.metadata_id from shows where shows.id = ? limit 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "eaf37d4b79e17c40736d2e084a54f16179167bfce31ba8510fbeeaa4780b1a2e"
+}

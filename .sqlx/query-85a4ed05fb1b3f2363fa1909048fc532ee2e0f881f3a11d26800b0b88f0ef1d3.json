@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT intros.start_sec, intros.end_sec FROM intros\n        JOIN episodes ON episodes.id = intros.episode_id\n        WHERE episodes.metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)",
+  "describe": {
+    "columns": [
+      {
+        "name": "start_sec",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "end_sec",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "85a4ed05fb1b3f2363fa1909048fc532ee2e0f881f3a11d26800b0b88f0ef1d3"
+}

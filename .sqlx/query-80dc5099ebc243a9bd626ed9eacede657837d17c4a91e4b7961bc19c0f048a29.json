@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM torrents LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "bencoded_info",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "bitfield",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "save_location",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "trackers",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "info_hash",
+        "ordinal": 5,
+        "type_info": "Blob"
+      },
+      {
+        "name": "added_at",
+        "ordinal": 6,
+        "type_info": "Datetime"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "80dc5099ebc243a9bd626ed9eacede657837d17c4a91e4b7961bc19c0f048a29"
+}

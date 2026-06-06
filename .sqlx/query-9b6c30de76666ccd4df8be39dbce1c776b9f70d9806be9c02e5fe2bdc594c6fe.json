@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT episodes.id FROM episodes\n            JOIN seasons ON seasons.id = episodes.season_id\n            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "9b6c30de76666ccd4df8be39dbce1c776b9f70d9806be9c02e5fe2bdc594c6fe"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE torrents SET bitfield = ? WHERE info_hash = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "34af891353b6a9be09d8ab60902cc3c9be6ba2399a918065c7f8a64b7cb19813"
+}

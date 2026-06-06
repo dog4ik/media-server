@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE videos.id = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "71ef625ae956f6968edf38ff3e273856cae5f0a7b84ca3acfdff98f9a617882b"
+}

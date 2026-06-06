@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT shows.id as \"show_id!\" FROM external_ids\n                JOIN shows ON shows.metadata_id = external_ids.metadata_id\n                WHERE external_ids.external_provider = ? AND external_ids.external_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "show_id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "74d7e1fdd0294a4f8dad4d92bc56be4962bfdcc3865e649cc4852481b1fc68e2"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO actors (name, external_metadata_id, external_metadata_provider, imdb_id, poster)\n                VALUES (?, ?, ?, ?, ?) RETURNING id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a91065f1ac66729b9fbb14a7e5b59ef483a490d8113c22f9f2d0f0f404f33d71"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM shows WHERE id = ?);",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "9cbe46d2be335af252d2fb3d03b87c45c6e2544ebf3f67711f67bcc3fb5669cd"
+}

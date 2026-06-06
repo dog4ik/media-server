@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT shows.id, shows.backdrop,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date,\n                metadata.original_language, metadata.original_title,\n                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as \"seasons!: String\",\n                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as \"episodes_count!: i64\"\n                FROM metadata_fts\n                JOIN metadata ON metadata.rowid = metadata_fts.rowid\n                JOIN shows ON shows.metadata_id = metadata.id\n                WHERE metadata_fts MATCH ? AND metadata.content_type = 'show'",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "backdrop",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "plot",
+        "ordinal": 3,
+        "type_info": "Text"
+      },
+      {
+        "name": "poster",
+        "ordinal": 4,
+        "type_info": "Text"
+      },
+      {
+        "name": "release_date",
+        "ordinal": 5,
+        "type_info": "Text"
+      },
+      {
+        "name": "original_language",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "original_title",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "seasons!: String",
+        "ordinal": 8,
+        "type_info": "Integer"
+      },
+      {
+        "name": "episodes_count!: i64",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "00b9409358d22ad104b662bb5b14b6bac2d7f726e19eda9f5a7fe9a4e17fc29a"
+}
