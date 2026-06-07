@@ -7,18 +7,16 @@ Wants=network-online.target
 [Service]
 Type=simple
 ExecStart=/usr/bin/media-server
-WorkingDirectory=/usr/share/media-server
+WorkingDirectory=/var/lib/media-server
 
-# Run as a transient, isolated system user. systemd creates and owns the
-# directories below and exports their paths to the process as $STATE_DIRECTORY,
-# $CONFIGURATION_DIRECTORY, $CACHE_DIRECTORY and $LOGS_DIRECTORY, which the binary
-# reads (see AppResources::systemd_dir in src/config.rs). This replaces the old
-# manual user-creation / chown setup.
-DynamicUser=yes
+User=media-server
+Group=media-server
+
 StateDirectory=media-server
-ConfigurationDirectory=media-server
 CacheDirectory=media-server
 LogsDirectory=media-server
+# Make freshly created files group-r/w
+UMask=0002
 
 # Optional overrides and secrets (tokens, RUST_LOG, OTLP endpoint, ...).
 # Shipped empty; the leading "-" makes it optional. See media-server.env.
@@ -33,9 +31,13 @@ KillMode=process
 StandardOutput=journal
 StandardError=journal
 
-# NOTE: media libraries usually live outside the service's own directories. If
-# your media is not world-readable, grant the service access via
-# SupplementaryGroups= (add a group that can read your media) or filesystem ACLs.
+# Sandboxing
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
 
 [Install]
 WantedBy=multi-user.target

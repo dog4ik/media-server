@@ -3,7 +3,7 @@ members = [".", "torrent", "upnp"]
 
 [package]
 name = "media-server"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "Self-hosted media server"
 license = "GPL-3.0-or-later"
@@ -39,6 +39,11 @@ assets = [
     "644",
   ],
   [
+    "packaging/systemd/media-server.sysusers",
+    "usr/lib/sysusers.d/media-server.conf",
+    "644",
+  ],
+  [
     "README.md",
     "usr/share/doc/media-server/README.md",
     "644",
@@ -51,6 +56,9 @@ unit-name = "media-server"
 enable = true
 start = true
 restart-after-upgrade = true
+
+# create the `media-server` system user via systemd-sysusers before the service is enabled/started.
+maintainer-scripts = "packaging/deb"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

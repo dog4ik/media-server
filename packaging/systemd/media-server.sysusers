@@ -1,0 +1,3 @@
+# Creates the dedicated system user and group
+#Type Name          ID  GECOS          Home directory          Shell
+u     media-server  -   "Media Server" /var/lib/media-server   -

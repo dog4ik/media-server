@@ -1054,10 +1054,8 @@ pub static APP_RESOURCES: LazyLock<AppResources> = LazyLock::new(AppResources::n
 #[cfg(target_os = "linux")]
 #[derive(Debug, Clone, Copy)]
 enum SystemdDirectory {
-    /// Persistent service state, e.g. the database (`StateDirectory=`).
+    /// Persistent service state, e.g. the database and config (`StateDirectory=`).
     State,
-    /// Service configuration files (`ConfigurationDirectory=`).
-    Configuration,
     /// Non-essential cached/temporary data (`CacheDirectory=`).
     Cache,
     /// Service log files (`LogsDirectory=`).
@@ -1069,7 +1067,6 @@ impl SystemdDirectory {
     const fn as_str(self) -> &'static str {
         match self {
             Self::State => "STATE_DIRECTORY",
-            Self::Configuration => "CONFIGURATION_DIRECTORY",
             Self::Cache => "CACHE_DIRECTORY",
             Self::Logs => "LOGS_DIRECTORY",
         }
@@ -1138,7 +1135,7 @@ impl AppResources {
     pub fn default_config_path() -> PathBuf {
         if Self::is_prod() {
             #[cfg(target_os = "linux")]
-            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Configuration) {
+            if let Some(dir) = Self::systemd_dir(SystemdDirectory::State) {
                 return dir.join("configuration.toml");
             }
             dirs::config_local_dir()
