@@ -72,6 +72,9 @@ jobs:
       - name: Install build tooling (LLVM for bindgen, NSIS)
         run: |
           choco install llvm nsis -y --no-progress
+          # choco updates the machine PATH via the registry, but the job's PATH was
+          # snapshotted at start, so makensis isn't visible to later steps. Add it.
+          echo "C:\\Program Files (x86)\\NSIS" >> "$GITHUB_PATH"
       - name: Download FFmpeg shared build
         run: |
           curl -fsSL -o ffmpeg.zip \
@@ -108,7 +111,8 @@ jobs:
         working-directory: installer
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          makensis "/DVERSION=${VERSION}" media_server.nsi
+          # MSYS_NO_PATHCONV stops Git Bash from rewriting the /D... switch into a path.
+          MSYS_NO_PATHCONV=1 makensis "/DVERSION=${VERSION}" media_server.nsi
       - name: Upload installer to release
         uses: softprops/action-gh-release@v2
         with:
