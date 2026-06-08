@@ -1,4 +1,5 @@
 use crate::{
+    config,
     db::{DbActions, DbRole, DbTransaction},
     ffmpeg,
     library::{
@@ -74,10 +75,29 @@ impl Default for ScanConfig {
     fn default() -> Self {
         Self {
             fetch_params: FetchParams::default(),
-            max_show_concurrency: 4,
-            use_season_episodes: false,
-            max_movie_concurrency: 8,
-            max_asset_concurrency: 16,
+            max_show_concurrency: config::scan::MaxShowConcurrency::default().0,
+            use_season_episodes: config::scan::UseSeasonEpisodes::default().0,
+            max_movie_concurrency: config::scan::MaxMovieConcurrency::default().0,
+            max_asset_concurrency: config::scan::MaxAssetConcurrency::default().0,
+        }
+    }
+}
+
+impl ScanConfig {
+    pub fn new_from_config_values() -> Self {
+        let (
+            config::MetadataLanguage(lang),
+            config::scan::MaxShowConcurrency(max_show_concurrency),
+            config::scan::UseSeasonEpisodes(use_season_episodes),
+            config::scan::MaxMovieConcurrency(max_movie_concurrency),
+            config::scan::MaxAssetConcurrency(max_asset_concurrency),
+        ) = config::CONFIG.get_values();
+        Self {
+            fetch_params: FetchParams { lang },
+            max_show_concurrency,
+            use_season_episodes,
+            max_movie_concurrency,
+            max_asset_concurrency,
         }
     }
 }

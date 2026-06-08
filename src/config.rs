@@ -262,6 +262,10 @@ impl ConfigStore {
         store.register_value::<UpnpEnabled>();
         store.register_value::<UpnpTtl>();
         store.register_value::<MetadataLanguage>();
+        store.register_value::<scan::MaxMovieConcurrency>();
+        store.register_value::<scan::MaxShowConcurrency>();
+        store.register_value::<scan::MaxAssetConcurrency>();
+        store.register_value::<scan::UseSeasonEpisodes>();
 
         store
     }
@@ -538,6 +542,10 @@ impl utoipa::PartialSchema for UtoipaConfigSchema {
             .item(UtoipaConfigValue::<WebUiPath>::schema())
             .item(UtoipaConfigValue::<UpnpEnabled>::schema())
             .item(UtoipaConfigValue::<UpnpTtl>::schema())
+            .item(UtoipaConfigValue::<scan::MaxMovieConcurrency>::schema())
+            .item(UtoipaConfigValue::<scan::MaxShowConcurrency>::schema())
+            .item(UtoipaConfigValue::<scan::MaxAssetConcurrency>::schema())
+            .item(UtoipaConfigValue::<scan::UseSeasonEpisodes>::schema())
             .item(UtoipaConfigValue::<MetadataLanguage>::schema());
         let array = schema::ArrayBuilder::new().items(schema).build();
         array.into()
@@ -723,6 +731,12 @@ impl ConfigValue for TmdbKey {
     const ENV_KEY: Option<&str> = Some("TMDB_TOKEN");
 }
 
+impl AsRef<Option<String>> for TmdbKey {
+    fn as_ref(&self) -> &Option<String> {
+        &self.0
+    }
+}
+
 /// API key for Provod agent. Allows server to authenticate with Provod proxy server
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 pub struct ProvodKey(pub Option<String>);
@@ -744,10 +758,48 @@ impl ConfigValue for OtelEndpoint {
     const REQUIRE_RESTART: bool = true;
 }
 
-impl AsRef<Option<String>> for TmdbKey {
-    fn as_ref(&self) -> &Option<String> {
-        &self.0
+/// Settings related to the library scanning process
+pub mod scan {
+    use super::*;
+    use serde::{Deserialize, Serialize};
+
+    /// Try to use episodes metadata from fetched season.
+    /// It will speed up metadata fetch for newly added season, but episodes will end up with potentially incomplete metadata
+    ///
+    /// Not recommended unless you have a huge show library you scan at once
+    #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
+    pub struct UseSeasonEpisodes(pub bool);
+    impl ConfigValue for UseSeasonEpisodes {}
+
+    /// The amount of movies allowed to be fetched concurrently
+    #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
+    pub struct MaxMovieConcurrency(pub usize);
+    impl Default for MaxMovieConcurrency {
+        fn default() -> Self {
+            Self(8)
+        }
     }
+    impl ConfigValue for MaxMovieConcurrency {}
+
+    /// The amount of shows allowed to be fetched concurrently
+    #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
+    pub struct MaxShowConcurrency(pub usize);
+    impl Default for MaxShowConcurrency {
+        fn default() -> Self {
+            Self(4)
+        }
+    }
+    impl ConfigValue for MaxShowConcurrency {}
+
+    /// The amount of assets allowed to be fetched concurrently
+    #[derive(Deserialize, Clone, Serialize, Debug, utoipa::ToSchema)]
+    pub struct MaxAssetConcurrency(pub usize);
+    impl Default for MaxAssetConcurrency {
+        fn default() -> Self {
+            Self(16)
+        }
+    }
+    impl ConfigValue for MaxAssetConcurrency {}
 }
 
 /// API key for TVDB. Allows server to authenticate with TVDB metadata provider

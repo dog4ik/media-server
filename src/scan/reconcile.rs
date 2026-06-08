@@ -71,10 +71,7 @@ impl LibraryReconciler {
             )
             .await?;
 
-        let config = ScanConfig {
-            fetch_params,
-            ..ScanConfig::default()
-        };
+        let config = ScanConfig::new_from_config_values(fetch_params);
         let max_asset_concurrency = config.max_asset_concurrency;
 
         let movie_scanner = MovieScanner::new(self.db.clone(), self.providers, config.clone());
