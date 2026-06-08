@@ -43,7 +43,13 @@ async fn main() {
         Err(err) => Some(err),
     };
 
-    let config::OtelEndpoint(otel_endpoint) = config::CONFIG.get_value();
+    let (
+        config::OtelEndpoint(otel_endpoint),
+        config::Port(port),
+        config::ShowFolders(show_dirs),
+        config::MovieFolders(movie_dirs),
+        config::WebUiPath(web_ui_path),
+    ) = config::CONFIG.get_values();
     let _guard = init_tracer(otel_endpoint.as_deref());
 
     match dotenv_path {
@@ -70,11 +76,8 @@ async fn main() {
             .expect("database to be found");
 
         let db = Box::leak(Box::new(db));
-        let config::Port(port) = config::CONFIG.get_value();
-        let show_dirs: config::ShowFolders = config::CONFIG.get_value();
-        let movie_dirs: config::MovieFolders = config::CONFIG.get_value();
 
-        let library = Library::init_from_folders(show_dirs.0, movie_dirs.0, db).await;
+        let library = Library::init_from_folders(show_dirs, movie_dirs, db).await;
         let library = Box::leak(Box::new(Mutex::new(library)));
 
         let mut providers_stack = MetadataProvidersStack::new();
@@ -354,10 +357,8 @@ async fn main() {
 
         let debug_api = Router::new().route("/library", get(api::server::library_state));
 
-        let web_ui_path: config::WebUiPath = config::CONFIG.get_value();
-
-        let assets_service = ServeDir::new(&web_ui_path.0)
-            .fallback(ServeFile::new(web_ui_path.0.join("index.html")));
+        let assets_service =
+            ServeDir::new(&web_ui_path).fallback(ServeFile::new(web_ui_path.join("index.html")));
 
         let upnp = Upnp::init(app_state.clone()).await;
 

@@ -138,7 +138,7 @@ impl<T: ConfigValue> SettingValue<T> {
     }
 }
 
-trait AnySettingValue: 'static + Send + Sync {
+pub trait AnySettingValue: 'static + Send + Sync {
     fn key(&self) -> String;
     fn require_restart(&self) -> bool;
     fn type_name(&self) -> std::borrow::Cow<'static, str>;
@@ -225,9 +225,11 @@ impl<T: ConfigValue> AnySettingValue for SettingValue<T> {
 
 pub static CONFIG: LazyLock<ConfigStore> = LazyLock::new(ConfigStore::construct);
 
+type SettingsInnerStore = HashMap<TypeId, Box<dyn AnySettingValue>>;
+
 #[derive(Clone)]
 pub struct ConfigStore {
-    settings: watch::Sender<HashMap<TypeId, Box<dyn AnySettingValue>>>,
+    settings: watch::Sender<SettingsInnerStore>,
 }
 
 impl std::fmt::Debug for ConfigStore {
@@ -283,13 +285,26 @@ impl ConfigStore {
         });
     }
 
-    pub fn get_value<T: ConfigValue>(&self) -> T {
-        let settings = self.settings.borrow();
-        let setting = settings
+    fn get_t<T: ConfigValue>(inner_storage: &SettingsInnerStore) -> T {
+        let setting = inner_storage
             .get(&TypeId::of::<T>())
             .unwrap_or_else(|| panic!("unregistered setting type {}", type_name::<T>()));
         let t: &T = setting.customized_value().downcast_ref().unwrap();
         t.clone()
+    }
+
+    /// Retrieve fresh single setting value.
+    pub fn get_value<T: ConfigValue>(&self) -> T {
+        let settings = self.settings.borrow();
+        Self::get_t(&settings)
+    }
+
+    /// Retrieve multiple settings values from the settings storage at once.
+    ///
+    /// Batch all settings reads under a single read lock
+    pub fn get_values<T: ManySettingsExtractor>(&self) -> T {
+        let settings = self.settings.borrow();
+        T::extract(&settings)
     }
 
     pub fn update_value<T: ConfigValue>(&self, new: T) {
@@ -419,7 +434,7 @@ impl Default for ConfigStore {
 }
 
 pub struct ConfigValueWatcher<T> {
-    rx: watch::Receiver<HashMap<TypeId, Box<dyn AnySettingValue>>>,
+    rx: watch::Receiver<SettingsInnerStore>,
     current_value: T,
     t_id: std::any::TypeId,
 }
@@ -558,6 +573,42 @@ pub struct UtoipaConfigValue<T> {
 
 #[derive(Debug)]
 pub struct UtoipaConfigSchema;
+
+/// Trait that allows extracting multiple settings values using a single borrow inside generic tuple
+pub trait ManySettingsExtractor {
+    fn extract(storage: &SettingsInnerStore) -> Self;
+}
+
+macro_rules! impl_many_settings_extractor_for_tuples {
+    () => {};
+
+    ($(($($types:ident),*)),*) => {
+        $(
+            impl<$($types: ConfigValue + 'static),*> ManySettingsExtractor for ($($types,)*) {
+                fn extract(storage: &SettingsInnerStore) -> Self {
+                    ($(
+                        ConfigStore::get_t::<$types>(storage),
+                    )*)
+                }
+            }
+        )*
+    };
+}
+
+impl_many_settings_extractor_for_tuples! {
+    (A),
+    (A, B),
+    (A, B, C),
+    (A, B, C, D),
+    (A, B, C, D, E),
+    (A, B, C, D, E, F),
+    (A, B, C, D, E, F, G),
+    (A, B, C, D, E, F, G, H),
+    (A, B, C, D, E, F, G, H, I),
+    (A, B, C, D, E, F, G, H, I, J),
+    (A, B, C, D, E, F, G, H, I, J, K),
+    (A, B, C, D, E, F, G, H, I, J, K, L)
+}
 
 // Settings
 

@@ -478,8 +478,8 @@ WHERE seasons.show_id = ?",
         tracing::info!("Partially refreshing library");
         let mut videos = HashMap::new();
         let mut to_remove = Vec::new();
-        let show_folders: config::ShowFolders = config::CONFIG.get_value();
-        let movie_folders: config::MovieFolders = config::CONFIG.get_value();
+        let (config::ShowFolders(show_folders), config::MovieFolders(movie_folders)) =
+            config::CONFIG.get_values();
         let mut show_paths = Vec::new();
         let mut movie_paths = Vec::new();
         {
@@ -492,22 +492,14 @@ WHERE seasons.show_id = ?",
                 }
                 match file.identifier {
                     ContentIdentifier::Show(_) => {
-                        if !show_folders
-                            .as_ref()
-                            .iter()
-                            .any(|p| file_path.starts_with(p))
-                        {
+                        if !show_folders.iter().any(|p| file_path.starts_with(p)) {
                             to_remove.push(*id);
                         } else {
                             show_paths.push(file.source.video.path().to_owned());
                         }
                     }
                     ContentIdentifier::Movie(_) => {
-                        if !movie_folders
-                            .as_ref()
-                            .iter()
-                            .any(|p| file_path.starts_with(p))
-                        {
+                        if !movie_folders.iter().any(|p| file_path.starts_with(p)) {
                             to_remove.push(*id);
                         } else {
                             movie_paths.push(file.source.video.path().to_owned());
@@ -529,9 +521,9 @@ WHERE seasons.show_id = ?",
         }
         tx.commit().await.unwrap();
 
-        explore_show_dirs(show_folders.0, self.db, &mut videos, &show_paths).await;
+        explore_show_dirs(show_folders, self.db, &mut videos, &show_paths).await;
 
-        explore_movie_dirs(movie_folders.0, self.db, &mut videos, &movie_paths).await;
+        explore_movie_dirs(movie_folders, self.db, &mut videos, &movie_paths).await;
 
         self.library.lock().unwrap().videos.extend(videos);
     }

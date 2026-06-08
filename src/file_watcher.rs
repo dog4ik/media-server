@@ -53,8 +53,8 @@ impl FileWatcher {
         })?;
 
         let cancellation_token = app_state.cancelation_token.clone();
-        let mut show_dirs: config::ShowFolders = config::CONFIG.get_value();
-        let mut movie_dirs: config::MovieFolders = config::CONFIG.get_value();
+        let (mut show_dirs, mut movie_dirs) =
+            config::CONFIG.get_values::<(config::ShowFolders, config::MovieFolders)>();
         let config_path = APP_RESOURCES.config_path.clone();
 
         tokio::spawn(async move {

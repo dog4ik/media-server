@@ -96,8 +96,7 @@ impl Upnp {
         let product_version = config::APP_RESOURCES.app_version;
         let cancellation_token = app_state.cancelation_token.child_token();
         let tracker = app_state.tasks.tracker.clone();
-        let port: config::Port = config::CONFIG.get_value();
-        let ttl: config::UpnpTtl = config::CONFIG.get_value();
+        let (config::Port(port), config::UpnpTtl(ttl)) = config::CONFIG.get_values();
 
         let uuid = app_state.db.get_uuid().await.unwrap_or_else(|_| {
             tracing::error!("Failed to get uuid, using random one");
@@ -107,8 +106,8 @@ impl Upnp {
         tracing::debug!("Server uuid: {uuid}");
 
         let config = upnp::ssdp::SsdpListenerConfig {
-            location_port: port.0,
-            ttl: Some(ttl.0),
+            location_port: port,
+            ttl: Some(ttl),
             user_agent: UpnpAgent {
                 os,
                 os_version,
@@ -124,7 +123,7 @@ impl Upnp {
         let mut router = upnp::router::UpnpRouter::new("/upnp", "Media server", uuid);
         match utils::local_addr().await {
             Ok(local_addr) => {
-                let server_location = format!("http://{}:{}", local_addr.ip(), port.0);
+                let server_location = format!("http://{}:{}", local_addr.ip(), port);
                 let content_directory =
                     MediaServerContentDirectory::new(app_state, server_location);
                 let content_directory = ContentDirectoryService::new(content_directory);
