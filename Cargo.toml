@@ -22,6 +22,8 @@ A self-hosted media server for organizing and streaming \
 your movie and TV show libraries, with metadata fetching, transcoding and DLNA \
 support."""
 conf-files = ["/etc/media-server/media-server.env"]
+# create the `media-server` system user via systemd-sysusers before the service is enabled/started.
+maintainer-scripts = "packaging/deb"
 assets = [
   [
     "target/release/media-server",
@@ -56,9 +58,6 @@ unit-name = "media-server"
 enable = true
 start = true
 restart-after-upgrade = true
-
-# create the `media-server` system user via systemd-sysusers before the service is enabled/started.
-maintainer-scripts = "packaging/deb"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
