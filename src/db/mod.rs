@@ -810,7 +810,9 @@ where
                 JOIN metadata ON metadata.id = episodes.metadata_id
                 LEFT JOIN intros ON intros.episode_id = episodes.id
                 LEFT JOIN history ON history.metadata_id = episodes.metadata_id
-                WHERE episodes.season_id = ? ORDER BY episodes.number ASC"#,
+                WHERE episodes.season_id = ?
+                AND EXISTS (SELECT 1 FROM videos WHERE videos.metadata_id = episodes.metadata_id)
+                ORDER BY episodes.number ASC"#,
                 season_row.id
             )
             .fetch_all(&mut *conn)
