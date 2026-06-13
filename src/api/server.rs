@@ -271,7 +271,7 @@ impl From<&Track<ffmpeg_abi::Video>> for DetailedVideoTrack {
             level: val.stream.level,
             profile_idc: val.stream.profile,
             bitrate: val.stream.bit_rate,
-            framerate: val.stream.avg_frame_rate as f64,
+            framerate: val.stream.avg_frame_rate,
             codec: val.stream.codec.clone(),
         }
     }

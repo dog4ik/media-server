@@ -101,7 +101,8 @@ pub async fn start(
     let duration = video_metadata.duration();
     let avg_framerate = video_metadata
         .default_video()
-        .map(|v| v.avg_frame_rate as usize);
+        .map(|v| v.avg_frame_rate)
+        .filter(|fps| *fps > 0.0);
     tracing::debug!(path = %target_path.display(), "Hls job input path");
     tracing::debug!(path = %tmp_path.0.display(), "Hls job temporary path");
     tracing::debug!("Hls job duration is {} mins", duration.as_secs_f32() / 60.);
@@ -112,6 +113,20 @@ pub async fn start(
     let (_watcher, file_change_rx) = spawn_watcher(&tmp_path.0)?;
 
     let video_codec_copy = config.video_encoder.is_none();
+
+    // Size the GOP from the *real* frame rate, rounding up so a GOP is never shorter than the
+    // segment length (otherwise ffmpeg packs two GOPs into one `hls_time` segment). The manifest
+    // and the seek targets then use the exact frame-aligned segment duration (`gop_frames / fps`)
+    // so the encoded segment boundaries line up with the manifest grid for the GOP-based hardware
+    // encoders
+    let (gop_frames, segment_duration) = match avg_framerate {
+        Some(fps) if !video_codec_copy => {
+            let frames = (DEFAULT_SEGMENT_LENGTH as f64 * fps).ceil() as usize;
+            (Some(frames), frames as f64 / fps)
+        }
+        // Without a known frame rate, use fallback.
+        _ => (None, DEFAULT_SEGMENT_LENGTH as f64),
+    };
     let args = CommandArgumentsParams {
         ffmpeg_path: ffmpeg_path.0,
         video_path: target_path,
@@ -122,8 +137,12 @@ pub async fn start(
         start: 0,
         seek_to: 0.,
         video_encoder: config.video_encoder.unwrap_or("copy".to_string()),
-        framerate: avg_framerate,
-        audio_codec: config.audio_encoder.unwrap_or("copy".to_string()),
+        gop_frames,
+        segment_duration,
+        // It is impossible to segment copied audio into transcoded segments without re-encoding
+        audio_codec: config
+            .audio_encoder
+            .unwrap_or_else(|| if video_codec_copy { "copy" } else { "aac" }.to_string()),
         copy_video: video_codec_copy,
     };
     let child = command::run(&args)?;
@@ -146,11 +165,7 @@ pub async fn start(
             }
         }
     } else {
-        M3U8Manifest::from_interval(
-            DEFAULT_SEGMENT_LENGTH as f64,
-            duration.as_secs_f64(),
-            &args.task_id,
-        )
+        M3U8Manifest::from_interval(segment_duration, duration.as_secs_f64(), &args.task_id)
     };
 
     let playlist = Arc::new(playlist);
@@ -259,6 +274,20 @@ async fn run_hls_handler(
                     }
                     continue;
                 };
+                // The current job writes segments sequentially starting at `start_segment`. A
+                // leftover file-change event from a previous killed job can slip past the reset
+                // drain and report an out-of-range segment
+                if new_segment < start_segment
+                    || new_segment > start_segment + segments_len + JOB_RESET_SEGMENT_THRESHOLD
+                {
+                    tracing::debug!(
+                        new_segment,
+                        start_segment,
+                        segments_len,
+                        "Ignoring implausible segment file event"
+                    );
+                    continue;
+                }
                 segments_len = new_segment - start_segment;
 
                 while let Some(ready_idx) = requests.iter().position(|r| r.idx < start_segment + segments_len) {

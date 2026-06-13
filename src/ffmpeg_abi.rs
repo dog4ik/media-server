@@ -57,7 +57,7 @@ pub struct Video {
     pub codec: VideoCodec,
     pub level: i32,
     pub profile: i32,
-    pub avg_frame_rate: u32,
+    pub avg_frame_rate: f64,
     pub bit_rate: usize,
     pub width: u32,
     pub height: u32,
@@ -111,7 +111,11 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Video {
         };
 
         let avg = stream.avg_frame_rate();
-        let avg_frame_rate = (avg.0 / avg.1).try_into()?;
+        let avg_frame_rate = if avg.1 == 0 {
+            0.0
+        } else {
+            avg.0 as f64 / avg.1 as f64
+        };
 
         Ok(Self {
             codec,

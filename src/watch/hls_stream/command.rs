@@ -34,20 +34,25 @@ fn apply_audio_arguments(c: &mut Command, codec: &str) {
     }
 }
 
-fn apply_keyframes_arguments(c: &mut Command, codec: &str, framerate: Option<usize>) {
+fn apply_keyframes_arguments(
+    c: &mut Command,
+    codec: &str,
+    gop_frames: Option<usize>,
+    segment_duration: f64,
+) {
     let add_keyframe_args = |c: &mut Command| {
         c.arg("-force_key_frames:0");
-        c.arg(format!("expr:gte(t,n_forced*{})", DEFAULT_SEGMENT_LENGTH));
+        // `t` is relative to the output start, so a keyframe is forced every segment_duration
+        // aligns the boundaries with the manifest grid.
+        c.arg(format!("expr:gte(t,n_forced*{})", segment_duration));
     };
 
     let add_gop_args = |c: &mut Command| {
-        if let Some(framerate) = framerate {
+        if let Some(gop_frames) = gop_frames {
             c.arg("-g:v:0");
-            // Math.ceil it
-            let frame_amount = DEFAULT_SEGMENT_LENGTH * framerate;
-            c.arg(frame_amount.to_string());
+            c.arg(gop_frames.to_string());
             c.arg("-keyint_min:v:0");
-            c.arg(frame_amount.to_string());
+            c.arg(gop_frames.to_string());
         }
     };
 
@@ -89,7 +94,11 @@ pub(super) struct CommandArgumentsParams {
     pub start: usize,
     pub seek_to: f64,
     pub video_encoder: String,
-    pub framerate: Option<usize>,
+    /// Number of frames per GOP. `None` when the frame rate is
+    /// unknown or the video is copied.
+    pub gop_frames: Option<usize>,
+    /// Frame-aligned segment duration in seconds (matches the manifest grid).
+    pub segment_duration: f64,
     pub audio_codec: String,
     pub copy_video: bool,
 }
@@ -116,7 +125,8 @@ pub(super) fn run(
         start,
         seek_to,
         video_encoder,
-        framerate,
+        gop_frames,
+        segment_duration,
         audio_codec,
         copy_video,
     }: &CommandArgumentsParams,
@@ -127,7 +137,12 @@ pub(super) fn run(
     c.arg("-ss");
     let seek_time = format!("{:.6}", seek_to);
     c.arg(&seek_time);
-    c.arg("-noaccurate_seek");
+    if *copy_video {
+        // Copy can't decode-and-discard to a frame boundary; the seek lands on the source
+        // keyframe, which is exactly the keyframe-based manifest boundary. Re-encoding uses
+        // accurate seek so the first output frame is exactly on the segment boundary.
+        c.arg("-noaccurate_seek");
+    }
 
     c.arg("-fflags");
     c.arg("+genpts");
@@ -142,10 +157,8 @@ pub(super) fn run(
     c.arg(format!("0:{audio_track_idx}"));
 
     apply_video_arguments(&mut c, if *copy_video { "copy" } else { video_encoder });
-    if *copy_video {
-        c.arg("-start_at_zero");
-    } else {
-        apply_keyframes_arguments(&mut c, video_encoder, *framerate);
+    if !*copy_video {
+        apply_keyframes_arguments(&mut c, video_encoder, *gop_frames, *segment_duration);
     }
     apply_audio_arguments(&mut c, audio_codec);
 
