@@ -56,7 +56,8 @@ use crate::metadata::{
     metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
-use crate::progress::{LibraryScanTask, ProgressDispatcher, Task, TaskError, TaskResource};
+use crate::progress::{ProgressDispatcher, Task, TaskError, TaskResource};
+use crate::scan::{self, LibraryScanTask};
 use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::watch::hls_stream::HlsStreamConfiguration;
 use crate::watch::{ClientType, WatchTask};
@@ -1278,9 +1279,12 @@ pub async fn library_state(
 )]
 pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<StatusCode, AppError> {
     let tasks = app_state.tasks;
-    let task_id = tasks.library_scan_tasks.start_task(LibraryScanTask, None)?;
+    let config = scan::ScanConfig::new_from_server_configuration();
+    let task_id = tasks
+        .library_scan_tasks
+        .start_task(LibraryScanTask::new(config.clone()), None)?;
     tokio::spawn(async move {
-        match app_state.reconciliate_library(task_id).await {
+        match app_state.reconciliate_library(task_id, config).await {
             Ok(_) => {
                 tasks.library_scan_tasks.finish_task(task_id);
             }

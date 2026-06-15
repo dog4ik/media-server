@@ -19,10 +19,13 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
+        ContentType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
         metadata_stack::MetadataProvidersStack,
     },
-    scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
+    scan::{
+        ContentScanner, insert_roles,
+        scan_progress::{FailedContent, MetadataProgressEmitter},
+    },
 };
 
 use super::{
@@ -87,7 +90,7 @@ impl MovieScanner {
                     fetch_single_movie_chunk(
                         db,
                         config,
-                        &title,
+                        title,
                         &title_videos,
                         &movie_providers,
                         &progress,
@@ -243,20 +246,21 @@ impl ContentScanner for MovieScanner {
 async fn fetch_single_movie_chunk(
     db: Db,
     config: ScanConfig,
-    title: &str,
+    title: String,
     videos: &[LibraryItem<MovieIdentifier>],
     movie_providers: &[&'static (dyn MovieMetadataProvider + Send + Sync)],
     progress: &MetadataProgressEmitter,
 ) -> ResolvedMovie {
     let first = videos.first().expect("movies are chunked");
-    let db_movies = db.search_movie(title).await.unwrap_or_default();
+    let db_movies = db.search_movie(&title).await.unwrap_or_default();
 
     if db_movies.is_empty()
         || db_movies.first().unwrap().title.split_whitespace().count()
             != title.split_whitespace().count()
     {
         for provider in movie_providers {
-            let Ok(search_results) = provider.movie_search(title, config.fetch_params).await else {
+            let Ok(search_results) = provider.movie_search(&title, config.fetch_params).await
+            else {
                 continue;
             };
             let Some(first_result) = search_results.into_iter().next() else {
@@ -320,9 +324,20 @@ async fn fetch_single_movie_chunk(
             .fetch_duration()
             .await
             .unwrap_or_default();
-        progress.dispatch_fail(videos.len());
+        let fallback = movie_fallback(&title);
+        progress.dispatch_fail(
+            FailedContent {
+                title: title,
+                videos: videos
+                    .iter()
+                    .map(|v| v.source.video.path().to_path_buf())
+                    .collect(),
+                content_type: ContentType::Movie,
+            },
+            videos.len(),
+        );
         ResolvedMovie {
-            lookup: movie_fallback(title),
+            lookup: fallback,
             duration,
             videos: videos.to_vec(),
         }

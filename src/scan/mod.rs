@@ -7,6 +7,7 @@ use crate::{
         assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
     },
     metadata::{ExternalIdMetadata, FetchParams, PersonMetadata},
+    progress::{ProgressStatus, TaskProgress, TaskTrait},
     scan::scan_progress::MetadataProgressEmitter,
 };
 
@@ -17,6 +18,40 @@ pub mod movie;
 pub mod reconcile;
 pub mod scan_progress;
 pub mod show;
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub struct LibraryScanTask {
+    scan_config: ScanConfig,
+    /// Content without proper metadata
+    failed_content: Vec<scan_progress::FailedContent>,
+}
+
+impl LibraryScanTask {
+    pub fn new(scan_config: ScanConfig) -> Self {
+        Self {
+            scan_config,
+            failed_content: Vec::new(),
+        }
+    }
+}
+
+impl PartialEq for LibraryScanTask {
+    fn eq(&self, _other: &Self) -> bool {
+        // All scan tasks are even (no duplicates are allowed)
+        true
+    }
+}
+
+impl Eq for LibraryScanTask {}
+
+impl TaskTrait for LibraryScanTask {
+    type Progress = scan_progress::ProgressChunk;
+
+    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress {
+        TaskProgress::LibraryScan(status)
+    }
+}
 
 /// Common interface for content scanners (shows, movies): fetch metadata for a batch of
 /// library videos, then flush the resolved tree into the database.
@@ -60,7 +95,7 @@ pub enum MetadataLookupWithIds<T> {
 }
 
 /// Configuration for scan operations.
-#[derive(Clone)]
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
 pub struct ScanConfig {
     pub fetch_params: FetchParams,
     /// Try to use season's episodes list to resolve episodes metadata
@@ -84,7 +119,7 @@ impl Default for ScanConfig {
 }
 
 impl ScanConfig {
-    pub fn new_from_config_values() -> Self {
+    pub fn new_from_server_configuration() -> Self {
         let (
             config::MetadataLanguage(lang),
             config::scan::MaxShowConcurrency(max_show_concurrency),

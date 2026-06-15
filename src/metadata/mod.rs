@@ -65,7 +65,7 @@ impl Language {
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+#[derive(Debug, Default, Clone, Copy, serde::Serialize, utoipa::ToSchema)]
 pub struct FetchParams {
     pub lang: Language,
 }

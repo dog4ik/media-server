@@ -5,8 +5,9 @@ use tracing::instrument;
 
 use crate::{
     db::{Db, DbActions},
-    library::{LibraryItem, show::ShowIdentifier},
-    metadata::{EpisodeMetadata, SeasonMetadata, ShowMetadata, ShowMetadataProvider},
+    library::{LibraryItem, Media, show::ShowIdentifier},
+    metadata::{ContentType, EpisodeMetadata, SeasonMetadata, ShowMetadata, ShowMetadataProvider},
+    scan::scan_progress::FailedContent,
 };
 
 use super::{
@@ -189,6 +190,7 @@ impl EpisodeScanner {
         episode_number: usize,
         videos: Vec<LibraryItem<ShowIdentifier>>,
     ) -> ResolvedEpisode {
+        let content_type = ContentType::Show;
         if let Some(show_id) = show_id {
             if let Ok(local_id) = self
                 .db
@@ -240,7 +242,18 @@ impl EpisodeScanner {
             episode = episode_number,
             "Using episode metadata fallback"
         );
-        self.progress.dispatch_fail(videos.len());
+        let title = videos[0].identifier.title();
+        self.progress.dispatch_fail(
+            FailedContent {
+                title: format!("{title} S{:0>2}E{:0>2}", season_number, episode_number),
+                videos: videos
+                    .iter()
+                    .map(|v| v.source.video.path().to_path_buf())
+                    .collect(),
+                content_type,
+            },
+            videos.len(),
+        );
         ResolvedEpisode {
             lookup: episode_fallback(episode_number, season_number),
             duration,

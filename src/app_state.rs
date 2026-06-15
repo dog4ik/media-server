@@ -457,7 +457,11 @@ WHERE seasons.show_id = ?",
     }
 
     #[tracing::instrument(skip(self), fields(%task_id))]
-    pub async fn reconciliate_library(&self, task_id: uuid::Uuid) -> Result<(), AppError> {
+    pub async fn reconciliate_library(
+        &self,
+        task_id: uuid::Uuid,
+        config: scan::ScanConfig,
+    ) -> Result<(), AppError> {
         self.partial_refresh().await;
         let progress = scan::scan_progress::ScanProgressEmitter::new(ProgressDispatcher::new(
             &self.tasks.library_scan_tasks,
@@ -469,7 +473,7 @@ WHERE seasons.show_id = ?",
             self.providers_stack,
             progress,
         )
-        .reconciliate()
+        .reconciliate(config)
         .await
     }
 

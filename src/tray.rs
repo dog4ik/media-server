@@ -139,14 +139,14 @@ pub async fn spawn_tray_icon(app_state: AppState) {
         tracing::trace!(btn = ?pressed_btn, "Tray button pressed");
         match pressed_btn {
             ButtonType::RefreshLibrary => {
-                tracing::trace!("Exit tray button pressed");
+                let config = crate::scan::ScanConfig::new_from_server_configuration();
                 match app_state
                     .tasks
                     .library_scan_tasks
-                    .start_task(crate::progress::LibraryScanTask, None)
+                    .start_task(crate::scan::LibraryScanTask::new(config.clone()), None)
                 {
                     Ok(task_id) => {
-                        let _ = app_state.reconciliate_library(task_id).await;
+                        let _ = app_state.reconciliate_library(task_id, config).await;
                     }
                     Err(e) => {
                         tracing::warn!("Failed to start library reconcillation from tray: {e}");

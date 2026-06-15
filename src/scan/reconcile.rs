@@ -48,7 +48,7 @@ impl LibraryReconciler {
     }
 
     #[tracing::instrument(name = "reconcile", skip_all)]
-    pub async fn reconciliate(self) -> Result<(), AppError> {
+    pub async fn reconciliate(self, config: ScanConfig) -> Result<(), AppError> {
         let db_movies_videos = sqlx::query!(
             "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT movies.metadata_id FROM movies);"
         )
@@ -67,7 +67,6 @@ impl LibraryReconciler {
             )
             .await?;
 
-        let config = ScanConfig::new_from_config_values();
         let max_asset_concurrency = config.max_asset_concurrency;
 
         let movie_scanner = MovieScanner::new(self.db.clone(), self.providers, config.clone());

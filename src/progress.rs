@@ -10,7 +10,7 @@ use crate::{
     app_state::AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
     intro_detection::IntroJob,
-    scan::scan_progress,
+    scan::LibraryScanTask,
     torrent::PendingTorrent,
     watch::WatchTask,
 };
@@ -40,18 +40,6 @@ impl Notification {
             task_progress: progress.into(),
             activity_id: id,
         }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Eq, PartialEq, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub struct LibraryScanTask;
-
-impl TaskTrait for LibraryScanTask {
-    type Progress = scan_progress::ProgressChunk;
-
-    fn into_progress(status: ProgressStatus<Self>) -> TaskProgress {
-        TaskProgress::LibraryScan(status)
     }
 }
 
@@ -122,6 +110,35 @@ impl<T: TaskTrait> TaskStorage<T> {
             activity_id: task_id,
         };
         let _ = self.progress_channel.0.send(notification);
+    }
+
+    /// Send the task progress and apply the necessary update to the task state.
+    ///
+    /// Acquires lock once
+    pub fn send_progress_with_update<F, R>(
+        &self,
+        task_id: Uuid,
+        status: ProgressStatus<T>,
+        f: F,
+    ) -> Option<R>
+    where
+        F: FnOnce(&mut Task<T>) -> R,
+    {
+        let ret = {
+            let mut tasks = self.tasks.lock().unwrap();
+            let task = tasks.iter_mut().find(|t| t.id == task_id)?;
+            if let ProgressStatus::Pending { progress } = &status {
+                task.latest_progress = Some(progress.clone());
+            }
+            f(task)
+        };
+        let task_progress = T::into_progress(status);
+        let notification = Notification {
+            task_progress,
+            activity_id: task_id,
+        };
+        let _ = self.progress_channel.0.send(notification);
+        Some(ret)
     }
 }
 
@@ -197,6 +214,17 @@ impl<T: TaskTrait> ProgressDispatcher<T> {
             .send_progress(self.task_id, ProgressStatus::Pending { progress });
     }
 
+    pub fn progress_with_update<F, R>(&self, progress: T::Progress, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Task<T>) -> R,
+    {
+        self.task_storage.send_progress_with_update(
+            self.task_id,
+            ProgressStatus::Pending { progress },
+            f,
+        )
+    }
+
     pub fn error(mut self, err: TaskError) {
         self.active = false;
         self.task_storage.error_task(self.task_id, err);
@@ -214,6 +242,14 @@ impl<T: TaskTrait> ProgressDispatcher<T> {
 
     pub fn task_id(&self) -> uuid::Uuid {
         self.task_id
+    }
+
+    pub fn update_task<F, R>(&self, f: F) -> Option<R>
+    where
+        F: FnOnce(&mut Task<T>) -> R,
+    {
+        let mut tasks = self.task_storage.tasks.lock().unwrap();
+        tasks.iter_mut().find(|t| t.id == self.task_id).map(f)
     }
 }
 
