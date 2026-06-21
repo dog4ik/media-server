@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "select shows.id, shows.metadata_id from shows where shows.id = ? limit 1",
+  "query": "SELECT shows.id, external_ids.metadata_id FROM external_ids\n                JOIN shows ON shows.metadata_id = external_ids.metadata_id\n                WHERE external_ids.external_provider = ? AND external_ids.external_id = ?",
   "describe": {
     "columns": [
       {
@@ -15,12 +15,12 @@
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 2
     },
     "nullable": [
       false,
       false
     ]
   },
-  "hash": "eaf37d4b79e17c40736d2e084a54f16179167bfce31ba8510fbeeaa4780b1a2e"
+  "hash": "0729499c04f8e2d3e27174353c2714c150ffba4051a6527ed2758bc3b3f3e569"
 }

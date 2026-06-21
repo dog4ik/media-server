@@ -1,12 +1,17 @@
+use std::collections::HashMap;
+
 use crate::{
     config,
-    db::{DbActions, DbRole, DbTransaction},
+    db::{DbActions, DbQueryBuilder, DbRole, DbTransaction},
     ffmpeg,
     library::{
         LibraryItem, Media, Source,
         assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
     },
-    metadata::{ExternalIdMetadata, FetchParams, PersonMetadata},
+    metadata::{
+        ExternalIdMetadata, FetchParams, MetadataProvider, PersonMetadata,
+        metadata_api::asset_saver::AssetTasks,
+    },
     progress::{ProgressStatus, TaskProgress, TaskTrait},
     scan::scan_progress::MetadataProgressEmitter,
 };
@@ -74,7 +79,7 @@ pub trait ContentScanner {
     async fn flush_to_db(
         &self,
         tx: &mut DbTransaction,
-        asset_tasks: &mut Vec<AssetSaveTask>,
+        asset_tasks: &mut AssetTasks,
         resolved: Vec<Self::Resolved>,
     ) -> sqlx::Result<()>;
 }
@@ -143,12 +148,14 @@ pub enum AssetKind {
     Backdrop(BackdropAsset),
 }
 
+#[derive(Debug)]
 pub enum AssetTaskSource {
     Url(String),
     VideoFrame(Source),
     UrlWithFrameFallback { url: String, source: Source },
 }
 
+#[derive(Debug)]
 pub struct AssetSaveTask {
     pub kind: AssetKind,
     pub source: AssetTaskSource,
@@ -229,22 +236,66 @@ async fn save_asset_from_url_with_frame_fallback(
     Ok(())
 }
 
-pub(super) async fn insert_roles(
+pub(crate) async fn insert_roles(
     tx: &mut DbTransaction,
     metadata_id: i64,
     cast: Vec<PersonMetadata>,
-    asset_tasks: &mut Vec<AssetSaveTask>,
+    asset_tasks: &mut AssetTasks,
 ) -> sqlx::Result<()> {
-    for cast in cast {
-        let actor_id = match tx
-            .lookup_actor_id(
-                cast.metadata_provider,
-                &cast.metadata_id,
-                cast.imdb_id.as_deref(),
+    if cast.is_empty() {
+        return Ok(());
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct ActorQueryRow {
+        id: i64,
+        external_metadata_id: String,
+        external_metadata_provider: MetadataProvider,
+    }
+
+    #[derive(Debug, Hash, Eq, PartialEq)]
+    struct MapKey<'a> {
+        provider: MetadataProvider,
+        provider_id: &'a str,
+    }
+
+    let local_actors = DbQueryBuilder::new(
+        "select id, external_metadata_id, external_metadata_provider from actors where (external_metadata_id, external_metadata_provider) in ",
+    )
+    .push_tuples(
+        cast.iter(),
+        |mut b,
+         PersonMetadata {
+             metadata_id,
+             metadata_provider,
+             ..
+         }| {
+            b.push_bind(metadata_id).push_bind(metadata_provider);
+        },
+    )
+    .build_query_as::<ActorQueryRow>()
+    .fetch_all(&mut **tx)
+    .await?;
+
+    let local_actors_map: HashMap<_, _> = local_actors
+        .iter()
+        .map(|v| {
+            (
+                MapKey {
+                    provider: v.external_metadata_provider,
+                    provider_id: &v.external_metadata_id,
+                },
+                v.id,
             )
-            .await?
-        {
-            Some(id) => id,
+        })
+        .collect();
+
+    for cast in cast {
+        let actor_id = match local_actors_map.get(&MapKey {
+            provider: cast.metadata_provider,
+            provider_id: &cast.metadata_id,
+        }) {
+            Some(id) => *id,
             None => {
                 let actor_id = tx.insert_actor(&cast.into_db_actor()).await?;
                 if let Some(poster_url) = cast.person_poster {
@@ -264,7 +315,7 @@ pub(super) async fn insert_roles(
             id: None,
             actor_id,
             metadata_id,
-            character: cast.role.as_ref().map(|r| r.character.clone()),
+            character: cast.role.map(|r| r.character),
         })
         .await?;
     }

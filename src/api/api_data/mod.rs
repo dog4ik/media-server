@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, time::Duration};
 
 use sqlx::QueryBuilder;
 
@@ -7,7 +7,7 @@ use crate::{
         api_data::api_types::{Actor, History},
         server::Intro,
     },
-    db::{Db, DbActions},
+    db::{Db, DbActions, LocalContentId},
     metadata::{MetadataProvider, MovieMetadata, PersonMetadata, ShowMetadata},
 };
 
@@ -30,9 +30,16 @@ impl LocalDataLookup {
         &self,
         metadata_provider: MetadataProvider,
         metadata_id: &str,
-    ) -> sqlx::Result<Option<i64>> {
+    ) -> sqlx::Result<Option<LocalContentId>> {
         if metadata_provider == MetadataProvider::Local {
-            Ok(Some(metadata_id.parse().unwrap()))
+            let id: i64 = metadata_id.parse().unwrap();
+            sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT id as "id!", metadata_id FROM shows WHERE id = ?"#,
+                id
+            )
+            .fetch_optional(&self.db.pool)
+            .await
         } else {
             self.db
                 .crossreference_show(metadata_provider, metadata_id)
@@ -44,9 +51,16 @@ impl LocalDataLookup {
         &self,
         metadata_provider: MetadataProvider,
         metadata_id: &str,
-    ) -> sqlx::Result<Option<i64>> {
+    ) -> sqlx::Result<Option<LocalContentId>> {
         if metadata_provider == MetadataProvider::Local {
-            Ok(Some(metadata_id.parse().unwrap()))
+            let id: i64 = metadata_id.parse().unwrap();
+            sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT id as "id!", metadata_id FROM movies WHERE id = ?"#,
+                id
+            )
+            .fetch_optional(&self.db.pool)
+            .await
         } else {
             self.db
                 .crossreference_movie(metadata_provider, metadata_id)
@@ -103,11 +117,12 @@ impl LocalDataLookup {
             history_id: Option<i64>,
             time: Option<i64>,
             is_finished: Option<bool>,
+            duration: i64,
             update_time: Option<time::OffsetDateTime>,
         }
         let mut local_map = QueryBuilder::new(
             r#"select
-            movies.id, movies.metadata_id,
+            movies.id, movies.metadata_id, movies.duration,
             external_ids.external_provider, external_ids.external_id,
             history.id as history_id, history.time, history.is_finished, history.update_time
             from external_ids
@@ -129,6 +144,7 @@ impl LocalDataLookup {
                 local_movie::LocalMovieData {
                     id: v.id,
                     metadata_id: v.metadata_id,
+                    local_duration: Duration::from_secs(v.duration as u64).into(),
                     history: v.history_id.map(|id| History {
                         id,
                         time: v.time.unwrap(),
@@ -194,7 +210,7 @@ impl LocalDataLookup {
         external_provider: MetadataProvider,
         external_id: &str,
     ) -> sqlx::Result<Option<local_movie::LocalMovieData>> {
-        let Some(id) = self
+        let Some(local) = self
             .crossreference_movie(external_provider, external_id)
             .await?
         else {
@@ -202,15 +218,17 @@ impl LocalDataLookup {
         };
 
         Ok(sqlx::query!(
-                r#"select movies.id, movies.metadata_id,
+                r#"select movies.id, movies.metadata_id, movies.duration,
             history.id as "history_id?", history.time, history.is_finished, history.update_time as history_update_time from movies
             left join history on history.metadata_id = movies.metadata_id
             where movies.id = ? limit 1"#,
-                  id
+                  local.id
         ).fetch_optional(&self.db.pool).await?.map(|r| local_movie::LocalMovieData {
             id: r.id,
             metadata_id: r.metadata_id,
-            history: r.history_id.map(|id| api_types::History { id,
+            local_duration: Duration::from_secs(r.duration as u64).into(),
+            history: r.history_id.map(|id| api_types::History { 
+                id,
                 time: r.time.unwrap(),
                 is_finished: r.is_finished.unwrap(),
                 update_time: r.history_update_time.map(Into::into).unwrap()
@@ -223,22 +241,17 @@ impl LocalDataLookup {
         external_provider: MetadataProvider,
         external_id: &str,
     ) -> sqlx::Result<Option<local_show::LocalShowData>> {
-        let Some(show_id) = self
+        let Some(local) = self
             .crossreference_show(external_provider, external_id)
             .await?
         else {
             return Ok(None);
         };
 
-        Ok(sqlx::query!(
-            r#"select shows.id, shows.metadata_id from shows where shows.id = ? limit 1"#,
-            show_id
-        )
-        .fetch_optional(&self.db.pool)
-        .await?
-        .map(|r| local_show::LocalShowData {
-            id: r.id,
-            metadata_id: r.metadata_id,
+        // `crossreference_show` already resolved both the show id and its metadata id.
+        Ok(Some(local_show::LocalShowData {
+            id: local.id,
+            metadata_id: local.metadata_id,
         }))
     }
 
@@ -258,7 +271,7 @@ impl LocalDataLookup {
 
         Ok(sqlx::query!(
             "SELECT seasons.id, seasons.metadata_id from seasons WHERE seasons.show_id = ? and seasons.number = ?",
-            local_id,
+            local_id.id,
             season,
         )
         .fetch_optional(&self.db.pool)
@@ -291,7 +304,7 @@ impl LocalDataLookup {
             left join intros on intros.episode_id = episodes.id
             left join history on history.metadata_id = episodes.metadata_id
             WHERE seasons.show_id = ? and seasons.number = ? and episodes.number = ? limit 1"#,
-            local_id,
+            local_id.id,
             season,
             episode,
         )

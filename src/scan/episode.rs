@@ -106,8 +106,8 @@ impl EpisodeScanner {
         mut season_videos: Vec<LibraryItem<ShowIdentifier>>,
     ) -> ResolvedSeason {
         let season_lookup = if let Some(show_id) = show_id {
-            if let Ok(local_id) = self.db.get_season_id(show_id, season_number).await {
-                MetadataLookup::Local(local_id)
+            if let Ok(local) = self.db.get_season_id(show_id, season_number).await {
+                MetadataLookup::Local(local.id)
             } else {
                 self.fetch_season_metadata(season_number).await
             }
@@ -128,6 +128,7 @@ impl EpisodeScanner {
             .map(Vec::from)
         {
             let episode_number = episode_videos.first().unwrap().identifier.episode as usize;
+            // Using season episodes is safe because the season is fresh
             let resolved = match self.config.use_season_episodes {
                 true if let Some(fresh_episode) = fresh_season_episodes
                     .into_iter()
@@ -192,14 +193,14 @@ impl EpisodeScanner {
     ) -> ResolvedEpisode {
         let content_type = ContentType::Show;
         if let Some(show_id) = show_id {
-            if let Ok(local_id) = self
+            if let Ok(local) = self
                 .db
                 .get_episode_id(show_id, season_number, episode_number)
                 .await
             {
                 self.progress.dispatch_success(videos.len());
                 return ResolvedEpisode {
-                    lookup: MetadataLookup::Local(local_id),
+                    lookup: MetadataLookup::Local(local.id),
                     duration: Duration::ZERO,
                     videos,
                 };

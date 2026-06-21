@@ -48,6 +48,7 @@ impl From<Movie> for MovieMetadata {
 pub struct LocalMovieData {
     pub id: i64,
     pub metadata_id: i64,
+    pub local_duration: crate::MediaDuration,
     pub history: Option<History>,
 }
 

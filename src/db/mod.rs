@@ -30,6 +30,20 @@ use crate::{
 
 pub mod query_builders;
 
+/// Number of times an idempotent content insert is retried when a concurrent writer wins the race
+/// for the same content.
+pub const MAX_INSERT_RETRIES: u32 = 2;
+
+pub fn is_unique_violation(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.is_unique_violation())
+}
+
+pub fn is_foreign_key_violation(e: &sqlx::Error) -> bool {
+    e.as_database_error()
+        .is_some_and(|d| d.is_foreign_key_violation())
+}
+
 fn path_to_url(path: &Path) -> String {
     #[allow(unused_mut)]
     let mut path = path.to_string_lossy().to_string();
@@ -118,6 +132,23 @@ impl ContentFetchParams {
     }
 }
 
+/// Combination of metadata and content id
+#[derive(sqlx::FromRow, Clone, Copy, Debug)]
+pub struct LocalContentId {
+    pub id: i64,
+    pub metadata_id: i64,
+}
+
+/// A season/episode row reduced to the identifiers needed to match it against
+/// freshly fetched metadata (by number) and to update/reuse it in place.
+#[derive(sqlx::FromRow, Clone, Copy, Debug)]
+pub struct LocalNode {
+    pub id: i64,
+    pub metadata_id: i64,
+    pub number: i64,
+    pub season_number: i64,
+}
+
 pub const DEFAULT_LIMIT: i64 = 50;
 
 /// All database queries and mutations
@@ -140,6 +171,42 @@ where
             .execute(&mut *conn)
             .await?;
             Ok(())
+        }
+    }
+
+    fn insert_list(
+        self,
+        list: &DbList,
+    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query_scalar!(
+                "INSERT INTO lists (name, description, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id;",
+                list.name,
+                list.description,
+                list.created_at,
+                list.updated_at,
+            )
+            .fetch_one(&mut *conn)
+            .await
+        }
+    }
+
+    fn insert_list_item(
+        self,
+        item: &DbListItem,
+    ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query_scalar!(
+                "INSERT INTO list_items (list_id, metadata_id, release_viewed, created_at) VALUES (?, ?, ?, ?) RETURNING id;",
+                item.list_id,
+                item.metadata_id,
+                item.release_viewed,
+                item.created_at,
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -330,7 +397,11 @@ where
             let history_query = sqlx::query!(
                 "INSERT INTO history
             (time, is_finished, metadata_id, update_time)
-            VALUES (?, ?, ?, ?) RETURNING id;",
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(metadata_id) DO UPDATE SET
+                is_finished = excluded.is_finished,
+                update_time = excluded.update_time
+            RETURNING id;",
                 db_history.time,
                 db_history.is_finished,
                 db_history.metadata_id,
@@ -356,6 +427,29 @@ where
                 db_external_id.is_prime,
             );
             query.fetch_one(&mut *conn).await
+        }
+    }
+
+    /// Best-effort insert for non-prime external ids. Idea is to  ignore a `UNIQUE` collision with an
+    /// id already owned by other content. Returns `None` when the row was skipped.
+    fn try_insert_external_id(
+        self,
+        db_external_id: DbExternalId,
+    ) -> impl std::future::Future<Output = Result<Option<i64>, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            let query = sqlx::query_scalar!(
+                "INSERT INTO external_ids
+            (external_provider, external_id, metadata_id, is_prime)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(external_provider, external_id) DO NOTHING
+            RETURNING id;",
+                db_external_id.external_provider,
+                db_external_id.external_id,
+                db_external_id.metadata_id,
+                db_external_id.is_prime,
+            );
+            query.fetch_optional(&mut *conn).await
         }
     }
 
@@ -470,6 +564,130 @@ where
                 }
             }?;
             Ok(db_ids.into_iter().map(|i| i.into()).collect())
+        }
+    }
+
+    fn get_external_id(
+        self,
+        metadata_id: i64,
+        provider_identifier: MetadataProvider,
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<ExternalIdMetadata>>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+
+            sqlx::query_as!(
+                DbExternalId,
+                "select external_ids.* from external_ids where metadata_id = ? and external_provider = ?",
+                metadata_id,
+                provider_identifier,
+            )
+            .fetch_optional(&mut *conn)
+            .await
+            .map(|v| v.map(Into::into))
+        }
+    }
+
+    /// Updates a metadata row in place, reusing its id (and therefore preserving
+    /// every foreign key that points at it: history, intros, saved list, etc.).
+    fn update_metadata(
+        self,
+        metadata_id: i64,
+        metadata: &DbMetadata,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "UPDATE metadata SET
+                    title = ?, release_date = ?, poster = ?, plot = ?,
+                    original_language = ?, original_title = ?
+                WHERE id = ?;",
+                metadata.title,
+                metadata.release_date,
+                metadata.poster,
+                metadata.plot,
+                metadata.original_language,
+                metadata.original_title,
+                metadata_id,
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
+    fn update_show_backdrop(
+        self,
+        show_id: i64,
+        backdrop: Option<String>,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "UPDATE shows SET backdrop = ? WHERE id = ?;",
+                backdrop,
+                show_id,
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
+    /// Removes every external id attached to a metadata row, so a fresh set can
+    /// be inserted in its place during reconciliation.
+    fn delete_external_ids(
+        self,
+        metadata_id: i64,
+    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query!(
+                "DELETE FROM external_ids WHERE metadata_id = ?;",
+                metadata_id
+            )
+            .execute(&mut *conn)
+            .await?;
+            Ok(())
+        }
+    }
+
+    /// Loads all season nodes of a show in a single query, indexed downstream by
+    /// season number. Replaces per-season `get_season_id` lookups.
+    fn get_show_season_nodes(
+        self,
+        show_id: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<LocalNode>, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query_as!(
+                LocalNode,
+                "SELECT id, metadata_id, number, number AS season_number
+                FROM seasons WHERE show_id = ?;",
+                show_id
+            )
+            .fetch_all(&mut *conn)
+            .await
+        }
+    }
+
+    /// Loads all episode nodes of a show in a single query, indexed downstream by
+    /// (season number, episode number). Replaces per-episode `get_episode_id` lookups.
+    fn get_show_episode_nodes(
+        self,
+        show_id: i64,
+    ) -> impl std::future::Future<Output = Result<Vec<LocalNode>, Error>> + Send {
+        async move {
+            let mut conn = self.acquire().await?;
+            sqlx::query_as!(
+                LocalNode,
+                "SELECT episodes.id, episodes.metadata_id, episodes.number, seasons.number AS season_number
+                FROM episodes
+                JOIN seasons ON seasons.id = episodes.season_id
+                WHERE seasons.show_id = ?;",
+                show_id
+            )
+            .fetch_all(&mut *conn)
+            .await
         }
     }
 
@@ -870,20 +1088,21 @@ where
         self,
         show_id: i64,
         season: usize,
-    ) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+    ) -> impl std::future::Future<Output = Result<LocalContentId, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
-            let season = sqlx::query!(
-                "SELECT seasons.id FROM seasons
-            WHERE seasons.show_id = ? AND seasons.number = ?;",
+            let season = sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT seasons.id, seasons.metadata_id FROM seasons
+            WHERE seasons.show_id = ? AND seasons.number = ?;"#,
                 show_id,
                 season,
             )
             .fetch_one(&mut *conn)
             .await?;
 
-            Ok(season.id)
+            Ok(season)
         }
     }
 
@@ -938,15 +1157,16 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         show_id: i64,
         season: usize,
         episode: usize,
-    ) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+    ) -> impl std::future::Future<Output = Result<LocalContentId, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
             let episode = episode as i64;
-            let episode = sqlx::query!(
-                "SELECT episodes.id FROM episodes
+            let episode = sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT episodes.id, episodes.metadata_id FROM episodes
             JOIN seasons ON seasons.id = episodes.season_id
-            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;",
+            WHERE seasons.show_id = ? AND seasons.number = ? AND episodes.number = ?;"#,
                 show_id,
                 season,
                 episode
@@ -954,7 +1174,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             .fetch_one(&mut *conn)
             .await?;
 
-            Ok(episode.id)
+            Ok(episode)
         }
     }
 
@@ -1225,12 +1445,13 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         self,
         provider: MetadataProvider,
         metadata_id: &str,
-    ) -> impl std::future::Future<Output = sqlx::Result<Option<i64>>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<LocalContentId>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
-            sqlx::query_scalar!(
-                r#"SELECT shows.id as "show_id!" FROM external_ids
+            sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT shows.id, external_ids.metadata_id FROM external_ids
                 JOIN shows ON shows.metadata_id = external_ids.metadata_id
                 WHERE external_ids.external_provider = ? AND external_ids.external_id = ?"#,
                 provider,
@@ -1245,12 +1466,13 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         self,
         provider: MetadataProvider,
         metadata_id: &str,
-    ) -> impl std::future::Future<Output = sqlx::Result<Option<i64>>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<Option<LocalContentId>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let provider = provider.to_string();
-            sqlx::query_scalar!(
-                r#"SELECT movies.id as "movie_id!" FROM external_ids
+            sqlx::query_as!(
+                LocalContentId,
+                r#"SELECT movies.id, external_ids.metadata_id FROM external_ids
                 JOIN movies ON movies.metadata_id = external_ids.metadata_id
                 WHERE external_ids.external_provider = ? AND external_ids.external_id = ?"#,
                 provider,
@@ -1453,7 +1675,7 @@ pub struct DbMovie {
 }
 
 impl DbMovie {
-    const SQL: &str = "movies.id as movie_table_id, movies.metadata_id as movie_metadata_id,
+    pub const SQL: &str = "movies.id as movie_table_id, movies.metadata_id as movie_metadata_id,
     movies.duration as movie_duration, movies.backdrop as movie_backdrop";
 }
 
@@ -1573,8 +1795,7 @@ pub struct DbRole {
 }
 
 impl DbRole {
-    pub const SQL: &str =
-        "id as role_id, actor_id as role_actor_id, metadata_id as role_metadata_id, character";
+    pub const SQL: &str = "roles.id as role_id, roles.actor_id as role_actor_id, roles.metadata_id as role_metadata_id, roles.character";
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
@@ -1619,6 +1840,81 @@ pub struct DbTorrentFile {
     pub priority: i64,
     pub idx: i64,
     pub relative_path: String,
+}
+
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    sqlx::Type,
+    utoipa::ToSchema,
+    serde::Deserialize,
+    serde::Serialize,
+)]
+#[serde(rename_all = "lowercase")]
+#[sqlx(rename_all = "lowercase")]
+pub enum ListKind {
+    User,
+    Saved,
+    Watchlist,
+}
+
+impl ListKind {
+    pub const SAVED_ID: i64 = 1;
+    pub const WATCH_ID: i64 = 2;
+
+    /// Value stored in `lists.kind`.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            ListKind::User => "user",
+            ListKind::Saved => "saved",
+            ListKind::Watchlist => "watchlist",
+        }
+    }
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct DbList {
+    #[sqlx(rename = "list_id")]
+    pub id: Option<i64>,
+    #[sqlx(rename = "list_name")]
+    pub name: String,
+    #[sqlx(rename = "list_description")]
+    pub description: Option<String>,
+    #[sqlx(rename = "list_kind")]
+    pub kind: ListKind,
+    #[sqlx(rename = "list_created_at")]
+    pub created_at: time::OffsetDateTime,
+    #[sqlx(rename = "list_updated_at")]
+    pub updated_at: time::OffsetDateTime,
+}
+
+impl DbList {
+    pub const SQL: &str = "lists.id as list_id, lists.name as list_name, lists.kind as list_kind, \
+lists.description as list_description, lists.created_at as list_created_at, \
+lists.updated_at as list_updated_at";
+}
+
+#[derive(Debug, Clone, FromRow)]
+pub struct DbListItem {
+    #[sqlx(rename = "list_item_id")]
+    pub id: Option<i64>,
+    #[sqlx(rename = "list_item_list_id")]
+    pub list_id: i64,
+    #[sqlx(rename = "list_item_metadata_id")]
+    pub metadata_id: i64,
+    #[sqlx(rename = "list_item_release_viewed")]
+    pub release_viewed: Option<bool>,
+    #[sqlx(rename = "list_item_created_at")]
+    pub created_at: time::OffsetDateTime,
+}
+
+impl DbListItem {
+    pub const SQL: &str = "list_items.id as list_item_id, list_items.list_id as list_item_list_id, \
+list_items.metadata_id as list_item_metadata_id, list_items.release_viewed as list_item_release_viewed, \
+list_items.created_at as list_item_created_at";
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Default)]

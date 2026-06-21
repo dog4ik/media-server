@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "select external_ids.* from external_ids where metadata_id = ? and external_provider = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "external_provider",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "external_id",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_prime",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b024495fb1f27bd48ee3b8eaa4b96fbb95ffccded052e9d7c916961cf5d3a298"
+}

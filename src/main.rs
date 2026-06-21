@@ -256,6 +256,10 @@ async fn main() {
             .route("/history/suggest/shows", get(api::history::suggest_shows))
             .route("/history/{id}", delete(api::history::remove_history_item))
             .route("/history/{id}", put(api::history::update_history))
+            .route(
+                "/history/external_mark_as_watched",
+                post(api::history::external_mark_as_watched),
+            )
             .route("/actor/{id}/poster", get(api::server::actor_poster))
             .route("/actor/list", get(api::server::actor_list))
             .route("/subtitles/{id}", delete(api::subtitles::delete_subtitles))
@@ -381,7 +385,7 @@ async fn main() {
 
         let http_trace = tower_http::trace::TraceLayer::new_for_http();
         let app = Router::new()
-            .nest("/api", server_api)
+            .nest("/api", server_api.nest("/lists", api::lists::router()))
             .nest("/debug", debug_api)
             .merge(
                 SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()),

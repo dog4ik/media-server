@@ -6,6 +6,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 
+pub mod metadata_api;
 pub mod metadata_stack;
 /// Fallback service for different metadata providers.
 ///
@@ -75,6 +76,12 @@ pub trait ProviderIdentifier {
     fn provider_identifier(&self) -> MetadataProvider;
 }
 
+impl<T: ProviderIdentifier + ?Sized> ProviderIdentifier for &T {
+    fn provider_identifier(&self) -> MetadataProvider {
+        (**self).provider_identifier()
+    }
+}
+
 /// This trait must be implemented by all movie metadata providers
 #[async_trait::async_trait]
 pub trait MovieMetadataProvider: ProviderIdentifier {
@@ -92,6 +99,25 @@ pub trait MovieMetadataProvider: ProviderIdentifier {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<MovieMetadata>, AppError>;
+}
+
+#[async_trait::async_trait]
+impl<T: MovieMetadataProvider + Send + Sync + ?Sized> MovieMetadataProvider for &T {
+    async fn movie(
+        &self,
+        movie_metadata_id: &str,
+        params: FetchParams,
+    ) -> Result<MovieMetadata, AppError> {
+        (**self).movie(movie_metadata_id, params).await
+    }
+
+    async fn movie_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<MovieMetadata>, AppError> {
+        (**self).movie_search(query, fetch_params).await
+    }
 }
 
 /// This trait must be implemented by all show metadata providers
@@ -130,6 +156,46 @@ pub trait ShowMetadataProvider: ProviderIdentifier {
         query: &str,
         fetch_params: FetchParams,
     ) -> Result<Vec<ShowMetadata>, AppError>;
+}
+
+#[async_trait::async_trait]
+impl<T: ShowMetadataProvider + Send + Sync + ?Sized> ShowMetadataProvider for &T {
+    async fn show(
+        &self,
+        show_id: &str,
+        fetch_params: FetchParams,
+    ) -> Result<ShowMetadata, AppError> {
+        (**self).show(show_id, fetch_params).await
+    }
+
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        fetch_params: FetchParams,
+    ) -> Result<SeasonMetadata, AppError> {
+        (**self).season(show_id, season, fetch_params).await
+    }
+
+    async fn episode(
+        &self,
+        show_id: &str,
+        season: usize,
+        episode: usize,
+        fetch_params: FetchParams,
+    ) -> Result<EpisodeMetadata, AppError> {
+        (**self)
+            .episode(show_id, season, episode, fetch_params)
+            .await
+    }
+
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: FetchParams,
+    ) -> Result<Vec<ShowMetadata>, AppError> {
+        (**self).show_search(query, fetch_params).await
+    }
 }
 
 /// This trait must be implemented by all metadata providers with discovery capabilities

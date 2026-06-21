@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT id, metadata_id, number, number AS season_number\n                FROM seasons WHERE show_id = ?;",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "number",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "season_number",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "574fb0a5eec0f03dfe7adc2aeb90b978c6b1e65d8c5b12a470fe5881270ca384"
+}

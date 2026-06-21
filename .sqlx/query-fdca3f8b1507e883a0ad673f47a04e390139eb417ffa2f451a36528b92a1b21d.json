@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "select movies.id, movies.metadata_id,\n            history.id as \"history_id?\", history.time, history.is_finished, history.update_time as history_update_time from movies\n            left join history on history.metadata_id = movies.metadata_id\n            where movies.id = ? limit 1",
+  "query": "select movies.id, movies.metadata_id, movies.duration,\n            history.id as \"history_id?\", history.time, history.is_finished, history.update_time as history_update_time from movies\n            left join history on history.metadata_id = movies.metadata_id\n            where movies.id = ? limit 1",
   "describe": {
     "columns": [
       {
@@ -14,23 +14,28 @@
         "type_info": "Integer"
       },
       {
-        "name": "history_id?",
+        "name": "duration",
         "ordinal": 2,
         "type_info": "Integer"
       },
       {
-        "name": "time",
+        "name": "history_id?",
         "ordinal": 3,
         "type_info": "Integer"
       },
       {
-        "name": "is_finished",
+        "name": "time",
         "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_finished",
+        "ordinal": 5,
         "type_info": "Bool"
       },
       {
         "name": "history_update_time",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Datetime"
       }
     ],
@@ -41,10 +46,11 @@
       false,
       false,
       false,
+      false,
       true,
       true,
       true
     ]
   },
-  "hash": "18fd8f2b094be7cec10f8470d06ba33a6d8c582b38c742b118cbfda6b323ef54"
+  "hash": "fdca3f8b1507e883a0ad673f47a04e390139eb417ffa2f451a36528b92a1b21d"
 }

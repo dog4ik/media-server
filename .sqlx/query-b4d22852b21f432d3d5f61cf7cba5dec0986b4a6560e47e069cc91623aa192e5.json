@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "select count(*) from history\n            join metadata on metadata.id = history.metadata_id\n            where is_finished = 1 and content_type = 'episode'",
+  "describe": {
+    "columns": [
+      {
+        "name": "count(*)",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b4d22852b21f432d3d5f61cf7cba5dec0986b4a6560e47e069cc91623aa192e5"
+}

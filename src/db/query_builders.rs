@@ -252,6 +252,7 @@ impl From<DbMovieQuery> for Movie {
             local: Some(LocalMovieData {
                 id: movie.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                local_duration: Duration::from_secs(movie.duration as u64).into(),
                 history: history.id.map(|id| History {
                     id,
                     time: history.time,
@@ -362,7 +363,7 @@ impl From<DbActorsQuery> for Actor {
 
 #[derive(Debug, sqlx::FromRow)]
 pub struct DbEpisodeQuery {
-    season_number: i64,
+    pub season_number: i64,
     #[sqlx(flatten)]
     pub episode: db::DbEpisode,
     #[sqlx(flatten)]

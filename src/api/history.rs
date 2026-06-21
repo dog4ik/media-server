@@ -11,11 +11,21 @@ use crate::{
             api_types::{Content, History},
             local_show::Episode,
         },
+        lists::EpisodesList,
         server::CursoredResponse,
     },
     app_state::{AppError, AppState},
-    db::{self, Db, DbActions, query_builders::DbHistoryQuery},
-    metadata::{EpisodeMetadata, MovieMetadata},
+    config,
+    db::{self, Db, DbActions, LocalContentId, query_builders::DbHistoryQuery},
+    metadata::{
+        EpisodeMetadata, MetadataProvider, MovieMetadata, MovieMetadataProvider,
+        ShowMetadataProvider,
+        metadata_api::{
+            PendingInsert,
+            movie::MovieMetadataApi,
+            show::{EpisodeNumber, ShowMetadataApi, WrittenShow},
+        },
+    },
     watch::WatchProgress,
 };
 
@@ -414,4 +424,318 @@ pub async fn remove_metadata_history(
         return Err(AppError::not_found("Content not found"));
     }
     Ok(())
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "snake_case", tag = "content_type")]
+pub enum MarkAsWatchedContent {
+    Movie,
+    Show(EpisodesList),
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct MarkAsWatched {
+    pub content: MarkAsWatchedContent,
+    pub provider: MetadataProvider,
+    pub provider_id: String,
+}
+
+/// Mark external metadata item as watched
+#[utoipa::path(
+    post,
+    path = "/api/history/external_mark_as_watched",
+    request_body = MarkAsWatched,
+    responses(
+        (status = 201, description = "History entry is created"),
+        (status = 404, description = "Metadata is not found", body = AppError),
+    ),
+    tag = "Videos",
+)]
+pub async fn external_mark_as_watched(
+    State(AppState {
+        db,
+        providers_stack,
+        ..
+    }): State<AppState>,
+    Json(MarkAsWatched {
+        content,
+        provider,
+        provider_id,
+    }): Json<MarkAsWatched>,
+) -> Result<(), AppError> {
+    match content {
+        MarkAsWatchedContent::Movie => {
+            let Some(provider) = providers_stack.movie_provider(provider) else {
+                return Err(AppError::not_found(
+                    "request metadata provider was not found",
+                ));
+            };
+            mark_external_movie_as_watched(provider, &provider_id, db).await?;
+        }
+        MarkAsWatchedContent::Show(episodes) => {
+            let Some(provider) = providers_stack.show_provider(provider) else {
+                return Err(AppError::not_found(
+                    "request metadata provider was not found",
+                ));
+            };
+            mark_external_show_as_watched(episodes, provider, &provider_id, db).await?;
+        }
+    };
+    Ok(())
+}
+
+async fn mark_external_show_as_watched<T>(
+    episodes: EpisodesList,
+    provider: T,
+    provider_id: &str,
+    db: &'static Db,
+) -> Result<WrittenShow<EpisodeNumber>, AppError>
+where
+    T: ShowMetadataProvider + Clone + Send + Sync + 'static,
+{
+    let api = ShowMetadataApi::new(provider, db);
+    // The api resolves/inserts the tree (retrying on concurrent inserts) and hands back the still
+    // open transaction so the history rows are written atomically with the metadata.
+    let PendingInsert {
+        content: written,
+        mut tx,
+        assets,
+    } = api.get_or_insert_show_tree(provider_id, episodes).await?;
+    let update_time = time::OffsetDateTime::now_utc();
+    for episode in written.episodes() {
+        tx.insert_history(crate::db::DbHistory {
+            id: None,
+            time: 0,
+            is_finished: true,
+            update_time: Some(update_time.into()),
+            metadata_id: episode.metadata_id,
+        })
+        .await?;
+    }
+    tx.commit().await?;
+    let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
+    assets.save(assets_concurrency, ()).await;
+    Ok(written)
+}
+
+async fn mark_external_movie_as_watched<T>(
+    provider: T,
+    provider_id: &str,
+    db: &'static Db,
+) -> Result<LocalContentId, AppError>
+where
+    T: MovieMetadataProvider + Clone + Send + Sync + 'static,
+{
+    let api = MovieMetadataApi::new(provider, db);
+    // The api resolves/inserts the movie (retrying on concurrent inserts) and hands back the still
+    // open transaction so the history row is written atomically with the metadata.
+    let PendingInsert {
+        content: local_id,
+        mut tx,
+        assets,
+    } = api.get_or_insert_movie(provider_id).await?;
+    let update_time = time::OffsetDateTime::now_utc();
+    tx.insert_history(crate::db::DbHistory {
+        id: None,
+        time: 0,
+        is_finished: true,
+        update_time: Some(update_time.into()),
+        metadata_id: local_id.metadata_id,
+    })
+    .await?;
+    tx.commit().await?;
+    let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
+    assets.save(assets_concurrency, ()).await;
+    Ok(local_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::metadata::metadata_api::asset_saver::AssetTasks;
+    use crate::metadata::metadata_api::tests::{
+        leak_db,
+        provider_mock::{MockProvider, MovieKey, ShowTreeBuilder},
+    };
+    use sqlx::SqlitePool;
+    use sqlx::pool::PoolOptions;
+    use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode};
+
+    use super::*;
+
+    /// Builds a `&'static Db` whose pool matches production: WAL journal mode plus a `busy_timeout`
+    /// (`Db::connect`). The `#[sqlx::test]` default pool is rollback-journal with no timeout, which
+    /// does not reflect how concurrent writes behave in production. Note that WAL alone does not
+    /// prevent a deferred write transaction from failing under contention — the write paths use
+    /// `BEGIN IMMEDIATE` for that — so this exercises the real production configuration end to end.
+    async fn leak_db_like_prod(
+        pool_opts: PoolOptions<sqlx::Sqlite>,
+        connect_opts: SqliteConnectOptions,
+    ) -> &'static Db {
+        let opts = connect_opts
+            .journal_mode(SqliteJournalMode::Wal)
+            .busy_timeout(Duration::from_secs(5));
+        let pool = pool_opts
+            .connect_with(opts)
+            .await
+            .expect("connect test pool");
+        leak_db(pool)
+    }
+
+    #[sqlx::test]
+    async fn marking_external_episodes_adds_them_to_database(
+        pool: SqlitePool,
+    ) -> anyhow::Result<()> {
+        let db = leak_db(pool);
+        let show_tree = ShowTreeBuilder::new(1).season(1, 1..=2);
+        let show_key = show_tree.show_key();
+        let provider = MockProvider::new([show_tree], []);
+
+        let written = mark_external_show_as_watched(
+            EpisodesList {
+                season: 1,
+                episodes: vec![1, 2],
+            },
+            provider,
+            &show_key.show_metadata().metadata_id,
+            db,
+        )
+        .await?;
+
+        assert_eq!(
+            written.episodes().count(),
+            2,
+            "new episodes should be written in database"
+        );
+
+        let history_count: i64 = sqlx::query_scalar!(
+            "select count(*) from history
+            join metadata on metadata.id = history.metadata_id
+            where is_finished = 1 and content_type = 'episode'",
+        )
+        .fetch_one(&db.pool)
+        .await?;
+        assert_eq!(history_count, 2, "new episodes should be in history");
+
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn marking_external_movie_adds_it_to_database(pool: SqlitePool) -> anyhow::Result<()> {
+        let db = leak_db(pool);
+        let movie_key = MovieKey::new(1);
+        let provider_metadata = movie_key.external_metadata();
+        let provider = MockProvider::new([], [movie_key]);
+
+        let content_id =
+            mark_external_movie_as_watched(provider, &provider_metadata.metadata_id, db).await?;
+        assert_eq!(content_id.metadata_id, 1, "movie was inserted");
+        let history = sqlx::query!("select * from history")
+            .fetch_all(&db.pool)
+            .await?;
+        assert_eq!(history.len(), 1, "history should contain watched movie");
+        assert_eq!(history[0].metadata_id, content_id.metadata_id);
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn concurrent_external_movie_marks_are_idempotent(
+        pool_opts: PoolOptions<sqlx::Sqlite>,
+        connect_opts: SqliteConnectOptions,
+    ) -> anyhow::Result<()> {
+        let db = leak_db_like_prod(pool_opts, connect_opts).await;
+        let movie_key = MovieKey::new(1);
+        let provider_metadata = movie_key.external_metadata();
+        let provider = MockProvider::new([], [movie_key]);
+        let id = provider_metadata.metadata_id;
+
+        let (p1, p2) = (provider.clone(), provider);
+        let (id1, id2) = (id.clone(), id);
+        let (r1, r2) = tokio::try_join!(
+            tokio::spawn(async move { mark_external_movie_as_watched(p1, &id1, db).await }),
+            tokio::spawn(async move { mark_external_movie_as_watched(p2, &id2, db).await }),
+        )?;
+        let c1 = r1?;
+        let c2 = r2?;
+        assert_eq!(c1.id, c2.id, "both calls resolve to the same movie");
+        assert_eq!(c1.metadata_id, c2.metadata_id);
+
+        let movie_count: i64 = sqlx::query_scalar!("select count(*) from movies")
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(movie_count, 1, "exactly one movie row despite the race");
+        let ext_count: i64 = sqlx::query_scalar!("select count(*) from external_ids")
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(ext_count, 1, "exactly one external id row despite the race");
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn concurrent_external_show_marks_are_idempotent(
+        pool_opts: PoolOptions<sqlx::Sqlite>,
+        connect_opts: SqliteConnectOptions,
+    ) -> anyhow::Result<()> {
+        let db = leak_db_like_prod(pool_opts, connect_opts).await;
+        let show_tree = ShowTreeBuilder::new(1).season(1, 1..=2);
+        let show_id = show_tree.show_key().show_metadata().metadata_id;
+        let provider = MockProvider::new([show_tree], []);
+
+        let (p1, p2) = (provider.clone(), provider);
+        let (id1, id2) = (show_id.clone(), show_id);
+        let list1 = EpisodesList {
+            season: 1,
+            episodes: vec![1, 2],
+        };
+        let list2 = list1.clone();
+        let (r1, r2) = tokio::try_join!(
+            tokio::spawn(async move { mark_external_show_as_watched(list1, p1, &id1, db).await }),
+            tokio::spawn(async move { mark_external_show_as_watched(list2, p2, &id2, db).await }),
+        )?;
+        let w1 = r1?;
+        let w2 = r2?;
+        assert_eq!(
+            w1.show_id, w2.show_id,
+            "both calls resolve to the same show"
+        );
+
+        let show_count: i64 = sqlx::query_scalar!("select count(*) from shows")
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(show_count, 1, "exactly one show row despite the race");
+        let episode_count: i64 = sqlx::query_scalar!("select count(*) from episodes")
+            .fetch_one(&db.pool)
+            .await?;
+        assert_eq!(
+            episode_count, 2,
+            "exactly two episode rows despite the race"
+        );
+        Ok(())
+    }
+
+    #[sqlx::test]
+    async fn marking_local_movie_adds_it_to_database(pool: SqlitePool) -> anyhow::Result<()> {
+        let db = leak_db(pool);
+        let movie_key = MovieKey::new(1);
+        let provider_metadata = movie_key.external_metadata();
+        let provider = MockProvider::new([], []);
+        let api = MovieMetadataApi::new(provider.clone(), db);
+        let mut tx = db.pool.begin().await?;
+        let inserted_movie = api
+            .insert_movie_metadata(provider_metadata.clone(), &mut tx, &mut AssetTasks::new())
+            .await?;
+        tx.commit().await?;
+
+        let content_id =
+            mark_external_movie_as_watched(provider, &provider_metadata.metadata_id, db).await?;
+        assert_eq!(
+            content_id.metadata_id, inserted_movie.metadata_id,
+            "existing movie was reused"
+        );
+        let history = sqlx::query!("select * from history")
+            .fetch_all(&db.pool)
+            .await?;
+        assert_eq!(history.len(), 1, "history should contain watched movie");
+        assert_eq!(history[0].metadata_id, content_id.metadata_id);
+        Ok(())
+    }
 }

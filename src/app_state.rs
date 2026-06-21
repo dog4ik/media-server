@@ -553,6 +553,12 @@ impl FromRef<AppState> for Db {
     }
 }
 
+impl FromRef<AppState> for &'static Db {
+    fn from_ref(app_state: &AppState) -> &'static Db {
+        app_state.db
+    }
+}
+
 impl FromRef<AppState> for &'static TaskResource {
     fn from_ref(app_state: &AppState) -> &'static TaskResource {
         app_state.tasks

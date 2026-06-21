@@ -33,6 +33,8 @@ pub mod server;
 pub mod subtitles;
 /// Torrent client specific endpoints
 pub mod torrent;
+/// Liked, watched, custom lists endpoints
+pub mod lists;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -135,11 +137,24 @@ pub mod torrent;
         history::update_history,
         history::suggest_movies,
         history::suggest_shows,
+        history::external_mark_as_watched,
         subtitles::pull_video_subtitle,
         subtitles::upload_subtitles,
         subtitles::delete_subtitles,
         subtitles::get_subtitles,
         subtitles::reference_external_subtitles,
+        lists::update_list,
+        lists::delete_list,
+        lists::create_list,
+        lists::add_item,
+        lists::add_to_saved,
+        lists::add_to_watchlist,
+        lists::all_lists,
+        lists::get_list,
+        lists::list_contents,
+        lists::remove_item,
+        lists::remove_watchlist_item,
+        lists::remove_saved_item,
         ws::ws,
     ),
     components(
@@ -222,6 +237,68 @@ pub mod torrent;
     )
 )]
 pub struct OpenApiDoc;
+
+pub struct QueryShowProvider(&'static (dyn metadata::ShowMetadataProvider + Send + 'static + Sync));
+
+impl FromRequestParts<app_state::AppState> for QueryShowProvider {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &app_state::AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Query(provider) =
+            Query::<metadata::MetadataProvider>::from_request_parts(parts, state).await?;
+        let Some(provider) = state.providers_stack.show_provider(provider) else {
+            return Err(AppError::bad_request("requested provider is not available"));
+        };
+        Ok(Self(provider))
+    }
+}
+
+impl metadata::ProviderIdentifier for QueryShowProvider {
+    fn provider_identifier(&self) -> metadata::MetadataProvider {
+        self.0.provider_identifier()
+    }
+}
+
+#[async_trait::async_trait]
+impl metadata::ShowMetadataProvider for QueryShowProvider {
+    async fn show(
+        &self,
+        show_id: &str,
+        fetch_params: metadata::FetchParams,
+    ) -> Result<metadata::ShowMetadata, AppError> {
+        self.0.show(show_id, fetch_params).await
+    }
+
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        fetch_params: metadata::FetchParams,
+    ) -> Result<metadata::SeasonMetadata, AppError> {
+        self.0.season(show_id, season, fetch_params).await
+    }
+
+    async fn episode(
+        &self,
+        show_id: &str,
+        season: usize,
+        episode: usize,
+        fetch_params: metadata::FetchParams,
+    ) -> Result<metadata::EpisodeMetadata, AppError> {
+        self.0.episode(show_id, season, episode, fetch_params).await
+    }
+
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: metadata::FetchParams,
+    ) -> Result<Vec<metadata::ShowMetadata>, AppError> {
+        self.0.show_search(query, fetch_params).await
+    }
+}
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct PageQuery {

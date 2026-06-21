@@ -20,7 +20,7 @@ use crate::{
     },
     metadata::{
         ContentType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
-        metadata_stack::MetadataProvidersStack,
+        metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{
         ContentScanner, insert_roles,
@@ -151,7 +151,7 @@ impl ContentScanner for MovieScanner {
     async fn flush_to_db(
         &self,
         tx: &mut DbTransaction,
-        asset_tasks: &mut Vec<AssetSaveTask>,
+        asset_tasks: &mut AssetTasks,
         resolved: Vec<ResolvedMovie>,
     ) -> sqlx::Result<()> {
         let span = debug_span!("flush_movies", count = resolved.len());
@@ -270,11 +270,11 @@ async fn fetch_single_movie_chunk(
                 .crossreference_movie(first_result.metadata_provider, &first_result.metadata_id)
                 .await
             {
-                Ok(Some(local_id)) => {
+                Ok(Some(local)) => {
                     tracing::debug!(movie_title = first_result.title, "Using local movie ref");
                     progress.dispatch_success(videos.len());
                     return ResolvedMovie {
-                        lookup: MetadataLookupWithIds::Local(local_id),
+                        lookup: MetadataLookupWithIds::Local(local.id),
                         duration: Duration::ZERO,
                         videos: videos.to_vec(),
                     };

@@ -1,26 +1,21 @@
-//! Library reconciliation service.
-//!
-//! Diffs the in-memory library against the database, fetches metadata for newly added
-//! videos through the show/movie scanners, flushes the resolved trees to the database, and
-//! saves the associated assets to disk.
+//! Diff the in-memory library against the database, fetch metadata for newly added
+//! videos through the show/movie scanners, flush the resolved trees to the database, and
+//! save the associated assets to disk.
 
-use std::{collections::HashSet, sync::Arc, sync::Mutex};
+use std::{collections::HashSet, sync::Mutex};
 
 use anyhow::Context;
-use tokio::{sync::Semaphore, task::JoinSet};
-use tokio_util::task::TaskTracker;
+use tokio::task::JoinSet;
 
 use crate::{
     app_state::AppError,
     db::{Db, DbActions},
     library::{Library, LibraryItem, Media},
-    metadata::metadata_stack::MetadataProvidersStack,
+    metadata::{metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack},
 };
 
 use super::{
-    AssetSaveTask, ContentScanner, ScanConfig,
-    movie::MovieScanner,
-    scan_progress::{AssetProgressEmitter, ScanProgressEmitter},
+    ContentScanner, ScanConfig, movie::MovieScanner, scan_progress::ScanProgressEmitter,
     show::ShowScanner,
 };
 
@@ -102,7 +97,7 @@ impl LibraryReconciler {
             movie_scanner.resolve(new_movies, metadata_progress),
         );
 
-        let mut tasks = Vec::new();
+        let mut tasks = AssetTasks::new();
         let mut tx = self.db.begin().await?;
         show_scanner
             .flush_to_db(&mut tx, &mut tasks, resolved_shows)
@@ -112,7 +107,8 @@ impl LibraryReconciler {
             .await?;
         tx.commit().await?;
         let assets_progress = self.progress.assets_progress_emitter(tasks.len());
-        self.save_assets(max_asset_concurrency, assets_progress, tasks)
+        tasks
+            .save(max_asset_concurrency, self.http_client.clone(), assets_progress)
             .await;
         self.progress.finish_scan();
         tracing::info!("Finished library reconciliation");
@@ -167,32 +163,5 @@ impl LibraryReconciler {
         }
 
         Ok(new_items)
-    }
-
-    /// Executes queued asset save tasks concurrently, reporting per-task progress.
-    async fn save_assets(
-        &self,
-        max_concurrency: usize,
-        emitter: AssetProgressEmitter,
-        tasks: Vec<AssetSaveTask>,
-    ) {
-        let semaphore = Arc::new(Semaphore::new(max_concurrency));
-        let tracker = TaskTracker::new();
-        for task in tasks {
-            let permit = semaphore.clone().acquire_owned().await.unwrap();
-            let emitter = emitter.clone();
-            let http_client = self.http_client.clone();
-            tracker.spawn(async move {
-                let _permit = permit;
-                if let Err(e) = task.execute(&http_client).await {
-                    emitter.dispatch_fail();
-                    tracing::warn!("Asset save task failed: {e}");
-                } else {
-                    emitter.dispatch_success();
-                }
-            });
-        }
-        tracker.close();
-        tracker.wait().await;
     }
 }
