@@ -336,9 +336,6 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
             continue;
         };
         let mut supported_paths = Vec::new();
-        let mut dir_season = None;
-        let mut dir_year = None;
-        let mut dir_show_title = None;
 
         // true value means that some episodes are missing number
         // we should try to sort them alphabetically to get their numbers
@@ -383,32 +380,11 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                 let metadata_parser = parser.clone();
                 let show_ident: Result<ShowIdentifier, ShowIdent> =
                     metadata_parser.feed_filename(file_name).try_into();
-                match &show_ident {
-                    // Successfully parsed show identifier
-                    Ok(identifier) => {
-                        // use successfully parsed children for directory identifier
-                        dir_show_title = Some(identifier.title.clone());
-                        dir_season = Some(identifier.season);
-                        if let Some(year) = identifier.year {
-                            dir_year = Some(year);
-                        }
+                if let Err(ident) = &show_ident {
+                    if ident.episode.is_none() {
+                        need_sort = true;
                     }
-                    // Failed parsed show identifier
-                    Err(ident) => {
-                        if !ident.title.is_empty() {
-                            dir_show_title = Some(ident.title.clone());
-                        }
-                        if let Some(season) = ident.season {
-                            dir_season = Some(season);
-                        }
-                        if ident.episode.is_none() {
-                            need_sort = true;
-                        }
-                        if let Some(year) = ident.year {
-                            dir_year = Some(year);
-                        }
-                    }
-                };
+                }
                 supported_paths.push((path, show_ident));
             } else {
                 tracing::trace!("Skipping unsupported file: {}", path.display());
@@ -424,19 +400,12 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                 Ok(identifier) => {
                     files.push((video, identifier));
                 }
-                Err(mut ident) => {
-                    if let Some(dir_title) = &dir_show_title {
-                        if ident.title.is_empty() {
-                            ident.title = dir_title.clone();
-                        }
-                    }
-                    // Here is the right time to use video container metadata.
-                    // The problem is that running ffprobe is expensive and will affect the startup time
+                Err(ident) => {
                     let identifier = ShowIdentifier {
                         episode: ident.episode.unwrap_or(i as u16 + 1),
-                        season: ident.season.or(dir_season).unwrap_or(1),
+                        season: ident.season.unwrap_or(1),
                         title: ident.title,
-                        year: ident.year.or(dir_year),
+                        year: ident.year,
                     };
                     files.push((video, identifier));
                 }
