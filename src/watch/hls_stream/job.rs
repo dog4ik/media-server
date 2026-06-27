@@ -288,7 +288,7 @@ async fn run_hls_handler(
                     );
                     continue;
                 }
-                segments_len = new_segment - start_segment;
+                segments_len = new_segment - start_segment + 1;
 
                 while let Some(ready_idx) = requests.iter().position(|r| r.idx < start_segment + segments_len) {
                     let ready = requests.swap_remove(ready_idx);
