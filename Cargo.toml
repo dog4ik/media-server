@@ -10,7 +10,9 @@ license = "GPL-3.0-or-later"
 repository = "https://github.com/dog4ik/media-server"
 
 [features]
+default = ["jemalloc"]
 windows-tray = ["dep:tray-icon", "dep:open", "dep:image", "dep:winit"]
+jemalloc = ["dep:tikv-jemallocator"]
 
 [package.metadata.deb]
 maintainer = "Vadim Gerasimov <angryvadik@gmail.com>"
@@ -143,3 +145,8 @@ opentelemetry = "0.32.0"
 opentelemetry_sdk = "0.32.1"
 opentelemetry-semantic-conventions = { version = "0.32.0", features = ["semconv_experimental"] }
 opentelemetry-otlp = { version = "0.32.0", features = ["metrics", "grpc-tonic"] }
+
+[target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
+tikv-jemallocator = { version = "0.7.0", optional = true, features = [
+  "unprefixed_malloc_on_supported_platforms",
+] }

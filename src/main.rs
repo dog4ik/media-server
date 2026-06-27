@@ -23,6 +23,18 @@ use tracing::{Instrument, info_span};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
+// Route every allocation in the process through jemalloc, including ffmpegs C allocations.
+// glibc kept the freed probing buffers resident after a library scan thus leaving gigabytes claimed but unused memory.
+// jemalloc returns them to the OS on its decay schedule.
+#[cfg(all(feature = "jemalloc", target_os = "linux", target_env = "gnu"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[cfg(all(feature = "jemalloc", target_os = "linux", target_env = "gnu"))]
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static MALLOC_CONF: &[u8] = b"background_thread:true,dirty_decay_ms:1000,muzzy_decay_ms:0\0";
+
 #[tokio::main]
 async fn main() {
     ffmpeg_next::init().expect("ffmpeg abi to initiate");
