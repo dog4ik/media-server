@@ -7,7 +7,6 @@ The application is split across repositories:
 - [media-server](https://github.com/dog4ik/media-server)
 - [media-server-web](https://github.com/dog4ik/media-server-web)
 - [media-server-installer](https://github.com/dog4ik/media-server-installer)
-- [media-server-aur](https://github.com/dog4ik/media-server-aur).
 
 ### Working with the database / sqlx
 
@@ -28,7 +27,4 @@ Keep the two repos minor versions in lockstep when releasing.
 
 1. Tag the web client (`vX.Y.Z`) first so its `dist.tar.gz` release exists.
 2. Make sure the server's `Cargo.toml` version shares the same `X.Y` minor.
-3. Tag the server `vX.Y.Z` and push the tag. `release.yaml` builds and uploads the
-   `.deb` and Windows installer.
-4. For Arch, bump and push the [media-server-aur](https://github.com/dog4ik/media-server-aur)
-   PKGBUILD (see its README).
+3. Tag the server `vX.Y.Z` and push the tag. CI will do the rest.
