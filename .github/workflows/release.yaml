@@ -93,7 +93,7 @@ jobs:
         run: |
           MINOR_VERSION=$(sed -n 's/^version = "\([0-9]*\.[0-9]*\).*/\1/p' Cargo.toml)
           FRONTEND_VERSION=$(curl -fsSL https://api.github.com/repos/dog4ik/media-server-web/releases \
-            | jq -r "[.[] | select(.tag_name | startswith(\"v${MINOR_VERSION}\"))] | last | .tag_name")
+            | jq -r "[.[] | select(.tag_name | startswith(\"v${MINOR_VERSION}\"))] | sort_by(.tag_name) | last | .tag_name")
           echo "Using web client release: ${FRONTEND_VERSION}"
           curl -fsSL "https://github.com/dog4ik/media-server-web/releases/download/${FRONTEND_VERSION}/dist.tar.gz" | tar -xz
       - name: Assemble installer inputs
