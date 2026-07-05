@@ -36,18 +36,19 @@ impl TryFrom<ffmpeg_next::Chapter<'_>> for Chapter {
                 _ => {}
             }
         }
-        let start = Duration::from_nanos(
-            chapter
-                .start()
-                .try_into()
-                .context("convert start duration to u64")?,
-        );
-        let end = Duration::from_nanos(
-            chapter
-                .end()
-                .try_into()
-                .context("convert end duration to u64")?,
-        );
+        // start/end are expressed in units of the chapter's time_base.
+        // seconds = timestamp * time_base.num / time_base.den.
+        let time_base = chapter.time_base();
+        let num = time_base.numerator();
+        let den = time_base.denominator();
+        anyhow::ensure!(den != 0, "chapter time_base has zero denominator");
+        let to_duration = |ts: i64| -> anyhow::Result<Duration> {
+            let ts = u64::try_from(ts).context("convert chapter timestamp to u64")?;
+            let seconds = ts as f64 * num as f64 / den as f64;
+            Ok(Duration::from_secs_f64(seconds))
+        };
+        let start = to_duration(chapter.start()).context("convert start duration")?;
+        let end = to_duration(chapter.end()).context("convert end duration")?;
         Ok(Self { title, start, end })
     }
 }
