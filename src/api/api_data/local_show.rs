@@ -32,6 +32,7 @@ pub struct LocalSeasonData {
 pub struct LocalEpisodeData {
     pub id: i64,
     pub metadata_id: i64,
+    pub videos_count: i64,
     pub history: Option<super::api_types::History>,
     pub intro: Option<Intro>,
 }
@@ -115,6 +116,7 @@ impl Season {
         struct Record {
             id: i64,
             metadata_id: i64,
+            videos_count: i64,
             history_id: Option<i64>,
             time: Option<i64>,
             update_time: Option<time::OffsetDateTime>,
@@ -127,6 +129,7 @@ impl Season {
         }
         let mut local_episodes = sqlx::QueryBuilder::new(
             "select episodes.id, episodes.metadata_id,
+            (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
             external_ids.external_id, external_ids.external_provider,
             history.id as history_id, history.time, history.update_time, history.is_finished,
             intros.id as intro_id, intros.start_sec, intros.end_sec
@@ -150,6 +153,7 @@ impl Season {
                 LocalEpisodeData {
                     metadata_id: r.metadata_id,
                     id: r.id,
+                    videos_count: r.videos_count,
                     history: r.history_id.map(|id| History {
                         id,
                         time: r.time.unwrap(),

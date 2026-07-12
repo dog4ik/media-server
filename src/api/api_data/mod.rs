@@ -111,6 +111,7 @@ impl LocalDataLookup {
         struct Record {
             id: i64,
             metadata_id: i64,
+            videos_count: i64,
             external_provider: MetadataProvider,
             external_id: String,
             // history
@@ -123,6 +124,7 @@ impl LocalDataLookup {
         let mut local_map = QueryBuilder::new(
             r#"select
             movies.id, movies.metadata_id, movies.duration,
+            (select count(id) from videos where videos.metadata_id = movies.metadata_id) as videos_count,
             external_ids.external_provider, external_ids.external_id,
             history.id as history_id, history.time, history.is_finished, history.update_time
             from external_ids
@@ -144,6 +146,7 @@ impl LocalDataLookup {
                 local_movie::LocalMovieData {
                     id: v.id,
                     metadata_id: v.metadata_id,
+                    videos_count: v.videos_count,
                     local_duration: Duration::from_secs(v.duration as u64).into(),
                     history: v.history_id.map(|id| History {
                         id,
@@ -219,6 +222,7 @@ impl LocalDataLookup {
 
         Ok(sqlx::query!(
                 r#"select movies.id, movies.metadata_id, movies.duration,
+                (select count(id) from videos where videos.metadata_id = movies.metadata_id) as videos_count,
             history.id as "history_id?", history.time, history.is_finished, history.update_time as history_update_time from movies
             left join history on history.metadata_id = movies.metadata_id
             where movies.id = ? limit 1"#,
@@ -227,6 +231,7 @@ impl LocalDataLookup {
             id: r.id,
             metadata_id: r.metadata_id,
             local_duration: Duration::from_secs(r.duration as u64).into(),
+            videos_count: r.videos_count,
             history: r.history_id.map(|id| api_types::History { 
                 id,
                 time: r.time.unwrap(),
@@ -297,6 +302,7 @@ impl LocalDataLookup {
 
         Ok(sqlx::query!(
                 r#"select episodes.id as episode_id, episodes.metadata_id,
+            (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
             history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
             intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
             from episodes
@@ -314,6 +320,7 @@ impl LocalDataLookup {
                 local_show::LocalEpisodeData {
                     id: r.episode_id,
                     metadata_id: r.metadata_id,
+                    videos_count: r.videos_count,
                     history: r.history_id.map(|id| api_types::History {
                         id,
                         time: r.history_time.unwrap(),

@@ -134,7 +134,7 @@ async fn get_list(Path(id): Path<i64>, State(db): State<Db>) -> Result<Json<List
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", tag = "content_type")]
 pub enum ListContent {
     Show(Show),
     Movie(Movie),

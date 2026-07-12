@@ -49,6 +49,7 @@ pub struct LocalMovieData {
     pub id: i64,
     pub metadata_id: i64,
     pub local_duration: crate::MediaDuration,
+    pub videos_count: i64,
     pub history: Option<History>,
 }
 

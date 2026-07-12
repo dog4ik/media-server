@@ -214,6 +214,7 @@ pub struct DbMovieQuery {
     pub external_ids: Option<Vec<ExternalIdsQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub genres: Option<Vec<GenreQueryJson>>,
+    pub videos_count: i64,
 }
 
 impl From<DbMovieQuery> for Movie {
@@ -225,6 +226,7 @@ impl From<DbMovieQuery> for Movie {
             cast,
             external_ids,
             genres,
+            videos_count,
         }: DbMovieQuery,
     ) -> Self {
         Self {
@@ -252,6 +254,7 @@ impl From<DbMovieQuery> for Movie {
             local: Some(LocalMovieData {
                 id: movie.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                videos_count,
                 local_duration: Duration::from_secs(movie.duration as u64).into(),
                 history: history.id.map(|id| History {
                     id,
@@ -267,7 +270,8 @@ impl From<DbMovieQuery> for Movie {
 impl DbMovieQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {metadata}, {history}, {movie}, {actors}, {external_ids}, {genres}
+            "select {metadata}, {history}, {movie}, {actors}, {external_ids}, {genres},
+            (select count(*) from videos where videos.metadata_id = movies.metadata_id) as videos_count
             from movies
             join metadata on metadata.id = movies.metadata_id
             left join history on history.metadata_id = metadata.id",
@@ -374,13 +378,15 @@ pub struct DbEpisodeQuery {
     pub history: db::DbHistory,
     #[sqlx(flatten, default)]
     pub intro: db::DbIntro,
+    pub videos_count: i64,
 }
 
 impl DbEpisodeQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
             "select {episode}, {metadata}, {history}, {intro}, {cast},
-            seasons.number as season_number
+            seasons.number as season_number,
+            (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
             from episodes
             join metadata on metadata.id = episodes.metadata_id
             left join history on history.metadata_id = episodes.metadata_id
@@ -405,6 +411,7 @@ impl From<DbEpisodeQuery> for Episode {
             cast,
             history,
             intro,
+            videos_count,
         }: DbEpisodeQuery,
     ) -> Self {
         Episode {
@@ -421,6 +428,7 @@ impl From<DbEpisodeQuery> for Episode {
             local: Some(LocalEpisodeData {
                 id: episode.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                videos_count,
                 intro: intro.id.map(|_| Intro {
                     start_sec: intro.start_sec,
                     end_sec: intro.end_sec,

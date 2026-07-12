@@ -2,7 +2,7 @@ use std::{ops::Deref, path::Path, str::FromStr, time::Duration};
 
 use serde::Serialize;
 use sqlx::{
-    Acquire, ConnectOptions, Error, Execute, FromRow, Pool, QueryBuilder, Sqlite, SqliteConnection,
+    Acquire, ConnectOptions, Error, FromRow, Pool, QueryBuilder, Sqlite, SqliteConnection,
     SqlitePool, Transaction,
     migrate::{MigrateError, Migrator},
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
@@ -1022,7 +1022,8 @@ where
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
                 seasons.number AS season_number,
                 history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
+                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end,
+                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
                 FROM episodes
                 JOIN seasons ON seasons.id = episodes.season_id
                 JOIN metadata ON metadata.id = episodes.metadata_id
@@ -1040,6 +1041,7 @@ where
                 let local = LocalEpisodeData {
                     id: db_episode.id,
                     metadata_id: db_episode.metadata_id,
+                    videos_count: db_episode.videos_count,
                     history: db_episode.history_id.map(|id| api_types::History {
                         id,
                         time: db_episode.history_time.map(Into::into).unwrap(),
@@ -1139,16 +1141,17 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             let episode = episode as i64;
             let mut query = DbQueryBuilder::default();
             DbEpisodeQuery::build(&mut query);
-            let q = query
+            query
                 .push(" where seasons.show_id = ")
                 .push_bind(show_id)
                 .push(" and seasons.number = ")
                 .push_bind(season)
                 .push(" and episodes.number = ")
                 .push_bind(episode)
-                .build_query_as::<DbEpisodeQuery>();
-            dbg!(q.sql());
-            q.fetch_one(&mut *conn).await.map(Into::into)
+                .build_query_as::<DbEpisodeQuery>()
+                .fetch_one(&mut *conn)
+                .await
+                .map(Into::into)
         }
     }
 
@@ -1189,7 +1192,8 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
                 seasons.number AS season_number,
                 history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end
+                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end,
+                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
                 FROM episodes
                 JOIN seasons ON seasons.id = episodes.season_id
                 JOIN metadata ON metadata.id = episodes.metadata_id
@@ -1204,6 +1208,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             let local = LocalEpisodeData {
                 id: episode.id,
                 metadata_id: episode.metadata_id,
+                videos_count: episode.videos_count,
                 history: episode.history_id.map(|id| api_types::History {
                     id,
                     time: episode.history_time.unwrap(),
