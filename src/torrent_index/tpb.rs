@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use reqwest::{Client, Method, Request, Url};
+use reqwest::{Client, Method, Request, Url, header::HeaderMap};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
@@ -50,21 +50,15 @@ pub struct TpbApi {
     base_url: Url,
 }
 
-impl Default for TpbApi {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl TpbApi {
-    pub fn new() -> Self {
-        let (client, base_url) = provod_agent::new_client("tpb").unwrap_or_else(|e| {
+    pub fn new(http_client: Client) -> Self {
+        let (headers, base_url) = provod_agent::client_config("tpb").unwrap_or_else(|e| {
             tracing::warn!("Failed to initialize Provod TPB API: {e}");
             tracing::info!("Using public TPB API");
-            (Client::new(), Url::parse("https://apibay.org").unwrap())
+            (HeaderMap::new(), Url::parse("https://apibay.org").unwrap())
         });
         let limited_client =
-            LimitedRequestClient::new(client, 1, std::time::Duration::from_secs(1));
+            LimitedRequestClient::new(http_client, headers, 1, std::time::Duration::from_secs(1));
         Self {
             client: limited_client,
             base_url,

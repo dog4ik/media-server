@@ -58,10 +58,10 @@ impl From<ProvodRuTrackerTorrent> for Torrent {
 }
 
 impl ProvodRuTrackerAdapter {
-    pub fn new() -> anyhow::Result<Self> {
-        let (client, base_url) = provod_agent::new_client("rutracker")?;
+    pub fn new(http_client: reqwest::Client) -> anyhow::Result<Self> {
+        let (headers, base_url) = provod_agent::client_config("rutracker")?;
         let limited_client =
-            LimitedRequestClient::new(client, 5, std::time::Duration::from_secs(1));
+            LimitedRequestClient::new(http_client, headers, 5, std::time::Duration::from_secs(1));
         Ok(Self {
             base_url,
             limited_client,

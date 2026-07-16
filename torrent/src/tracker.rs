@@ -57,7 +57,7 @@ pub struct AnnouncePayload {
 }
 
 impl AnnouncePayload {
-    async fn announce_http(&self) -> anyhow::Result<AnnounceResult> {
+    async fn announce_http(&self, client: &reqwest::Client) -> anyhow::Result<AnnounceResult> {
         let url_params = HttpAnnounceUrlParams::from_payload(self);
         let separator = if self.announce.to_string().contains('?') {
             '&'
@@ -71,7 +71,6 @@ impl AnnouncePayload {
             &urlencode(&self.info_hash)
         );
         tracing::debug!(tracker_url, "Announcing tracker {} via HTTP", self.announce);
-        let client = reqwest::Client::new();
         let response = client
             .get(tracker_url)
             .header(
@@ -304,14 +303,18 @@ impl UdpTrackerChannel {
 
 #[derive(Debug)]
 pub enum TrackerType {
-    Http,
+    Http(reqwest::Client),
     Udp(UdpTrackerChannel),
 }
 
 impl TrackerType {
-    pub fn from_url(url: &Url, sender: &UdpTrackerChannel) -> anyhow::Result<Self> {
+    pub fn from_url(
+        url: &Url,
+        sender: &UdpTrackerChannel,
+        http_client: &reqwest::Client,
+    ) -> anyhow::Result<Self> {
         match url.scheme() {
-            "https" | "http" => Ok(Self::Http),
+            "https" | "http" => Ok(Self::Http(http_client.clone())),
             "udp" => Ok(Self::Udp(sender.clone())),
             rest => Err(anyhow::anyhow!("url scheme {rest} is not supported")),
         }
@@ -475,7 +478,7 @@ impl Tracker {
     pub async fn announce(&mut self) -> anyhow::Result<()> {
         tracing::debug!("Announcing tracker");
         let announce_result = match &self.tracker_type {
-            TrackerType::Http => self.announce_payload.announce_http().await,
+            TrackerType::Http(client) => self.announce_payload.announce_http(client).await,
             TrackerType::Udp(chan) => {
                 let conn_id = match &mut self.udp_connection_state {
                     Some(state) if state.assigned_at.elapsed() > CONNECTION_ID_VALID_DURATION => {
@@ -506,7 +509,9 @@ impl Tracker {
             let quit_timeout = Duration::from_millis(500);
             tokio::time::timeout(quit_timeout, async move {
                 let _ = match &self.tracker_type {
-                    TrackerType::Http => self.announce_payload.announce_http().await?,
+                    TrackerType::Http(client) => {
+                        self.announce_payload.announce_http(client).await?
+                    }
                     TrackerType::Udp(chan) => {
                         let conn_id = match &mut self.udp_connection_state {
                             Some(state)

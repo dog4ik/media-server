@@ -88,8 +88,10 @@ async fn upnp_ip(client: &ScpdClient<InternetGatewayClient>) -> anyhow::Result<I
     Ok(ip)
 }
 
-pub async fn search_upnp_gateway() -> anyhow::Result<ScpdClient<InternetGatewayClient>> {
-    let search_client = search_client::SearchClient::bind().await?;
+pub async fn search_upnp_gateway(
+    http_client: reqwest::Client,
+) -> anyhow::Result<ScpdClient<InternetGatewayClient>> {
+    let search_client = search_client::SearchClient::bind(http_client).await?;
     let service = search_client
         .search_for::<InternetGatewayClient>(search_client::SearchOptions::new())
         .await?;

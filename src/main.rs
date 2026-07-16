@@ -83,6 +83,8 @@ async fn main() {
 
         let cancellation_token = CancellationToken::new();
 
+        let http_client = reqwest::Client::new();
+
         let db = Db::connect(&APP_RESOURCES.database_path)
             .await
             .expect("database to be found");
@@ -93,14 +95,16 @@ async fn main() {
         let library = Box::leak(Box::new(Mutex::new(library)));
 
         let mut providers_stack = MetadataProvidersStack::new();
-        providers_stack.setup_providers();
+        providers_stack.setup_providers(&http_client);
         let providers_stack = Box::leak(Box::new(providers_stack));
 
         let tasks = TaskResource::new(cancellation_token.clone());
         let tasks = Box::leak(Box::new(tasks));
         let tracker = tasks.tracker.clone();
 
-        let torrent_client = TorrentClient::new(tasks, db.clone()).await.unwrap();
+        let torrent_client = TorrentClient::new(tasks, db.clone(), http_client.clone())
+            .await
+            .unwrap();
         torrent_client.load_torrents().await.unwrap();
 
         let torrent_client: &'static TorrentClient = Box::leak(Box::new(torrent_client));
@@ -111,6 +115,7 @@ async fn main() {
             tasks,
             providers_stack,
             torrent_client,
+            http_client,
             cancelation_token: cancellation_token.clone(),
         };
 

@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use anyhow::Context;
-use reqwest::{Client, Request, Response};
+use reqwest::{Client, Request, Response, header::HeaderMap};
 use serde::de::DeserializeOwned;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
@@ -28,19 +28,31 @@ pub struct LimitedRequestClient {
 impl LimitedRequestClient {
     /// Create new limited client.
     ///
+    /// `default_headers` are added to every request that doesn't already set them.
+    ///
     /// Number argument is the allowed "concurrency", [Duration] argument is rate.
     ///
     /// For example arguments (50, [std::time::Duration::SECOND]) mean that rate limit is 50 requests per second
-    pub fn new(client: Client, limit_number: usize, limit_duration: Duration) -> Self {
+    pub fn new(
+        client: Client,
+        default_headers: HeaderMap,
+        limit_number: usize,
+        limit_duration: Duration,
+    ) -> Self {
         let (tx, mut rx) = mpsc::channel::<LimitedRequest>(100);
         tokio::spawn(async move {
             let semaphore = Arc::new(Semaphore::new(limit_number));
             while let Some(LimitedRequest {
-                req,
+                mut req,
                 res,
                 cancellation_token,
             }) = rx.recv().await
             {
+                for (name, value) in &default_headers {
+                    req.headers_mut()
+                        .entry(name)
+                        .or_insert_with(|| value.clone());
+                }
                 let semaphore = semaphore.clone();
                 let client = client.clone();
                 tokio::spawn(async move {

@@ -35,25 +35,23 @@ pub struct TvdbApi {
 impl TvdbApi {
     pub const RATE_LIMIT: usize = 10;
     pub const API_URL: &'static str = "https://api4.thetvdb.com/v4";
-    pub fn new(api_key: Option<&str>) -> anyhow::Result<Self> {
-        let (client, base_url) = match api_key {
+    pub fn new(http_client: Client, api_key: Option<&str>) -> anyhow::Result<Self> {
+        let (headers, base_url) = match api_key {
             Some(api_key) => {
                 tracing::info!("Using personal tvdb token");
                 let mut headers = HeaderMap::with_capacity(1);
                 headers.insert(AUTHORIZATION, HeaderValue::from_str(api_key).unwrap());
-                (
-                    Client::builder()
-                        .default_headers(headers)
-                        .build()
-                        .expect("build to succeed"),
-                    Url::parse(Self::API_URL).expect("url to parse"),
-                )
+                (headers, Url::parse(Self::API_URL).expect("url to parse"))
             }
-            None => provod_agent::new_client("tvdb")?,
+            None => provod_agent::client_config("tvdb")?,
         };
 
-        let limited_client =
-            LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
+        let limited_client = LimitedRequestClient::new(
+            http_client,
+            headers,
+            Self::RATE_LIMIT,
+            std::time::Duration::from_secs(1),
+        );
         Ok(Self {
             client: limited_client,
             show_cache: Mutex::new(LruCache::new(METADATA_CACHE_SIZE)),

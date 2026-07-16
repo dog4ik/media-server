@@ -104,6 +104,9 @@ pub struct ClientConfig {
     pub cancellation_token: Option<CancellationToken>,
     pub upnp_nat_traversal_enabled: bool,
     pub max_peer_connections: usize,
+    /// HTTP client used for tracker announces and upnp gateway discovery.
+    /// When [None] the client creates its own.
+    pub http_client: Option<reqwest::Client>,
 }
 
 impl Default for ClientConfig {
@@ -115,6 +118,7 @@ impl Default for ClientConfig {
             cancellation_token: Some(CancellationToken::new()),
             upnp_nat_traversal_enabled: true,
             max_peer_connections: MAX_PEER_CONNECTIONS,
+            http_client: None,
         }
     }
 }
@@ -128,6 +132,7 @@ pub struct Client {
     task_tracker: TaskTracker,
     config: ClientConfig,
     session: SessionHandle,
+    http_client: reqwest::Client,
 }
 
 impl Client {
@@ -137,8 +142,9 @@ impl Client {
     ) -> anyhow::Result<Self> {
         let cancellation_token = config.cancellation_token.clone().unwrap_or_default();
         let task_tracker = TaskTracker::new();
+        let http_client = config.http_client.clone().unwrap_or_default();
         let upnp_client = match config.upnp_nat_traversal_enabled {
-            true => utils::search_upnp_gateway().await.ok(),
+            true => utils::search_upnp_gateway(http_client.clone()).await.ok(),
             false => None,
         };
         let external_ip = utils::external_ip(upnp_client.as_ref()).await.ok();
@@ -171,6 +177,7 @@ impl Client {
             task_tracker,
             session,
             config,
+            http_client,
         })
     }
 
@@ -193,6 +200,7 @@ impl Client {
             urls,
             hash,
             self.udp_tracker_tx.clone(),
+            self.http_client.clone(),
             initial_stat,
             self.task_tracker.clone(),
             child_token.clone(),
@@ -251,7 +259,8 @@ impl Client {
         let mut tracker_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
         let mut ut_metadata_set: JoinSet<anyhow::Result<Info>> = JoinSet::new();
         for tracker_url in tracker_list.clone() {
-            let tracker_type = TrackerType::from_url(&tracker_url, &self.udp_tracker_tx)?;
+            let tracker_type =
+                TrackerType::from_url(&tracker_url, &self.udp_tracker_tx, &self.http_client)?;
             {
                 let response_tx = response_tx.clone();
                 tracker_set.spawn(async move {
@@ -316,13 +325,14 @@ fn spawn_trackers(
     urls: Vec<Url>,
     info_hash: [u8; 20],
     tracker_tx: UdpTrackerChannel,
+    http_client: reqwest::Client,
     initial_progress: DownloadStat,
     task_tracker: TaskTracker,
     cancellation_token: CancellationToken,
 ) -> Vec<DownloadTracker> {
     let mut handles = Vec::with_capacity(urls.len());
     for url in urls {
-        let Ok(tracker_type) = TrackerType::from_url(&url, &tracker_tx)
+        let Ok(tracker_type) = TrackerType::from_url(&url, &tracker_tx, &http_client)
             .inspect_err(|e| tracing::warn!("Unknown tracker type: {e}"))
         else {
             continue;

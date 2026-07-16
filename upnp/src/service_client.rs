@@ -362,7 +362,7 @@ pub struct ScpdClient<T: ScpdService> {
 }
 
 impl<T: ScpdService> ScpdClient<T> {
-    pub fn new(scpd: Scpd<'_>, control_url: String) -> Self {
+    pub fn new(scpd: Scpd<'_>, control_url: String, fetch_client: reqwest::Client) -> Self {
         let actions = scpd
             .actions
             .iter()
@@ -384,8 +384,6 @@ impl<T: ScpdService> ScpdClient<T> {
                 }
             })
             .collect();
-
-        let fetch_client = reqwest::Client::new();
 
         Self {
             actions,

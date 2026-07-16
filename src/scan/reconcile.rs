@@ -30,6 +30,7 @@ pub struct LibraryReconciler {
     db: &'static Db,
     providers: &'static MetadataProvidersStack,
     progress: ScanProgressEmitter,
+    http_client: reqwest::Client,
 }
 
 impl LibraryReconciler {
@@ -38,12 +39,14 @@ impl LibraryReconciler {
         db: &'static Db,
         providers: &'static MetadataProvidersStack,
         progress: ScanProgressEmitter,
+        http_client: reqwest::Client,
     ) -> Self {
         Self {
             library,
             db,
             providers,
             progress,
+            http_client,
         }
     }
 
@@ -178,9 +181,10 @@ impl LibraryReconciler {
         for task in tasks {
             let permit = semaphore.clone().acquire_owned().await.unwrap();
             let emitter = emitter.clone();
+            let http_client = self.http_client.clone();
             tracker.spawn(async move {
                 let _permit = permit;
-                if let Err(e) = task.execute().await {
+                if let Err(e) = task.execute(&http_client).await {
                     emitter.dispatch_fail();
                     tracing::warn!("Asset save task failed: {e}");
                 } else {

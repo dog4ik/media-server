@@ -620,9 +620,14 @@ async fn handle_progress(
 
 impl TorrentClient {
     #[tracing::instrument(name = "torrent_client_init", skip_all)]
-    pub async fn new(tasks: &'static TaskResource, manager: Db) -> anyhow::Result<Self> {
+    pub async fn new(
+        tasks: &'static TaskResource,
+        manager: Db,
+        http_client: reqwest::Client,
+    ) -> anyhow::Result<Self> {
         let config = torrent::ClientConfig {
             cancellation_token: Some(tasks.parent_cancellation_token.clone()),
+            http_client: Some(http_client),
             ..Default::default()
         };
         let progress_broadcast = TorrentProgressChannel::new();

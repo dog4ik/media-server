@@ -108,7 +108,7 @@ fn resolve_local_addr() -> Ipv4Addr {
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
-    let client = SearchClient::bind().await.unwrap();
+    let client = SearchClient::bind(reqwest::Client::new()).await.unwrap();
 
     let options = SearchOptions::new()
         .take(Some(1))

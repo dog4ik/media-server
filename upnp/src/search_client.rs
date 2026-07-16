@@ -52,9 +52,8 @@ pub struct SearchClient {
 }
 
 impl SearchClient {
-    pub async fn bind() -> anyhow::Result<Self> {
+    pub async fn bind(fetch_client: reqwest::Client) -> anyhow::Result<Self> {
         let socket = UdpSocket::bind(SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 0)).await?;
-        let fetch_client = reqwest::Client::new();
         Ok(Self {
             socket,
             fetch_client,
@@ -100,7 +99,7 @@ impl SearchClient {
 
         let service_scpd = Scpd::read_xml(&mut quick_xml::Reader::from_str(&service_scpd))?;
 
-        Ok(ScpdClient::new(service_scpd, control_url))
+        Ok(ScpdClient::new(service_scpd, control_url, client))
     }
 
     #[tracing::instrument(name = "ssdp_search", level = "debug", skip_all, fields(service = %T::URN))]

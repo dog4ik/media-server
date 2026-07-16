@@ -85,8 +85,11 @@ impl MetadataProvidersStack {
     }
 
     #[tracing::instrument(skip_all)]
-    pub fn setup_providers(&mut self) {
-        match TmdbApi::new(config::CONFIG.get_value::<config::TmdbKey>().0) {
+    pub fn setup_providers(&mut self, http_client: &reqwest::Client) {
+        match TmdbApi::new(
+            http_client.clone(),
+            config::CONFIG.get_value::<config::TmdbKey>().0,
+        ) {
             Ok(tmdb_api) => {
                 let tmdb_api: &'static _ = Box::leak(Box::new(tmdb_api));
                 self.tmdb = Some(tmdb_api);
@@ -94,11 +97,11 @@ impl MetadataProvidersStack {
             Err(e) => tracing::warn!("Failed to initialize TMDB api: {e}"),
         };
 
-        let tpb_api = TpbApi::new();
+        let tpb_api = TpbApi::new(http_client.clone());
         let tpb_api = Box::leak(Box::new(tpb_api));
         self.tpb = Some(tpb_api);
 
-        match ProvodRuTrackerAdapter::new() {
+        match ProvodRuTrackerAdapter::new(http_client.clone()) {
             Ok(rutracker_api) => {
                 let rutracker_api: &'static _ = Box::leak(Box::new(rutracker_api));
                 self.rutracker = Some(&rutracker_api);
@@ -106,7 +109,10 @@ impl MetadataProvidersStack {
             Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
         }
 
-        match TvdbApi::new(config::CONFIG.get_value::<config::TvdbKey>().0.as_deref()) {
+        match TvdbApi::new(
+            http_client.clone(),
+            config::CONFIG.get_value::<config::TvdbKey>().0.as_deref(),
+        ) {
             Ok(tvdb_api) => {
                 let tvdb_api: &'static _ = Box::leak(Box::new(tvdb_api));
                 self.tvdb = Some(tvdb_api);

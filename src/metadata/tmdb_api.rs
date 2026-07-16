@@ -86,33 +86,32 @@ impl TmdbApi {
     ///
     /// If provided api key, requests will go directly to tmdb.
     /// Otherwise Provod proxy will be used.
-    pub fn new(api_key: Option<String>) -> anyhow::Result<Self> {
-        let mut headers = HeaderMap::with_capacity(2);
+    pub fn new(http_client: Client, api_key: Option<String>) -> anyhow::Result<Self> {
         // If we don't have token use provod agent
-        let (client, base_url) = match api_key {
+        let (headers, base_url) = match api_key {
             Some(api_key) => {
                 tracing::info!("Using personal TMDB api token");
-                headers.insert(
-                    ACCEPT_ENCODING,
-                    HeaderValue::from_str("compress").expect("ascii"),
-                );
-                headers.insert(
-                    AUTHORIZATION,
-                    HeaderValue::from_str(&format!("Bearer {api_key}")).expect("ascii"),
-                );
-                (
-                    Client::builder()
-                        .default_headers(headers)
-                        .build()
-                        .expect("build to succeed"),
-                    Url::parse(Self::API_URL).expect("url to parse"),
-                )
+                let headers = HeaderMap::from_iter([
+                    (
+                        ACCEPT_ENCODING,
+                        HeaderValue::from_str("compress").expect("ascii"),
+                    ),
+                    (
+                        AUTHORIZATION,
+                        HeaderValue::from_str(&format!("Bearer {api_key}")).expect("ascii"),
+                    ),
+                ]);
+                (headers, Url::parse(Self::API_URL).expect("url to parse"))
             }
-            None => provod_agent::new_client("tmdb")?,
+            None => provod_agent::client_config("tmdb")?,
         };
 
-        let limited_client =
-            LimitedRequestClient::new(client, Self::RATE_LIMIT, std::time::Duration::from_secs(1));
+        let limited_client = LimitedRequestClient::new(
+            http_client,
+            headers,
+            Self::RATE_LIMIT,
+            std::time::Duration::from_secs(1),
+        );
         Ok(Self {
             client: limited_client,
             base_url,

@@ -155,21 +155,28 @@ pub struct AssetSaveTask {
 }
 
 impl AssetSaveTask {
-    pub async fn execute(self) -> anyhow::Result<()> {
+    pub async fn execute(self, http_client: &reqwest::Client) -> anyhow::Result<()> {
         match self.kind {
-            AssetKind::Poster(asset) => self.source.execute_with(asset).await,
-            AssetKind::Backdrop(asset) => self.source.execute_with(asset).await,
+            AssetKind::Poster(asset) => self.source.execute_with(http_client, asset).await,
+            AssetKind::Backdrop(asset) => self.source.execute_with(http_client, asset).await,
         }
     }
 }
 
 impl AssetTaskSource {
-    async fn execute_with(self, asset: impl FileAsset) -> anyhow::Result<()> {
+    async fn execute_with(
+        self,
+        http_client: &reqwest::Client,
+        asset: impl FileAsset,
+    ) -> anyhow::Result<()> {
         match self {
-            AssetTaskSource::Url(url) => save_asset_from_url(url.parse()?, asset).await,
+            AssetTaskSource::Url(url) => {
+                save_asset_from_url(http_client, url.parse()?, asset).await
+            }
             AssetTaskSource::VideoFrame(source) => save_asset_from_frame(asset, &source).await,
             AssetTaskSource::UrlWithFrameFallback { url, source } => {
-                save_asset_from_url_with_frame_fallback(url.parse()?, asset, &source).await
+                save_asset_from_url_with_frame_fallback(http_client, url.parse()?, asset, &source)
+                    .await
             }
         }
     }
@@ -185,13 +192,17 @@ async fn save_asset_from_frame(asset: impl FileAsset, source: &Source) -> anyhow
     Ok(())
 }
 
-#[tracing::instrument(level = "debug", skip(asset), fields(asset = %asset.path().display()))]
-async fn save_asset_from_url(url: reqwest::Url, asset: impl FileAsset) -> anyhow::Result<()> {
+#[tracing::instrument(level = "debug", skip(http_client, asset), fields(asset = %asset.path().display()))]
+async fn save_asset_from_url(
+    http_client: &reqwest::Client,
+    url: reqwest::Url,
+    asset: impl FileAsset,
+) -> anyhow::Result<()> {
     use std::io::{Error, ErrorKind};
     use tokio_stream::StreamExt;
     use tokio_util::io::StreamReader;
 
-    let response = reqwest::get(url).await?;
+    let response = http_client.get(url).send().await?;
     let stream = response
         .bytes_stream()
         .map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
@@ -200,15 +211,16 @@ async fn save_asset_from_url(url: reqwest::Url, asset: impl FileAsset) -> anyhow
     Ok(())
 }
 
-#[tracing::instrument(level = "debug", skip(asset, source), fields(asset = %asset.path().display()))]
+#[tracing::instrument(level = "debug", skip(http_client, asset, source), fields(asset = %asset.path().display()))]
 async fn save_asset_from_url_with_frame_fallback(
+    http_client: &reqwest::Client,
     url: reqwest::Url,
     asset: impl FileAsset,
     source: &Source,
 ) -> anyhow::Result<()> {
     use tokio::fs;
     let asset_path = asset.path();
-    if let Err(e) = save_asset_from_url(url, asset).await {
+    if let Err(e) = save_asset_from_url(http_client, url, asset).await {
         let video_duration = source.video.metadata().await?.duration();
         tracing::warn!("Failed to save image, pulling frame: {e}");
         fs::create_dir_all(asset_path.parent().unwrap()).await?;

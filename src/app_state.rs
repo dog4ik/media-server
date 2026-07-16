@@ -27,6 +27,7 @@ pub struct AppState {
     pub tasks: &'static TaskResource,
     pub providers_stack: &'static MetadataProvidersStack,
     pub torrent_client: &'static TorrentClient,
+    pub http_client: reqwest::Client,
     pub cancelation_token: CancellationToken,
 }
 
@@ -472,6 +473,7 @@ WHERE seasons.show_id = ?",
             self.db,
             self.providers_stack,
             progress,
+            self.http_client.clone(),
         )
         .reconciliate(config)
         .await
