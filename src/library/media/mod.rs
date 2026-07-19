@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize, de::Visitor, ser::SerializeStruct};
 use std::{
     fmt::Display,
     io::SeekFrom,
+    ops::Bound,
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
@@ -159,37 +160,12 @@ impl Video {
             Ok(size) => size,
             Err(e) => return AppError::from(e).into_response(),
         };
-        let range = range.map(|h| h.0).unwrap_or(Range::bytes(0..).unwrap());
-        let (start, end) = range
-            .satisfiable_ranges(file_size)
-            .next()
-            .expect("at least one tuple");
-        let start = match start {
-            std::ops::Bound::Included(val) => val,
-            std::ops::Bound::Excluded(val) => val,
-            std::ops::Bound::Unbounded => 0,
-        };
-
-        let end = match end {
-            std::ops::Bound::Included(val) => val,
-            std::ops::Bound::Excluded(val) => val,
-            std::ops::Bound::Unbounded => file_size,
-        };
 
         let Ok(mut file) = tokio::fs::File::open(&self.path).await else {
             return AppError::internal_error("Failed to open file").into_response();
         };
-        if file.seek(SeekFrom::Start(start)).await.is_err() {
-            return AppError::bad_request("Failed to seek file to requested range").into_response();
-        };
 
-        let chunk_size = end - start + 1;
-        let stream_of_bytes = FramedRead::new(file.take(chunk_size), BytesCodec::new());
         let mut headers = HeaderMap::new();
-        headers.insert(
-            header::CONTENT_LENGTH,
-            header::HeaderValue::from(end - start),
-        );
         headers.insert(
             header::CONTENT_TYPE,
             HeaderValue::from_static(self.container().mime_type()),
@@ -199,15 +175,57 @@ impl Video {
             header::CACHE_CONTROL,
             HeaderValue::from_static("public, max-age=0"),
         );
+
+        let Some(TypedHeader(range)) = range else {
+            headers.insert(header::CONTENT_LENGTH, HeaderValue::from(file_size));
+            let stream = FramedRead::new(file, BytesCodec::new());
+            return (StatusCode::OK, headers, Body::from_stream(stream)).into_response();
+        };
+
+        let unsatisfiable = || {
+            let h = HeaderMap::from_iter([(
+                header::CONTENT_RANGE,
+                HeaderValue::from_str(&format!("bytes */{file_size}")).unwrap(),
+            )]);
+            (StatusCode::RANGE_NOT_SATISFIABLE, h).into_response()
+        };
+
+        // First requested range, resolved to an inclusive [start, end].
+        let Some((start_bound, end_bound)) = range.satisfiable_ranges(file_size).next() else {
+            return unsatisfiable();
+        };
+        let start = match start_bound {
+            Bound::Included(v) => v,
+            Bound::Excluded(v) => v + 1,
+            Bound::Unbounded => 0,
+        };
+        let end = match end_bound {
+            Bound::Included(v) => v,
+            Bound::Excluded(v) => v.saturating_sub(1),
+            Bound::Unbounded => file_size.saturating_sub(1),
+        }
+        .min(file_size.saturating_sub(1));
+
+        if file_size == 0 || start >= file_size || start > end {
+            return unsatisfiable();
+        }
+
+        if file.seek(SeekFrom::Start(start)).await.is_err() {
+            return AppError::internal_error("Failed to seek file").into_response();
+        }
+
+        let length = end - start + 1;
+        headers.insert(header::CONTENT_LENGTH, HeaderValue::from(length));
         headers.insert(
             header::CONTENT_RANGE,
-            HeaderValue::from_str(&format!("bytes {}-{}/{}", start, end - 1, file_size)).unwrap(),
+            HeaderValue::from_str(&format!("bytes {start}-{end}/{file_size}")).unwrap(),
         );
 
+        let stream = FramedRead::new(file.take(length), BytesCodec::new());
         (
             StatusCode::PARTIAL_CONTENT,
             headers,
-            Body::from_stream(stream_of_bytes),
+            Body::from_stream(stream),
         )
             .into_response()
     }
