@@ -86,10 +86,8 @@ impl MetadataProvidersStack {
 
     #[tracing::instrument(skip_all)]
     pub fn setup_providers(&mut self, http_client: &reqwest::Client) {
-        match TmdbApi::new(
-            http_client.clone(),
-            config::CONFIG.get_value::<config::TmdbKey>().0,
-        ) {
+        let (config::TmdbKey(tmdb_key), config::TvdbKey(tvdb_key)) = config::CONFIG.get_values();
+        match TmdbApi::new(http_client.clone(), tmdb_key) {
             Ok(tmdb_api) => {
                 let tmdb_api: &'static _ = Box::leak(Box::new(tmdb_api));
                 self.tmdb = Some(tmdb_api);
@@ -109,10 +107,7 @@ impl MetadataProvidersStack {
             Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
         }
 
-        match TvdbApi::new(
-            http_client.clone(),
-            config::CONFIG.get_value::<config::TvdbKey>().0.as_deref(),
-        ) {
+        match TvdbApi::new(http_client.clone(), tvdb_key.as_deref()) {
             Ok(tvdb_api) => {
                 let tvdb_api: &'static _ = Box::leak(Box::new(tvdb_api));
                 self.tvdb = Some(tvdb_api);
@@ -122,15 +117,18 @@ impl MetadataProvidersStack {
         self.apply_config_order();
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn apply_config_order(&self) {
-        let discover_order = config::CONFIG.get_value::<config::DiscoverProvidersOrder>();
-        let show_order = config::CONFIG.get_value::<config::ShowProvidersOrder>();
-        let movie_order = config::CONFIG.get_value::<config::MovieProvidersOrder>();
-        let torrent_order = config::CONFIG.get_value::<config::TorrentIndexesOrder>();
-        self.order_discover_providers(discover_order.0);
-        self.order_movie_providers(movie_order.0);
-        self.order_show_providers(show_order.0);
-        self.order_torrent_indexes(torrent_order.0);
+        let (
+            config::DiscoverProvidersOrder(discover_order),
+            config::DiscoverProvidersOrder(show_order),
+            config::MovieProvidersOrder(movie_order),
+            config::TorrentIndexesOrder(torrent_order),
+        ) = config::CONFIG.get_values();
+        self.order_discover_providers(discover_order);
+        self.order_movie_providers(movie_order);
+        self.order_show_providers(show_order);
+        self.order_torrent_indexes(torrent_order);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

@@ -33,6 +33,11 @@ impl LimitedRequestClient {
     /// Number argument is the allowed "concurrency", [Duration] argument is rate.
     ///
     /// For example arguments (50, [std::time::Duration::SECOND]) mean that rate limit is 50 requests per second
+    #[tracing::instrument(
+        name = "spawn_limited_request_client",
+        skip(client, default_headers),
+        fields(limit_number, limit_duration)
+    )]
     pub fn new(
         client: Client,
         default_headers: HeaderMap,
