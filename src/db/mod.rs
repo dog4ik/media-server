@@ -158,22 +158,6 @@ pub trait DbActions<'a>: Acquire<'a, Database = Sqlite> + Send
 where
     Self: Sized,
 {
-    fn clear(self) -> impl std::future::Future<Output = Result<(), sqlx::Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            sqlx::query!(
-                "
-        DELETE FROM metadata;
-        DELETE FROM videos;
-        DELETE FROM subtitles;
-        ",
-            )
-            .execute(&mut *conn)
-            .await?;
-            Ok(())
-        }
-    }
-
     fn insert_list(
         self,
         list: &DbList,
@@ -739,16 +723,6 @@ where
         }
     }
 
-    fn soft_remove_episode(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            conn.remove_episode(id).await
-        }
-    }
-
     fn remove_season(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
@@ -780,23 +754,12 @@ where
         }
     }
 
-    fn soft_remove_season(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            conn.remove_season(id).await
-        }
-    }
-
     fn remove_show(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             tracing::debug!(id, "Removing show");
 
-            // Cascade removes seasons → episodes → intros. Metadata rows persist.
-            sqlx::query!("DELETE FROM shows WHERE id = ?", id)
+            sqlx::query!("delete from shows where id = ?", id)
                 .execute(&mut *conn)
                 .await?;
 
@@ -806,16 +769,6 @@ where
             };
 
             Ok(())
-        }
-    }
-
-    fn soft_remove_show(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            conn.remove_show(id).await
         }
     }
 
@@ -834,16 +787,6 @@ where
             };
 
             Ok(())
-        }
-    }
-
-    fn soft_remove_movie(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            conn.remove_movie(id).await
         }
     }
 

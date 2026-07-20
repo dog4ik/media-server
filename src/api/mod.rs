@@ -93,7 +93,6 @@ pub mod lists;
         server::stop_watch_session,
         server::progress,
         server::reconciliate_lib,
-        server::clear_db,
         server::start_direct_stream,
         server::start_hls_stream,
         server::hls_manifest,

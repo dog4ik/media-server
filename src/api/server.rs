@@ -1299,26 +1299,6 @@ pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<Statu
     Ok(StatusCode::ACCEPTED)
 }
 
-/// Clear the database. For debug purposes only.
-#[utoipa::path(
-    delete,
-    path = "/api/clear_db",
-    responses(
-        (status = 200, body = String),
-    ),
-    tag = "Configuration",
-)]
-pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, StatusCode> {
-    tracing::info!("Clearing database");
-    app_state
-        .db
-        .pool
-        .clear()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok("done".into())
-}
-
 #[derive(Debug, utoipa::ToSchema)]
 pub struct CursoredResponse<T> {
     data: Vec<T>,

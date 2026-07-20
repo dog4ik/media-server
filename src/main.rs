@@ -373,8 +373,7 @@ async fn main() {
             .route(
                 "/file_browser/parent/{key}",
                 get(api::file_browser::parent_directory),
-            )
-            .route("/clear_db", delete(api::server::clear_db));
+            );
 
         let debug_api = Router::new().route("/library", get(api::server::library_state));
 
