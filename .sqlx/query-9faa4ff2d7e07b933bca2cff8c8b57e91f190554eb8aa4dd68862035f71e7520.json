@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "delete from list_items where list_id = ? and metadata_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "9faa4ff2d7e07b933bca2cff8c8b57e91f190554eb8aa4dd68862035f71e7520"
+}
