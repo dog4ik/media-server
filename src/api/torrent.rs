@@ -15,8 +15,9 @@ use tokio_stream::{Stream, StreamExt};
 use torrent::{DownloadParams, MagnetLink, TorrentFile};
 
 use crate::{
+    AppError,
     api::{OptionalContentTypeQuery, Path, Query},
-    app_state::{AppError, AppState},
+    app_state::AppState,
     config,
     metadata::{ContentType, metadata_stack::MetadataProvidersStack},
     torrent::{
@@ -193,7 +194,7 @@ pub async fn set_files_priority(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
     Json(payload): Json<PriorityPayload>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let torrent = client
         .get_download(info_hash.as_ref())
         .ok_or(AppError::not_found("Torrent is not found"))?;
@@ -232,7 +233,7 @@ pub async fn open_torrent(
         ..
     }): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
         .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
     let tracker_list = magnet_link.all_trackers().ok_or(AppError::bad_request(
@@ -295,7 +296,7 @@ pub async fn parse_torrent_file(
     State(providers_stack): State<&'static MetadataProvidersStack>,
     Query(hint): Query<Option<DownloadContentHint>>,
     MultipartTorrent { torrent_file, .. }: MultipartTorrent,
-) -> Result<Json<TorrentInfo>, AppError> {
+) -> crate::Result<Json<TorrentInfo>> {
     let torrent_info = TorrentInfo::new(&torrent_file.info, hint, providers_stack).await;
     Ok(Json(torrent_info))
 }
@@ -317,7 +318,7 @@ pub async fn open_torrent_file(
         save_location,
         torrent_file,
     }: MultipartTorrent,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let torrent_info = TorrentInfo::new(&torrent_file.info, None, app_state.providers_stack).await;
     let save_location = save_location
         .or_else(|| {
@@ -370,7 +371,7 @@ pub async fn open_torrent_file(
 pub async fn resolve_magnet_link(
     State(app_state): State<AppState>,
     Query(payload): Query<ResolveMagnetLinkPayload>,
-) -> Result<Json<TorrentInfo>, AppError> {
+) -> crate::Result<Json<TorrentInfo>> {
     let client = app_state.torrent_client;
     let providers_stack = app_state.providers_stack;
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
@@ -403,7 +404,7 @@ pub async fn index_magnet_link(
     Query(TorrentIndexQuery { provider }): Query<TorrentIndexQuery>,
     Query(StringIdQuery { id }): Query<StringIdQuery>,
     State(app_state): State<AppState>,
-) -> Result<Json<IndexMagnetLink>, AppError> {
+) -> crate::Result<Json<IndexMagnetLink>> {
     let index = app_state
         .providers_stack
         .torrent_index(dbg!(provider))
@@ -431,7 +432,7 @@ pub async fn index_magnet_link(
 pub async fn torrent_state(
     State(client): State<&'static TorrentClient>,
     Path(info_hash): Path<InfoHash>,
-) -> Result<Json<TorrentState>, AppError> {
+) -> crate::Result<Json<TorrentState>> {
     let progress = client
         .full_progress(info_hash.as_ref())
         .await
@@ -482,7 +483,7 @@ pub async fn updates(
 pub async fn validate_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     client
         .get_download(&info_hash.0)
         .ok_or(AppError::not_found("Torrent is not found"))?;
@@ -509,7 +510,7 @@ pub struct BatchActionPayload {
 pub async fn batch_action(
     State(client): State<&'static TorrentClient>,
     Json(BatchActionPayload { hashes, action }): Json<BatchActionPayload>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     if action == Action::Abort {
         client.remove_downloads(&hashes).await;
     }
@@ -538,7 +539,7 @@ pub async fn batch_action(
 pub async fn delete_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     client
         .remove_download(info_hash.0)
         .await

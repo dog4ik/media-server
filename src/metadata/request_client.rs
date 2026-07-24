@@ -6,7 +6,7 @@ use serde::de::DeserializeOwned;
 use tokio::sync::{Semaphore, mpsc, oneshot};
 use tokio_util::sync::CancellationToken;
 
-use crate::app_state::AppError;
+use crate::AppError;
 
 /// Request that is send to limited request client
 #[derive(Debug)]
@@ -85,7 +85,7 @@ impl LimitedRequestClient {
         Self { request_tx: tx }
     }
 
-    pub async fn request<T>(&self, req: Request) -> Result<T, AppError>
+    pub async fn request<T>(&self, req: Request) -> crate::Result<T>
     where
         T: DeserializeOwned,
     {
@@ -102,7 +102,7 @@ impl LimitedRequestClient {
         }
     }
 
-    pub async fn request_raw(&self, req: Request) -> Result<Response, AppError> {
+    pub async fn request_raw(&self, req: Request) -> crate::Result<Response> {
         let (tx, rx) = oneshot::channel::<Result<Response, reqwest::Error>>();
         let cancellation_token = CancellationToken::new();
         // Its important to drop this guard after getting reqwest::Response

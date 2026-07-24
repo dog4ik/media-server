@@ -1,4 +1,5 @@
 use crate::{
+    AppError,
     api::{
         Json, Path,
         api_data::{
@@ -6,7 +7,7 @@ use crate::{
             local_show::{Episode, Show},
         },
     },
-    app_state::{AppError, AppState},
+    app_state::AppState,
     db::{
         Db, DbActions, DbList, DbListItem, DbQueryBuilder, ListKind, is_foreign_key_violation,
         query_builders::{DbFullEpisodeQuery, DbMovieQuery, DbShowQuery},
@@ -57,7 +58,7 @@ pub struct AllLists {
     ),
     tag = "Lists",
 )]
-async fn all_lists(State(db): State<Db>) -> Result<Json<AllLists>, AppError> {
+async fn all_lists(State(db): State<Db>) -> crate::Result<Json<AllLists>> {
     let lists = sqlx::query!("select *, (select count(id) from list_items where list_items.list_id = lists.id) as count from lists
         where kind = 'user' order by updated_at desc")
         .fetch_all(&db.pool)
@@ -117,7 +118,7 @@ async fn all_lists(State(db): State<Db>) -> Result<Json<AllLists>, AppError> {
     ),
     tag = "Lists",
 )]
-async fn get_list(Path(id): Path<i64>, State(db): State<Db>) -> Result<Json<List>, AppError> {
+async fn get_list(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<Json<List>> {
     let list = sqlx::query!("select *, (select count(id) from list_items where list_items.list_id = lists.id) as count from lists
         where id = ?", id)
         .fetch_one(&db.pool)
@@ -165,7 +166,7 @@ pub struct ListEpisode {
 async fn list_contents(
     Path(id): Path<i64>,
     State(db): State<Db>,
-) -> Result<Json<Vec<ListContent>>, AppError> {
+) -> crate::Result<Json<Vec<ListContent>>> {
     // Insertion order of the list, used to order the result once the per-kind queries are merged.
     let ordered = sqlx::query_scalar!(
         "select metadata_id from list_items where list_id = ? order by created_at, id",
@@ -298,7 +299,7 @@ pub(super) struct CreateList {
 async fn create_list(
     State(db): State<Db>,
     Json(CreateList { name, description }): Json<CreateList>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let now = OffsetDateTime::now_utc();
     db.insert_list(&DbList {
         id: None,
@@ -329,7 +330,7 @@ async fn update_list(
     Path(id): Path<i64>,
     State(db): State<Db>,
     Json(CreateList { name, description }): Json<CreateList>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let updated_at = OffsetDateTime::now_utc();
     let res = sqlx::query!(
         "update lists set name = ?, description = ?, updated_at = ? where id = ?",
@@ -359,7 +360,7 @@ async fn update_list(
     ),
     tag = "Lists",
 )]
-async fn delete_list(Path(id): Path<i64>, State(db): State<Db>) -> Result<StatusCode, AppError> {
+async fn delete_list(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<StatusCode> {
     let res = sqlx::query!(
         "delete from lists where id = ? and kind = ?",
         id,
@@ -378,7 +379,7 @@ const CONTENT_LINK_ERROR_TEXT: &str = "one of the content metadata items was not
 async fn resolve_content(
     app_state: &AppState,
     items: ListItems,
-) -> Result<PendingInsert<Vec<i64>>, AppError> {
+) -> crate::Result<PendingInsert<Vec<i64>>> {
     let db = app_state.db;
     let providers = app_state.providers_stack;
     match items {
@@ -451,7 +452,8 @@ async fn link_content(
     pending: PendingInsert<Vec<i64>>,
     list_id: i64,
     release_viewed: Option<bool>,
-) -> Result<(), AppError> {
+    http_client: reqwest::Client,
+) -> crate::Result<()> {
     let PendingInsert {
         content: metadata_ids,
         mut tx,
@@ -477,7 +479,7 @@ async fn link_content(
         }
     }
     tx.commit().await?;
-    assets.save(16, ()).await;
+    assets.save(16, http_client, ()).await;
     Ok(())
 }
 
@@ -498,13 +500,13 @@ async fn add_item(
     Path(list_id): Path<i64>,
     State(app_state): State<AppState>,
     Json(items): Json<ListItems>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(pending, list_id, None).await?;
+    link_content(pending, list_id, None, app_state.http_client).await?;
     Ok(StatusCode::CREATED)
 }
 
-async fn remove_list_item(db: &Db, list_id: i64, metadata_id: i64) -> Result<(), AppError> {
+async fn remove_list_item(db: &Db, list_id: i64, metadata_id: i64) -> crate::Result<()> {
     let res = sqlx::query!(
         "delete from list_items where list_id = ? and metadata_id = ?",
         list_id,
@@ -535,7 +537,7 @@ async fn remove_list_item(db: &Db, list_id: i64, metadata_id: i64) -> Result<(),
 async fn remove_item(
     Path((list_id, metadata_id)): Path<(i64, i64)>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     remove_list_item(&db, list_id, metadata_id).await
 }
 
@@ -552,9 +554,9 @@ async fn remove_item(
 async fn add_to_saved(
     State(app_state): State<AppState>,
     Json(items): Json<ListItems>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(pending, ListKind::SAVED_ID, None).await?;
+    link_content(pending, ListKind::SAVED_ID, None, app_state.http_client).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -574,7 +576,7 @@ async fn add_to_saved(
 async fn remove_saved_item(
     Path(metadata_id): Path<i64>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     remove_list_item(&db, ListKind::SAVED_ID, metadata_id).await
 }
 
@@ -591,9 +593,15 @@ async fn remove_saved_item(
 async fn add_to_watchlist(
     State(app_state): State<AppState>,
     Json(items): Json<ListItems>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(pending, ListKind::WATCH_ID, Some(true)).await?;
+    link_content(
+        pending,
+        ListKind::WATCH_ID,
+        Some(true),
+        app_state.http_client,
+    )
+    .await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -613,7 +621,7 @@ async fn add_to_watchlist(
 async fn remove_watchlist_item(
     Path(metadata_id): Path<i64>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     remove_list_item(&db, ListKind::WATCH_ID, metadata_id).await
 }
 
@@ -639,7 +647,7 @@ mod tests {
 
     use sqlx::SqlitePool;
 
-    use crate::app_state::AppErrorKind;
+    use crate::AppErrorKind;
     use crate::db::DbActions;
     use crate::metadata::metadata_api::tests::leak_db;
 
@@ -661,7 +669,7 @@ mod tests {
             tx: db.pool.begin().await?,
             assets: AssetTasks::new(),
         };
-        let res = link_content(pending, list_id, None)
+        let res = link_content(pending, list_id, None, reqwest::Client::new())
             .await
             .expect_err("request should fail");
         assert_eq!(res.kind, AppErrorKind::NotFound);

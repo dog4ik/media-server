@@ -1,7 +1,7 @@
+use crate::AppError;
 use crate::MediaDuration as CrateDuration;
 use crate::OffsetDateTime as CrateOffsetDateTime;
 use crate::app_state;
-use crate::app_state::AppError;
 use crate::config;
 use crate::db;
 use crate::ffmpeg;
@@ -168,8 +168,8 @@ pub mod torrent;
             metadata::ContentType,
             metadata::MetadataProvider,
             metadata::Language,
-            app_state::AppError,
-            app_state::AppErrorKind,
+            crate::AppError,
+            crate::AppErrorKind,
             server::DetailedVideo,
             server::DetailedVideoTrack,
             server::DetailedAudioTrack,
@@ -267,7 +267,7 @@ impl metadata::ShowMetadataProvider for QueryShowProvider {
         &self,
         show_id: &str,
         fetch_params: metadata::FetchParams,
-    ) -> Result<metadata::ShowMetadata, AppError> {
+    ) -> crate::Result<metadata::ShowMetadata> {
         self.0.show(show_id, fetch_params).await
     }
 
@@ -276,7 +276,7 @@ impl metadata::ShowMetadataProvider for QueryShowProvider {
         show_id: &str,
         season: usize,
         fetch_params: metadata::FetchParams,
-    ) -> Result<metadata::SeasonMetadata, AppError> {
+    ) -> crate::Result<metadata::SeasonMetadata> {
         self.0.season(show_id, season, fetch_params).await
     }
 
@@ -286,7 +286,7 @@ impl metadata::ShowMetadataProvider for QueryShowProvider {
         season: usize,
         episode: usize,
         fetch_params: metadata::FetchParams,
-    ) -> Result<metadata::EpisodeMetadata, AppError> {
+    ) -> crate::Result<metadata::EpisodeMetadata> {
         self.0.episode(show_id, season, episode, fetch_params).await
     }
 
@@ -294,7 +294,7 @@ impl metadata::ShowMetadataProvider for QueryShowProvider {
         &self,
         query: &str,
         fetch_params: metadata::FetchParams,
-    ) -> Result<Vec<metadata::ShowMetadata>, AppError> {
+    ) -> crate::Result<Vec<metadata::ShowMetadata>> {
         self.0.show_search(query, fetch_params).await
     }
 }

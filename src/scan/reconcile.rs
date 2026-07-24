@@ -8,7 +8,6 @@ use anyhow::Context;
 use tokio::task::JoinSet;
 
 use crate::{
-    app_state::AppError,
     db::{Db, DbActions},
     library::{Library, LibraryItem, Media},
     metadata::{metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack},
@@ -46,7 +45,7 @@ impl LibraryReconciler {
     }
 
     #[tracing::instrument(name = "reconcile", skip_all)]
-    pub async fn reconciliate(self, config: ScanConfig) -> Result<(), AppError> {
+    pub async fn reconciliate(self, config: ScanConfig) -> crate::Result<()> {
         let db_movies_videos = sqlx::query!(
             "SELECT videos.id FROM videos WHERE videos.metadata_id IN (SELECT movies.metadata_id FROM movies);"
         )
@@ -108,7 +107,11 @@ impl LibraryReconciler {
         tx.commit().await?;
         let assets_progress = self.progress.assets_progress_emitter(tasks.len());
         tasks
-            .save(max_asset_concurrency, self.http_client.clone(), assets_progress)
+            .save(
+                max_asset_concurrency,
+                self.http_client.clone(),
+                assets_progress,
+            )
             .await;
         self.progress.finish_scan();
         tracing::info!("Finished library reconciliation");
@@ -123,7 +126,7 @@ impl LibraryReconciler {
         items: Vec<LibraryItem<I>>,
         db_video_ids: Vec<i64>,
         removal_context: &'static str,
-    ) -> Result<Vec<LibraryItem<I>>, AppError>
+    ) -> crate::Result<Vec<LibraryItem<I>>>
     where
         I: Media + Send + 'static,
     {

@@ -1,6 +1,12 @@
 #![windows_subsystem = "windows"]
 #![doc = include_str!("../README.md")]
 
+use std::{error::Error, fmt::Display};
+
+use reqwest::StatusCode;
+
+use crate::api::Json;
+
 /// Api surface of the media server
 pub mod api;
 /// Shared state of the application
@@ -83,7 +89,7 @@ impl From<time::OffsetDateTime> for OffsetDateTime {
 pub struct MediaDuration(pub std::time::Duration);
 
 impl serde::Serialize for MediaDuration {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
@@ -92,7 +98,7 @@ impl serde::Serialize for MediaDuration {
 }
 
 impl<'de> serde::Deserialize<'de> for MediaDuration {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
@@ -103,7 +109,7 @@ impl<'de> serde::Deserialize<'de> for MediaDuration {
             fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
                 formatter.write_str("Duration time in milliseconds")
             }
-            fn visit_u64<E>(self, v: u64) -> Result<Self::Value, E>
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<Self::Value, E>
             where
                 E: serde::de::Error,
             {
@@ -118,5 +124,148 @@ impl<'de> serde::Deserialize<'de> for MediaDuration {
 impl From<std::time::Duration> for MediaDuration {
     fn from(value: std::time::Duration) -> Self {
         Self(value)
+    }
+}
+
+pub type Result<T> = std::result::Result<T, AppError>;
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
+pub struct AppError {
+    pub message: String,
+    pub kind: AppErrorKind,
+}
+
+#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppErrorKind {
+    /// Unclassified internal error
+    InternalError,
+    /// Resource was not found
+    NotFound,
+    /// There resource is duplicated
+    Duplicate,
+    BadRequest,
+    /// Sqlite database is busy
+    DatabaseLocked,
+}
+
+impl Display for AppErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AppErrorKind::InternalError => f.write_str("Internal error"),
+            AppErrorKind::NotFound => f.write_str("Not found"),
+            AppErrorKind::Duplicate => f.write_str("Duplicate"),
+            AppErrorKind::BadRequest => f.write_str("Bad request"),
+            AppErrorKind::DatabaseLocked => f.write_str("Database locked"),
+        }
+    }
+}
+
+impl Error for AppError {}
+
+impl Display for AppError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind, self.message)
+    }
+}
+
+impl From<AppErrorKind> for StatusCode {
+    fn from(val: AppErrorKind) -> Self {
+        match val {
+            AppErrorKind::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
+            AppErrorKind::NotFound => StatusCode::NOT_FOUND,
+            AppErrorKind::Duplicate => StatusCode::CONFLICT,
+            AppErrorKind::BadRequest => StatusCode::BAD_REQUEST,
+            AppErrorKind::DatabaseLocked => StatusCode::SERVICE_UNAVAILABLE,
+        }
+    }
+}
+
+impl From<anyhow::Error> for AppError {
+    fn from(err: anyhow::Error) -> Self {
+        Self {
+            message: err.to_string(),
+            kind: AppErrorKind::InternalError,
+        }
+    }
+}
+
+impl From<sqlx::Error> for AppError {
+    fn from(value: sqlx::Error) -> Self {
+        match value {
+            sqlx::Error::RowNotFound => AppError {
+                message: "Database row not found".to_string(),
+                kind: AppErrorKind::NotFound,
+            },
+            sqlx::Error::Database(err) if err.is_unique_violation() => AppError {
+                message: "Database unique violation".to_string(),
+                kind: AppErrorKind::Duplicate,
+            },
+            rest => AppError {
+                message: format!("{}", rest),
+                kind: AppErrorKind::InternalError,
+            },
+        }
+    }
+}
+
+impl From<std::io::Error> for AppError {
+    fn from(value: std::io::Error) -> Self {
+        match value.kind() {
+            std::io::ErrorKind::NotFound => AppError {
+                message: value.to_string(),
+                kind: AppErrorKind::NotFound,
+            },
+            _ => AppError {
+                message: value.to_string(),
+                kind: AppErrorKind::InternalError,
+            },
+        }
+    }
+}
+
+impl From<std::num::ParseIntError> for AppError {
+    fn from(value: std::num::ParseIntError) -> Self {
+        AppError {
+            message: value.to_string(),
+            kind: AppErrorKind::BadRequest,
+        }
+    }
+}
+
+impl AppError {
+    pub fn new(message: impl AsRef<str>, kind: AppErrorKind) -> Self {
+        Self {
+            message: message.as_ref().into(),
+            kind,
+        }
+    }
+
+    pub fn not_found(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::NotFound,
+        }
+    }
+
+    pub fn bad_request(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::BadRequest,
+        }
+    }
+
+    pub fn internal_error(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::InternalError,
+        }
+    }
+}
+
+impl axum::response::IntoResponse for AppError {
+    fn into_response(self) -> axum::response::Response {
+        let status: StatusCode = self.kind.clone().into();
+        (status, Json(self)).into_response()
     }
 }

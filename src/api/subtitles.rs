@@ -10,8 +10,9 @@ use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
 
 use crate::{
+    AppError,
     api::{Json, NumberQuery, Path, Query},
-    app_state::{AppError, AppState},
+    app_state::AppState,
     db::{self, Db, DbActions},
     library::assets::{self, FileAsset},
 };
@@ -34,7 +35,7 @@ pub async fn pull_video_subtitle(
     Path(video_id): Path<i64>,
     Query(number): Query<NumberQuery>,
     State(state): State<AppState>,
-) -> Result<String, AppError> {
+) -> crate::Result<String> {
     state
         .pull_subtitle_from_video(video_id, number.number)
         .await
@@ -85,7 +86,7 @@ pub async fn upload_subtitles(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     mut multipart: Multipart,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let mut language = None;
     while let Ok(Some(field)) = multipart.next_field().await {
         if let Some("language") = field.name() {
@@ -161,7 +162,7 @@ pub async fn reference_external_subtitles(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     Json(reference): Json<SubtitlesReferencePayload>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     if !reference.path.ends_with(".srt") {
         tracing::trace!(path = reference.path, "Rejecting subtitles reference path");
         return Err(AppError::bad_request("only .srt files can be referenced"));
@@ -197,7 +198,7 @@ pub async fn reference_external_subtitles(
     ),
     tag = "Subtitles",
 )]
-pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Result<(), AppError> {
+pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<()> {
     let removed_subs = sqlx::query!(
         "DELETE FROM subtitles WHERE id = ? RETURNING video_id, external_path",
         id
@@ -234,7 +235,7 @@ pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> Resu
 pub async fn get_subtitles(
     Path(id): Path<i64>,
     State(db): State<Db>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let (video_id, external_path) = sqlx::query!(
         "SELECT video_id, external_path FROM subtitles WHERE id = ?",
         id

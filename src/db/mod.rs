@@ -18,7 +18,6 @@ use crate::{
         },
         server::Intro,
     },
-    app_state::AppError,
     config,
     db::query_builders::{DbEpisodeQuery, DbMovieQuery},
     library::assets::{self, AssetDir},
@@ -521,7 +520,7 @@ where
         self,
         content_id: i64,
         content_hint: ContentType,
-    ) -> impl std::future::Future<Output = Result<Vec<ExternalIdMetadata>, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Vec<ExternalIdMetadata>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
 
@@ -1058,7 +1057,7 @@ where
         self,
         show_id: i64,
         season: usize,
-    ) -> impl std::future::Future<Output = Result<LocalContentId, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<LocalContentId>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
@@ -1128,7 +1127,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         show_id: i64,
         season: usize,
         episode: usize,
-    ) -> impl std::future::Future<Output = Result<LocalContentId, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<LocalContentId>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let season = season as i64;
@@ -1152,7 +1151,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn get_episode_by_id(
         self,
         episode_id: i64,
-    ) -> impl std::future::Future<Output = Result<Episode, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Episode>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             #[derive(sqlx::FromRow)]
@@ -1233,7 +1232,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         }
     }
 
-    fn get_system_id(self) -> impl std::future::Future<Output = Result<i64, AppError>> + Send {
+    fn get_system_id(self) -> impl std::future::Future<Output = crate::Result<i64>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let system_id = sqlx::query_as!(DbSystemId, "SELECT id from system_id")
@@ -1243,7 +1242,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
         }
     }
 
-    fn get_uuid(self) -> impl std::future::Future<Output = Result<uuid::Uuid, AppError>> + Send {
+    fn get_uuid(self) -> impl std::future::Future<Output = crate::Result<uuid::Uuid>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let db_upnp_uuid: DbUpnpUuid = sqlx::query_as(r#"SELECT uuid FROM upnp_uuid"#)
@@ -1257,7 +1256,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn all_torrents(
         self,
         limit: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<DbTorrent>, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Vec<DbTorrent>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let torrents = sqlx::query_as!(DbTorrent, "SELECT * FROM torrents LIMIT ?", limit)
@@ -1270,7 +1269,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn get_torrent_by_info_hash(
         self,
         info_hash: &[u8; 20],
-    ) -> impl std::future::Future<Output = Result<DbTorrent, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<DbTorrent>> + Send {
         async move {
             let info_hash = &info_hash[..];
             let mut conn = self.acquire().await?;
@@ -1288,7 +1287,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn torrent_files(
         self,
         torrent_id: i64,
-    ) -> impl std::future::Future<Output = Result<Vec<DbTorrentFile>, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Vec<DbTorrentFile>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let torrents = sqlx::query_as!(
@@ -1305,7 +1304,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn search_movie(
         self,
         query: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<MovieMetadata>, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Vec<MovieMetadata>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let query = format!("\"{}\"", query.trim().to_lowercase());
@@ -1353,7 +1352,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     fn search_show(
         self,
         query: &str,
-    ) -> impl std::future::Future<Output = Result<Vec<ShowMetadata>, AppError>> + Send {
+    ) -> impl std::future::Future<Output = crate::Result<Vec<ShowMetadata>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             let query = format!("\"{}\"", query.trim().to_lowercase());

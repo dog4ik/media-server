@@ -5,6 +5,7 @@ use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
 
 use crate::{
+    AppError,
     api::{
         CursorQuery, Json, OptionalUuidQuery, Path, Query, TakeQuery,
         api_data::{
@@ -14,7 +15,7 @@ use crate::{
         lists::EpisodesList,
         server::CursoredResponse,
     },
-    app_state::{AppError, AppState},
+    app_state::AppState,
     config,
     db::{self, Db, DbActions, LocalContentId, query_builders::DbHistoryQuery},
     metadata::{
@@ -110,7 +111,7 @@ pub async fn all_history(
     Query(TakeQuery { take }): Query<TakeQuery>,
     Query(CursorQuery { cursor }): Query<CursorQuery>,
     State(db): State<Db>,
-) -> Result<Json<CursoredResponse<HistoryEntry>>, AppError> {
+) -> crate::Result<Json<CursoredResponse<HistoryEntry>>> {
     let take = take.unwrap_or(50);
     let cursor: Option<i64> = cursor
         .map(|x| {
@@ -162,7 +163,7 @@ pub struct ShowSuggestion {
     ),
     tag = "History",
 )]
-pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistory>>, AppError> {
+pub async fn suggest_movies(State(db): State<Db>) -> crate::Result<Json<Vec<MovieHistory>>> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.metadata_id, movies.id AS movie_id FROM history
@@ -200,7 +201,7 @@ pub async fn suggest_movies(State(db): State<Db>) -> Result<Json<Vec<MovieHistor
     ),
     tag = "History",
 )]
-pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggestion>>, AppError> {
+pub async fn suggest_shows(State(db): State<Db>) -> crate::Result<Json<Vec<ShowSuggestion>>> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.metadata_id, episodes.number AS episode_number, seasons.show_id AS show_id,
@@ -259,7 +260,7 @@ pub async fn suggest_shows(State(db): State<Db>) -> Result<Json<Vec<ShowSuggesti
     ),
     tag = "History",
 )]
-pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
+pub async fn clear_history(State(db): State<Db>) -> crate::Result<()> {
     sqlx::query!("DELETE FROM history")
         .execute(&db.pool)
         .await?;
@@ -279,10 +280,7 @@ pub async fn clear_history(State(db): State<Db>) -> Result<(), AppError> {
     ),
     tag = "History",
 )]
-pub async fn remove_history_item(
-    State(db): State<Db>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
+pub async fn remove_history_item(State(db): State<Db>, Path(id): Path<i64>) -> crate::Result<()> {
     sqlx::query!("DELETE FROM history WHERE id = ?;", id)
         .execute(&db.pool)
         .await?;
@@ -315,7 +313,7 @@ pub async fn update_history(
     Path(id): Path<i64>,
     Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
     Json(payload): Json<UpdateHistoryPayload>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let update_time = time::OffsetDateTime::now_utc();
     let db = app_state.db;
     tracing::trace!(
@@ -365,7 +363,7 @@ pub async fn update_metadata_history(
     Path(metadata_id): Path<i64>,
     Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
     Json(payload): Json<UpdateHistoryPayload>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let db = app_state.db;
     if let Some(task_id) = task_id {
         let watch_sessions = &app_state.tasks.watch_sessions;
@@ -416,7 +414,7 @@ pub async fn update_metadata_history(
 pub async fn remove_metadata_history(
     State(db): State<Db>,
     Path(id): Path<i64>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let rows = sqlx::query!("DELETE FROM history WHERE metadata_id = ?;", id)
         .execute(&db.pool)
         .await?;
@@ -455,6 +453,7 @@ pub async fn external_mark_as_watched(
     State(AppState {
         db,
         providers_stack,
+        http_client,
         ..
     }): State<AppState>,
     Json(MarkAsWatched {
@@ -462,7 +461,7 @@ pub async fn external_mark_as_watched(
         provider,
         provider_id,
     }): Json<MarkAsWatched>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     match content {
         MarkAsWatchedContent::Movie => {
             let Some(provider) = providers_stack.movie_provider(provider) else {
@@ -470,7 +469,7 @@ pub async fn external_mark_as_watched(
                     "request metadata provider was not found",
                 ));
             };
-            mark_external_movie_as_watched(provider, &provider_id, db).await?;
+            mark_external_movie_as_watched(provider, &provider_id, db, http_client).await?;
         }
         MarkAsWatchedContent::Show(episodes) => {
             let Some(provider) = providers_stack.show_provider(provider) else {
@@ -478,7 +477,8 @@ pub async fn external_mark_as_watched(
                     "request metadata provider was not found",
                 ));
             };
-            mark_external_show_as_watched(episodes, provider, &provider_id, db).await?;
+            mark_external_show_as_watched(episodes, provider, &provider_id, db, http_client)
+                .await?;
         }
     };
     Ok(())
@@ -489,7 +489,8 @@ async fn mark_external_show_as_watched<T>(
     provider: T,
     provider_id: &str,
     db: &'static Db,
-) -> Result<WrittenShow<EpisodeNumber>, AppError>
+    http_client: reqwest::Client,
+) -> crate::Result<WrittenShow<EpisodeNumber>>
 where
     T: ShowMetadataProvider + Clone + Send + Sync + 'static,
 {
@@ -514,7 +515,7 @@ where
     }
     tx.commit().await?;
     let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
-    assets.save(assets_concurrency, ()).await;
+    assets.save(assets_concurrency, http_client, ()).await;
     Ok(written)
 }
 
@@ -522,7 +523,8 @@ async fn mark_external_movie_as_watched<T>(
     provider: T,
     provider_id: &str,
     db: &'static Db,
-) -> Result<LocalContentId, AppError>
+    http_client: reqwest::Client,
+) -> crate::Result<LocalContentId>
 where
     T: MovieMetadataProvider + Clone + Send + Sync + 'static,
 {
@@ -545,7 +547,7 @@ where
     .await?;
     tx.commit().await?;
     let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
-    assets.save(assets_concurrency, ()).await;
+    assets.save(assets_concurrency, http_client, ()).await;
     Ok(local_id)
 }
 
@@ -598,6 +600,7 @@ mod tests {
             provider,
             &show_key.show_metadata().metadata_id,
             db,
+            reqwest::Client::new(),
         )
         .await?;
 
@@ -626,8 +629,13 @@ mod tests {
         let provider_metadata = movie_key.external_metadata();
         let provider = MockProvider::new([], [movie_key]);
 
-        let content_id =
-            mark_external_movie_as_watched(provider, &provider_metadata.metadata_id, db).await?;
+        let content_id = mark_external_movie_as_watched(
+            provider,
+            &provider_metadata.metadata_id,
+            db,
+            reqwest::Client::new(),
+        )
+        .await?;
         assert_eq!(content_id.metadata_id, 1, "movie was inserted");
         let history = sqlx::query!("select * from history")
             .fetch_all(&db.pool)
@@ -651,8 +659,12 @@ mod tests {
         let (p1, p2) = (provider.clone(), provider);
         let (id1, id2) = (id.clone(), id);
         let (r1, r2) = tokio::try_join!(
-            tokio::spawn(async move { mark_external_movie_as_watched(p1, &id1, db).await }),
-            tokio::spawn(async move { mark_external_movie_as_watched(p2, &id2, db).await }),
+            tokio::spawn(async move {
+                mark_external_movie_as_watched(p1, &id1, db, reqwest::Client::new()).await
+            }),
+            tokio::spawn(async move {
+                mark_external_movie_as_watched(p2, &id2, db, reqwest::Client::new()).await
+            }),
         )?;
         let c1 = r1?;
         let c2 = r2?;
@@ -688,8 +700,12 @@ mod tests {
         };
         let list2 = list1.clone();
         let (r1, r2) = tokio::try_join!(
-            tokio::spawn(async move { mark_external_show_as_watched(list1, p1, &id1, db).await }),
-            tokio::spawn(async move { mark_external_show_as_watched(list2, p2, &id2, db).await }),
+            tokio::spawn(async move {
+                mark_external_show_as_watched(list1, p1, &id1, db, reqwest::Client::new()).await
+            }),
+            tokio::spawn(async move {
+                mark_external_show_as_watched(list2, p2, &id2, db, reqwest::Client::new()).await
+            }),
         )?;
         let w1 = r1?;
         let w2 = r2?;
@@ -725,8 +741,13 @@ mod tests {
             .await?;
         tx.commit().await?;
 
-        let content_id =
-            mark_external_movie_as_watched(provider, &provider_metadata.metadata_id, db).await?;
+        let content_id = mark_external_movie_as_watched(
+            provider,
+            &provider_metadata.metadata_id,
+            db,
+            reqwest::Client::new(),
+        )
+        .await?;
         assert_eq!(
             content_id.metadata_id, inserted_movie.metadata_id,
             "existing movie was reused"

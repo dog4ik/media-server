@@ -7,7 +7,6 @@ use reqwest::{
 };
 use serde::Deserialize;
 
-use crate::app_state::AppError;
 use crate::metadata::{PersonMetadata, ProviderIdentifier, RoleMetadata};
 
 use super::{
@@ -121,7 +120,7 @@ impl TmdbApi {
     pub async fn trending_shows(
         &self,
         language: Language,
-    ) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
+    ) -> crate::Result<TmdbSearch<TmdbSearchShowResult>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -137,7 +136,7 @@ impl TmdbApi {
     pub async fn trending_movies(
         &self,
         language: Language,
-    ) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
+    ) -> crate::Result<TmdbSearch<TmdbSearchMovieResult>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -154,7 +153,7 @@ impl TmdbApi {
         &self,
         query: &str,
         lang: Language,
-    ) -> Result<TmdbSearch<TmdbSearchMovieResult>, AppError> {
+    ) -> crate::Result<TmdbSearch<TmdbSearchMovieResult>> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut()
@@ -172,7 +171,7 @@ impl TmdbApi {
         &self,
         query: &str,
         language: Language,
-    ) -> Result<TmdbSearch<TmdbSearchShowResult>, AppError> {
+    ) -> crate::Result<TmdbSearch<TmdbSearchShowResult>> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("search").push("tv");
@@ -187,7 +186,7 @@ impl TmdbApi {
         &self,
         query: &str,
         lang: Language,
-    ) -> Result<TmdbSearch<TmdbFindMultiResult>, AppError> {
+    ) -> crate::Result<TmdbSearch<TmdbFindMultiResult>> {
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut()
@@ -206,7 +205,7 @@ impl TmdbApi {
         tmdb_show_id: usize,
         season: usize,
         fetch_params: FetchParams,
-    ) -> Result<TmdbShowSeason, AppError> {
+    ) -> crate::Result<TmdbShowSeason> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -229,7 +228,7 @@ impl TmdbApi {
         season: usize,
         episode: usize,
         params: FetchParams,
-    ) -> Result<TmdbSeasonEpisode, AppError> {
+    ) -> crate::Result<TmdbSeasonEpisode> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -247,7 +246,7 @@ impl TmdbApi {
     }
 
     #[allow(unused)]
-    async fn find_by_imdb_id(&self, imdb_id: &str) -> Result<TmdbFindByIdResult, AppError> {
+    async fn find_by_imdb_id(&self, imdb_id: &str) -> crate::Result<TmdbFindByIdResult> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().unwrap().push("find").push(imdb_id);
         url.query_pairs_mut()
@@ -257,7 +256,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    async fn movie_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+    async fn movie_external_ids(&self, id: usize) -> crate::Result<TmdbExternalIds> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -269,7 +268,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    async fn show_external_ids(&self, id: usize) -> Result<TmdbExternalIds, AppError> {
+    async fn show_external_ids(&self, id: usize) -> crate::Result<TmdbExternalIds> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -285,7 +284,7 @@ impl TmdbApi {
         &self,
         movie_id: usize,
         lang: Language,
-    ) -> Result<TmdbMovieDetails, AppError> {
+    ) -> crate::Result<TmdbMovieDetails> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -299,11 +298,7 @@ impl TmdbApi {
         Ok(res)
     }
 
-    async fn show_details(
-        &self,
-        show_id: usize,
-        lang: Language,
-    ) -> Result<TmdbShowDetails, AppError> {
+    async fn show_details(&self, show_id: usize, lang: Language) -> crate::Result<TmdbShowDetails> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .unwrap()
@@ -433,11 +428,7 @@ impl ProviderIdentifier for TmdbApi {
 
 #[async_trait::async_trait]
 impl MovieMetadataProvider for TmdbApi {
-    async fn movie(
-        &self,
-        metadata_id: &str,
-        params: FetchParams,
-    ) -> Result<MovieMetadata, AppError> {
+    async fn movie(&self, metadata_id: &str, params: FetchParams) -> crate::Result<MovieMetadata> {
         let movie = self
             .movie_details(metadata_id.parse()?, params.lang)
             .await?;
@@ -448,7 +439,7 @@ impl MovieMetadataProvider for TmdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
+    ) -> crate::Result<Vec<MovieMetadata>> {
         let content = self.search_movie(query, fetch_params.lang).await?;
         Ok(content.results.into_iter().map(Into::into).collect())
     }
@@ -460,7 +451,7 @@ impl ShowMetadataProvider for TmdbApi {
         &self,
         metadata_show_id: &str,
         fetch_params: FetchParams,
-    ) -> Result<ShowMetadata, AppError> {
+    ) -> crate::Result<ShowMetadata> {
         self.show_details(metadata_show_id.parse()?, fetch_params.lang)
             .await
             .map(Into::into)
@@ -471,7 +462,7 @@ impl ShowMetadataProvider for TmdbApi {
         metadata_show_id: &str,
         season: usize,
         fetch_params: FetchParams,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_season(show_id, season, fetch_params)
             .await
@@ -484,7 +475,7 @@ impl ShowMetadataProvider for TmdbApi {
         season: usize,
         episode: usize,
         fetch_params: FetchParams,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         let show_id = metadata_show_id.parse().expect("tmdb ids to be numbers");
         self.tv_show_episode(show_id, season, episode, fetch_params)
             .await
@@ -495,7 +486,7 @@ impl ShowMetadataProvider for TmdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
+    ) -> crate::Result<Vec<ShowMetadata>> {
         let shows = self.search_tv_show(query, fetch_params.lang).await?;
         Ok(shows.results.into_iter().map(Into::into).collect())
     }
@@ -507,7 +498,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MetadataSearchResult>, AppError> {
+    ) -> crate::Result<Vec<MetadataSearchResult>> {
         let content = self.search_multi(query, fetch_params.lang).await?;
         Ok(content
             .results
@@ -520,7 +511,7 @@ impl DiscoverMetadataProvider for TmdbApi {
         &self,
         content_id: &str,
         content_hint: ContentType,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+    ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let id = content_id.parse()?;
 
         let ids = match content_hint {

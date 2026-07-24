@@ -30,9 +30,13 @@ impl<T> PendingInsert<T> {
     /// Commit the transaction and ensure assets are saved.
     ///
     /// When the transaction fails to commit assets are not being saved
-    pub async fn commit(self, max_concurrency: usize) -> sqlx::Result<()> {
+    pub async fn commit(
+        self,
+        max_concurrency: usize,
+        http_client: reqwest::Client,
+    ) -> sqlx::Result<()> {
         self.tx.commit().await?;
-        self.assets.save(max_concurrency, ()).await;
+        self.assets.save(max_concurrency, http_client, ()).await;
         Ok(())
     }
 }

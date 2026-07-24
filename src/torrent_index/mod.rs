@@ -4,7 +4,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize, Serializer};
 use time::OffsetDateTime;
 
-use crate::{app_state::AppError, metadata::FetchParams};
+use crate::metadata::FetchParams;
 
 pub mod rutracker;
 pub mod tpb;
@@ -67,17 +67,17 @@ pub trait TorrentIndex {
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError>;
+    ) -> crate::Result<Vec<Torrent>>;
     async fn search_movie_torrent(
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError>;
+    ) -> crate::Result<Vec<Torrent>>;
     async fn search_any_torrent(
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError>;
-    async fn fetch_magnet_link(&self, torrent_id: &str) -> Result<torrent::MagnetLink, AppError>;
+    ) -> crate::Result<Vec<Torrent>>;
+    async fn fetch_magnet_link(&self, torrent_id: &str) -> crate::Result<torrent::MagnetLink>;
     fn provider_identifier(&self) -> TorrentIndexIdentifier;
 }

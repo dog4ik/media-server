@@ -7,7 +7,7 @@ use tokio_util::{sync::CancellationToken, task::TaskTracker};
 use uuid::Uuid;
 
 use crate::{
-    app_state::AppError,
+    AppError,
     ffmpeg::{PreviewsJob, TranscodeJob},
     intro_detection::IntroJob,
     scan::LibraryScanTask,

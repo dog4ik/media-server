@@ -13,7 +13,7 @@ use reqwest::{
 use serde::Deserialize;
 
 use crate::{
-    app_state::AppError,
+    AppError,
     metadata::{LocaleMetadata, ProviderIdentifier},
 };
 
@@ -61,7 +61,7 @@ impl TvdbApi {
     }
 
     // https://api4.thetvdb.com/v4/search?query=halo&type=series
-    async fn search_series(&self, query: &str) -> Result<Vec<TvdbSearchResult>, AppError> {
+    async fn search_series(&self, query: &str) -> crate::Result<Vec<TvdbSearchResult>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut p| {
@@ -77,7 +77,7 @@ impl TvdbApi {
     }
 
     // https://api4.thetvdb.com/v4/search?query=inception&type=movie
-    async fn search_movie(&self, query: &str) -> Result<Vec<TvdbSearchResult>, AppError> {
+    async fn search_movie(&self, query: &str) -> crate::Result<Vec<TvdbSearchResult>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut p| {
@@ -93,7 +93,7 @@ impl TvdbApi {
     }
 
     // https://api4.thetvdb.com/v4/search?query=inception
-    async fn search_multi(&self, query: &str) -> Result<Vec<TvdbSearchResult>, AppError> {
+    async fn search_multi(&self, query: &str) -> crate::Result<Vec<TvdbSearchResult>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut p| {
@@ -111,7 +111,7 @@ impl TvdbApi {
         &self,
         id: usize,
         params: FetchParams,
-    ) -> Result<TvdbMovieExtendedRecord, AppError> {
+    ) -> crate::Result<TvdbMovieExtendedRecord> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut path| {
@@ -136,7 +136,7 @@ impl TvdbApi {
         &self,
         id: usize,
         params: FetchParams,
-    ) -> Result<TvdbSeriesExtendedRecord, AppError> {
+    ) -> crate::Result<TvdbSeriesExtendedRecord> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .map(|mut path| {
@@ -177,7 +177,7 @@ impl MovieMetadataProvider for TvdbApi {
         &self,
         movie_metadata_id: &str,
         params: FetchParams,
-    ) -> Result<MovieMetadata, AppError> {
+    ) -> crate::Result<MovieMetadata> {
         let id = movie_metadata_id.parse()?;
         if let Some(movie) = self.get_movie_from_cache(id) {
             return Ok(movie.into());
@@ -190,7 +190,7 @@ impl MovieMetadataProvider for TvdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
+    ) -> crate::Result<Vec<MovieMetadata>> {
         Ok(self
             .search_movie(query)
             .await?
@@ -202,11 +202,7 @@ impl MovieMetadataProvider for TvdbApi {
 
 #[async_trait::async_trait]
 impl ShowMetadataProvider for TvdbApi {
-    async fn show(
-        &self,
-        show_id: &str,
-        fetch_params: FetchParams,
-    ) -> Result<ShowMetadata, AppError> {
+    async fn show(&self, show_id: &str, fetch_params: FetchParams) -> crate::Result<ShowMetadata> {
         match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => Ok(s.into()),
             None => self
@@ -221,7 +217,7 @@ impl ShowMetadataProvider for TvdbApi {
         show_id: &str,
         season: usize,
         fetch_params: FetchParams,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         let show = match self.get_show_from_cache(show_id.parse()?) {
             Some(s) => s,
             None => self.fetch_show(show_id.parse()?, fetch_params).await?,
@@ -261,7 +257,7 @@ impl ShowMetadataProvider for TvdbApi {
         season: usize,
         episode: usize,
         fetch_params: FetchParams,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         let season = self.season(show_id, season, fetch_params).await?;
         season
             .episodes
@@ -274,7 +270,7 @@ impl ShowMetadataProvider for TvdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
+    ) -> crate::Result<Vec<ShowMetadata>> {
         Ok(self
             .search_series(query)
             .await?
@@ -290,7 +286,7 @@ impl DiscoverMetadataProvider for TvdbApi {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MetadataSearchResult>, AppError> {
+    ) -> crate::Result<Vec<MetadataSearchResult>> {
         Ok(self
             .search_multi(query)
             .await?
@@ -303,7 +299,7 @@ impl DiscoverMetadataProvider for TvdbApi {
         &self,
         content_id: &str,
         content_hint: ContentType,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+    ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let id = content_id.parse()?;
         let retrieve_ids = |ids: Vec<TvdbRemoteIds>| {
             ids.into_iter()

@@ -1,9 +1,6 @@
 use std::{fmt::Display, num::NonZero, str::FromStr, time::Duration};
 
-use crate::{
-    app_state::AppError,
-    db::{DbContentType, DbEpisode, DbMetadata, DbMovie, DbSeason, DbShow},
-};
+use crate::db::{DbContentType, DbEpisode, DbMetadata, DbMovie, DbSeason, DbShow};
 use serde::{Deserialize, Serialize};
 
 pub mod metadata_api;
@@ -91,14 +88,14 @@ pub trait MovieMetadataProvider: ProviderIdentifier {
         &self,
         movie_metadata_id: &str,
         params: FetchParams,
-    ) -> Result<MovieMetadata, AppError>;
+    ) -> crate::Result<MovieMetadata>;
 
     /// Movie search
     async fn movie_search(
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError>;
+    ) -> crate::Result<Vec<MovieMetadata>>;
 }
 
 #[async_trait::async_trait]
@@ -107,7 +104,7 @@ impl<T: MovieMetadataProvider + Send + Sync + ?Sized> MovieMetadataProvider for 
         &self,
         movie_metadata_id: &str,
         params: FetchParams,
-    ) -> Result<MovieMetadata, AppError> {
+    ) -> crate::Result<MovieMetadata> {
         (**self).movie(movie_metadata_id, params).await
     }
 
@@ -115,7 +112,7 @@ impl<T: MovieMetadataProvider + Send + Sync + ?Sized> MovieMetadataProvider for 
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
+    ) -> crate::Result<Vec<MovieMetadata>> {
         (**self).movie_search(query, fetch_params).await
     }
 }
@@ -125,11 +122,7 @@ impl<T: MovieMetadataProvider + Send + Sync + ?Sized> MovieMetadataProvider for 
 pub trait ShowMetadataProvider: ProviderIdentifier {
     /// Query for show
     #[allow(async_fn_in_trait)]
-    async fn show(
-        &self,
-        show_id: &str,
-        fetch_params: FetchParams,
-    ) -> Result<ShowMetadata, AppError>;
+    async fn show(&self, show_id: &str, fetch_params: FetchParams) -> crate::Result<ShowMetadata>;
 
     /// Query for season
     #[allow(async_fn_in_trait)]
@@ -138,7 +131,7 @@ pub trait ShowMetadataProvider: ProviderIdentifier {
         show_id: &str,
         season: usize,
         fetch_params: FetchParams,
-    ) -> Result<SeasonMetadata, AppError>;
+    ) -> crate::Result<SeasonMetadata>;
 
     /// Query for episode
     #[allow(async_fn_in_trait)]
@@ -148,23 +141,19 @@ pub trait ShowMetadataProvider: ProviderIdentifier {
         season: usize,
         episode: usize,
         fetch_params: FetchParams,
-    ) -> Result<EpisodeMetadata, AppError>;
+    ) -> crate::Result<EpisodeMetadata>;
 
     /// Show search
     async fn show_search(
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError>;
+    ) -> crate::Result<Vec<ShowMetadata>>;
 }
 
 #[async_trait::async_trait]
 impl<T: ShowMetadataProvider + Send + Sync + ?Sized> ShowMetadataProvider for &T {
-    async fn show(
-        &self,
-        show_id: &str,
-        fetch_params: FetchParams,
-    ) -> Result<ShowMetadata, AppError> {
+    async fn show(&self, show_id: &str, fetch_params: FetchParams) -> crate::Result<ShowMetadata> {
         (**self).show(show_id, fetch_params).await
     }
 
@@ -173,7 +162,7 @@ impl<T: ShowMetadataProvider + Send + Sync + ?Sized> ShowMetadataProvider for &T
         show_id: &str,
         season: usize,
         fetch_params: FetchParams,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         (**self).season(show_id, season, fetch_params).await
     }
 
@@ -183,7 +172,7 @@ impl<T: ShowMetadataProvider + Send + Sync + ?Sized> ShowMetadataProvider for &T
         season: usize,
         episode: usize,
         fetch_params: FetchParams,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         (**self)
             .episode(show_id, season, episode, fetch_params)
             .await
@@ -193,7 +182,7 @@ impl<T: ShowMetadataProvider + Send + Sync + ?Sized> ShowMetadataProvider for &T
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
+    ) -> crate::Result<Vec<ShowMetadata>> {
         (**self).show_search(query, fetch_params).await
     }
 }
@@ -206,14 +195,14 @@ pub trait DiscoverMetadataProvider: ProviderIdentifier {
         &self,
         query: &str,
         fetch_params: FetchParams,
-    ) -> Result<Vec<MetadataSearchResult>, AppError>;
+    ) -> crate::Result<Vec<MetadataSearchResult>>;
 
     /// External ids without self
     async fn external_ids(
         &self,
         content_id: &str,
         content_hint: ContentType,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError>;
+    ) -> crate::Result<Vec<ExternalIdMetadata>>;
 }
 
 // types

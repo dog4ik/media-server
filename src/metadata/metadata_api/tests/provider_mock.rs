@@ -5,7 +5,6 @@ use std::{
 };
 
 use crate::{
-    app_state::AppError,
     db::{Db, DbActions, DbExternalId, DbMetadata, DbTransaction},
     metadata::{
         EpisodeMetadata, FetchParams, MetadataProvider, MovieMetadata, MovieMetadataProvider,
@@ -443,13 +442,13 @@ impl MockProvider {
         }
     }
 
-    fn get_show(&self, show_id: &str) -> Result<&MockShowEntry, AppError> {
+    fn get_show(&self, show_id: &str) -> crate::Result<&MockShowEntry> {
         self.shows
             .get(show_id)
             .ok_or_else(|| anyhow::anyhow!("mock provider has no show {show_id}").into())
     }
 
-    fn get_movie(&self, movie_id: &str) -> Result<&MovieMetadata, AppError> {
+    fn get_movie(&self, movie_id: &str) -> crate::Result<&MovieMetadata> {
         self.movies
             .get(movie_id)
             .ok_or_else(|| anyhow::anyhow!("mock provider has no movie {movie_id}").into())
@@ -464,7 +463,7 @@ impl ProviderIdentifier for MockProvider {
 
 #[async_trait::async_trait]
 impl ShowMetadataProvider for MockProvider {
-    async fn show(&self, show_id: &str, _: FetchParams) -> Result<ShowMetadata, AppError> {
+    async fn show(&self, show_id: &str, _: FetchParams) -> crate::Result<ShowMetadata> {
         Ok(self.get_show(show_id)?.metadata.clone())
     }
 
@@ -473,7 +472,7 @@ impl ShowMetadataProvider for MockProvider {
         show_id: &str,
         season: usize,
         _: FetchParams,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         self.get_show(show_id)?
             .seasons
             .get(&season)
@@ -489,7 +488,7 @@ impl ShowMetadataProvider for MockProvider {
         season: usize,
         episode: usize,
         _: FetchParams,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         self.get_show(show_id)?
             .episodes
             .get(&(season, episode))
@@ -499,11 +498,7 @@ impl ShowMetadataProvider for MockProvider {
             })
     }
 
-    async fn show_search(
-        &self,
-        query: &str,
-        _: FetchParams,
-    ) -> Result<Vec<ShowMetadata>, AppError> {
+    async fn show_search(&self, query: &str, _: FetchParams) -> crate::Result<Vec<ShowMetadata>> {
         let query = query.to_lowercase();
         Ok(self
             .shows
@@ -516,19 +511,11 @@ impl ShowMetadataProvider for MockProvider {
 
 #[async_trait::async_trait]
 impl MovieMetadataProvider for MockProvider {
-    async fn movie(
-        &self,
-        movie_metadata_id: &str,
-        _: FetchParams,
-    ) -> Result<MovieMetadata, AppError> {
+    async fn movie(&self, movie_metadata_id: &str, _: FetchParams) -> crate::Result<MovieMetadata> {
         self.get_movie(movie_metadata_id).cloned()
     }
 
-    async fn movie_search(
-        &self,
-        query: &str,
-        _: FetchParams,
-    ) -> Result<Vec<MovieMetadata>, AppError> {
+    async fn movie_search(&self, query: &str, _: FetchParams) -> crate::Result<Vec<MovieMetadata>> {
         Ok(self
             .movies
             .values()

@@ -4,7 +4,6 @@ use anyhow::Context;
 use serde::{Serialize, ser::SerializeStruct};
 
 use crate::{
-    app_state::AppError,
     config,
     torrent_index::{
         Torrent, TorrentIndex, TorrentIndexIdentifier, rutracker::ProvodRuTrackerAdapter,
@@ -202,7 +201,7 @@ impl MetadataProvidersStack {
         &self,
         movie_id: &str,
         provider: MetadataProvider,
-    ) -> Result<MovieMetadata, AppError> {
+    ) -> crate::Result<MovieMetadata> {
         let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
         let provider = movie_providers
             .into_iter()
@@ -220,7 +219,7 @@ impl MetadataProvidersStack {
         &self,
         show_id: &str,
         provider: MetadataProvider,
-    ) -> Result<ShowMetadata, AppError> {
+    ) -> crate::Result<ShowMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -237,7 +236,7 @@ impl MetadataProvidersStack {
         show_id: &str,
         season: usize,
         provider: MetadataProvider,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -255,7 +254,7 @@ impl MetadataProvidersStack {
         season: usize,
         episode: usize,
         provider: MetadataProvider,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -274,7 +273,7 @@ impl MetadataProvidersStack {
         id: &str,
         content_type: ContentType,
         provider: MetadataProvider,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+    ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
         let provider = discover_providers
             .into_iter()
