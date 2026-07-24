@@ -52,7 +52,7 @@ mod search_show {
         // The provider knows the show, but it is absent from the local db -> New.
         let show_tree = ShowTreeBuilder::new(1).season(1, 1..=1);
         let expected = show_tree.show_key().show_metadata();
-        let api = ShowMetadataApi::new(MockProvider::new([show_tree], []), db);
+        let api = ShowMetadataApi::new_test(MockProvider::new([show_tree], []), db);
 
         let show = api.search_show_by_id(&expected.metadata_id).await?;
         let MetadataLookup::New { metadata } = show else {
@@ -70,7 +70,7 @@ mod search_show {
         // Seed the show locally and let the provider serve the very same show.
         let builder = ShowTreeBuilder::new(1).season(1, 1..=1);
         let saved = builder.save(db).await?;
-        let api = ShowMetadataApi::new(MockProvider::new([builder], []), db);
+        let api = ShowMetadataApi::new_test(MockProvider::new([builder], []), db);
 
         let show = api
             .search_show_by_id(&saved.key.show_metadata().metadata_id)
@@ -114,7 +114,7 @@ async fn reconcile_updates_in_place(pool: SqlitePool) -> anyhow::Result<()> {
         .season_key(1)
         .episode_key(1)
         .external_metadata();
-    let api = ShowMetadataApi::new(MockProvider::new([corrected], []), db);
+    let api = ShowMetadataApi::new_test(MockProvider::new([corrected], []), db);
 
     // The corrected show is not in the local db -> all New nodes.
     let show = api.search_show_by_id(&corrected_meta.metadata_id).await?;
@@ -136,8 +136,14 @@ async fn reconcile_updates_in_place(pool: SqlitePool) -> anyhow::Result<()> {
         .await?;
 
     let mut tx = db.begin().await?;
-    let written =
-        reconcile_show_tree(db, &mut tx, &mut AssetTasks::new(), saved.content_id, fresh).await?;
+    let written = reconcile_show_tree(
+        db,
+        &mut tx,
+        &mut AssetTasks::new(reqwest::Client::new()),
+        saved.content_id,
+        fresh,
+    )
+    .await?;
     tx.commit().await?;
 
     // The show metadata row is reused (ids unchanged) and updated in place.

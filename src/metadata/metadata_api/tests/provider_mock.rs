@@ -156,8 +156,7 @@ impl ShowKey {
 ///
 /// Metadata rows are inserted with the deterministic [`TestKey::unique_local_id`]
 /// as their primary key, so assertions can reference `saved.*.metadata_id`
-/// directly. Content-table rows (shows/seasons/episodes) auto-increment and their
-/// ids are returned in the [`SavedShow`] tree.
+/// directly.
 pub struct ShowTreeBuilder {
     show: ShowKey,
     seasons: Vec<(SeasonKey, Vec<EpisodeKey>)>,

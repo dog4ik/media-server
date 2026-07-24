@@ -386,7 +386,7 @@ async fn resolve_content(
         ListItems::Local { metadata_ids } => Ok(PendingInsert {
             content: metadata_ids,
             tx: db.pool.begin().await?,
-            assets: AssetTasks::new(),
+            assets: AssetTasks::new(app_state.http_client.clone()),
         }),
         ListItems::External {
             id,
@@ -399,7 +399,8 @@ async fn resolve_content(
                         "requested movie provider is not available",
                     ));
                 };
-                let movie_api = MovieMetadataApi::new(movie_provider, &db);
+                let movie_api =
+                    MovieMetadataApi::new(movie_provider, &db, app_state.http_client.clone());
                 let resolved = movie_api.get_or_insert_movie(&id).await?;
                 Ok(PendingInsert {
                     content: vec![resolved.content.metadata_id],
@@ -413,9 +414,10 @@ async fn resolve_content(
                         "requested tv show provider is not available",
                     ));
                 };
-                let show_api = ShowMetadataApi::new(show_provider, &db);
+                let show_api =
+                    ShowMetadataApi::new(show_provider, &db, app_state.http_client.clone());
                 let resolved_show = show_api.search_show_by_id(&id).await?;
-                let mut assets = AssetTasks::new();
+                let mut assets = AssetTasks::new(app_state.http_client.clone());
                 let tree = match episodes {
                     Some(list) => show_api.fetch_show_tree(resolved_show, list).await?,
                     None => ResolvedShow {
@@ -452,7 +454,6 @@ async fn link_content(
     pending: PendingInsert<Vec<i64>>,
     list_id: i64,
     release_viewed: Option<bool>,
-    http_client: reqwest::Client,
 ) -> crate::Result<()> {
     let PendingInsert {
         content: metadata_ids,
@@ -479,7 +480,7 @@ async fn link_content(
         }
     }
     tx.commit().await?;
-    assets.save(16, http_client, ()).await;
+    assets.save(16, ()).await;
     Ok(())
 }
 
@@ -502,7 +503,7 @@ async fn add_item(
     Json(items): Json<ListItems>,
 ) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(pending, list_id, None, app_state.http_client).await?;
+    link_content(pending, list_id, None).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -556,7 +557,7 @@ async fn add_to_saved(
     Json(items): Json<ListItems>,
 ) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(pending, ListKind::SAVED_ID, None, app_state.http_client).await?;
+    link_content(pending, ListKind::SAVED_ID, None).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -595,13 +596,7 @@ async fn add_to_watchlist(
     Json(items): Json<ListItems>,
 ) -> crate::Result<StatusCode> {
     let pending = resolve_content(&app_state, items).await?;
-    link_content(
-        pending,
-        ListKind::WATCH_ID,
-        Some(true),
-        app_state.http_client,
-    )
-    .await?;
+    link_content(pending, ListKind::WATCH_ID, Some(true)).await?;
     Ok(StatusCode::CREATED)
 }
 
@@ -667,9 +662,9 @@ mod tests {
         let pending = PendingInsert {
             content: vec![100],
             tx: db.pool.begin().await?,
-            assets: AssetTasks::new(),
+            assets: AssetTasks::new(reqwest::Client::new()),
         };
-        let res = link_content(pending, list_id, None, reqwest::Client::new())
+        let res = link_content(pending, list_id, None)
             .await
             .expect_err("request should fail");
         assert_eq!(res.kind, AppErrorKind::NotFound);

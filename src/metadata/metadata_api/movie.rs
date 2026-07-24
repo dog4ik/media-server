@@ -20,13 +20,31 @@ pub struct MovieMetadataApi<T> {
     provider: T,
     fetch_params: FetchParams,
     db: &'static Db,
+    http_client: reqwest::Client,
+}
+
+#[cfg(test)]
+impl MovieMetadataApi<crate::metadata::metadata_api::tests::provider_mock::MockProvider> {
+    pub fn new_test(
+        provider: crate::metadata::metadata_api::tests::provider_mock::MockProvider,
+        db: &'static Db,
+    ) -> Self {
+        let fetch_params = FetchParams::default();
+
+        Self {
+            provider,
+            db,
+            fetch_params,
+            http_client: reqwest::Client::new(),
+        }
+    }
 }
 
 impl<T> MovieMetadataApi<T>
 where
     T: MovieMetadataProvider,
 {
-    pub fn new(provider: T, db: &'static Db) -> Self {
+    pub fn new(provider: T, db: &'static Db, http_client: reqwest::Client) -> Self {
         let config::MetadataLanguage(lang) = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang };
 
@@ -34,6 +52,7 @@ where
             provider,
             db,
             fetch_params,
+            http_client,
         }
     }
 
@@ -95,7 +114,7 @@ where
         for _ in 0..crate::db::MAX_INSERT_RETRIES {
             let movie = self.search_movie_by_id(id).await?;
             let mut tx = self.db.pool.begin_with("BEGIN IMMEDIATE").await?;
-            let mut assets = AssetTasks::new();
+            let mut assets = AssetTasks::new(self.http_client.clone());
             let outcome: sqlx::Result<LocalContentId> = match movie {
                 MetadataLookup::Local(local) => Ok(local),
                 MetadataLookup::New { metadata } => {

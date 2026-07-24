@@ -96,7 +96,7 @@ impl LibraryReconciler {
             movie_scanner.resolve(new_movies, metadata_progress),
         );
 
-        let mut tasks = AssetTasks::new();
+        let mut tasks = AssetTasks::new(self.http_client.clone());
         let mut tx = self.db.begin().await?;
         show_scanner
             .flush_to_db(&mut tx, &mut tasks, resolved_shows)
@@ -106,13 +106,7 @@ impl LibraryReconciler {
             .await?;
         tx.commit().await?;
         let assets_progress = self.progress.assets_progress_emitter(tasks.len());
-        tasks
-            .save(
-                max_asset_concurrency,
-                self.http_client.clone(),
-                assets_progress,
-            )
-            .await;
+        tasks.save(max_asset_concurrency, assets_progress).await;
         self.progress.finish_scan();
         tracing::info!("Finished library reconciliation");
         Ok(())

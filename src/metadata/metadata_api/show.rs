@@ -264,13 +264,30 @@ pub struct ShowMetadataApi<T> {
     provider: T,
     fetch_params: FetchParams,
     db: &'static Db,
+    http_client: reqwest::Client,
+}
+
+#[cfg(test)]
+impl ShowMetadataApi<crate::metadata::metadata_api::tests::provider_mock::MockProvider> {
+    pub fn new_test(
+        provider: crate::metadata::metadata_api::tests::provider_mock::MockProvider,
+        db: &'static Db,
+    ) -> Self {
+        let fetch_params = FetchParams::default();
+        Self {
+            provider,
+            fetch_params,
+            db,
+            http_client: reqwest::Client::new(),
+        }
+    }
 }
 
 impl<T> ShowMetadataApi<T>
 where
     T: ShowMetadataProvider + Clone + Send + Sync + 'static,
 {
-    pub fn new(provider: T, db: &'static Db) -> Self {
+    pub fn new(provider: T, db: &'static Db, http_client: reqwest::Client) -> Self {
         let config::MetadataLanguage(lang) = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang };
 
@@ -278,6 +295,7 @@ where
             provider,
             db,
             fetch_params,
+            http_client,
         }
     }
 
@@ -406,7 +424,7 @@ where
             let show = self.search_show_by_id(id).await?;
             let resolved = self.fetch_show_tree(show, tree.clone()).await?;
             let mut tx = self.db.pool.begin_with("BEGIN IMMEDIATE").await?;
-            let mut assets = AssetTasks::new();
+            let mut assets = AssetTasks::new(self.http_client.clone());
             match self.flush_show_tree(&mut tx, &mut assets, resolved).await {
                 Ok(content) => {
                     return Ok(PendingInsert {
