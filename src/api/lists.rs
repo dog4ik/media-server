@@ -9,7 +9,7 @@ use crate::{
     },
     app_state::AppState,
     db::{
-        Db, DbActions, DbList, DbListItem, DbQueryBuilder, ListKind, is_foreign_key_violation,
+        Db, DbActions, DbList, DbListItem, DbQueryBuilder, ListKind,
         query_builders::{DbFullEpisodeQuery, DbMovieQuery, DbShowQuery},
     },
     metadata::{
@@ -473,7 +473,7 @@ async fn link_content(
             .await
         {
             Ok(_) => {}
-            Err(e) if is_foreign_key_violation(&e) => {
+            Err(sqlx::Error::Database(e)) if e.is_foreign_key_violation() => {
                 return Err(AppError::not_found(CONTENT_LINK_ERROR_TEXT));
             }
             Err(e) => return Err(e.into()),

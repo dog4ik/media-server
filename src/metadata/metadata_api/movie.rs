@@ -131,7 +131,7 @@ where
                         assets,
                     });
                 }
-                Err(e) if crate::db::is_unique_violation(&e) => {
+                Err(sqlx::Error::Database(e)) if e.is_unique_violation() => {
                     tracing::debug!("Concurrent movie insert detected, retrying");
                 }
                 Err(e) => return Err(e.into()),

@@ -435,7 +435,8 @@ where
                 }
                 Err(e)
                     if e.downcast_ref::<sqlx::Error>()
-                        .is_some_and(crate::db::is_unique_violation) =>
+                        .and_then(|e| e.as_database_error())
+                        .is_some_and(|e| e.is_unique_violation()) =>
                 {
                     tracing::debug!("Concurrent show insert detected, retrying");
                 }

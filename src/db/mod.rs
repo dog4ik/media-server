@@ -35,16 +35,6 @@ pub const RFC_3339_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 /// for the same content.
 pub const MAX_INSERT_RETRIES: u32 = 2;
 
-pub fn is_unique_violation(e: &sqlx::Error) -> bool {
-    e.as_database_error()
-        .is_some_and(|d| d.is_unique_violation())
-}
-
-pub fn is_foreign_key_violation(e: &sqlx::Error) -> bool {
-    e.as_database_error()
-        .is_some_and(|d| d.is_foreign_key_violation())
-}
-
 fn path_to_url(path: &Path) -> String {
     #[allow(unused_mut)]
     let mut path = path.to_string_lossy().to_string();
