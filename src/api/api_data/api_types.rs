@@ -1,8 +1,9 @@
 use serde::Serialize;
 
 use crate::{
+    OffsetDateTime,
     api::api_data::local_actor::LocalActorData,
-    db,
+    db::{self, ListKind},
     metadata::{LocaleMetadata, MetadataProvider, PersonMetadata},
 };
 
@@ -69,6 +70,15 @@ pub struct Actor {
     pub imdb_id: Option<String>,
     pub character: Option<String>,
     pub local: Option<LocalActorData>,
+}
+
+/// Compact representation of a list.
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct CompactList {
+    pub id: i64,
+    pub name: String,
+    pub kind: ListKind,
+    pub updated_at: OffsetDateTime,
 }
 
 impl From<PersonMetadata> for Actor {

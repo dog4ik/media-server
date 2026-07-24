@@ -9,7 +9,7 @@ use crate::{
     app_state::{AppError, AppState},
     db::{
         Db, DbActions, DbList, DbListItem, DbQueryBuilder, ListKind, is_foreign_key_violation,
-        query_builders::{DbEpisodeQuery, DbMovieQuery, DbShowQuery},
+        query_builders::{DbFullEpisodeQuery, DbMovieQuery, DbShowQuery},
     },
     metadata::{
         MetadataProvider,
@@ -138,7 +138,16 @@ async fn get_list(Path(id): Path<i64>, State(db): State<Db>) -> Result<Json<List
 pub enum ListContent {
     Show(Show),
     Movie(Movie),
-    Episode(Episode),
+    Episode(ListEpisode),
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ListEpisode {
+    #[serde(flatten)]
+    pub episode: Episode,
+    /// Local id of the show this episode belongs to
+    pub show_id: i64,
+    pub show_title: String,
 }
 
 /// Get list contents
@@ -189,12 +198,12 @@ async fn list_contents(
         .await?;
 
     let mut episodes_query = DbQueryBuilder::default();
-    DbEpisodeQuery::build(&mut episodes_query);
+    DbFullEpisodeQuery::build(&mut episodes_query);
     let episodes = episodes_query
         .push(FILTER)
         .push_bind(id)
         .push(")")
-        .build_query_as::<DbEpisodeQuery>()
+        .build_query_as::<DbFullEpisodeQuery>()
         .fetch_all(&db.pool)
         .await?;
 
@@ -205,10 +214,17 @@ async fn list_contents(
     for movie in movies {
         by_metadata.insert(movie.metadata.id.unwrap(), ListContent::Movie(movie.into()));
     }
-    for episode in episodes {
+    for query_result in episodes {
+        let metadata_id = query_result.episode.metadata.id.unwrap();
+        let show_id = query_result.show_id;
+        let show_title = query_result.show_title;
         by_metadata.insert(
-            episode.metadata.id.unwrap(),
-            ListContent::Episode(episode.into()),
+            metadata_id,
+            ListContent::Episode(ListEpisode {
+                episode: query_result.episode.into(),
+                show_id,
+                show_title,
+            }),
         );
     }
 
@@ -610,7 +626,7 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}", put(update_list).delete(delete_list).get(get_list))
         .route("/{id}/items", get(list_contents))
         .route("/{id}/add", post(add_item))
-        .route("/{id}/remove/id", delete(remove_item))
+        .route("/{id}/remove/{id}", delete(remove_item))
         .route("/saved/add", post(add_to_saved))
         .route("/saved/remove/{id}", delete(remove_saved_item))
         .route("/watchlist/add", post(add_to_watchlist))

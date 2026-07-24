@@ -25,3 +25,14 @@ pub struct PendingInsert<T> {
     pub tx: DbTransaction,
     pub assets: AssetTasks,
 }
+
+impl<T> PendingInsert<T> {
+    /// Commit the transaction and ensure assets are saved.
+    ///
+    /// When the transaction fails to commit assets are not being saved
+    pub async fn commit(self, max_concurrency: usize) -> sqlx::Result<()> {
+        self.tx.commit().await?;
+        self.assets.save(max_concurrency, ()).await;
+        Ok(())
+    }
+}

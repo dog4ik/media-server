@@ -29,12 +29,12 @@ pub mod api_data;
 pub mod file_browser;
 pub mod history;
 pub mod intros;
+/// Liked, watched, custom lists endpoints
+pub mod lists;
 pub mod server;
 pub mod subtitles;
 /// Torrent client specific endpoints
 pub mod torrent;
-/// Liked, watched, custom lists endpoints
-pub mod lists;
 
 #[derive(OpenApi)]
 #[openapi(

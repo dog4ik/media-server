@@ -30,6 +30,8 @@ use crate::{
 
 pub mod query_builders;
 
+pub const RFC_3339_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
+
 /// Number of times an idempotent content insert is retried when a concurrent writer wins the race
 /// for the same content.
 pub const MAX_INSERT_RETRIES: u32 = 2;
@@ -949,34 +951,56 @@ where
             let mut conn = self.acquire().await?;
             let season = season as i64;
             let season_row = sqlx::query!(
-                r#"SELECT seasons.id, seasons.number, seasons.metadata_id,
+                r#"select seasons.id, seasons.number, seasons.metadata_id,
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date
-                FROM seasons
-                JOIN metadata ON metadata.id = seasons.metadata_id
-                WHERE seasons.show_id = ? AND seasons.number = ?"#,
+                from seasons
+                join metadata on metadata.id = seasons.metadata_id
+                where seasons.show_id = ? and seasons.number = ?"#,
                 show_id,
                 season
             )
             .fetch_one(&mut *conn)
             .await?;
 
-            let episodes: Vec<_> = sqlx::query!(
-                r#"SELECT episodes.id, episodes.number, episodes.duration, episodes.season_id,
+            #[derive(sqlx::FromRow)]
+            struct Record {
+                id: i64,
+                number: i64,
+                duration: i64,
+                title: String,
+                plot: Option<String>,
+                poster: Option<String>,
+                release_date: Option<String>,
+                metadata_id: i64,
+                season_number: i64,
+                history_id: Option<i64>,
+                is_finished: Option<bool>,
+                history_time: Option<i64>,
+                history_update_time: Option<time::OffsetDateTime>,
+                intro_start: Option<i64>,
+                intro_end: Option<i64>,
+                videos_count: i64,
+                #[sqlx(json, default, nullish)]
+                lists: Option<Vec<query_builders::ListsQueryJson>>,
+            }
+            let episodes: Vec<_> = DbQueryBuilder::new(format!(
+                r#"select episodes.id, episodes.number, episodes.duration,
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
-                seasons.number AS season_number,
-                history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end,
-                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
-                FROM episodes
-                JOIN seasons ON seasons.id = episodes.season_id
-                JOIN metadata ON metadata.id = episodes.metadata_id
-                LEFT JOIN intros ON intros.episode_id = episodes.id
-                LEFT JOIN history ON history.metadata_id = episodes.metadata_id
-                WHERE episodes.season_id = ?
-                AND EXISTS (SELECT 1 FROM videos WHERE videos.metadata_id = episodes.metadata_id)
-                ORDER BY episodes.number ASC"#,
-                season_row.id
-            )
+                seasons.number as season_number,
+                history.id as history_id, history.is_finished, history.time as history_time, history.update_time as history_update_time,
+                intros.start_sec as intro_start, intros.end_sec as intro_end,
+                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count, {lists}
+                from episodes
+                join seasons on seasons.id = episodes.season_id
+                join metadata on metadata.id = episodes.metadata_id
+                left join intros on intros.episode_id = episodes.id
+                left join history on history.metadata_id = episodes.metadata_id
+                where episodes.season_id = "#,
+                lists = query_builders::ListsQueryJson::SQL_JSON_AGGR,
+            ))
+            .push_bind(season_row.id)
+            .push(" and exists (select 1 from videos where videos.metadata_id = episodes.metadata_id) order by episodes.number asc")
+            .build_query_as::<Record>()
             .fetch_all(&mut *conn)
             .await?
             .into_iter()
@@ -985,6 +1009,7 @@ where
                     id: db_episode.id,
                     metadata_id: db_episode.metadata_id,
                     videos_count: db_episode.videos_count,
+                    lists: db_episode.lists.into_iter().flatten().map(Into::into).collect(),
                     history: db_episode.history_id.map(|id| api_types::History {
                         id,
                         time: db_episode.history_time.map(Into::into).unwrap(),
@@ -1130,21 +1155,43 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
     ) -> impl std::future::Future<Output = Result<Episode, AppError>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let episode = sqlx::query!(
-                r#"SELECT episodes.id, episodes.number, episodes.duration,
+            #[derive(sqlx::FromRow)]
+            struct Record {
+                id: i64,
+                number: i64,
+                title: String,
+                plot: Option<String>,
+                poster: Option<String>,
+                release_date: Option<String>,
+                metadata_id: i64,
+                season_number: i64,
+                history_id: Option<i64>,
+                is_finished: Option<bool>,
+                history_time: Option<i64>,
+                history_update_time: Option<time::OffsetDateTime>,
+                intro_start: Option<i64>,
+                intro_end: Option<i64>,
+                videos_count: i64,
+                #[sqlx(json, default, nullish)]
+                lists: Option<Vec<query_builders::ListsQueryJson>>,
+            }
+            let episode = DbQueryBuilder::new(format!(
+                r#"select episodes.id, episodes.number,
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date, metadata.id as metadata_id,
-                seasons.number AS season_number,
-                history.id as "history_id?", history.is_finished, history.time as history_time, history.update_time as history_update_time,
-                intros.id as "intro_id?", intros.start_sec as intro_start, intros.end_sec as intro_end,
-                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
-                FROM episodes
-                JOIN seasons ON seasons.id = episodes.season_id
-                JOIN metadata ON metadata.id = episodes.metadata_id
-                LEFT JOIN intros ON intros.episode_id = episodes.id
-                LEFT JOIN history ON history.metadata_id = episodes.metadata_id
-                WHERE episodes.id = ?;"#,
-                episode_id,
-            )
+                seasons.number as season_number,
+                history.id as history_id, history.is_finished, history.time as history_time, history.update_time as history_update_time,
+                intros.start_sec as intro_start, intros.end_sec as intro_end,
+                (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count, {lists}
+                from episodes
+                join seasons on seasons.id = episodes.season_id
+                join metadata on metadata.id = episodes.metadata_id
+                left join intros on intros.episode_id = episodes.id
+                left join history on history.metadata_id = episodes.metadata_id
+                where episodes.id = "#,
+                lists = query_builders::ListsQueryJson::SQL_JSON_AGGR,
+            ))
+            .push_bind(episode_id)
+            .build_query_as::<Record>()
             .fetch_one(&mut *conn)
             .await?;
 
@@ -1152,6 +1199,12 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
                 id: episode.id,
                 metadata_id: episode.metadata_id,
                 videos_count: episode.videos_count,
+                lists: episode
+                    .lists
+                    .into_iter()
+                    .flatten()
+                    .map(Into::into)
+                    .collect(),
                 history: episode.history_id.map(|id| api_types::History {
                     id,
                     time: episode.history_time.unwrap(),

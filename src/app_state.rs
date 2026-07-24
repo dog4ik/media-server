@@ -417,7 +417,7 @@ WHERE seasons.show_id = ?",
     pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
         let AppState { db, library, .. } = self;
         let video_ids = sqlx::query!(
-            r#"SELECT min(videos.id) as "video_id!", episodes.id as "episode_id!" FROM episodes
+            r#"SELECT min(videos.id) as "video_id!: i64", episodes.id as "episode_id!" FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
         JOIN videos ON videos.metadata_id = episodes.metadata_id
         WHERE seasons.show_id = ? AND seasons.number = ?

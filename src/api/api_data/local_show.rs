@@ -6,10 +6,11 @@ use crate::{
     api::{
         api_data::{
             LocalDataLookup,
-            api_types::{Actor, History},
+            api_types::{Actor, CompactList, History},
         },
         server::Intro,
     },
+    db::query_builders::ListsQueryJson,
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider,
         SeasonMetadata, ShowMetadata,
@@ -19,6 +20,7 @@ use crate::{
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct LocalShowData {
     pub id: i64,
+    pub lists: Vec<CompactList>,
     pub metadata_id: i64,
 }
 
@@ -32,6 +34,7 @@ pub struct LocalSeasonData {
 pub struct LocalEpisodeData {
     pub id: i64,
     pub metadata_id: i64,
+    pub lists: Vec<CompactList>,
     pub videos_count: i64,
     pub history: Option<super::api_types::History>,
     pub intro: Option<Intro>,
@@ -126,19 +129,23 @@ impl Season {
             intro_id: Option<i64>,
             start_sec: Option<i64>,
             end_sec: Option<i64>,
+            #[sqlx(json, default, nullish)]
+            lists: Option<Vec<ListsQueryJson>>,
         }
-        let mut local_episodes = sqlx::QueryBuilder::new(
+        let mut local_episodes = sqlx::QueryBuilder::new(format!(
             "select episodes.id, episodes.metadata_id,
             (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
             external_ids.external_id, external_ids.external_provider,
             history.id as history_id, history.time, history.update_time, history.is_finished,
-            intros.id as intro_id, intros.start_sec, intros.end_sec
+            intros.id as intro_id, intros.start_sec, intros.end_sec, {lists}
             from external_ids
             join episodes on episodes.metadata_id = external_ids.metadata_id
+            join metadata on metadata.id = episodes.metadata_id
             left join intros on intros.episode_id = episodes.id
             left join history on history.metadata_id = episodes.metadata_id
             where (external_ids.external_provider, external_ids.external_id) in",
-        )
+            lists = ListsQueryJson::SQL_JSON_AGGR,
+        ))
         .push_tuples(meta.episodes.iter(), |mut b, meta| {
             b.push_bind(meta.metadata_provider)
                 .push_bind(&meta.metadata_id);
@@ -154,6 +161,7 @@ impl Season {
                     metadata_id: r.metadata_id,
                     id: r.id,
                     videos_count: r.videos_count,
+                    lists: r.lists.into_iter().flatten().map(Into::into).collect(),
                     history: r.history_id.map(|id| History {
                         id,
                         time: r.time.unwrap(),
