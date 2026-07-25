@@ -19,7 +19,7 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ContentType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
+        ParentMediaType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{
@@ -332,7 +332,7 @@ async fn fetch_single_movie_chunk(
                     .iter()
                     .map(|v| v.source.video.path().to_path_buf())
                     .collect(),
-                content_type: ContentType::Movie,
+                content_type: ParentMediaType::Movie,
             },
             videos.len(),
         );

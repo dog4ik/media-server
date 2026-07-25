@@ -6,7 +6,7 @@ use std::{
 use serde::Serialize;
 
 use crate::{
-    metadata::{ContentType, metadata_api::asset_saver::AssetsProgressSink},
+    metadata::{ParentMediaType, metadata_api::asset_saver::AssetsProgressSink},
     progress::ProgressDispatcher,
 };
 
@@ -16,7 +16,7 @@ pub struct FailedContent {
     pub title: String,
     #[schema(value_type = Vec<String>)]
     pub videos: Vec<PathBuf>,
-    pub content_type: ContentType,
+    pub content_type: ParentMediaType,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]

@@ -52,7 +52,7 @@ use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
 use crate::metadata::{
-    ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
+    ParentMediaType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
@@ -689,7 +689,7 @@ pub async fn contents_video(
     }
 
     let video_ids = match content_type.content_type {
-        crate::metadata::ContentType::Movie => {
+        crate::metadata::ParentMediaType::Movie => {
             sqlx::query_as!(
                 VideoId,
                 "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?",
@@ -698,7 +698,7 @@ pub async fn contents_video(
             .fetch_all(&state.db.pool)
             .await
         }
-        crate::metadata::ContentType::Show => {
+        crate::metadata::ParentMediaType::Show => {
             sqlx::query_as!(
                 VideoId,
                 "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
@@ -1160,10 +1160,10 @@ pub async fn search_torrent(
                 .torrent_index(p)
                 .ok_or(AppError::not_found("Provider is not found"))?;
             match content_type.content_type {
-                Some(ContentType::Show) => {
+                Some(ParentMediaType::Show) => {
                     provider.search_show_torrent(&search, &fetch_params).await?
                 }
-                Some(ContentType::Movie) => {
+                Some(ParentMediaType::Movie) => {
                     provider
                         .search_movie_torrent(&search, &fetch_params)
                         .await?

@@ -17,7 +17,7 @@ use crate::{
         ContentIdentifier, Media, is_format_supported, movie::MovieIdentifier, show::ShowIdentifier,
     },
     metadata::{
-        ContentType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
+        ParentMediaType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
         metadata_stack::MetadataProvidersStack,
     },
     progress::{ProgressStatus, TaskResource, TaskTrait},
@@ -873,7 +873,7 @@ impl TorrentInfo {
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
 pub struct DownloadContentHint {
-    pub content_type: ContentType,
+    pub content_type: ParentMediaType,
     pub metadata_provider: MetadataProvider,
     pub metadata_id: String,
 }
@@ -939,10 +939,10 @@ pub enum TorrentContent {
 }
 
 impl TorrentContent {
-    pub fn content_type(&self) -> ContentType {
+    pub fn content_type(&self) -> ParentMediaType {
         match self {
-            TorrentContent::Show(_) => ContentType::Show,
-            TorrentContent::Movie(_) => ContentType::Movie,
+            TorrentContent::Show(_) => ParentMediaType::Show,
+            TorrentContent::Movie(_) => ParentMediaType::Movie,
         }
     }
 }
@@ -996,10 +996,10 @@ async fn parse_torrent_files(
                     .map(Into::into)
                     .or_else(|_| MovieIdentifier::from_path(file_name).map(Into::into))
                     .ok(),
-                Some(ContentType::Movie) => {
+                Some(ParentMediaType::Movie) => {
                     MovieIdentifier::from_path(file_name).map(Into::into).ok()
                 }
-                Some(ContentType::Show) => {
+                Some(ParentMediaType::Show) => {
                     ShowIdentifier::from_path(file_name).map(Into::into).ok()
                 }
             };
@@ -1018,13 +1018,13 @@ async fn parse_torrent_files(
     };
 
     let content_type = if show_identifiers.is_empty() {
-        ContentType::Movie
+        ParentMediaType::Movie
     } else {
-        ContentType::Show
+        ParentMediaType::Show
     };
 
     match content_type {
-        ContentType::Show => {
+        ParentMediaType::Show => {
             let show_title = show_identifiers.first().unwrap().1.title();
             let mut seasons_map: HashMap<u16, Vec<TorrentEpisode>> = HashMap::new();
             let show = match &content_hint {
@@ -1066,7 +1066,7 @@ async fn parse_torrent_files(
                 == MetadataProvider::Local
             {
                 let Ok(external_ids) = providers_stack
-                    .get_external_ids(&show.metadata_id, ContentType::Show, show.metadata_provider)
+                    .get_external_ids(&show.metadata_id, ParentMediaType::Show, show.metadata_provider)
                     .await
                 else {
                     tracing::error!("External ids are not found while resolving local entry");
@@ -1135,7 +1135,7 @@ async fn parse_torrent_files(
                 })),
             }
         }
-        ContentType::Movie => {
+        ParentMediaType::Movie => {
             let mut resolved_movies = Vec::new();
             for (file_idx, movie) in movie_identifiers {
                 if let Some(movie) = providers_stack

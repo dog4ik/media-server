@@ -18,7 +18,7 @@ use crate::{
 };
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
+    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
     Language, METADATA_CACHE_SIZE, MetadataProvider, MetadataSearchResult, MovieMetadata,
     MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider, provod_agent,
     request_client::LimitedRequestClient,
@@ -298,7 +298,7 @@ impl DiscoverMetadataProvider for TvdbApi {
     async fn external_ids(
         &self,
         content_id: &str,
-        content_hint: ContentType,
+        content_hint: ParentMediaType,
     ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let id = content_id.parse()?;
         let retrieve_ids = |ids: Vec<TvdbRemoteIds>| {
@@ -308,19 +308,19 @@ impl DiscoverMetadataProvider for TvdbApi {
         };
 
         let cached_ids = match content_hint {
-            ContentType::Movie => self.get_movie_from_cache(id).map(|c| c.remote_ids),
-            ContentType::Show => self.get_show_from_cache(id).map(|c| c.remote_ids),
+            ParentMediaType::Movie => self.get_movie_from_cache(id).map(|c| c.remote_ids),
+            ParentMediaType::Show => self.get_show_from_cache(id).map(|c| c.remote_ids),
         };
         if let Some(ids) = cached_ids {
             return Ok(retrieve_ids(ids));
         }
 
         let fresh_ids = match content_hint {
-            ContentType::Movie => self
+            ParentMediaType::Movie => self
                 .fetch_movie(id, FetchParams::default())
                 .await
                 .map(|x| x.remote_ids),
-            ContentType::Show => self
+            ParentMediaType::Show => self
                 .fetch_show(id, FetchParams::default())
                 .await
                 .map(|x| x.remote_ids),
@@ -482,8 +482,8 @@ impl TryFrom<TvdbSearchResult> for MetadataSearchResult {
     type Error = AppError;
     fn try_from(mut val: TvdbSearchResult) -> Result<Self, Self::Error> {
         let content_type = match val.search_type.as_ref() {
-            "series" => ContentType::Show,
-            "movie" => ContentType::Movie,
+            "series" => ParentMediaType::Show,
+            "movie" => ParentMediaType::Movie,
             _ => Err(anyhow::anyhow!("Unknown content type: {}", val.search_type))?,
         };
         let locale_metadata =

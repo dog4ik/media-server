@@ -165,7 +165,9 @@ pub mod torrent;
             metadata::MetadataProvider,
             metadata::ExternalIdMetadata,
             metadata::MetadataSearchResult,
-            metadata::ContentType,
+            metadata::ParentMediaType,
+            metadata::LeafMediaType,
+            metadata::MediaType,
             metadata::MetadataProvider,
             metadata::Language,
             crate::AppError,
@@ -399,13 +401,13 @@ pub struct SearchQuery {
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct ContentTypeQuery {
     #[param(inline)]
-    pub content_type: metadata::ContentType,
+    pub content_type: metadata::ParentMediaType,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct OptionalContentTypeQuery {
     #[param(inline)]
-    pub content_type: Option<metadata::ContentType>,
+    pub content_type: Option<metadata::ParentMediaType>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]

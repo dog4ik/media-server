@@ -12,7 +12,7 @@ use crate::{
 };
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
+    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
     MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
     ShowMetadata, ShowMetadataProvider, tmdb_api::TmdbApi, tvdb_api::TvdbApi,
 };
@@ -271,7 +271,7 @@ impl MetadataProvidersStack {
     pub async fn get_external_ids(
         &self,
         id: &str,
-        content_type: ContentType,
+        content_type: ParentMediaType,
         provider: MetadataProvider,
     ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
@@ -286,7 +286,7 @@ impl MetadataProvidersStack {
     pub async fn get_torrents(
         &self,
         query: &str,
-        content_type: Option<ContentType>,
+        content_type: Option<ParentMediaType>,
     ) -> Vec<Torrent> {
         let torrent_indexes = { self.torrent_indexes_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
@@ -300,8 +300,8 @@ impl MetadataProvidersStack {
                     tokio::time::timeout(
                         Duration::from_secs(5),
                         match content_type {
-                            Some(ContentType::Show) => p.search_show_torrent(&query, &fetch_params),
-                            Some(ContentType::Movie) => {
+                            Some(ParentMediaType::Show) => p.search_show_torrent(&query, &fetch_params),
+                            Some(ParentMediaType::Movie) => {
                                 p.search_movie_torrent(&query, &fetch_params)
                             }
                             None => p.search_any_torrent(&query, &fetch_params),

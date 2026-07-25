@@ -19,7 +19,7 @@ use crate::{
     api::{OptionalContentTypeQuery, Path, Query},
     app_state::AppState,
     config,
-    metadata::{ContentType, metadata_stack::MetadataProvidersStack},
+    metadata::{ParentMediaType, metadata_stack::MetadataProvidersStack},
     torrent::{
         Action, DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState,
         TorrentClient, TorrentDownloadPayload, TorrentInfo, TorrentState,
@@ -263,8 +263,8 @@ pub async fn open_torrent(
                 .as_ref()
                 .map(|c| c.content_type())?;
             let folders = match content_type {
-                ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-                ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
+                ParentMediaType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
+                ParentMediaType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
             };
             folders
                 .into_iter()
@@ -328,8 +328,8 @@ pub async fn open_torrent_file(
                 .as_ref()
                 .map(|c| c.content_type())?;
             let folders = match content_type {
-                ContentType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-                ContentType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
+                ParentMediaType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
+                ParentMediaType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
             };
             folders
                 .into_iter()
@@ -357,7 +357,7 @@ pub async fn open_torrent_file(
     path = "/api/torrent/resolve_magnet_link",
     params(
         ResolveMagnetLinkPayload,
-        ("content_type" = Option<ContentType>, Query, description = "Content type"),
+        ("content_type" = Option<ParentMediaType>, Query, description = "Content type"),
         ("metadata_provider" = Option<crate::metadata::MetadataProvider>, Query, description = "Metadata provider"),
         ("metadata_id" = Option<String>, Query, description = "Metadata id"),
     ),

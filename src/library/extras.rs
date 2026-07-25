@@ -1,4 +1,4 @@
-use crate::metadata::ContentType;
+use crate::metadata::ParentMediaType;
 
 use super::identification::Token;
 
@@ -6,21 +6,21 @@ use super::identification::Token;
 pub struct ExtrasIdent {
     name: String,
     parent_title: String,
-    extra_type: ContentType,
+    extra_type: ParentMediaType,
 }
 
 #[derive(Debug)]
 pub struct ExtrasIdentifier {
     name: String,
     parent_title: String,
-    extra_type: ContentType,
+    extra_type: ParentMediaType,
 }
 
 impl ExtrasIdent {
-    pub fn parse_parent(&mut self, parent_tokens: Vec<Token<'_>>, content_type: ContentType) {
+    pub fn parse_parent(&mut self, parent_tokens: Vec<Token<'_>>, content_type: ParentMediaType) {
         match content_type {
-            ContentType::Movie => {}
-            ContentType::Show => todo!(),
+            ParentMediaType::Movie => {}
+            ParentMediaType::Show => todo!(),
         }
     }
 

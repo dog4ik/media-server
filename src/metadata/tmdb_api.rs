@@ -10,7 +10,7 @@ use serde::Deserialize;
 use crate::metadata::{PersonMetadata, ProviderIdentifier, RoleMetadata};
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
+    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
     MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
     ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
@@ -510,13 +510,13 @@ impl DiscoverMetadataProvider for TmdbApi {
     async fn external_ids(
         &self,
         content_id: &str,
-        content_hint: ContentType,
+        content_hint: ParentMediaType,
     ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let id = content_id.parse()?;
 
         let ids = match content_hint {
-            ContentType::Movie => self.movie_external_ids(id).await,
-            ContentType::Show => self.show_external_ids(id).await,
+            ParentMediaType::Movie => self.movie_external_ids(id).await,
+            ParentMediaType::Show => self.show_external_ids(id).await,
         }?;
         let mut out = Vec::new();
 
@@ -629,7 +629,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                     .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
                 tmdb_id = movie.id;
                 plot = movie.overview;
-                content_type = ContentType::Movie;
+                content_type = ParentMediaType::Movie;
                 original_title = movie.original_title;
                 original_language = movie.original_language;
             }
@@ -640,7 +640,7 @@ impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
                     .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
                 tmdb_id = show.id;
                 plot = show.overview;
-                content_type = ContentType::Show;
+                content_type = ParentMediaType::Show;
                 original_title = show.original_name;
                 original_language = show.original_language;
             }

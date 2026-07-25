@@ -201,7 +201,7 @@ pub trait DiscoverMetadataProvider: ProviderIdentifier {
     async fn external_ids(
         &self,
         content_id: &str,
-        content_hint: ContentType,
+        content_hint: ParentMediaType,
     ) -> crate::Result<Vec<ExternalIdMetadata>>;
 }
 
@@ -269,11 +269,30 @@ impl Display for MetadataProvider {
     }
 }
 
+/// Leaf node type of the any content tree
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
-pub enum ContentType {
+pub enum ParentMediaType {
     Movie,
     Show,
+}
+
+/// Leaf node type of the any content tree
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum LeafMediaType {
+    Movie,
+    Episode,
+}
+
+/// Any media content type supported by the media server
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub enum MediaType {
+    Movie,
+    Show,
+    Episode,
+    Season,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -282,7 +301,7 @@ pub struct MetadataSearchResult {
     pub poster: Option<String>,
     pub plot: Option<String>,
     pub metadata_provider: MetadataProvider,
-    pub content_type: ContentType,
+    pub content_type: ParentMediaType,
     pub metadata_id: String,
     pub locale_metadata: Option<LocaleMetadata>,
 }
@@ -388,7 +407,7 @@ impl From<MovieMetadata> for MetadataSearchResult {
             poster: val.poster,
             plot: val.plot,
             metadata_provider: val.metadata_provider,
-            content_type: ContentType::Movie,
+            content_type: ParentMediaType::Movie,
             metadata_id: val.metadata_id,
             locale_metadata: val.locale_metadata,
         }
@@ -402,7 +421,7 @@ impl From<ShowMetadata> for MetadataSearchResult {
             poster: val.poster,
             plot: val.plot,
             metadata_provider: val.metadata_provider,
-            content_type: ContentType::Show,
+            content_type: ParentMediaType::Show,
             metadata_id: val.metadata_id,
             locale_metadata: val.locale_metadata,
         }

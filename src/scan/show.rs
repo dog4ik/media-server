@@ -20,7 +20,7 @@ use crate::{
         show::ShowIdentifier,
     },
     metadata::{
-        ContentType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
+        ParentMediaType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
@@ -130,7 +130,7 @@ impl ShowScanner {
             let external_ids: Vec<ExternalIdMetadata> = match &chunk.lookup {
                 MetadataLookupWithIds::New { external_ids, .. } => external_ids.clone(),
                 MetadataLookupWithIds::Local(show_id) => db
-                    .get_external_ids(*show_id, ContentType::Show)
+                    .get_external_ids(*show_id, ParentMediaType::Show)
                     .await
                     .unwrap_or_default(),
             };

@@ -6,7 +6,7 @@ use tracing::instrument;
 use crate::{
     db::{Db, DbActions},
     library::{LibraryItem, Media, show::ShowIdentifier},
-    metadata::{ContentType, EpisodeMetadata, SeasonMetadata, ShowMetadata, ShowMetadataProvider},
+    metadata::{ParentMediaType, EpisodeMetadata, SeasonMetadata, ShowMetadata, ShowMetadataProvider},
     scan::scan_progress::FailedContent,
 };
 
@@ -191,7 +191,7 @@ impl EpisodeScanner {
         episode_number: usize,
         videos: Vec<LibraryItem<ShowIdentifier>>,
     ) -> ResolvedEpisode {
-        let content_type = ContentType::Show;
+        let content_type = ParentMediaType::Show;
         if let Some(show_id) = show_id {
             if let Ok(local) = self
                 .db

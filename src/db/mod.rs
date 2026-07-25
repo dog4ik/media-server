@@ -22,7 +22,7 @@ use crate::{
     db::query_builders::{DbEpisodeQuery, DbMovieQuery},
     library::assets::{self, AssetDir},
     metadata::{
-        ContentType, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider,
+        ParentMediaType, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider,
         MovieMetadata, ShowMetadata,
     },
 };
@@ -509,13 +509,13 @@ where
     fn get_external_ids(
         self,
         content_id: i64,
-        content_hint: ContentType,
+        content_hint: ParentMediaType,
     ) -> impl std::future::Future<Output = crate::Result<Vec<ExternalIdMetadata>>> + Send {
         async move {
             let mut conn = self.acquire().await?;
 
             let db_ids = match content_hint {
-                ContentType::Movie => {
+                ParentMediaType::Movie => {
                     sqlx::query_as!(
                         DbExternalId,
                         "SELECT external_ids.* FROM external_ids
@@ -526,7 +526,7 @@ where
                     .fetch_all(&mut *conn)
                     .await
                 }
-                ContentType::Show => {
+                ParentMediaType::Show => {
                     sqlx::query_as!(
                         DbExternalId,
                         "SELECT external_ids.* FROM external_ids
