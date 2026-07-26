@@ -562,7 +562,7 @@ where
     T: serde::de::DeserializeOwned + Send,
     S: Send + Sync,
 {
-    type Rejection = axum::Json<AppError>;
+    type Rejection = AppError;
 
     async fn from_request(
         req: axum::http::Request<axum::body::Body>,
@@ -570,7 +570,10 @@ where
     ) -> std::result::Result<Self, Self::Rejection> {
         match axum::Json::<T>::from_request(req, state).await {
             Ok(axum::Json(value)) => Ok(Self(value)),
-            Err(e) => Err(axum::Json(AppError::bad_request(e.to_string()))),
+            Err(axum::extract::rejection::JsonRejection::JsonDataError(e)) => {
+                Err(AppError::unprocessable(e.to_string()))
+            }
+            Err(e) => Err(AppError::bad_request(e.to_string())),
         }
     }
 }

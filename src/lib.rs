@@ -147,6 +147,7 @@ pub enum AppErrorKind {
     BadRequest,
     /// Sqlite database is busy
     DatabaseLocked,
+    Unprocessable,
 }
 
 impl Display for AppErrorKind {
@@ -157,6 +158,7 @@ impl Display for AppErrorKind {
             AppErrorKind::Duplicate => f.write_str("Duplicate"),
             AppErrorKind::BadRequest => f.write_str("Bad request"),
             AppErrorKind::DatabaseLocked => f.write_str("Database locked"),
+            AppErrorKind::Unprocessable => f.write_str("Unprocessable entity"),
         }
     }
 }
@@ -177,6 +179,7 @@ impl From<AppErrorKind> for StatusCode {
             AppErrorKind::Duplicate => StatusCode::CONFLICT,
             AppErrorKind::BadRequest => StatusCode::BAD_REQUEST,
             AppErrorKind::DatabaseLocked => StatusCode::SERVICE_UNAVAILABLE,
+            AppErrorKind::Unprocessable => StatusCode::UNPROCESSABLE_ENTITY,
         }
     }
 }
@@ -252,6 +255,13 @@ impl AppError {
         AppError {
             message: msg.as_ref().into(),
             kind: AppErrorKind::BadRequest,
+        }
+    }
+
+    pub fn unprocessable(msg: impl AsRef<str>) -> AppError {
+        AppError {
+            message: msg.as_ref().into(),
+            kind: AppErrorKind::Unprocessable,
         }
     }
 
