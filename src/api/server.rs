@@ -52,7 +52,7 @@ use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
 use crate::metadata::{
-    ParentMediaType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
+    EpisodeMetadata, MovieMetadata, ParentMediaType, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};

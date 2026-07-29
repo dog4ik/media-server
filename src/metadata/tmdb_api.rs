@@ -10,9 +10,9 @@ use serde::Deserialize;
 use crate::metadata::{PersonMetadata, ProviderIdentifier, RoleMetadata};
 
 use super::{
-    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
-    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
-    ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
+    DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata,
+    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, ParentMediaType,
+    SeasonMetadata, ShowMetadata, ShowMetadataProvider, request_client::LimitedRequestClient,
 };
 use super::{FetchParams, Language, provod_agent};
 

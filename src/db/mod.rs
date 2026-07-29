@@ -22,8 +22,8 @@ use crate::{
     db::query_builders::{DbEpisodeQuery, DbMovieQuery},
     library::assets::{self, AssetDir},
     metadata::{
-        ParentMediaType, EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider,
-        MovieMetadata, ShowMetadata,
+        EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider, MovieMetadata,
+        ParentMediaType, ShowMetadata,
     },
 };
 
@@ -1563,6 +1563,17 @@ pub enum DbContentType {
     Show,
     Season,
     Episode,
+}
+
+impl From<DbContentType> for crate::metadata::MediaType {
+    fn from(value: DbContentType) -> Self {
+        match value {
+            DbContentType::Movie => Self::Movie,
+            DbContentType::Show => Self::Show,
+            DbContentType::Season => Self::Season,
+            DbContentType::Episode => Self::Episode,
+        }
+    }
 }
 
 impl DbContentType {

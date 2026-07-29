@@ -17,7 +17,7 @@ use crate::{
         ContentIdentifier, Media, is_format_supported, movie::MovieIdentifier, show::ShowIdentifier,
     },
     metadata::{
-        ParentMediaType, EpisodeMetadata, MetadataProvider, MovieMetadata, ShowMetadata,
+        EpisodeMetadata, MetadataProvider, MovieMetadata, ParentMediaType, ShowMetadata,
         metadata_stack::MetadataProvidersStack,
     },
     progress::{ProgressStatus, TaskResource, TaskTrait},
@@ -1066,7 +1066,11 @@ async fn parse_torrent_files(
                 == MetadataProvider::Local
             {
                 let Ok(external_ids) = providers_stack
-                    .get_external_ids(&show.metadata_id, ParentMediaType::Show, show.metadata_provider)
+                    .get_external_ids(
+                        &show.metadata_id,
+                        ParentMediaType::Show,
+                        show.metadata_provider,
+                    )
                     .await
                 else {
                     tracing::error!("External ids are not found while resolving local entry");

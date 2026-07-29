@@ -6,7 +6,9 @@ use tracing::instrument;
 use crate::{
     db::{Db, DbActions},
     library::{LibraryItem, Media, show::ShowIdentifier},
-    metadata::{ParentMediaType, EpisodeMetadata, SeasonMetadata, ShowMetadata, ShowMetadataProvider},
+    metadata::{
+        EpisodeMetadata, ParentMediaType, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    },
     scan::scan_progress::FailedContent,
 };
 

@@ -20,7 +20,7 @@ use crate::{
         show::ShowIdentifier,
     },
     metadata::{
-        ParentMediaType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
+        ExternalIdMetadata, MetadataProvider, ParentMediaType, ShowMetadata, ShowMetadataProvider,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},

@@ -150,6 +150,8 @@ pub mod torrent;
         lists::add_to_watchlist,
         lists::all_lists,
         lists::get_list,
+        lists::export_list,
+        lists::import_list,
         lists::list_contents,
         lists::remove_item,
         lists::remove_watchlist_item,

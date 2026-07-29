@@ -101,6 +101,15 @@ pub struct EpisodeInput<T> {
     pub items: Vec<T>,
 }
 
+impl<T> ShowTree<T> {
+    /// Create empty show tree
+    pub fn empty() -> Self {
+        Self {
+            seasons: Vec::new(),
+        }
+    }
+}
+
 impl<T: ShowItem> ShowTree<T> {
     /// Group a flat, unstructured set of items into a season/episode tree.
     pub fn from_flat(mut items: Vec<T>) -> Self {
@@ -127,9 +136,44 @@ impl<T: ShowItem> ShowTree<T> {
     }
 }
 
+impl<T> Default for ShowTree<T> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl<T: ShowItem> From<Vec<T>> for ShowTree<T> {
     fn from(items: Vec<T>) -> Self {
         Self::from_flat(items)
+    }
+}
+
+/// Implementation assumes that number conversion will succeed without errors
+impl<K, V> From<HashMap<K, Vec<V>>> for ShowTree<EpisodeNumber>
+where
+    K: TryInto<usize, Error: std::fmt::Debug>,
+    V: TryInto<usize, Error: std::fmt::Debug>,
+{
+    fn from(value: HashMap<K, Vec<V>>) -> Self {
+        Self {
+            seasons: value
+                .into_iter()
+                .filter_map(|(season, episodes)| {
+                    Some(SeasonInput {
+                        number: season.try_into().ok()?,
+                        episodes: episodes
+                            .into_iter()
+                            .filter_map(|ep| {
+                                Some(EpisodeInput {
+                                    number: ep.try_into().ok()?,
+                                    items: Vec::new(),
+                                })
+                            })
+                            .collect(),
+                    })
+                })
+                .collect(),
+        }
     }
 }
 
@@ -420,7 +464,10 @@ where
         C: HasSource + Clone + Send + 'static,
     {
         let tree = items.into();
-        for _ in 0..crate::db::MAX_INSERT_RETRIES {
+        for attempt in 0..crate::db::MAX_INSERT_RETRIES {
+            if attempt != 0 {
+                tracing::warn!(%attempt, "External id unique constraint violated, retrying show tree lookup");
+            }
             let show = self.search_show_by_id(id).await?;
             let resolved = self.fetch_show_tree(show, tree.clone()).await?;
             let mut tx = self.db.pool.begin_with("BEGIN IMMEDIATE").await?;
@@ -738,5 +785,48 @@ where
             duration,
             items,
         }
+    }
+}
+
+pub(super) struct BatchResult<T, S = ()> {
+    pub api: ShowMetadataApi<&'static (dyn ShowMetadataProvider + Send + Sync + 'static)>,
+    pub resolved: ResolvedShow<T>,
+    pub state: S,
+}
+
+/// Wrapper around [ShowMetadataApi] that allows processing many shows
+pub(super) struct BatchShowApi<T, S> {
+    pub join_set: JoinSet<anyhow::Result<BatchResult<T, S>>>,
+}
+
+impl<T, S> BatchShowApi<T, S>
+where
+    T: HasSource + Send + 'static,
+    S: Send + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            join_set: JoinSet::new(),
+        }
+    }
+
+    /// Spawn a resolving task for a show tree
+    pub fn spawn(
+        &mut self,
+        api: ShowMetadataApi<&'static (dyn ShowMetadataProvider + Send + Sync + 'static)>,
+        show_id: String,
+        tree: impl Into<ShowTree<T>>,
+        state: S,
+    ) {
+        let tree = tree.into();
+        self.join_set.spawn(async move {
+            let show = api.search_show_by_id(&show_id).await?;
+            let resolved = api.fetch_show_tree(show, tree).await?;
+            Ok(BatchResult {
+                api,
+                resolved,
+                state,
+            })
+        });
     }
 }

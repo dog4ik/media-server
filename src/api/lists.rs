@@ -12,22 +12,26 @@ use crate::{
         Db, DbActions, DbList, DbListItem, DbQueryBuilder, ListKind,
         query_builders::{DbFullEpisodeQuery, DbMovieQuery, DbShowQuery},
     },
+    lists,
     metadata::{
         MetadataProvider,
         metadata_api::{
             PendingInsert,
             asset_saver::AssetTasks,
+            batch::BatchApi,
             movie::MovieMetadataApi,
-            show::{
-                EpisodeInput, EpisodeNumber, ResolvedShow, SeasonInput, ShowMetadataApi, ShowTree,
-            },
+            show::{EpisodeInput, EpisodeNumber, SeasonInput, ShowMetadataApi, ShowTree},
         },
     },
 };
 
 use std::collections::HashMap;
 
-use axum::{extract::State, http::StatusCode};
+use axum::{
+    extract::State,
+    http::{HeaderMap, HeaderName, HeaderValue, StatusCode},
+    response::IntoResponse,
+};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -416,33 +420,23 @@ async fn resolve_content(
                 };
                 let show_api =
                     ShowMetadataApi::new(show_provider, &db, app_state.http_client.clone());
-                let resolved_show = show_api.search_show_by_id(&id).await?;
-                let mut assets = AssetTasks::new(app_state.http_client.clone());
-                let tree = match episodes {
-                    Some(list) => show_api.fetch_show_tree(resolved_show, list).await?,
-                    None => ResolvedShow {
-                        show_lookup: resolved_show,
-                        seasons: Vec::new(),
-                    },
-                };
-                let mut tx = db.pool.begin().await?;
-                let flushed = show_api.flush_show_tree(&mut tx, &mut assets, tree).await?;
-                // A whole show links its own metadata; a show with episodes links each episode.
-                let content = if flushed.seasons.is_empty() {
-                    vec![flushed.metadata_id]
-                } else {
-                    flushed
-                        .seasons
-                        .into_iter()
-                        .flat_map(|s| s.episodes)
-                        .map(|e| e.metadata_id)
-                        .collect()
-                };
-                Ok(PendingInsert {
-                    content,
-                    tx,
-                    assets,
-                })
+                let flushed = show_api
+                    .get_or_insert_show_tree(
+                        &id,
+                        episodes.map(Into::<ShowTree<_>>::into).unwrap_or_default(),
+                    )
+                    .await?;
+                Ok(flushed.map(|tree| {
+                    if tree.seasons.is_empty() {
+                        vec![tree.metadata_id]
+                    } else {
+                        tree.seasons
+                            .into_iter()
+                            .flat_map(|s| s.episodes)
+                            .map(|e| e.metadata_id)
+                            .collect()
+                    }
+                }))
             }
         },
     }
@@ -542,6 +536,175 @@ async fn remove_item(
     remove_list_item(&db, list_id, metadata_id).await
 }
 
+/// Export list in json but group all episodes into a single show
+#[utoipa::path(
+    get,
+    path = "/api/lists/{id}/export",
+    params(
+        ("id", description = "List id"),
+    ),
+    responses(
+        (status = 200, description = "Exported list in json format", content_type = "application/json", body = Vec<lists::ExportedGroupedItem>),
+        (status = 404, description = "List not found", body = AppError),
+    ),
+    tag = "Lists",
+)]
+async fn export_list(
+    Path(list_id): Path<i64>,
+    State(db): State<Db>,
+) -> crate::Result<impl axum::response::IntoResponse> {
+    let list_name: String = sqlx::query_scalar!("select name from lists where id = ?", list_id)
+        .fetch_one(&db.pool)
+        .await?
+        .chars()
+        // ensure that list name contains only ascii to use it in header
+        .map(|c| if c.is_ascii() { c } else { '?' })
+        .collect();
+
+    let items = lists::export_grouped_list(&db, list_id).await?;
+
+    let headers = HeaderMap::from_iter([(
+        HeaderName::from_static("content-disposition"),
+        HeaderValue::from_str(&format!(
+            "attachment; filename=\"exported_list_{list_name}.json\""
+        ))
+        .expect("filename to be ascii only"),
+    )]);
+    Ok((headers, Json(items)).into_response())
+}
+
+#[derive(Debug, Serialize, utoipa::ToSchema)]
+pub struct ImportResult {
+    count: usize,
+}
+
+/// Import grouped list in json
+#[utoipa::path(
+    post,
+    path = "/api/lists/{id}/import",
+    params(
+        ("id", description = "List id"),
+    ),
+    responses(
+        (status = 200, description = "Import results", body = ImportResult),
+        (status = 500, description = "Import error", body = AppError),
+    ),
+    tag = "Lists",
+)]
+async fn import_list(
+    Path(list_id): Path<i64>,
+    State(AppState {
+        db,
+        providers_stack,
+        http_client,
+        ..
+    }): State<AppState>,
+    Json(items): Json<Vec<lists::ExportedGroupedItem>>,
+) -> crate::Result<Json<ImportResult>> {
+    let mut batch_api = BatchApi::<EpisodeNumber, bool, ()>::new(db.clone(), http_client.clone());
+    for item in items {
+        let Some(prime_id) = item.external_ids.into_iter().find(|id| id.is_prime) else {
+            tracing::error!("Primary external id for {} was not found", item.title);
+            continue;
+        };
+        match item.content_type {
+            lists::ExportedGroupedContentType::Movie => {
+                let Some(provider) = providers_stack.movie_provider(prime_id.provider) else {
+                    tracing::error!("Movie provider {} is not available", prime_id.provider);
+                    continue;
+                };
+                let movie_api = MovieMetadataApi::new(provider, db, http_client.clone());
+                batch_api.spawn_movie(movie_api, prime_id.id, ());
+            }
+            lists::ExportedGroupedContentType::Show {
+                self_in_list,
+                episodes,
+            } => {
+                let Some(provider) = providers_stack.show_provider(prime_id.provider) else {
+                    tracing::error!("Show provider {} is not available", prime_id.provider);
+                    continue;
+                };
+                let show_api = ShowMetadataApi::new(provider, db, http_client.clone());
+                batch_api.spawn_show(show_api, prime_id.id, episodes, self_in_list);
+            }
+        }
+    }
+
+    let mut result = ImportResult { count: 0 };
+    batch_api
+        .join_all(
+            &mut result,
+            |local_id, tx, _, ctx| {
+                Box::pin(async move {
+                    let now = OffsetDateTime::now_utc();
+                    match tx
+                        .insert_list_item(&DbListItem {
+                            id: None,
+                            list_id,
+                            metadata_id: local_id.metadata_id,
+                            release_viewed: None,
+                            created_at: now,
+                        })
+                        .await
+                    {
+                        Ok(_) => {
+                            ctx.count += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to insert movie into the list: {e}");
+                        }
+                    };
+                    Ok(())
+                })
+            },
+            |show, tx, self_in_list, ctx| {
+                Box::pin(async move {
+                    let now = OffsetDateTime::now_utc();
+                    if self_in_list {
+                        match tx
+                            .insert_list_item(&DbListItem {
+                                id: None,
+                                list_id,
+                                metadata_id: show.metadata_id,
+                                release_viewed: None,
+                                created_at: now,
+                            })
+                            .await
+                        {
+                            Ok(_) => {
+                                ctx.count += 1;
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to insert show into the list: {e}");
+                            }
+                        };
+                    }
+                    for episode in show.episodes() {
+                        match tx
+                            .insert_list_item(&DbListItem {
+                                id: None,
+                                list_id,
+                                metadata_id: episode.metadata_id,
+                                release_viewed: None,
+                                created_at: now,
+                            })
+                            .await
+                        {
+                            Ok(_) => ctx.count += 1,
+                            Err(e) => {
+                                tracing::warn!("Failed to insert episode into the list: {e}");
+                            }
+                        };
+                    }
+                    Ok(())
+                })
+            },
+        )
+        .await?;
+
+    Ok(Json(result))
+}
+
 /// Add content to the saved list
 #[utoipa::path(
     post,
@@ -630,6 +793,8 @@ pub fn router() -> axum::Router<AppState> {
         .route("/{id}/items", get(list_contents))
         .route("/{id}/add", post(add_item))
         .route("/{id}/remove/{id}", delete(remove_item))
+        .route("/{id}/export", get(export_list))
+        .route("/{id}/import", post(import_list))
         .route("/saved/add", post(add_to_saved))
         .route("/saved/remove/{id}", delete(remove_saved_item))
         .route("/watchlist/add", post(add_to_watchlist))

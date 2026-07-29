@@ -12,8 +12,8 @@ use crate::{
 };
 
 use super::{
-    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+    DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams, MetadataProvider,
+    MetadataSearchResult, MovieMetadata, MovieMetadataProvider, ParentMediaType, SeasonMetadata,
     ShowMetadata, ShowMetadataProvider, tmdb_api::TmdbApi, tvdb_api::TvdbApi,
 };
 
@@ -300,7 +300,9 @@ impl MetadataProvidersStack {
                     tokio::time::timeout(
                         Duration::from_secs(5),
                         match content_type {
-                            Some(ParentMediaType::Show) => p.search_show_torrent(&query, &fetch_params),
+                            Some(ParentMediaType::Show) => {
+                                p.search_show_torrent(&query, &fetch_params)
+                            }
                             Some(ParentMediaType::Movie) => {
                                 p.search_movie_torrent(&query, &fetch_params)
                             }

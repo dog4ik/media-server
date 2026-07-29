@@ -18,10 +18,10 @@ use crate::{
 };
 
 use super::{
-    ParentMediaType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-    Language, METADATA_CACHE_SIZE, MetadataProvider, MetadataSearchResult, MovieMetadata,
-    MovieMetadataProvider, SeasonMetadata, ShowMetadata, ShowMetadataProvider, provod_agent,
-    request_client::LimitedRequestClient,
+    DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams, Language,
+    METADATA_CACHE_SIZE, MetadataProvider, MetadataSearchResult, MovieMetadata,
+    MovieMetadataProvider, ParentMediaType, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
+    provod_agent, request_client::LimitedRequestClient,
 };
 
 #[derive(Debug)]

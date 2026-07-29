@@ -1,5 +1,6 @@
 pub mod asset_saver;
 pub mod movie;
+pub mod batch;
 pub mod reconcile;
 pub mod show;
 
@@ -34,5 +35,18 @@ impl<T> PendingInsert<T> {
         self.tx.commit().await?;
         self.assets.save(max_concurrency, ()).await;
         Ok(())
+    }
+
+    /// Map inner content to another type
+    pub fn map<F, R>(self, map_fn: F) -> PendingInsert<R>
+    where
+        F: FnOnce(T) -> R,
+    {
+        let content = self.content;
+        PendingInsert {
+            content: map_fn(content),
+            tx: self.tx,
+            assets: self.assets,
+        }
     }
 }

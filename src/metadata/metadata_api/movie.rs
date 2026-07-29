@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use tokio::task::JoinSet;
+
 use crate::{
     config,
     db::{Db, DbActions, DbExternalId, DbTransaction, LocalContentId},
@@ -111,7 +113,10 @@ where
         &self,
         id: &str,
     ) -> anyhow::Result<PendingInsert<LocalContentId>> {
-        for _ in 0..crate::db::MAX_INSERT_RETRIES {
+        for attempt in 0..crate::db::MAX_INSERT_RETRIES {
+            if attempt != 0 {
+                tracing::warn!(%attempt, "External id unique constraint violated, retrying movie lookup");
+            }
             let movie = self.search_movie_by_id(id).await?;
             let mut tx = self.db.pool.begin_with("BEGIN IMMEDIATE").await?;
             let mut assets = AssetTasks::new(self.http_client.clone());
@@ -138,6 +143,21 @@ where
             }
         }
         anyhow::bail!("could not insert movie after concurrent insert retries")
+    }
+
+    pub(super) async fn get_or_insert_lookup(
+        &self,
+        lookup: MetadataLookup<MovieMetadata>,
+        tx: &mut DbTransaction,
+        assets: &mut AssetTasks,
+    ) -> anyhow::Result<LocalContentId> {
+        match lookup {
+            MetadataLookup::New { metadata } => {
+                Ok(self.insert_movie_metadata(metadata, tx, assets).await?)
+            }
+            MetadataLookup::Local(local_content_id) => Ok(local_content_id),
+            MetadataLookup::Missing => Err(anyhow::anyhow!("Movie was not found")),
+        }
     }
 
     pub async fn insert_movie_metadata(
@@ -196,5 +216,44 @@ where
             id: movie_id,
             metadata_id,
         })
+    }
+}
+
+pub(super) struct BatchResult<S> {
+    pub resolved: MetadataLookup<MovieMetadata>,
+    pub api: MovieMetadataApi<&'static (dyn MovieMetadataProvider + Send + Sync + 'static)>,
+    pub state: S,
+}
+
+/// Wrapper around [MovieMetadataApi] that allows processing many shows
+pub(super) struct BatchMovieApi<S = ()> {
+    pub join_set: JoinSet<anyhow::Result<BatchResult<S>>>,
+}
+
+impl<S> BatchMovieApi<S>
+where
+    S: Send + 'static,
+{
+    pub fn new() -> Self {
+        Self {
+            join_set: JoinSet::new(),
+        }
+    }
+
+    /// Spawn a resolving task for a movie
+    pub fn spawn(
+        &mut self,
+        api: MovieMetadataApi<&'static (dyn MovieMetadataProvider + Send + Sync + 'static)>,
+        movie_id: String,
+        state: S,
+    ) {
+        self.join_set.spawn(async move {
+            let resolved = api.search_movie_by_id(&movie_id).await?;
+            Ok(BatchResult {
+                resolved,
+                api,
+                state,
+            })
+        });
     }
 }

@@ -32,6 +32,7 @@ pub mod file_watcher;
 pub mod intro_detection;
 /// Everything related to local media files
 pub mod library;
+pub mod lists;
 /// Integrations with movie and TV databases.
 pub mod metadata;
 /// Progress notifications dispatched to the connected Websockets clients
@@ -59,6 +60,8 @@ pub mod utils;
 pub mod watch;
 /// Websockets clients connection
 pub mod ws;
+
+pub type BoxedFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + 'a + Send>>;
 
 /// Wrapper around `time::OffsetDateTime`
 #[derive(

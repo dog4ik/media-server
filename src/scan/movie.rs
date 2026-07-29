@@ -19,7 +19,7 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ParentMediaType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
+        ExternalIdMetadata, MovieMetadata, MovieMetadataProvider, ParentMediaType,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{
@@ -179,12 +179,13 @@ impl ContentScanner for MovieScanner {
                         insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
+                        let is_prime = metadata.metadata_provider == ext_id.provider;
                         let _ = tx
                             .insert_external_id(DbExternalId {
                                 external_provider: ext_id.provider,
                                 external_id: ext_id.id.clone(),
                                 metadata_id: Some(metadata_id),
-                                is_prime: false.into(),
+                                is_prime: is_prime.into(),
                                 ..Default::default()
                             })
                             .await;
