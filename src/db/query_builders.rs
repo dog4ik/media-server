@@ -157,6 +157,7 @@ pub struct ListsQueryJson {
     pub name: String,
     pub kind: ListKind,
     pub updated_at: OffsetDateTime,
+    pub added_at: OffsetDateTime,
 }
 
 impl ListsQueryJson {
@@ -164,7 +165,8 @@ impl ListsQueryJson {
 'id', lists.id,
 'name', lists.name,
 'kind', lists.kind,
-'updated_at', strftime('%Y-%m-%dT%H:%M:%SZ', lists.updated_at)
+'updated_at', strftime('%Y-%m-%dT%H:%M:%SZ', lists.updated_at),
+'added_at', strftime('%Y-%m-%dT%H:%M:%SZ', list_items.created_at)
 ))
 from list_items
 join lists on lists.id = list_items.list_id
@@ -178,6 +180,7 @@ impl From<ListsQueryJson> for CompactList {
             name,
             kind,
             updated_at,
+            added_at,
         }: ListsQueryJson,
     ) -> Self {
         Self {
@@ -185,6 +188,7 @@ impl From<ListsQueryJson> for CompactList {
             name,
             kind,
             updated_at,
+            added_at,
         }
     }
 }

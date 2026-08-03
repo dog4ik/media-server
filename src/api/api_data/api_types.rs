@@ -78,7 +78,10 @@ pub struct CompactList {
     pub id: i64,
     pub name: String,
     pub kind: ListKind,
+    /// When the list itself last changed
     pub updated_at: OffsetDateTime,
+    /// When this particular item was added to the list.
+    pub added_at: OffsetDateTime,
 }
 
 impl From<PersonMetadata> for Actor {
