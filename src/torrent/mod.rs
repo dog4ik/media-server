@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::Context;
+use base64::Engine;
 use serde::{Deserialize, Serialize};
 use tokio::{sync::broadcast, task::JoinSet};
 use torrent::{DownloadHandle, DownloadParams, Info, MagnetLink, OutputFile};
@@ -152,6 +153,14 @@ pub struct SessionState {
     pub torrents: Vec<TorrentState>,
 }
 
+fn ser_base64<S>(val: &Vec<u8>, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    use base64::engine::general_purpose::STANDARD;
+    serializer.serialize_str(&STANDARD.encode(val))
+}
+
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TorrentState {
     pub info_hash: String,
@@ -164,8 +173,11 @@ pub struct TorrentState {
     pub trackers: Vec<StateTracker>,
     pub peers: Vec<StatePeer>,
     pub files: Vec<StateFile>,
-    /// This is a little too much for a state
-    pub downloaded_pieces: Vec<bool>,
+    /// Base64 encoded bitfield
+    #[serde(serialize_with = "ser_base64")]
+    #[schema(content_encoding = "base64")]
+    #[schema(format = Byte, value_type = String)]
+    pub downloaded_pieces: Vec<u8>,
     pub state: DownloadState,
     pub pending_pieces: Vec<usize>,
 }

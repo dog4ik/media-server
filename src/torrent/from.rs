@@ -143,11 +143,6 @@ impl From<torrent::FullSessionState> for super::SessionState {
 
 impl From<torrent::FullState> for super::TorrentState {
     fn from(value: torrent::FullState) -> Self {
-        let downloaded_pieces = value
-            .bitfield
-            .all_pieces(value.total_pieces)
-            .into_iter()
-            .collect();
         Self {
             info_hash: crate::utils::stringify_info_hash(&value.info_hash),
             name: value.name,
@@ -159,7 +154,7 @@ impl From<torrent::FullState> for super::TorrentState {
             trackers: value.trackers.into_iter().map(Into::into).collect(),
             peers: value.peers.into_iter().map(Into::into).collect(),
             files: value.files.into_iter().map(Into::into).collect(),
-            downloaded_pieces,
+            downloaded_pieces: value.bitfield.0,
             state: value.state.into(),
             pending_pieces: value.pending_pieces,
         }
