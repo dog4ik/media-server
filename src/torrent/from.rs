@@ -184,12 +184,14 @@ impl From<torrent::progress::Progress> for super::Progress {
         torrent::progress::Progress {
             session_update,
             changed_torrents,
+            session_events,
             tick_num,
         }: torrent::progress::Progress,
     ) -> Self {
         Self {
             session_update: session_update.map(Into::into),
             changed_torrents: changed_torrents.into_iter().map(Into::into).collect(),
+            session_events: session_events.into_iter().map(Into::into).collect(),
             tick_num,
         }
     }
@@ -233,7 +235,6 @@ impl From<torrent::ProgressEvent> for super::ProgressEvent {
             events::ProgressEvent::StorageFile(storage_file_event) => {
                 Self::StorageFile(storage_file_event.into())
             }
-            events::ProgressEvent::Session(session_event) => Self::Session(session_event.into()),
         }
     }
 }

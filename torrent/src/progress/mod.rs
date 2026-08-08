@@ -1,4 +1,4 @@
-use crate::progress::events::TorrentTickEvents;
+use crate::progress::events::{SessionEvent, TorrentTickEvents};
 
 pub mod consumer;
 pub mod events;
@@ -27,7 +27,15 @@ pub struct TorrentUpdate {
 pub struct Progress {
     pub session_update: Option<SessionUpdate>,
     pub changed_torrents: Vec<TorrentUpdate>,
+    /// Events that are scoped to the session
+    pub session_events: Vec<SessionEvent>,
     pub tick_num: usize,
+}
+
+impl Progress {
+    pub fn is_empty(&self) -> bool {
+        self.changed_torrents.is_empty() && self.session_events.is_empty()
+    }
 }
 
 #[derive(Debug, Default)]

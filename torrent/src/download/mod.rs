@@ -38,23 +38,15 @@ pub mod peer;
 #[derive(Debug)]
 pub enum DownloadMessage {
     SetStrategy(ScheduleStrategy),
-    SetFilePriority {
-        file_idx: usize,
-        priority: Priority,
-    },
-    PostFullState {
-        tx: tokio::sync::oneshot::Sender<FullState>,
-    },
+    SetFilePriority { file_idx: usize, priority: Priority },
     Validate,
     Abort,
     Pause,
     Resume,
 }
 
-// TODO: cancel, pause and other control
 #[derive(Debug, Clone)]
 pub struct DownloadHandle {
-    pub download_tx: mpsc::Sender<DownloadMessage>,
     pub cancellation_token: CancellationToken,
 }
 
@@ -62,53 +54,6 @@ impl DownloadHandle {
     /// Abort download
     pub fn abort(&self) {
         self.cancellation_token.cancel();
-    }
-
-    /// Pause download
-    pub async fn pause(&self) -> anyhow::Result<()> {
-        self.download_tx.send(DownloadMessage::Pause).await?;
-        Ok(())
-    }
-
-    /// Resume download
-    pub async fn resume(&self) -> anyhow::Result<()> {
-        self.download_tx.send(DownloadMessage::Resume).await?;
-        Ok(())
-    }
-
-    /// Validate files
-    pub async fn validate(&self) -> anyhow::Result<()> {
-        self.download_tx.send(DownloadMessage::Validate).await?;
-        Ok(())
-    }
-
-    /// Change scheduling strategy
-    pub async fn set_strategy(&self, strategy: ScheduleStrategy) -> anyhow::Result<()> {
-        self.download_tx
-            .send(DownloadMessage::SetStrategy(strategy))
-            .await?;
-        Ok(())
-    }
-
-    /// Change file's priority
-    pub async fn set_file_priority(
-        &self,
-        file_idx: usize,
-        priority: Priority,
-    ) -> anyhow::Result<()> {
-        self.download_tx
-            .send(DownloadMessage::SetFilePriority { file_idx, priority })
-            .await?;
-        Ok(())
-    }
-
-    pub async fn full_state(&self) -> anyhow::Result<FullState> {
-        use tokio::sync::oneshot;
-        let (tx, rx) = oneshot::channel();
-        self.download_tx
-            .send(DownloadMessage::PostFullState { tx })
-            .await?;
-        Ok(rx.await?)
     }
 }
 
@@ -299,10 +244,6 @@ const PEX_HISTORY_CLEANUP_THRESHOLD: usize = 500;
 pub struct Download {
     pub info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
-    commands: (
-        mpsc::Sender<DownloadMessage>,
-        mpsc::Receiver<DownloadMessage>,
-    ),
     storage_rx: mpsc::Receiver<StorageFeedback>,
     new_peers: mpsc::Receiver<NewPeer>,
     trackers: Vec<DownloadTracker>,
@@ -369,8 +310,6 @@ impl Download {
         let seeder = Seeder::new(storage.clone());
         let peer_storage = PeerStorage::new(vec![], client_external_ip);
 
-        let commands = mpsc::channel(10);
-
         Self {
             new_peers,
             trackers,
@@ -387,7 +326,6 @@ impl Download {
             stat,
             seeder,
             info,
-            commands,
             peer_storage,
             running_performance: metric::RollingSpeedMeter::new(),
         }
@@ -395,7 +333,6 @@ impl Download {
 
     pub fn make_handle(&self) -> DownloadHandle {
         DownloadHandle {
-            download_tx: self.commands.0.clone(),
             cancellation_token: self.cancellation_token.clone(),
         }
     }
@@ -913,14 +850,10 @@ impl Download {
                     self.set_download_state(ctx, DownloadState::Pending);
                 }
             }
-            DownloadMessage::PostFullState { tx } => {
-                tracing::debug!("Dispatching full torrent progress");
-                let _ = tx.send(self.full_state(ctx));
-            }
         };
     }
 
-    pub fn full_state(&self, ctx: &mut TickContext) -> FullState {
+    pub fn full_state(&self, ctx: &TickContext) -> FullState {
         let trackers = self
             .trackers
             .iter()
@@ -932,7 +865,7 @@ impl Download {
             })
             .collect();
 
-        let peers = self.scheduler.peers.iter().map(|p| p.state(&ctx)).collect();
+        let peers = self.scheduler.peers.iter().map(|p| p.state(ctx)).collect();
         let output_files = self.info.output_files("");
         let mut files: Vec<_> = self
             .scheduler

@@ -148,8 +148,17 @@ async fn ws_handler_inner(connection: &mut Connection, app_state: AppState) -> a
                 }
             }
             progress = torrent_progress.recv() => {
-                let progress = progress?;
-                handle_torrent_progress(connection, progress).await?;
+                match progress {
+                    Ok(progress) => handle_torrent_progress(connection, progress).await?,
+                    Err(RecvError::Lagged(n)) => {
+                        tracing::warn!("WebSocket client lagged, dropped {n} torrent progress messages");
+                        if connection.is_torrent_subscribed {
+                            let session = app_state.torrent_client.fetch_session_state().await;
+                            connection.send(WsMessage::TorrentSessionState { session }).await?;
+                        }
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
         }
     }

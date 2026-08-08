@@ -11,3 +11,10 @@ pub struct TickContext<'a> {
     pub tick_num: usize,
     pub ban_list: &'a BanList,
 }
+
+impl TickContext<'_> {
+    /// Take the events accumulated so far
+    pub fn take_events(&mut self) -> TorrentTickEvents {
+        std::mem::take(&mut self.events)
+    }
+}

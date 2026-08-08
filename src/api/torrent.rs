@@ -483,16 +483,10 @@ pub async fn validate_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
 ) -> Result<StatusCode, AppError> {
-    let handle = client
+    client
         .get_download(&info_hash.0)
-        .ok_or(AppError::not_found("Torrent is not found"))?
-        .handle();
-    handle
-        .download_handle
-        .validate()
-        .await
-        // Fails only when download finished
-        .map_err(|_| AppError::not_found("Torrent is not found"))?;
+        .ok_or(AppError::not_found("Torrent is not found"))?;
+    client.validate(info_hash.0).await;
     Ok(StatusCode::ACCEPTED)
 }
 

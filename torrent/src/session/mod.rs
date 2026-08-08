@@ -59,14 +59,13 @@ impl<T: ProgressConsumer> Session<T> {
             ban_list: &self.ban_list,
         };
         let mut changed_torrents = Vec::new();
+        let mut session_events = Vec::new();
         match command {
             SessionMessage::AddTorrent(mut torrent) => {
                 if self.torrent_list.find(torrent.info_hash).is_none() {
                     torrent.initial_tracker_announce();
-                    let full_state = torrent.full_state(&mut tick_context);
-                    tick_context
-                        .events
-                        .emit_session(SessionEvent::TorrentAdd(Box::new(full_state)));
+                    let full_state = torrent.full_state(&tick_context);
+                    session_events.push(SessionEvent::TorrentAdd(Box::new(full_state)));
                     self.torrent_list.add(*torrent);
                 } else {
                     tracing::warn!("Attempt to add duplicate torrent");
@@ -79,7 +78,9 @@ impl<T: ProgressConsumer> Session<T> {
                             &mut tick_context,
                             crate::DownloadMessage::SetStrategy(strategy),
                         )
-                        .await
+                        .await;
+                    changed_torrents
+                        .push(torrent.construct_torrent_update(tick_context.take_events()));
                 }
             }
             SessionMessage::SetFilesPriority {
@@ -96,19 +97,24 @@ impl<T: ProgressConsumer> Session<T> {
                             )
                             .await;
                     }
-                    changed_torrents.push(torrent.construct_torrent_update(tick_context.events));
+                    changed_torrents
+                        .push(torrent.construct_torrent_update(tick_context.take_events()));
                 }
             }
             SessionMessage::PostFullState {
                 tx,
                 request: TorrentStateRequest::Single(hash),
             } => {
-                if let Some(torrent) = self.torrent_list.find_mut(hash) {
-                    let _ = tx.send(progress::full::FullSessionState {
-                        torrents: vec![torrent.full_state(&mut tick_context)],
-                        session_stats: self.full_stats(),
-                    });
-                }
+                // Always answer, otherwise the requester waits on the oneshot forever
+                let torrents = self
+                    .torrent_list
+                    .find(hash)
+                    .map(|t| vec![t.full_state(&tick_context)])
+                    .unwrap_or_default();
+                let _ = tx.send(progress::full::FullSessionState {
+                    torrents,
+                    session_stats: self.full_stats(),
+                });
             }
             SessionMessage::PostFullState {
                 tx,
@@ -116,9 +122,13 @@ impl<T: ProgressConsumer> Session<T> {
             } => {
                 let _ = tx.send(progress::full::FullSessionState {
                     session_stats: self.full_stats(),
-                    torrents: self.torrent_list.items[range]
+                    torrents: self
+                        .torrent_list
+                        .items
+                        .get(range)
+                        .unwrap_or_default()
                         .iter()
-                        .map(|d| d.full_state(&mut tick_context))
+                        .map(|d| d.full_state(&tick_context))
                         .collect(),
                 });
             }
@@ -132,20 +142,12 @@ impl<T: ProgressConsumer> Session<T> {
                         .torrent_list
                         .items
                         .iter()
-                        .map(|d| d.full_state(&mut tick_context))
+                        .map(|d| d.full_state(&tick_context))
                         .collect(),
                 });
             }
             SessionMessage::PerformAction { torrents, action } => {
                 for info_hash in torrents {
-                    let mut tick_context = TickContext {
-                        allowed_connections: u8::MAX as usize,
-                        tick_interval: self.config.tick_interval,
-                        tick_start: std::time::Instant::now(),
-                        events: TorrentTickEvents::new(),
-                        tick_num: self.tick_num,
-                        ban_list: &self.ban_list,
-                    };
                     if let Some(download) = self.torrent_list.find_mut(info_hash) {
                         let message = match action {
                             session_message::Action::Validate => crate::DownloadMessage::Validate,
@@ -156,11 +158,7 @@ impl<T: ProgressConsumer> Session<T> {
                                         crate::DownloadMessage::Abort,
                                     )
                                     .await;
-                                tick_context
-                                    .events
-                                    .emit_session(SessionEvent::TorrentRemove { info_hash });
-                                changed_torrents
-                                    .push(download.construct_torrent_update(tick_context.events));
+                                session_events.push(SessionEvent::TorrentRemove { info_hash });
                                 self.torrent_list.remove(info_hash);
                                 continue;
                             }
@@ -169,18 +167,20 @@ impl<T: ProgressConsumer> Session<T> {
                         };
                         download.handle_command(&mut tick_context, message).await;
                         changed_torrents
-                            .push(download.construct_torrent_update(tick_context.events));
+                            .push(download.construct_torrent_update(tick_context.take_events()));
                     }
                 }
             }
         };
 
-        if !changed_torrents.is_empty() {
-            self.progress_consumer.consume_progress(crate::Progress {
-                session_update: None,
-                changed_torrents,
-                tick_num: self.tick_num,
-            });
+        let progress = crate::Progress {
+            session_update: None,
+            changed_torrents,
+            session_events,
+            tick_num: self.tick_num,
+        };
+        if !progress.is_empty() {
+            self.progress_consumer.consume_progress(progress);
         }
     }
 
@@ -235,10 +235,8 @@ impl<T: ProgressConsumer> Session<T> {
                         connected_peers += download.connections_count() as u16;
 
                         if !tick_context.events.is_empty() {
-                            let mut events = TorrentTickEvents::new();
-                            std::mem::swap(&mut events, &mut tick_context.events);
                             changed_torrents.push(progress::TorrentUpdate {
-                                events,
+                                events: tick_context.take_events(),
                                 download_speed,
                                 state,
                                 total_downloaded: downloaded_after,
@@ -266,6 +264,7 @@ impl<T: ProgressConsumer> Session<T> {
                         self.progress_consumer.consume_progress(progress::Progress {
                             changed_torrents,
                             session_update,
+                            session_events: Vec::new(),
                             tick_num: self.tick_num,
                         });
                     }

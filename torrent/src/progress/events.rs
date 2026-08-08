@@ -66,10 +66,6 @@ impl TorrentTickEvents {
         self.emit(ProgressEvent::State(state))
     }
 
-    pub fn emit_session(&mut self, session_event: SessionEvent) {
-        self.emit(ProgressEvent::Session(session_event))
-    }
-
     pub fn emit(&mut self, event: ProgressEvent) {
         self.events.push(event);
     }
@@ -78,13 +74,14 @@ impl TorrentTickEvents {
         self.events.is_empty()
     }
 
-    pub fn drain_events(&mut self, target: &mut Vec<ProgressEvent>) {
-        target.reserve(self.events.len());
-        std::mem::swap(&mut self.events, target);
-    }
-
     pub fn into_inner(self) -> Vec<ProgressEvent> {
         self.events
+    }
+}
+
+impl Default for TorrentTickEvents {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -144,5 +141,4 @@ pub enum ProgressEvent {
     Tracker(TrackerEvent),
     StoragePiece(StoragePieceEvent),
     StorageFile(StorageFileEvent),
-    Session(SessionEvent),
 }

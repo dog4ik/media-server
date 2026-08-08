@@ -210,14 +210,8 @@ pub struct SessionUpdate {
 pub struct Progress {
     pub changed_torrents: Vec<TorrentUpdate>,
     pub session_update: Option<SessionUpdate>,
+    pub session_events: Vec<SessionEvent>,
     pub tick_num: usize,
-}
-
-impl Progress {
-    pub fn download_speed(&self) -> u64 {
-        // self.changed_torrents.iter().map(|p| p.download_speed).sum()
-        todo!()
-    }
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -228,8 +222,6 @@ pub enum ProgressEvent {
     Tracker(TrackerEvent),
     StoragePiece(StoragePieceEvent),
     StorageFile(StorageFileEvent),
-    ValidationComplete { valid_bitfield: Vec<u8> },
-    Session(SessionEvent),
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -322,8 +314,8 @@ pub struct CompactTorrentProgress {
 
 impl CompactTorrentProgress {
     pub fn new(progress: &TorrentUpdate, total_size: u64) -> Self {
-        let percent = if progress.total_downloaded > 0 {
-            total_size as f64 / progress.total_downloaded as f64 * 100.
+        let percent = if total_size > 0 {
+            progress.total_downloaded as f64 / total_size as f64 * 100.
         } else {
             0.
         };
@@ -553,13 +545,21 @@ async fn handle_progress(
     manager: impl TorrentManager,
 ) {
     let mut sub = progress_broadcast.subscribe();
-    while let Ok(Progress {
-        session_update,
-        changed_torrents,
-        tick_num,
-        ..
-    }) = sub.recv().await.as_deref()
-    {
+    loop {
+        let progress = match sub.recv().await {
+            Ok(progress) => progress,
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("Torrent progress persister lagged, dropped {n} messages");
+                continue;
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        };
+        let Progress {
+            session_update,
+            changed_torrents,
+            tick_num,
+            ..
+        } = progress.as_ref();
         tracing::debug!(
             tick_num,
             connected_peers = ?session_update.as_ref().map(|v| v.connected_peers),
@@ -568,23 +568,12 @@ async fn handle_progress(
         let mut new_pieces = Vec::new();
         for torrent in changed_torrents {
             for event in &torrent.events {
-                match event {
-                    ProgressEvent::StoragePiece(StoragePieceEvent {
-                        piece,
-                        piece_event: StoragePieceEventKind::Finished,
-                    }) => {
-                        new_pieces.push(*piece);
-                    }
-                    ProgressEvent::ValidationComplete { valid_bitfield } => {
-                        if let Err(e) = manager
-                            .update_pieces(&torrent.info_hash, &valid_bitfield)
-                            .await
-                        {
-                            tracing::error!("Failed to save torrent validation result: {e}");
-                            continue;
-                        }
-                    }
-                    _ => {}
+                if let ProgressEvent::StoragePiece(StoragePieceEvent {
+                    piece,
+                    piece_event: StoragePieceEventKind::Finished,
+                }) = event
+                {
+                    new_pieces.push(*piece);
                 }
             }
             if !new_pieces.is_empty() {
@@ -843,13 +832,19 @@ impl TorrentClient {
     }
 
     pub async fn full_progress(&self, info_hash: &[u8; 20]) -> Option<TorrentState> {
-        let download = self.get_download(info_hash)?;
-        download
-            .download_handle
-            .full_state()
-            .await
-            .ok()
-            .map(Into::into)
+        let state = self
+            .client
+            .handle()
+            .fetch_progress(torrent::TorrentStateRequest::Single(*info_hash))
+            .await;
+        state.torrents.into_iter().next().map(Into::into)
+    }
+
+    pub async fn validate(&self, info_hash: [u8; 20]) {
+        self.client
+            .handle()
+            .batch_action(vec![info_hash], torrent::Action::Validate)
+            .await;
     }
 }
 
