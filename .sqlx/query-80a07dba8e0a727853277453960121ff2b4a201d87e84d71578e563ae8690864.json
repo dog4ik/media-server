@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT external_id FROM external_ids WHERE metadata_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "external_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "80a07dba8e0a727853277453960121ff2b4a201d87e84d71578e563ae8690864"
+}
