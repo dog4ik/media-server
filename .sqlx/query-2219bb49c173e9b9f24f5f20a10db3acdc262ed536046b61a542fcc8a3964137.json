@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE shows SET backdrop = ? WHERE id = ?;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2219bb49c173e9b9f24f5f20a10db3acdc262ed536046b61a542fcc8a3964137"
+}

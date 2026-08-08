@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT seasons.id FROM seasons\n            WHERE seasons.show_id = ? AND seasons.number = ?;",
+  "query": "INSERT INTO list_items (list_id, metadata_id, release_viewed, created_at) VALUES (?, ?, ?, ?) RETURNING id;",
   "describe": {
     "columns": [
       {
@@ -10,11 +10,11 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 4
     },
     "nullable": [
       false
     ]
   },
-  "hash": "ba843dc42fe3df9bb1fc4f081d1c5a90ffdb254274d07297892db2e707771c6a"
+  "hash": "73b3b528a80ed66689b46b2ba81aec1c0fc2b19267c0caaaf232229d9cdfe836"
 }

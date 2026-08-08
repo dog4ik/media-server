@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT movies.id, external_ids.metadata_id FROM external_ids\n                JOIN movies ON movies.metadata_id = external_ids.metadata_id\n                WHERE external_ids.external_provider = ? AND external_ids.external_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "metadata_id",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "f34db38c34fde59edc7752a2373c24e30963f3d264981e0df7f7f5b3e067d162"
+}

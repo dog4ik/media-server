@@ -1,6 +1,6 @@
 use crate::{
+    AppError,
     api::{Json, Path},
-    app_state::AppError,
     file_browser::{BrowseDirectory, BrowseFile, BrowseRootDirs, FileKey},
 };
 
@@ -31,7 +31,7 @@ pub async fn root_dirs() -> Json<BrowseRootDirs> {
     ),
     tag = "FileBrowser",
 )]
-pub async fn browse_directory(Path(key): Path<FileKey>) -> Result<Json<BrowseDirectory>, AppError> {
+pub async fn browse_directory(Path(key): Path<FileKey>) -> crate::Result<Json<BrowseDirectory>> {
     let resolved_dir = BrowseDirectory::explore(key).await?;
     Ok(Json(resolved_dir))
 }
@@ -48,7 +48,7 @@ pub async fn browse_directory(Path(key): Path<FileKey>) -> Result<Json<BrowseDir
     ),
     tag = "FileBrowser",
 )]
-pub async fn parent_directory(Path(mut key): Path<FileKey>) -> Result<Json<BrowseFile>, AppError> {
+pub async fn parent_directory(Path(mut key): Path<FileKey>) -> crate::Result<Json<BrowseFile>> {
     if let Some(parent) = key.path.parent() {
         key.path = parent.to_owned();
     }

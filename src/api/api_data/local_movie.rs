@@ -3,7 +3,7 @@ use serde::Serialize;
 use crate::{
     api::api_data::{
         LocalDataLookup,
-        api_types::{Actor, History},
+        api_types::{Actor, CompactList, History},
     },
     metadata::{ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider, MovieMetadata},
 };
@@ -48,6 +48,9 @@ impl From<Movie> for MovieMetadata {
 pub struct LocalMovieData {
     pub id: i64,
     pub metadata_id: i64,
+    pub local_duration: crate::MediaDuration,
+    pub videos_count: i64,
+    pub lists: Vec<CompactList>,
     pub history: Option<History>,
 }
 

@@ -4,10 +4,7 @@ use reqwest::{Client, Method, Request, Url, header::HeaderMap};
 use serde::Deserialize;
 use time::OffsetDateTime;
 
-use crate::{
-    app_state::AppError,
-    metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient},
-};
+use crate::metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient};
 
 use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
 
@@ -65,7 +62,7 @@ impl TpbApi {
         }
     }
 
-    pub async fn search(&self, query: &str, cat: Category) -> Result<Vec<TpbTorrent>, AppError> {
+    pub async fn search(&self, query: &str, cat: Category) -> crate::Result<Vec<TpbTorrent>> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().expect("base url").push("q.php");
         url.query_pairs_mut().append_pair("q", query);
@@ -96,7 +93,7 @@ impl TpbApi {
         Ok(response)
     }
 
-    pub async fn get_magnet_link(&self, id: &str) -> Result<torrent::MagnetLink, AppError> {
+    pub async fn get_magnet_link(&self, id: &str) -> crate::Result<torrent::MagnetLink> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().expect("base url").push("t.php");
         url.query_pairs_mut().append_pair("id", id);
@@ -114,7 +111,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> Result<Vec<super::Torrent>, AppError> {
+    ) -> crate::Result<Vec<super::Torrent>> {
         Ok(self
             .search(query, Category::Movie)
             .await?
@@ -126,7 +123,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> Result<Vec<super::Torrent>, AppError> {
+    ) -> crate::Result<Vec<super::Torrent>> {
         Ok(self
             .search(query, Category::Show)
             .await?
@@ -138,7 +135,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> Result<Vec<super::Torrent>, AppError> {
+    ) -> crate::Result<Vec<super::Torrent>> {
         Ok(self
             .search(query, Category::Any)
             .await?
@@ -147,7 +144,7 @@ impl TorrentIndex for TpbApi {
             .collect())
     }
 
-    async fn fetch_magnet_link(&self, torrent_id: &str) -> Result<torrent::MagnetLink, AppError> {
+    async fn fetch_magnet_link(&self, torrent_id: &str) -> crate::Result<torrent::MagnetLink> {
         Ok(self.get_magnet_link(torrent_id).await?)
     }
 

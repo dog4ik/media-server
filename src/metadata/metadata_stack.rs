@@ -4,7 +4,6 @@ use anyhow::Context;
 use serde::{Serialize, ser::SerializeStruct};
 
 use crate::{
-    app_state::AppError,
     config,
     torrent_index::{
         Torrent, TorrentIndex, TorrentIndexIdentifier, rutracker::ProvodRuTrackerAdapter,
@@ -13,8 +12,8 @@ use crate::{
 };
 
 use super::{
-    ContentType, DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams,
-    MetadataProvider, MetadataSearchResult, MovieMetadata, MovieMetadataProvider, SeasonMetadata,
+    DiscoverMetadataProvider, EpisodeMetadata, ExternalIdMetadata, FetchParams, MetadataProvider,
+    MetadataSearchResult, MovieMetadata, MovieMetadataProvider, ParentMediaType, SeasonMetadata,
     ShowMetadata, ShowMetadataProvider, tmdb_api::TmdbApi, tvdb_api::TvdbApi,
 };
 
@@ -86,10 +85,8 @@ impl MetadataProvidersStack {
 
     #[tracing::instrument(skip_all)]
     pub fn setup_providers(&mut self, http_client: &reqwest::Client) {
-        match TmdbApi::new(
-            http_client.clone(),
-            config::CONFIG.get_value::<config::TmdbKey>().0,
-        ) {
+        let (config::TmdbKey(tmdb_key), config::TvdbKey(tvdb_key)) = config::CONFIG.get_values();
+        match TmdbApi::new(http_client.clone(), tmdb_key) {
             Ok(tmdb_api) => {
                 let tmdb_api: &'static _ = Box::leak(Box::new(tmdb_api));
                 self.tmdb = Some(tmdb_api);
@@ -109,10 +106,7 @@ impl MetadataProvidersStack {
             Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
         }
 
-        match TvdbApi::new(
-            http_client.clone(),
-            config::CONFIG.get_value::<config::TvdbKey>().0.as_deref(),
-        ) {
+        match TvdbApi::new(http_client.clone(), tvdb_key.as_deref()) {
             Ok(tvdb_api) => {
                 let tvdb_api: &'static _ = Box::leak(Box::new(tvdb_api));
                 self.tvdb = Some(tvdb_api);
@@ -122,15 +116,18 @@ impl MetadataProvidersStack {
         self.apply_config_order();
     }
 
+    #[tracing::instrument(skip_all)]
     pub fn apply_config_order(&self) {
-        let discover_order = config::CONFIG.get_value::<config::DiscoverProvidersOrder>();
-        let show_order = config::CONFIG.get_value::<config::ShowProvidersOrder>();
-        let movie_order = config::CONFIG.get_value::<config::MovieProvidersOrder>();
-        let torrent_order = config::CONFIG.get_value::<config::TorrentIndexesOrder>();
-        self.order_discover_providers(discover_order.0);
-        self.order_movie_providers(movie_order.0);
-        self.order_show_providers(show_order.0);
-        self.order_torrent_indexes(torrent_order.0);
+        let (
+            config::DiscoverProvidersOrder(discover_order),
+            config::DiscoverProvidersOrder(show_order),
+            config::MovieProvidersOrder(movie_order),
+            config::TorrentIndexesOrder(torrent_order),
+        ) = config::CONFIG.get_values();
+        self.order_discover_providers(discover_order);
+        self.order_movie_providers(movie_order);
+        self.order_show_providers(show_order);
+        self.order_torrent_indexes(torrent_order);
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
@@ -204,7 +201,7 @@ impl MetadataProvidersStack {
         &self,
         movie_id: &str,
         provider: MetadataProvider,
-    ) -> Result<MovieMetadata, AppError> {
+    ) -> crate::Result<MovieMetadata> {
         let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
         let provider = movie_providers
             .into_iter()
@@ -222,7 +219,7 @@ impl MetadataProvidersStack {
         &self,
         show_id: &str,
         provider: MetadataProvider,
-    ) -> Result<ShowMetadata, AppError> {
+    ) -> crate::Result<ShowMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -239,7 +236,7 @@ impl MetadataProvidersStack {
         show_id: &str,
         season: usize,
         provider: MetadataProvider,
-    ) -> Result<SeasonMetadata, AppError> {
+    ) -> crate::Result<SeasonMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -257,7 +254,7 @@ impl MetadataProvidersStack {
         season: usize,
         episode: usize,
         provider: MetadataProvider,
-    ) -> Result<EpisodeMetadata, AppError> {
+    ) -> crate::Result<EpisodeMetadata> {
         let show_providers = { self.show_providers_stack.lock().unwrap().clone() };
         let provider = show_providers
             .into_iter()
@@ -274,9 +271,9 @@ impl MetadataProvidersStack {
     pub async fn get_external_ids(
         &self,
         id: &str,
-        content_type: ContentType,
+        content_type: ParentMediaType,
         provider: MetadataProvider,
-    ) -> Result<Vec<ExternalIdMetadata>, AppError> {
+    ) -> crate::Result<Vec<ExternalIdMetadata>> {
         let discover_providers = { self.discover_providers_stack.lock().unwrap().clone() };
         let provider = discover_providers
             .into_iter()
@@ -289,7 +286,7 @@ impl MetadataProvidersStack {
     pub async fn get_torrents(
         &self,
         query: &str,
-        content_type: Option<ContentType>,
+        content_type: Option<ParentMediaType>,
     ) -> Vec<Torrent> {
         let torrent_indexes = { self.torrent_indexes_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
@@ -303,8 +300,10 @@ impl MetadataProvidersStack {
                     tokio::time::timeout(
                         Duration::from_secs(5),
                         match content_type {
-                            Some(ContentType::Show) => p.search_show_torrent(&query, &fetch_params),
-                            Some(ContentType::Movie) => {
+                            Some(ParentMediaType::Show) => {
+                                p.search_show_torrent(&query, &fetch_params)
+                            }
+                            Some(ParentMediaType::Movie) => {
                                 p.search_movie_torrent(&query, &fetch_params)
                             }
                             None => p.search_any_torrent(&query, &fetch_params),

@@ -5,7 +5,10 @@ use std::{
 
 use serde::Serialize;
 
-use crate::{metadata::ContentType, progress::ProgressDispatcher};
+use crate::{
+    metadata::{ParentMediaType, metadata_api::asset_saver::AssetsProgressSink},
+    progress::ProgressDispatcher,
+};
 
 /// Failed metadata fetch attempt
 #[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
@@ -13,7 +16,7 @@ pub struct FailedContent {
     pub title: String,
     #[schema(value_type = Vec<String>)]
     pub videos: Vec<PathBuf>,
-    pub content_type: ContentType,
+    pub content_type: ParentMediaType,
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -125,8 +128,8 @@ pub struct AssetProgressEmitter {
     pub emitter: ScanProgressEmitter,
 }
 
-impl AssetProgressEmitter {
-    pub fn dispatch_success(&self) {
+impl AssetsProgressSink for AssetProgressEmitter {
+    fn dispatch_success(&self) {
         self.emitter.dispatch.progress(ProgressChunk::AssetsSave {
             total_assets_count: self.total_count,
             success_count: self.done_count.fetch_add(1, atomic::Ordering::Relaxed) + 1,
@@ -134,7 +137,7 @@ impl AssetProgressEmitter {
         });
     }
 
-    pub fn dispatch_fail(&self) {
+    fn dispatch_fail(&self) {
         self.emitter.dispatch.progress(ProgressChunk::AssetsSave {
             total_assets_count: self.total_count,
             success_count: self.done_count.load(atomic::Ordering::Relaxed),

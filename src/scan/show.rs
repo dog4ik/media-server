@@ -20,8 +20,8 @@ use crate::{
         show::ShowIdentifier,
     },
     metadata::{
-        ContentType, ExternalIdMetadata, MetadataProvider, ShowMetadata, ShowMetadataProvider,
-        metadata_stack::MetadataProvidersStack,
+        ExternalIdMetadata, MetadataProvider, ParentMediaType, ShowMetadata, ShowMetadataProvider,
+        metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
 };
@@ -130,7 +130,7 @@ impl ShowScanner {
             let external_ids: Vec<ExternalIdMetadata> = match &chunk.lookup {
                 MetadataLookupWithIds::New { external_ids, .. } => external_ids.clone(),
                 MetadataLookupWithIds::Local(show_id) => db
-                    .get_external_ids(*show_id, ContentType::Show)
+                    .get_external_ids(*show_id, ParentMediaType::Show)
                     .await
                     .unwrap_or_default(),
             };
@@ -191,7 +191,7 @@ impl ContentScanner for ShowScanner {
     async fn flush_to_db(
         &self,
         tx: &mut DbTransaction,
-        asset_tasks: &mut Vec<AssetSaveTask>,
+        asset_tasks: &mut AssetTasks,
         resolved_shows: Vec<ResolvedShow>,
     ) -> sqlx::Result<()> {
         let span = debug_span!("flush_shows", count = resolved_shows.len());
@@ -211,15 +211,19 @@ impl ContentScanner for ShowScanner {
                         insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
-                        if let Err(e) = tx
-                            .insert_external_id(DbExternalId {
-                                external_provider: ext_id.provider,
-                                external_id: ext_id.id.clone(),
-                                metadata_id: Some(metadata_id),
-                                ..Default::default()
-                            })
-                            .await
-                        {
+                        let is_prime = metadata.metadata_provider == ext_id.provider;
+                        let db_ext = DbExternalId {
+                            external_provider: ext_id.provider,
+                            external_id: ext_id.id.clone(),
+                            metadata_id: Some(metadata_id),
+                            is_prime: is_prime.into(),
+                            ..Default::default()
+                        };
+                        if is_prime {
+                            // The prime id is the idempotency anchor: a collision means another
+                            // writer already inserted this show, so propagate it to trigger a retry.
+                            tx.insert_external_id(db_ext).await?;
+                        } else if let Err(e) = tx.try_insert_external_id(db_ext).await {
                             tracing::error!(
                                 provider = %ext_id.provider,
                                 "Failed to insert external id: {e}"
@@ -386,7 +390,7 @@ async fn fetch_single_show_chunk(
                 .crossreference_show(first_result.metadata_provider, &first_result.metadata_id)
                 .await
             {
-                Ok(Some(local_id)) => return MetadataLookupWithIds::Local(local_id),
+                Ok(Some(local)) => return MetadataLookupWithIds::Local(local.id),
                 Ok(None) | Err(_) => {
                     let Ok(mut show_metadata) = provider
                         .show(&first_result.metadata_id, config.fetch_params)

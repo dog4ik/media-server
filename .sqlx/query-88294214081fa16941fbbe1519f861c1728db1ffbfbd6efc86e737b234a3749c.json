@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE metadata SET\n                    title = ?, release_date = ?, poster = ?, plot = ?,\n                    original_language = ?, original_title = ?\n                WHERE id = ?;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "88294214081fa16941fbbe1519f861c1728db1ffbfbd6efc86e737b234a3749c"
+}

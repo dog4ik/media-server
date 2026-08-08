@@ -3,7 +3,7 @@ pub mod container;
 
 use self::container::VideoContainer;
 use crate::{
-    app_state::AppError,
+    AppError,
     db::{DbActions, DbVideo},
     ffmpeg_abi::{ProbeOutput, get_metadata},
 };

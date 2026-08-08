@@ -1,11 +1,7 @@
 use crate::api::Json;
+use crate::app_state::AppState;
 use crate::db::DbActions;
-use crate::{
-    app_state::{AppError, AppState},
-    db::Db,
-    intro_detection::IntroJob,
-    progress::TaskError,
-};
+use crate::{AppError, db::Db, intro_detection::IntroJob, progress::TaskError};
 use axum::{
     extract::{Path, State},
     http::StatusCode,
@@ -35,7 +31,7 @@ pub struct Intro {
 pub async fn detect_intros(
     Path((show_id, season)): Path<(i64, i64)>,
     State(app_state): State<AppState>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     let tasks = app_state.tasks;
     let job = IntroJob {
         show_id,
@@ -69,7 +65,7 @@ pub async fn detect_intros(
 pub async fn video_intro(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
-) -> Result<Json<Intro>, AppError> {
+) -> crate::Result<Json<Intro>> {
     let intro = sqlx::query_as!(
         Intro,
         r#"SELECT intros.start_sec, intros.end_sec FROM intros
@@ -98,7 +94,7 @@ pub async fn video_intro(
 pub async fn delete_video_intro(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     sqlx::query!(
         r#"DELETE FROM intros WHERE episode_id = (
             SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)
@@ -127,7 +123,7 @@ pub async fn delete_video_intro(
 pub async fn delete_season_intros(
     Path((show_id, season)): Path<(i64, i64)>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let mut tx = db.pool.begin().await?;
     let intros = sqlx::query!(
         r#"SELECT intros.id FROM intros
@@ -164,7 +160,7 @@ pub async fn delete_season_intros(
 pub async fn delete_episode_intros(
     Path((show_id, season, episode)): Path<(i64, i64, i64)>,
     State(db): State<Db>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     let intros = sqlx::query!(
         r#"SELECT intros.id FROM intros
         JOIN episodes ON episodes.id = intros.episode_id
@@ -213,7 +209,7 @@ pub async fn update_video_intro(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     Json(EditIntroPayload { start, end }): Json<EditIntroPayload>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     if start < 0 || end < 0 {
         return Err(AppError::bad_request("intro can't timing must be > 0"));
     }

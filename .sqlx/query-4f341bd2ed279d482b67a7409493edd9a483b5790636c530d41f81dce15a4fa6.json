@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "\nwith resolved as (\n  select coalesce(\n    shows.metadata_id,\n    case when episodes.metadata_id is null\n      then list_items.metadata_id end\n    ) as entity_metadata_id,\n    seasons.number  as season_number,\n    episodes.number as episode_number,\n    case when episodes.metadata_id is null then 1 else 0 end as self_in_list\n    from list_items\n    left join episodes on episodes.metadata_id = list_items.metadata_id\n    left join seasons on seasons.id = episodes.season_id\n    left join shows on shows.id = seasons.show_id\n    where list_items.list_id = ?\n  ),\n  season_episodes as (\n    select entity_metadata_id, season_number,\n    json_group_array(episode_number order by episode_number) as episode_numbers\n    from resolved\n    where episode_number is not null\n    group by entity_metadata_id, season_number\n  ),\n  content as (\n    select entity_metadata_id,\n    json_group_object(cast(season_number as text), json(episode_numbers)) as content\n    from season_episodes\n    group by entity_metadata_id\n  ),\n  ext as (\n    select metadata_id,\n    json_group_array(json_object(\n        'id', id, 'external_provider', external_provider,\n        'external_id', external_id, 'is_prime', is_prime\n    )) as external_ids\n  from external_ids\n  group by metadata_id\n)\nselect metadata.id, metadata.title,\nmetadata.content_type as \"media_type: DbContentType\",\nresolved.self_in_list as \"self_in_list!: i64\",\ncoalesce(content.content, json('{}')) as \"episodes!: sqlx::types::Json<HashMap<i64, Vec<i64>>>\",\ncoalesce(ext.external_ids, json('[]')) as \"external_ids!: sqlx::types::Json<Vec<ExternalIdsQueryJson>>\"\nfrom resolved\njoin metadata on metadata.id = resolved.entity_metadata_id\nleft join content on content.entity_metadata_id = resolved.entity_metadata_id\njoin ext on ext.metadata_id = resolved.entity_metadata_id\ngroup by metadata.id\norder by metadata.id;\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "title",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "media_type: DbContentType",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "self_in_list!: i64",
+        "ordinal": 3,
+        "type_info": "Null"
+      },
+      {
+        "name": "episodes!: sqlx::types::Json<HashMap<i64, Vec<i64>>>",
+        "ordinal": 4,
+        "type_info": "Null"
+      },
+      {
+        "name": "external_ids!: sqlx::types::Json<Vec<ExternalIdsQueryJson>>",
+        "ordinal": 5,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      null,
+      null,
+      null
+    ]
+  },
+  "hash": "4f341bd2ed279d482b67a7409493edd9a483b5790636c530d41f81dce15a4fa6"
+}

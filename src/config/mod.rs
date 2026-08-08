@@ -11,7 +11,7 @@ use tokio::sync::watch;
 use utoipa::openapi::RefOr;
 
 use crate::{
-    app_state::AppError,
+    AppError,
     metadata::{self, MetadataProvider},
     torrent_index::TorrentIndexIdentifier,
 };
@@ -357,10 +357,7 @@ impl ConfigStore {
         });
     }
 
-    pub fn apply_json(
-        &self,
-        value: serde_json::Value,
-    ) -> Result<ConfigurationApplyResult, AppError> {
+    pub fn apply_json(&self, value: serde_json::Value) -> crate::Result<ConfigurationApplyResult> {
         let mut result = ConfigurationApplyResult::default();
         let obj = match value {
             serde_json::Value::Object(obj) => obj,

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT metadata_id FROM shows WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "metadata_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a763fa1181bd500dbac0ead680ee4e02caf3284105c06d01fa5fa8085e6ca467"
+}

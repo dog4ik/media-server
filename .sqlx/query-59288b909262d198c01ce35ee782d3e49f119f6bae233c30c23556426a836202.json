@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM external_ids WHERE metadata_id = ?;",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "59288b909262d198c01ce35ee782d3e49f119f6bae233c30c23556426a836202"
+}

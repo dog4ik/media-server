@@ -19,8 +19,8 @@ use crate::{
         movie::MovieIdentifier,
     },
     metadata::{
-        ContentType, ExternalIdMetadata, MovieMetadata, MovieMetadataProvider,
-        metadata_stack::MetadataProvidersStack,
+        ExternalIdMetadata, MovieMetadata, MovieMetadataProvider, ParentMediaType,
+        metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
     scan::{
         ContentScanner, insert_roles,
@@ -151,7 +151,7 @@ impl ContentScanner for MovieScanner {
     async fn flush_to_db(
         &self,
         tx: &mut DbTransaction,
-        asset_tasks: &mut Vec<AssetSaveTask>,
+        asset_tasks: &mut AssetTasks,
         resolved: Vec<ResolvedMovie>,
     ) -> sqlx::Result<()> {
         let span = debug_span!("flush_movies", count = resolved.len());
@@ -179,12 +179,13 @@ impl ContentScanner for MovieScanner {
                         insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
                     for ext_id in &external_ids {
+                        let is_prime = metadata.metadata_provider == ext_id.provider;
                         let _ = tx
                             .insert_external_id(DbExternalId {
                                 external_provider: ext_id.provider,
                                 external_id: ext_id.id.clone(),
                                 metadata_id: Some(metadata_id),
-                                is_prime: false.into(),
+                                is_prime: is_prime.into(),
                                 ..Default::default()
                             })
                             .await;
@@ -270,11 +271,11 @@ async fn fetch_single_movie_chunk(
                 .crossreference_movie(first_result.metadata_provider, &first_result.metadata_id)
                 .await
             {
-                Ok(Some(local_id)) => {
+                Ok(Some(local)) => {
                     tracing::debug!(movie_title = first_result.title, "Using local movie ref");
                     progress.dispatch_success(videos.len());
                     return ResolvedMovie {
-                        lookup: MetadataLookupWithIds::Local(local_id),
+                        lookup: MetadataLookupWithIds::Local(local.id),
                         duration: Duration::ZERO,
                         videos: videos.to_vec(),
                     };
@@ -332,7 +333,7 @@ async fn fetch_single_movie_chunk(
                     .iter()
                     .map(|v| v.source.video.path().to_path_buf())
                     .collect(),
-                content_type: ContentType::Movie,
+                content_type: ParentMediaType::Movie,
             },
             videos.len(),
         );

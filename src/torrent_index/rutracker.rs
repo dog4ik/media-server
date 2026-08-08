@@ -2,10 +2,7 @@ use anyhow::Context;
 use reqwest::{Method, Request, Url};
 use serde::Deserialize;
 
-use crate::{
-    app_state::AppError,
-    metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient},
-};
+use crate::metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient};
 
 use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
 
@@ -68,14 +65,14 @@ impl ProvodRuTrackerAdapter {
         })
     }
 
-    pub async fn search(&self, query: &str) -> Result<Vec<ProvodRuTrackerTorrent>, AppError> {
+    pub async fn search(&self, query: &str) -> crate::Result<Vec<ProvodRuTrackerTorrent>> {
         let mut url = self.base_url.clone();
         url.query_pairs_mut().append_pair("search", query);
         let req = Request::new(Method::GET, url);
         self.limited_client.request(req).await
     }
 
-    pub async fn get_torrent_file(&self, id: &str) -> Result<torrent::TorrentFile, AppError> {
+    pub async fn get_torrent_file(&self, id: &str) -> crate::Result<torrent::TorrentFile> {
         let mut url = self.base_url.clone();
         url.path_segments_mut().expect("base url").push("download");
         url.query_pairs_mut().append_pair("id", id);
@@ -85,7 +82,7 @@ impl ProvodRuTrackerAdapter {
         Ok(torrent::TorrentFile::from_bytes(&bytes)?)
     }
 
-    pub async fn get_magnet_link(&self, id: &str) -> Result<torrent::MagnetLink, AppError> {
+    pub async fn get_magnet_link(&self, id: &str) -> crate::Result<torrent::MagnetLink> {
         let mut url = self.base_url.clone();
         url.path_segments_mut()
             .expect("base url")
@@ -104,7 +101,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError> {
+    ) -> crate::Result<Vec<Torrent>> {
         Ok(self
             .search(query)
             .await?
@@ -117,7 +114,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError> {
+    ) -> crate::Result<Vec<Torrent>> {
         Ok(self
             .search(query)
             .await?
@@ -130,7 +127,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> Result<Vec<Torrent>, AppError> {
+    ) -> crate::Result<Vec<Torrent>> {
         Ok(self
             .search(query)
             .await?
@@ -139,7 +136,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
             .collect())
     }
 
-    async fn fetch_magnet_link(&self, torrent_id: &str) -> Result<torrent::MagnetLink, AppError> {
+    async fn fetch_magnet_link(&self, torrent_id: &str) -> crate::Result<torrent::MagnetLink> {
         Ok(self.get_magnet_link(torrent_id).await?)
     }
 

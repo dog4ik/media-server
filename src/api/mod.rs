@@ -1,7 +1,7 @@
+use crate::AppError;
 use crate::MediaDuration as CrateDuration;
 use crate::OffsetDateTime as CrateOffsetDateTime;
 use crate::app_state;
-use crate::app_state::AppError;
 use crate::config;
 use crate::db;
 use crate::ffmpeg;
@@ -29,6 +29,8 @@ pub mod api_data;
 pub mod file_browser;
 pub mod history;
 pub mod intros;
+/// Liked, watched, custom lists endpoints
+pub mod lists;
 pub mod server;
 pub mod subtitles;
 /// Torrent client specific endpoints
@@ -91,7 +93,6 @@ pub mod torrent;
         server::stop_watch_session,
         server::progress,
         server::reconciliate_lib,
-        server::clear_db,
         server::start_direct_stream,
         server::start_hls_stream,
         server::hls_manifest,
@@ -135,11 +136,26 @@ pub mod torrent;
         history::update_history,
         history::suggest_movies,
         history::suggest_shows,
+        history::external_mark_as_watched,
         subtitles::pull_video_subtitle,
         subtitles::upload_subtitles,
         subtitles::delete_subtitles,
         subtitles::get_subtitles,
         subtitles::reference_external_subtitles,
+        lists::update_list,
+        lists::delete_list,
+        lists::create_list,
+        lists::add_item,
+        lists::add_to_saved,
+        lists::add_to_watchlist,
+        lists::all_lists,
+        lists::get_list,
+        lists::export_list,
+        lists::import_list,
+        lists::list_contents,
+        lists::remove_item,
+        lists::remove_watchlist_item,
+        lists::remove_saved_item,
         ws::ws,
     ),
     components(
@@ -151,11 +167,13 @@ pub mod torrent;
             metadata::MetadataProvider,
             metadata::ExternalIdMetadata,
             metadata::MetadataSearchResult,
-            metadata::ContentType,
+            metadata::ParentMediaType,
+            metadata::LeafMediaType,
+            metadata::MediaType,
             metadata::MetadataProvider,
             metadata::Language,
-            app_state::AppError,
-            app_state::AppErrorKind,
+            crate::AppError,
+            crate::AppErrorKind,
             server::DetailedVideo,
             server::DetailedVideoTrack,
             server::DetailedAudioTrack,
@@ -222,6 +240,68 @@ pub mod torrent;
     )
 )]
 pub struct OpenApiDoc;
+
+pub struct QueryShowProvider(&'static (dyn metadata::ShowMetadataProvider + Send + 'static + Sync));
+
+impl FromRequestParts<app_state::AppState> for QueryShowProvider {
+    type Rejection = AppError;
+
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &app_state::AppState,
+    ) -> Result<Self, Self::Rejection> {
+        let Query(provider) =
+            Query::<metadata::MetadataProvider>::from_request_parts(parts, state).await?;
+        let Some(provider) = state.providers_stack.show_provider(provider) else {
+            return Err(AppError::bad_request("requested provider is not available"));
+        };
+        Ok(Self(provider))
+    }
+}
+
+impl metadata::ProviderIdentifier for QueryShowProvider {
+    fn provider_identifier(&self) -> metadata::MetadataProvider {
+        self.0.provider_identifier()
+    }
+}
+
+#[async_trait::async_trait]
+impl metadata::ShowMetadataProvider for QueryShowProvider {
+    async fn show(
+        &self,
+        show_id: &str,
+        fetch_params: metadata::FetchParams,
+    ) -> crate::Result<metadata::ShowMetadata> {
+        self.0.show(show_id, fetch_params).await
+    }
+
+    async fn season(
+        &self,
+        show_id: &str,
+        season: usize,
+        fetch_params: metadata::FetchParams,
+    ) -> crate::Result<metadata::SeasonMetadata> {
+        self.0.season(show_id, season, fetch_params).await
+    }
+
+    async fn episode(
+        &self,
+        show_id: &str,
+        season: usize,
+        episode: usize,
+        fetch_params: metadata::FetchParams,
+    ) -> crate::Result<metadata::EpisodeMetadata> {
+        self.0.episode(show_id, season, episode, fetch_params).await
+    }
+
+    async fn show_search(
+        &self,
+        query: &str,
+        fetch_params: metadata::FetchParams,
+    ) -> crate::Result<Vec<metadata::ShowMetadata>> {
+        self.0.show_search(query, fetch_params).await
+    }
+}
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct PageQuery {
@@ -323,13 +403,13 @@ pub struct SearchQuery {
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct ContentTypeQuery {
     #[param(inline)]
-    pub content_type: metadata::ContentType,
+    pub content_type: metadata::ParentMediaType,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct OptionalContentTypeQuery {
     #[param(inline)]
-    pub content_type: Option<metadata::ContentType>,
+    pub content_type: Option<metadata::ParentMediaType>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -484,7 +564,7 @@ where
     T: serde::de::DeserializeOwned + Send,
     S: Send + Sync,
 {
-    type Rejection = axum::Json<AppError>;
+    type Rejection = AppError;
 
     async fn from_request(
         req: axum::http::Request<axum::body::Body>,
@@ -492,7 +572,10 @@ where
     ) -> std::result::Result<Self, Self::Rejection> {
         match axum::Json::<T>::from_request(req, state).await {
             Ok(axum::Json(value)) => Ok(Self(value)),
-            Err(e) => Err(axum::Json(AppError::bad_request(e.to_string()))),
+            Err(axum::extract::rejection::JsonRejection::JsonDataError(e)) => {
+                Err(AppError::unprocessable(e.to_string()))
+            }
+            Err(e) => Err(AppError::bad_request(e.to_string())),
         }
     }
 }

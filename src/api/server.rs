@@ -24,6 +24,7 @@ use uuid::Uuid;
 
 use super::{ContentTypeQuery, OptionalContentTypeQuery, ProviderQuery, StringIdQuery};
 use super::{IdQuery, SearchQuery, VariantQuery};
+use crate::AppError;
 use crate::api::api_data::LocalDataLookup;
 use crate::api::api_data::api_types::Actor;
 use crate::api::api_data::local_movie::Movie;
@@ -31,7 +32,6 @@ use crate::api::api_data::local_show::{Episode, Season, Show};
 use crate::api::{
     ContentFilterQuery, CursorQuery, OptionalTorrentIndexQuery, Path, Query, TakeQuery,
 };
-use crate::app_state::AppError;
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
 };
@@ -52,7 +52,7 @@ use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
 use crate::metadata::{
-    ContentType, EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata,
+    EpisodeMetadata, MovieMetadata, ParentMediaType, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
 };
 use crate::metadata::{ExternalIdMetadata, MetadataProvider, MetadataSearchResult};
@@ -397,7 +397,7 @@ pub enum VideoContentMetadata {
 pub async fn video_content_metadata(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
-) -> Result<Json<VideoContentMetadata>, AppError> {
+) -> crate::Result<Json<VideoContentMetadata>> {
     let video = {
         let library = app_state.library.lock().unwrap();
         library
@@ -461,7 +461,7 @@ pub async fn video_content_metadata(
 pub async fn previews(
     Path((video_id, number)): Path<(i64, usize)>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let preview_asset = PreviewAsset::new(video_id, number);
     let response = preview_asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -489,7 +489,7 @@ pub async fn watch(
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     if let Query(VariantQuery {
         variant: Some(variant),
     }) = variant
@@ -530,7 +530,7 @@ pub async fn watch_episode(
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let video_id = sqlx::query!(
         "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?;",
         episode_id
@@ -562,7 +562,7 @@ pub async fn watch_movie(
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
     range: Option<TypedHeader<Range>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let video_id = sqlx::query!(
         "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?;",
         movie_id
@@ -588,7 +588,7 @@ pub async fn watch_movie(
 pub async fn all_local_shows(
     Query(filter): Query<ContentFilterQuery>,
     State(db): State<Db>,
-) -> Result<Json<CursoredResponse<Show>>, AppError> {
+) -> crate::Result<Json<CursoredResponse<Show>>> {
     let shows = db.all_shows(filter.into()).await?;
 
     let cursor = shows.last().and_then(|s| s.local.as_ref()).map(|l| l.id);
@@ -612,7 +612,7 @@ pub async fn all_local_shows(
 pub async fn local_episode(
     Path(id): Path<i64>,
     State(db): State<Db>,
-) -> Result<Json<Episode>, AppError> {
+) -> crate::Result<Json<Episode>> {
     Ok(Json(db.get_episode_by_id(id).await?))
 }
 
@@ -631,7 +631,7 @@ pub async fn local_episode(
 pub async fn all_local_movies(
     State(db): State<Db>,
     Query(filter): Query<ContentFilterQuery>,
-) -> Result<Json<CursoredResponse<Movie>>, AppError> {
+) -> crate::Result<Json<CursoredResponse<Movie>>> {
     let movies = db.all_movies(filter.into()).await?;
     let cursor = movies.last().and_then(|s| s.local.as_ref()).map(|l| l.id);
 
@@ -657,7 +657,7 @@ pub async fn external_ids(
     Path(id): Path<String>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Query(ContentTypeQuery { content_type }): Query<ContentTypeQuery>,
-) -> Result<Json<Vec<ExternalIdMetadata>>, AppError> {
+) -> crate::Result<Json<Vec<ExternalIdMetadata>>> {
     let res = providers
         .get_external_ids(&id, content_type, provider)
         .await?;
@@ -682,14 +682,14 @@ pub async fn contents_video(
     Query(IdQuery { id }): Query<IdQuery>,
     Query(content_type): Query<ContentTypeQuery>,
     State(state): State<AppState>,
-) -> Result<Json<Vec<DetailedVideo>>, AppError> {
+) -> crate::Result<Json<Vec<DetailedVideo>>> {
     #[derive(FromRow)]
     struct VideoId {
         id: i64,
     }
 
     let video_ids = match content_type.content_type {
-        crate::metadata::ContentType::Movie => {
+        crate::metadata::ParentMediaType::Movie => {
             sqlx::query_as!(
                 VideoId,
                 "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?",
@@ -698,7 +698,7 @@ pub async fn contents_video(
             .fetch_all(&state.db.pool)
             .await
         }
-        crate::metadata::ContentType::Show => {
+        crate::metadata::ParentMediaType::Show => {
             sqlx::query_as!(
                 VideoId,
                 "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
@@ -769,7 +769,7 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Detaile
 pub async fn get_video_by_id(
     Path(id): Path<i64>,
     State(state): State<AppState>,
-) -> Result<Json<DetailedVideo>, AppError> {
+) -> crate::Result<Json<DetailedVideo>> {
     let AppState { library, db, .. } = state;
     let source = {
         let library = library.lock().unwrap();
@@ -801,7 +801,7 @@ pub async fn get_show(
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
-) -> Result<Json<Show>, AppError> {
+) -> crate::Result<Json<Show>> {
     let res = if provider.is_local() {
         db.get_show(id.parse()?).await?
     } else {
@@ -830,7 +830,7 @@ pub async fn get_movie(
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path(id): Path<String>,
-) -> Result<Json<Movie>, AppError> {
+) -> crate::Result<Json<Movie>> {
     let movie = if provider.is_local() {
         db.get_movie(id.parse()?).await?
     } else {
@@ -857,7 +857,7 @@ pub async fn get_movie(
 pub async fn show_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = PosterAsset::new(id, PosterContentType::Show);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -882,7 +882,7 @@ pub async fn show_poster(
 pub async fn season_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = PosterAsset::new(id, PosterContentType::Season);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -907,7 +907,7 @@ pub async fn season_poster(
 pub async fn show_backdrop(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = BackdropAsset::new(id, BackdropContentType::Show);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -932,7 +932,7 @@ pub async fn show_backdrop(
 pub async fn movie_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = PosterAsset::new(id, PosterContentType::Movie);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -957,7 +957,7 @@ pub async fn movie_poster(
 pub async fn movie_backdrop(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = BackdropAsset::new(id, BackdropContentType::Movie);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -982,7 +982,7 @@ pub async fn movie_backdrop(
 pub async fn episode_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = PosterAsset::new(id, PosterContentType::Episode);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -1007,7 +1007,7 @@ pub async fn episode_poster(
 pub async fn actor_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let asset = PosterAsset::new(id, PosterContentType::Actor);
     let response = asset
         .into_response(axum_extra::headers::ContentType::jpeg(), is_modified_since)
@@ -1033,7 +1033,7 @@ pub async fn actor_list(
     Query(CursorQuery { cursor }): Query<CursorQuery>,
     Query(TakeQuery { take }): Query<TakeQuery>,
     Query(SearchQuery { search }): Query<SearchQuery>,
-) -> Result<impl IntoResponse, AppError> {
+) -> crate::Result<impl IntoResponse> {
     let mut builder = db::DbQueryBuilder::default();
     DbActorsQuery::build(&mut builder);
 
@@ -1085,7 +1085,7 @@ pub async fn get_season(
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path((show_id, season)): Path<(String, usize)>,
-) -> Result<Json<Season>, AppError> {
+) -> crate::Result<Json<Season>> {
     let res = if provider.is_local() {
         db.get_season(show_id.parse()?, season).await?
     } else {
@@ -1116,7 +1116,7 @@ pub async fn get_episode(
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
     Path((show_id, season, episode)): Path<(String, usize, usize)>,
-) -> Result<Json<Episode>, AppError> {
+) -> crate::Result<Json<Episode>> {
     let res = if provider.is_local() {
         db.get_episode(show_id.parse()?, season, episode).await?
     } else {
@@ -1148,7 +1148,7 @@ pub async fn search_torrent(
     Query(content_type): Query<OptionalContentTypeQuery>,
     Query(OptionalTorrentIndexQuery { provider }): Query<OptionalTorrentIndexQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
-) -> Result<Json<Vec<Torrent>>, AppError> {
+) -> crate::Result<Json<Vec<Torrent>>> {
     if search.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -1160,10 +1160,10 @@ pub async fn search_torrent(
                 .torrent_index(p)
                 .ok_or(AppError::not_found("Provider is not found"))?;
             match content_type.content_type {
-                Some(ContentType::Show) => {
+                Some(ParentMediaType::Show) => {
                     provider.search_show_torrent(&search, &fetch_params).await?
                 }
-                Some(ContentType::Movie) => {
+                Some(ParentMediaType::Movie) => {
                     provider
                         .search_movie_torrent(&search, &fetch_params)
                         .await?
@@ -1191,7 +1191,7 @@ pub async fn search_torrent(
 pub async fn get_trending_shows(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
-) -> Result<Json<Vec<Show>>, AppError> {
+) -> crate::Result<Json<Vec<Show>>> {
     let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
@@ -1216,7 +1216,7 @@ pub async fn get_trending_shows(
 pub async fn get_trending_movies(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
-) -> Result<Json<Vec<Movie>>, AppError> {
+) -> crate::Result<Json<Vec<Movie>>> {
     let language: config::MetadataLanguage = config::CONFIG.get_value();
     let tmdb_api = providers
         .tmdb
@@ -1245,7 +1245,7 @@ pub async fn get_trending_movies(
 pub async fn search_content(
     Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
-) -> Result<Json<Vec<MetadataSearchResult>>, AppError> {
+) -> crate::Result<Json<Vec<MetadataSearchResult>>> {
     if query.search.is_empty() {
         return Ok(Json(Vec::new()));
     }
@@ -1256,7 +1256,7 @@ pub async fn search_content(
 /// Debug library files
 pub async fn library_state(
     State(app_state): State<AppState>,
-) -> Result<Json<serde_json::Value>, AppError> {
+) -> crate::Result<Json<serde_json::Value>> {
     let library = app_state.library.lock().unwrap();
     let map: serde_json::Map<String, serde_json::Value> = library
         .videos
@@ -1277,7 +1277,7 @@ pub async fn library_state(
     ),
     tag = "Videos",
 )]
-pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<StatusCode, AppError> {
+pub async fn reconciliate_lib(State(app_state): State<AppState>) -> crate::Result<StatusCode> {
     let tasks = app_state.tasks;
     let config = scan::ScanConfig::new_from_server_configuration();
     let task_id = tasks
@@ -1297,26 +1297,6 @@ pub async fn reconciliate_lib(State(app_state): State<AppState>) -> Result<Statu
         };
     });
     Ok(StatusCode::ACCEPTED)
-}
-
-/// Clear the database. For debug purposes only.
-#[utoipa::path(
-    delete,
-    path = "/api/clear_db",
-    responses(
-        (status = 200, body = String),
-    ),
-    tag = "Configuration",
-)]
-pub async fn clear_db(State(app_state): State<AppState>) -> Result<String, StatusCode> {
-    tracing::info!("Clearing database");
-    app_state
-        .db
-        .pool
-        .clear()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok("done".into())
 }
 
 #[derive(Debug, utoipa::ToSchema)]
@@ -1364,10 +1344,7 @@ where
     ),
     tag = "Videos",
 )]
-pub async fn remove_video(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
+pub async fn remove_video(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.remove_video(id).await
 }
 
@@ -1387,7 +1364,7 @@ pub async fn remove_video(
 pub async fn delete_episode(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     state.delete_episode(id).await
 }
 
@@ -1407,7 +1384,7 @@ pub async fn delete_episode(
 pub async fn delete_season(
     State(state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     state.delete_season(id).await
 }
 
@@ -1424,10 +1401,7 @@ pub async fn delete_season(
     ),
     tag = "Shows",
 )]
-pub async fn delete_show(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
+pub async fn delete_show(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_show(id).await
 }
 
@@ -1444,10 +1418,7 @@ pub async fn delete_show(
     ),
     tag = "Movies",
 )]
-pub async fn delete_movie(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> Result<(), AppError> {
+pub async fn delete_movie(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_movie(id).await
 }
 
@@ -1468,7 +1439,7 @@ pub async fn delete_movie(
 pub async fn remove_variant(
     State(state): State<AppState>,
     Path((video_id, variant_id)): Path<(i64, String)>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     state.remove_variant(video_id, &variant_id).await?;
     Ok(())
 }
@@ -1491,7 +1462,7 @@ pub async fn alter_show_metadata(
     State(db): State<Db>,
     Path(show_id): Path<i64>,
     Json(metadata): Json<ShowMetadata>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     sqlx::query!(
         "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM shows WHERE id = ?);",
         metadata.title,
@@ -1522,7 +1493,7 @@ pub async fn alter_season_metadata(
     State(db): State<Db>,
     Path((show_id, season)): Path<(i64, i64)>,
     Json(metadata): Json<SeasonMetadata>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     sqlx::query!(
         "UPDATE metadata SET plot = ? WHERE id = (SELECT metadata_id FROM seasons WHERE show_id = ? AND number = ?);",
         metadata.plot,
@@ -1554,7 +1525,7 @@ pub async fn alter_episode_metadata(
     State(db): State<Db>,
     Path((show_id, season, episode)): Path<(i64, i64, i64)>,
     Json(metadata): Json<EpisodeMetadata>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     sqlx::query!(
         r#"UPDATE metadata SET title = ?, plot = ?
         WHERE id = (
@@ -1591,7 +1562,7 @@ pub async fn alter_movie_metadata(
     State(db): State<Db>,
     Path(id): Path<i64>,
     Json(metadata): Json<MovieMetadata>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     sqlx::query!(
         "UPDATE metadata SET title = ?, plot = ? WHERE id = (SELECT metadata_id FROM movies WHERE id = ?);",
         metadata.title,
@@ -1618,7 +1589,7 @@ pub async fn alter_movie_metadata(
     ),
     tag = "Shows",
 )]
-pub async fn fix_show_metadata() -> Result<(), AppError> {
+pub async fn fix_show_metadata() -> crate::Result<()> {
     unimplemented!("Fixing show metadata is unimplemented");
 }
 
@@ -1637,7 +1608,7 @@ pub async fn fix_show_metadata() -> Result<(), AppError> {
     ),
     tag = "Movies",
 )]
-pub async fn fix_movie_metadata() -> Result<(), AppError> {
+pub async fn fix_movie_metadata() -> crate::Result<()> {
     unimplemented!("Fixing movie metadata is not implemented")
 }
 
@@ -1657,7 +1628,7 @@ pub async fn fix_movie_metadata() -> Result<(), AppError> {
     ),
     tag = "Metadata",
 )]
-pub async fn fix_metadata() -> Result<(), AppError> {
+pub async fn fix_metadata() -> crate::Result<()> {
     unimplemented!("fixing metadata is not yet implemented");
 }
 
@@ -1674,7 +1645,7 @@ pub async fn fix_metadata() -> Result<(), AppError> {
     ),
     tag = "Shows",
 )]
-pub async fn reset_show_metadata() -> Result<(), AppError> {
+pub async fn reset_show_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
@@ -1690,7 +1661,7 @@ pub async fn reset_show_metadata() -> Result<(), AppError> {
     ),
     tag = "Movies",
 )]
-pub async fn reset_movie_metadata() -> Result<(), AppError> {
+pub async fn reset_movie_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
@@ -1708,7 +1679,7 @@ pub async fn reset_movie_metadata() -> Result<(), AppError> {
     ),
     tag = "Metadata",
 )]
-pub async fn reset_metadata() -> Result<(), AppError> {
+pub async fn reset_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
@@ -1730,7 +1701,7 @@ pub async fn transcode_video(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<TranscodePayload>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     app_state.transcode_video(id, payload).await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -1751,7 +1722,7 @@ pub async fn transcode_video(
 pub async fn generate_previews(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
-) -> Result<StatusCode, AppError> {
+) -> crate::Result<StatusCode> {
     app_state.generate_previews(id).await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -1769,7 +1740,7 @@ pub async fn generate_previews(
     ),
     tag = "Videos",
 )]
-pub async fn delete_previews(Path(id): Path<i64>) -> Result<(), AppError> {
+pub async fn delete_previews(Path(id): Path<i64>) -> crate::Result<()> {
     let previews_dir = PreviewsDirAsset::new(id);
     previews_dir.delete_dir().await?;
     Ok(())
@@ -1835,7 +1806,7 @@ pub async fn transcode_tasks(
 pub async fn cancel_previews_task(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     tasks.previews_tasks.cancel_task(task_id)?;
     Ok(())
 }
@@ -1857,7 +1828,7 @@ pub async fn cancel_previews_task(
 pub async fn stop_watch_session(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
-) -> Result<(), AppError> {
+) -> crate::Result<()> {
     tasks.watch_sessions.cancel_task(task_id)?;
     Ok(())
 }
@@ -1961,7 +1932,7 @@ pub async fn server_capabilities() -> Json<Capabilities> {
 )]
 pub async fn update_server_configuration(
     Json(new_config): Json<serde_json::Value>,
-) -> Result<Json<ConfigurationApplyResult>, AppError> {
+) -> crate::Result<Json<ConfigurationApplyResult>> {
     let result = config::CONFIG.apply_json(new_config)?;
     let table = config::CONFIG.construct_table();
 
@@ -1981,7 +1952,7 @@ pub async fn update_server_configuration(
     ),
     tag = "Configuration",
 )]
-pub async fn reset_server_configuration() -> Result<(), AppError> {
+pub async fn reset_server_configuration() -> crate::Result<()> {
     config::CONFIG.reset_config_values();
 
     let table = config::CONFIG.construct_table();
@@ -2132,7 +2103,7 @@ pub async fn start_direct_stream(
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
     Json(payload): Json<StartDirectStreamRequest>,
-) -> Result<Json<StartWatchSessionResponse>, AppError> {
+) -> crate::Result<Json<StartWatchSessionResponse>> {
     let watch_sessions = &app_state.tasks.watch_sessions;
     let source = app_state.get_source_by_id(video_id)?;
     let total_duration = source.video.fetch_duration().await.map(Into::into)?;
@@ -2172,7 +2143,7 @@ pub async fn start_hls_stream(
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
     Json(payload): Json<StartHlsStreamRequest>,
-) -> Result<Json<StartWatchSessionResponse>, AppError> {
+) -> crate::Result<Json<StartWatchSessionResponse>> {
     let tracker = app_state.tasks.tracker.clone();
     let watch_sessions = &app_state.tasks.watch_sessions;
     let source = app_state.get_source_by_id(video_id)?;
@@ -2256,7 +2227,7 @@ pub async fn start_hls_stream(
 pub async fn hls_manifest(
     Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
-) -> Result<String, AppError> {
+) -> crate::Result<String> {
     let sessions = tasks.watch_sessions.tasks.lock().unwrap();
     let job = sessions
         .iter()
@@ -2291,7 +2262,7 @@ pub async fn hls_manifest(
 pub async fn hls_init(
     Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
-) -> Result<axum::response::Response, AppError> {
+) -> crate::Result<axum::response::Response> {
     use axum_extra::headers::{HeaderMap, HeaderMapExt};
     use std::str::FromStr;
     use tokio::fs::File;
@@ -2346,7 +2317,7 @@ pub async fn hls_init(
 pub async fn hls_segment(
     Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
     State(tasks): State<&'static TaskResource>,
-) -> Result<axum::response::Response, AppError> {
+) -> crate::Result<axum::response::Response> {
     use axum_extra::headers::{HeaderMap, HeaderMapExt};
     use std::str::FromStr;
     use tokio::fs::File;

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "select name from lists where id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "name",
+        "ordinal": 0,
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1e8b3926e6143513cb6c2435306dccf590028b554d54b9389034c7867b73a912"
+}

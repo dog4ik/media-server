@@ -1,10 +1,11 @@
-use std::{collections::HashMap, error::Error, fmt::Display, num::ParseIntError, sync::Mutex};
+use std::{collections::HashMap, sync::Mutex};
 
-use axum::{Json, extract::FromRef, http::StatusCode, response::IntoResponse};
+use axum::extract::FromRef;
 use tokio::fs;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    AppError,
     config::{self},
     db::{Db, DbActions},
     ffmpeg::{self, FFmpegRunningJob, TranscodeJob},
@@ -31,137 +32,13 @@ pub struct AppState {
     pub cancelation_token: CancellationToken,
 }
 
-#[derive(Debug, Clone, serde::Serialize, utoipa::ToSchema)]
-pub struct AppError {
-    pub message: String,
-    #[serde(skip)]
-    pub kind: AppErrorKind,
-}
-
-#[derive(Debug, Clone, utoipa::ToSchema, PartialEq)]
-pub enum AppErrorKind {
-    InternalError,
-    NotFound,
-    Duplicate,
-    BadRequest,
-}
-
-impl Error for AppError {}
-
-impl Display for AppError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind {
-            AppErrorKind::InternalError => write!(f, "Internal Error: {}", self.message),
-            AppErrorKind::NotFound => write!(f, "Not Found Error: {}", self.message),
-            AppErrorKind::Duplicate => write!(f, "Duplicate Error: {}", self.message),
-            AppErrorKind::BadRequest => write!(f, "Bad Request: {}", self.message),
-        }
-    }
-}
-
-impl From<AppErrorKind> for StatusCode {
-    fn from(val: AppErrorKind) -> Self {
-        match val {
-            AppErrorKind::InternalError => StatusCode::INTERNAL_SERVER_ERROR,
-            AppErrorKind::NotFound => StatusCode::NOT_FOUND,
-            AppErrorKind::Duplicate => StatusCode::BAD_REQUEST,
-            AppErrorKind::BadRequest => StatusCode::BAD_REQUEST,
-        }
-    }
-}
-
-impl From<anyhow::Error> for AppError {
-    fn from(err: anyhow::Error) -> Self {
-        Self {
-            message: err.to_string(),
-            kind: AppErrorKind::InternalError,
-        }
-    }
-}
-
-impl From<sqlx::Error> for AppError {
-    fn from(value: sqlx::Error) -> Self {
-        match value {
-            sqlx::Error::RowNotFound => AppError {
-                message: "Database row not found".to_string(),
-                kind: AppErrorKind::NotFound,
-            },
-            rest => AppError {
-                message: format!("{}", rest),
-                kind: AppErrorKind::InternalError,
-            },
-        }
-    }
-}
-
-impl From<std::io::Error> for AppError {
-    fn from(value: std::io::Error) -> Self {
-        match value.kind() {
-            std::io::ErrorKind::NotFound => AppError {
-                message: value.to_string(),
-                kind: AppErrorKind::NotFound,
-            },
-            _ => AppError {
-                message: value.to_string(),
-                kind: AppErrorKind::InternalError,
-            },
-        }
-    }
-}
-
-impl From<ParseIntError> for AppError {
-    fn from(value: ParseIntError) -> Self {
-        AppError {
-            message: value.to_string(),
-            kind: AppErrorKind::BadRequest,
-        }
-    }
-}
-
-impl AppError {
-    pub fn new(message: impl AsRef<str>, kind: AppErrorKind) -> Self {
-        Self {
-            message: message.as_ref().into(),
-            kind,
-        }
-    }
-
-    pub fn not_found(msg: impl AsRef<str>) -> AppError {
-        AppError {
-            message: msg.as_ref().into(),
-            kind: AppErrorKind::NotFound,
-        }
-    }
-
-    pub fn bad_request(msg: impl AsRef<str>) -> AppError {
-        AppError {
-            message: msg.as_ref().into(),
-            kind: AppErrorKind::BadRequest,
-        }
-    }
-
-    pub fn internal_error(msg: impl AsRef<str>) -> AppError {
-        AppError {
-            message: msg.as_ref().into(),
-            kind: AppErrorKind::InternalError,
-        }
-    }
-}
-
-impl IntoResponse for AppError {
-    fn into_response(self) -> axum::response::Response {
-        let status: StatusCode = self.kind.clone().into();
-        (status, Json(self)).into_response()
-    }
-}
-
 impl AppState {
     pub fn metadata_fetch_params(&self) -> FetchParams {
         let language: config::MetadataLanguage = config::CONFIG.get_value();
         FetchParams { lang: language.0 }
     }
 
-    pub fn get_source_by_id(&self, id: i64) -> Result<Source, AppError> {
+    pub fn get_source_by_id(&self, id: i64) -> crate::Result<Source> {
         let library = self.library.lock().unwrap();
         library
             .get_source(id)
@@ -170,7 +47,7 @@ impl AppState {
     }
 
     #[tracing::instrument(skip(self, id), fields(video_id = id))]
-    pub async fn remove_video(&self, id: i64) -> Result<(), AppError> {
+    pub async fn remove_video(&self, id: i64) -> crate::Result<()> {
         let source = self.get_source_by_id(id)?;
         source
             .video
@@ -187,7 +64,7 @@ impl AppState {
     }
 
     #[tracing::instrument(skip(self, id), fields(movie_id = id))]
-    pub async fn delete_movie(&self, id: i64) -> Result<(), AppError> {
+    pub async fn delete_movie(&self, id: i64) -> crate::Result<()> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos JOIN movies ON movies.metadata_id = videos.metadata_id WHERE movies.id = ?",
@@ -210,7 +87,7 @@ impl AppState {
     }
 
     #[tracing::instrument(skip(self, id), fields(season_id = id))]
-    pub async fn delete_season(&self, id: i64) -> Result<(), AppError> {
+    pub async fn delete_season(&self, id: i64) -> crate::Result<()> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.season_id = ?",
@@ -233,7 +110,7 @@ impl AppState {
     }
 
     #[tracing::instrument(skip(self, id), fields(show_id = id))]
-    pub async fn delete_show(&self, id: i64) -> Result<(), AppError> {
+    pub async fn delete_show(&self, id: i64) -> crate::Result<()> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos
@@ -259,7 +136,7 @@ WHERE seasons.show_id = ?",
     }
 
     #[tracing::instrument(skip(self, id), fields(episode_id = id))]
-    pub async fn delete_episode(&self, id: i64) -> Result<(), AppError> {
+    pub async fn delete_episode(&self, id: i64) -> crate::Result<()> {
         let mut tx = self.db.begin().await?;
         let ids = sqlx::query!(
             "SELECT videos.id FROM videos JOIN episodes ON episodes.metadata_id = videos.metadata_id WHERE episodes.id = ?",
@@ -282,7 +159,7 @@ WHERE seasons.show_id = ?",
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> Result<(), AppError> {
+    pub async fn remove_variant(&self, video_id: i64, variant_id: &str) -> crate::Result<()> {
         let asset = VariantAsset::new(video_id, variant_id.to_string());
         asset.delete_file().await?;
         if let Some(source) = self.library.lock().unwrap().get_source_mut(video_id) {
@@ -301,7 +178,7 @@ WHERE seasons.show_id = ?",
         &self,
         video_id: i64,
         subs_track: usize,
-    ) -> Result<String, AppError> {
+    ) -> crate::Result<String> {
         let video = self.get_source_by_id(video_id)?.video;
         let metadata = video.metadata().await?;
         let track_number = {
@@ -322,7 +199,7 @@ WHERE seasons.show_id = ?",
         &self,
         video_id: i64,
         payload: TranscodePayload,
-    ) -> Result<(), AppError> {
+    ) -> crate::Result<()> {
         let source = self.get_source_by_id(video_id)?;
         let video_metadata = source.video.metadata().await?;
         let variants_dir = source.variants_dir();
@@ -375,7 +252,7 @@ WHERE seasons.show_id = ?",
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn generate_previews(&self, video_id: i64) -> Result<(), AppError> {
+    pub async fn generate_previews(&self, video_id: i64) -> crate::Result<()> {
         let source = self.get_source_by_id(video_id)?;
         let video_metadata = source.video.metadata().await?;
         let previews_dir = source.previews_dir();
@@ -414,10 +291,10 @@ WHERE seasons.show_id = ?",
     }
 
     #[tracing::instrument(skip(self))]
-    pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> Result<(), AppError> {
+    pub async fn detect_intros(&self, show_id: i64, season_number: i64) -> crate::Result<()> {
         let AppState { db, library, .. } = self;
         let video_ids = sqlx::query!(
-            r#"SELECT min(videos.id) as "video_id!", episodes.id as "episode_id!" FROM episodes
+            r#"SELECT min(videos.id) as "video_id!: i64", episodes.id as "episode_id!" FROM episodes
         JOIN seasons ON seasons.id = episodes.season_id
         JOIN videos ON videos.metadata_id = episodes.metadata_id
         WHERE seasons.show_id = ? AND seasons.number = ?
@@ -462,7 +339,7 @@ WHERE seasons.show_id = ?",
         &self,
         task_id: uuid::Uuid,
         config: scan::ScanConfig,
-    ) -> Result<(), AppError> {
+    ) -> crate::Result<()> {
         self.partial_refresh().await;
         let progress = scan::scan_progress::ScanProgressEmitter::new(ProgressDispatcher::new(
             &self.tasks.library_scan_tasks,
@@ -550,6 +427,12 @@ impl FromRef<AppState> for &'static TorrentClient {
 impl FromRef<AppState> for Db {
     fn from_ref(app_state: &AppState) -> Db {
         app_state.db.clone()
+    }
+}
+
+impl FromRef<AppState> for &'static Db {
+    fn from_ref(app_state: &AppState) -> &'static Db {
+        app_state.db
     }
 }
 

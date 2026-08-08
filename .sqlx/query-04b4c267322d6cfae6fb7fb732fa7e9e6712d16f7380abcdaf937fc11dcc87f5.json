@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO history\n            (time, is_finished, metadata_id, update_time)\n            VALUES (?, ?, ?, ?) RETURNING id;",
+  "query": "INSERT INTO lists (name, description, created_at, updated_at) VALUES (?, ?, ?, ?) RETURNING id;",
   "describe": {
     "columns": [
       {
@@ -16,5 +16,5 @@
       false
     ]
   },
-  "hash": "3e88255f364e78c57c8fa24aa02fd47987c876b284f6c1b30cafc3b1af8ef5cb"
+  "hash": "04b4c267322d6cfae6fb7fb732fa7e9e6712d16f7380abcdaf937fc11dcc87f5"
 }

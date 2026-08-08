@@ -1,16 +1,17 @@
 use std::time::Duration;
 
 use crate::{
+    OffsetDateTime,
     api::{
         api_data::{
-            api_types::{Actor, History},
+            api_types::{Actor, CompactList, History},
             local_actor,
             local_movie::{LocalMovieData, Movie},
             local_show::{Episode, LocalEpisodeData, LocalShowData, Show},
         },
         server::Intro,
     },
-    db::{self, DbActor, DbQueryBuilder},
+    db::{self, DbActor, DbQueryBuilder, ListKind},
     metadata::{ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider},
 };
 
@@ -28,12 +29,14 @@ pub struct DbShowQuery {
     pub external_ids: Option<Vec<ExternalIdsQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub genres: Option<Vec<GenreQueryJson>>,
+    #[sqlx(json, default, nullish)]
+    pub lists: Option<Vec<ListsQueryJson>>,
 }
 
 impl DbShowQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {show}, {metadata}, {cast}, {external_ids}, {genres},
+            "select {show}, {metadata}, {cast}, {external_ids}, {genres}, {lists},
             (select count(episodes.id) from episodes join seasons on episodes.season_id = seasons.id where seasons.show_id = shows.id) as episode_count,
             (select group_concat(seasons.number) from seasons where seasons.show_id = shows.id) as seasons
             from shows
@@ -43,6 +46,7 @@ impl DbShowQuery {
             cast = CastQueryJson::SQL_JSON_AGGR,
             external_ids = ExternalIdsQueryJson::SQL_JSON_AGGR,
             genres = GenreQueryJson::SQL_JSON_AGGR,
+            lists = ListsQueryJson::SQL_JSON_AGGR,
         ));
     }
 }
@@ -57,6 +61,7 @@ impl From<DbShowQuery> for Show {
             cast,
             external_ids,
             genres,
+            lists,
         }: DbShowQuery,
     ) -> Self {
         let locale_metadata = metadata.original_language.zip(metadata.original_title).map(
@@ -89,6 +94,7 @@ impl From<DbShowQuery> for Show {
             local: Some(LocalShowData {
                 id: show.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                lists: lists.into_iter().flatten().map(Into::into).collect(),
             }),
         }
     }
@@ -141,6 +147,48 @@ impl From<CastQueryJson> for Actor {
             imdb_id,
             character,
             local: Some(local_actor::LocalActorData { id }),
+        }
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct ListsQueryJson {
+    pub id: i64,
+    pub name: String,
+    pub kind: ListKind,
+    pub updated_at: OffsetDateTime,
+    pub added_at: OffsetDateTime,
+}
+
+impl ListsQueryJson {
+    pub const SQL_JSON_AGGR: &str = "coalesce((select json_group_array(json_object(
+'id', lists.id,
+'name', lists.name,
+'kind', lists.kind,
+'updated_at', strftime('%Y-%m-%dT%H:%M:%SZ', lists.updated_at),
+'added_at', strftime('%Y-%m-%dT%H:%M:%SZ', list_items.created_at)
+))
+from list_items
+join lists on lists.id = list_items.list_id
+where list_items.metadata_id = metadata.id), json('null')) as lists ";
+}
+
+impl From<ListsQueryJson> for CompactList {
+    fn from(
+        ListsQueryJson {
+            id,
+            name,
+            kind,
+            updated_at,
+            added_at,
+        }: ListsQueryJson,
+    ) -> Self {
+        Self {
+            id,
+            name,
+            kind,
+            updated_at,
+            added_at,
         }
     }
 }
@@ -214,6 +262,9 @@ pub struct DbMovieQuery {
     pub external_ids: Option<Vec<ExternalIdsQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub genres: Option<Vec<GenreQueryJson>>,
+    #[sqlx(json, default, nullish)]
+    pub lists: Option<Vec<ListsQueryJson>>,
+    pub videos_count: i64,
 }
 
 impl From<DbMovieQuery> for Movie {
@@ -225,6 +276,8 @@ impl From<DbMovieQuery> for Movie {
             cast,
             external_ids,
             genres,
+            lists,
+            videos_count,
         }: DbMovieQuery,
     ) -> Self {
         Self {
@@ -252,6 +305,9 @@ impl From<DbMovieQuery> for Movie {
             local: Some(LocalMovieData {
                 id: movie.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                lists: lists.into_iter().flatten().map(Into::into).collect(),
+                videos_count,
+                local_duration: Duration::from_secs(movie.duration as u64).into(),
                 history: history.id.map(|id| History {
                     id,
                     time: history.time,
@@ -266,7 +322,8 @@ impl From<DbMovieQuery> for Movie {
 impl DbMovieQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {metadata}, {history}, {movie}, {actors}, {external_ids}, {genres}
+            "select {metadata}, {history}, {movie}, {actors}, {external_ids}, {genres}, {lists},
+            (select count(*) from videos where videos.metadata_id = movies.metadata_id) as videos_count
             from movies
             join metadata on metadata.id = movies.metadata_id
             left join history on history.metadata_id = metadata.id",
@@ -276,6 +333,7 @@ impl DbMovieQuery {
             actors = CastQueryJson::SQL_JSON_AGGR,
             external_ids = ExternalIdsQueryJson::SQL_JSON_AGGR,
             genres = GenreQueryJson::SQL_JSON_AGGR,
+            lists = ListsQueryJson::SQL_JSON_AGGR,
         ));
     }
 }
@@ -360,26 +418,66 @@ impl From<DbActorsQuery> for Actor {
     }
 }
 
+/// Same as [`DbEpisodeQuery`] but queries extra show columns
+///
+/// Separated because fetching episode with show data is more expensive
+#[derive(Debug, sqlx::FromRow)]
+pub struct DbFullEpisodeQuery {
+    #[sqlx(flatten)]
+    pub episode: DbEpisodeQuery,
+    pub show_id: i64,
+    pub show_title: String,
+}
+
+impl DbFullEpisodeQuery {
+    pub fn build(builder: &mut DbQueryBuilder) {
+        builder.push(format_args!(
+            "select {episode}, {metadata}, {history}, {intro}, {cast}, {lists},
+            seasons.number as season_number,
+            seasons.show_id, show_metadata.title as show_title,
+            (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
+            from episodes
+            join metadata on metadata.id = episodes.metadata_id
+            left join history on history.metadata_id = episodes.metadata_id
+            left join intros on intros.episode_id = episodes.id
+            join seasons on seasons.id = episodes.season_id
+            join shows on shows.id = seasons.show_id
+            join metadata as show_metadata on show_metadata.id = shows.metadata_id
+            ",
+            episode = db::DbEpisode::SQL,
+            metadata = db::DbMetadata::SQL,
+            history = db::DbHistory::SQL,
+            intro = db::DbIntro::SQL,
+            cast = CastQueryJson::SQL_JSON_AGGR,
+            lists = ListsQueryJson::SQL_JSON_AGGR,
+        ));
+    }
+}
+
 #[derive(Debug, sqlx::FromRow)]
 pub struct DbEpisodeQuery {
-    season_number: i64,
+    pub season_number: i64,
     #[sqlx(flatten)]
     pub episode: db::DbEpisode,
     #[sqlx(flatten)]
     pub metadata: db::DbMetadata,
     #[sqlx(json, default, nullish)]
     pub cast: Option<Vec<CastQueryJson>>,
+    #[sqlx(json, default, nullish)]
+    pub lists: Option<Vec<ListsQueryJson>>,
     #[sqlx(flatten, default)]
     pub history: db::DbHistory,
     #[sqlx(flatten, default)]
     pub intro: db::DbIntro,
+    pub videos_count: i64,
 }
 
 impl DbEpisodeQuery {
     pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
-            "select {episode}, {metadata}, {history}, {intro}, {cast},
-            seasons.number as season_number
+            "select {episode}, {metadata}, {history}, {intro}, {cast}, {lists},
+            seasons.number as season_number,
+            (select count(*) from videos where videos.metadata_id = episodes.metadata_id) as videos_count
             from episodes
             join metadata on metadata.id = episodes.metadata_id
             left join history on history.metadata_id = episodes.metadata_id
@@ -391,6 +489,7 @@ impl DbEpisodeQuery {
             history = db::DbHistory::SQL,
             intro = db::DbIntro::SQL,
             cast = CastQueryJson::SQL_JSON_AGGR,
+            lists = ListsQueryJson::SQL_JSON_AGGR,
         ));
     }
 }
@@ -402,8 +501,10 @@ impl From<DbEpisodeQuery> for Episode {
             episode,
             metadata,
             cast,
+            lists,
             history,
             intro,
+            videos_count,
         }: DbEpisodeQuery,
     ) -> Self {
         Episode {
@@ -420,6 +521,8 @@ impl From<DbEpisodeQuery> for Episode {
             local: Some(LocalEpisodeData {
                 id: episode.id.unwrap(),
                 metadata_id: metadata.id.unwrap(),
+                lists: lists.into_iter().flatten().map(Into::into).collect(),
+                videos_count,
                 intro: intro.id.map(|_| Intro {
                     start_sec: intro.start_sec,
                     end_sec: intro.end_sec,

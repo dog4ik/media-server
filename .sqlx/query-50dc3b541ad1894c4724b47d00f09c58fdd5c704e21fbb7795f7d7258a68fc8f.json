@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT seasons.id, seasons.number, seasons.metadata_id,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date\n                FROM seasons\n                JOIN metadata ON metadata.id = seasons.metadata_id\n                WHERE seasons.show_id = ? AND seasons.number = ?",
+  "query": "select seasons.id, seasons.number, seasons.metadata_id,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date\n                from seasons\n                join metadata on metadata.id = seasons.metadata_id\n                where seasons.show_id = ? and seasons.number = ?",
   "describe": {
     "columns": [
       {
@@ -52,5 +52,5 @@
       true
     ]
   },
-  "hash": "81166db760dd77bfce8a3c4268d1c2d2042a0465c94f27d841644bddd2672af0"
+  "hash": "50dc3b541ad1894c4724b47d00f09c58fdd5c704e21fbb7795f7d7258a68fc8f"
 }
