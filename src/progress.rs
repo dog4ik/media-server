@@ -112,6 +112,18 @@ impl<T: TaskTrait> TaskStorage<T> {
         let _ = self.progress_channel.0.send(notification);
     }
 
+    /// Send the task progress when the tasks lock is already held by the caller.
+    pub fn send_task_progress(&self, task: &mut Task<T>, status: ProgressStatus<T>) {
+        if let ProgressStatus::Pending { progress } = &status {
+            task.latest_progress = Some(progress.clone());
+        }
+        let notification = Notification {
+            task_progress: T::into_progress(status),
+            activity_id: task.id,
+        };
+        let _ = self.progress_channel.0.send(notification);
+    }
+
     /// Send the task progress and apply the necessary update to the task state.
     ///
     /// Acquires lock once

@@ -11,48 +11,52 @@ pub struct TrackerStats {
 }
 
 pub trait ProgressConsumer: Send + 'static {
-    fn consume_progress(&mut self, progress: Progress);
+    fn consume_progress(
+        &mut self,
+        progress: Progress,
+    ) -> impl std::future::Future<Output = ()> + Send;
 }
 
-impl<F> ProgressConsumer for F
+impl<T, F> ProgressConsumer for T
 where
-    F: FnMut(Progress) + Send + 'static,
+    F: std::future::Future + Send + 'static,
+    T: Fn(Progress) -> F + Send + 'static,
 {
-    fn consume_progress(&mut self, progress: Progress) {
-        self(progress);
+    async fn consume_progress(&mut self, progress: Progress) {
+        self(progress).await;
     }
 }
 
 impl ProgressConsumer for std::sync::mpsc::Sender<Progress> {
-    fn consume_progress(&mut self, progress: Progress) {
+    async fn consume_progress(&mut self, progress: Progress) {
         let _ = self.send(progress);
     }
 }
 
 impl ProgressConsumer for tokio::sync::mpsc::Sender<Progress> {
-    fn consume_progress(&mut self, progress: Progress) {
+    async fn consume_progress(&mut self, progress: Progress) {
         let _ = self.try_send(progress);
     }
 }
 
 impl ProgressConsumer for tokio::sync::broadcast::Sender<Progress> {
-    fn consume_progress(&mut self, progress: Progress) {
+    async fn consume_progress(&mut self, progress: Progress) {
         let _ = self.send(progress);
     }
 }
 
 impl ProgressConsumer for tokio::sync::watch::Sender<Progress> {
-    fn consume_progress(&mut self, progress: Progress) {
+    async fn consume_progress(&mut self, progress: Progress) {
         let _ = self.send(progress);
     }
 }
 
 impl ProgressConsumer for flume::Sender<Progress> {
-    fn consume_progress(&mut self, progress: Progress) {
+    async fn consume_progress(&mut self, progress: Progress) {
         let _ = self.send(progress);
     }
 }
 
 impl ProgressConsumer for () {
-    fn consume_progress(&mut self, _progress: Progress) {}
+    async fn consume_progress(&mut self, _progress: Progress) {}
 }

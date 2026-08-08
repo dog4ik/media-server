@@ -357,12 +357,18 @@ pub struct TorrentHandle {
     pub download_handle: DownloadHandle,
 }
 
+/// Pieces that the torrent finished downloading during a single progress tick.
+#[derive(Debug, Clone)]
+pub struct FinishedPieces {
+    pub info_hash: [u8; 20],
+    pub pieces: Vec<usize>,
+}
+
 #[allow(async_fn_in_trait)]
 pub trait TorrentManager {
     async fn create_torrent(&self, params: DownloadParams) -> anyhow::Result<()>;
     async fn read_torrents(&self) -> anyhow::Result<Vec<DownloadParams>>;
-    async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()>;
-    async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()>;
+    async fn update_torrents(&self, updates: &[FinishedPieces]) -> anyhow::Result<()>;
     async fn delete_torrent(&self, hash: &[u8; 20]) -> anyhow::Result<()>;
     async fn delete_torrents(
         &self,
@@ -423,22 +429,19 @@ impl TorrentManager for Db {
         Ok(downloads)
     }
 
-    async fn update_torrent(&self, hash: &[u8; 20], new_pieces: &[usize]) -> anyhow::Result<()> {
-        // BUG: This code introduces race condition.
-        // ensure that it is called not in parallel
-        let torrent = self.get_torrent_by_info_hash(hash).await?;
-        let mut bf = torrent::BitField(torrent.bitfield);
-        for piece in new_pieces {
-            bf.add(*piece).unwrap();
+    async fn update_torrents(&self, updates: &[FinishedPieces]) -> anyhow::Result<()> {
+        let mut tx = self.begin_with("BEGIN IMMEDIATE").await?;
+        for update in updates {
+            let torrent = tx.get_torrent_by_info_hash(&update.info_hash).await?;
+            let mut bf = torrent::BitField(torrent.bitfield);
+            for &piece in &update.pieces {
+                bf.add(piece)?;
+            }
+            tracing::debug!("Applying {} pieces to bitfield", update.pieces.len());
+            tx.update_torrent_by_info_hash(&update.info_hash, &bf.0)
+                .await?;
         }
-        tracing::debug!("Applying {} pieces to bitfield", new_pieces.len());
-        self.update_torrent_by_info_hash(hash, &bf.0).await?;
-        Ok(())
-    }
-
-    async fn update_pieces(&self, hash: &[u8; 20], bitfield: &[u8]) -> anyhow::Result<()> {
-        tracing::debug!("Saving torrent bitfield");
-        self.update_torrent_by_info_hash(hash, bitfield).await?;
+        tx.commit().await?;
         Ok(())
     }
 
@@ -502,12 +505,6 @@ pub struct TorrentProgress {
 #[derive(Debug, Clone)]
 pub struct TorrentProgressChannel(broadcast::Sender<Arc<Progress>>);
 
-impl torrent::ProgressConsumer for TorrentProgressChannel {
-    fn consume_progress(&mut self, progress: torrent::Progress) {
-        self.send(progress.into());
-    }
-}
-
 impl Default for TorrentProgressChannel {
     fn default() -> Self {
         Self::new()
@@ -520,8 +517,8 @@ impl TorrentProgressChannel {
         Self(tx)
     }
 
-    pub fn send(&self, progress: Progress) {
-        let _ = self.0.send(Arc::new(progress));
+    pub fn send(&self, progress: Arc<Progress>) {
+        let _ = self.0.send(progress);
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<Arc<Progress>> {
@@ -539,83 +536,72 @@ pub struct TorrentClient {
 }
 
 async fn handle_progress(
-    progress_broadcast: TorrentProgressChannel,
+    Progress {
+        session_update,
+        changed_torrents,
+        tick_num,
+        ..
+    }: &Progress,
     tasks: &'static TaskResource,
     torrents: Arc<Mutex<Vec<PendingTorrent>>>,
     manager: impl TorrentManager,
 ) {
-    let mut sub = progress_broadcast.subscribe();
-    loop {
-        let progress = match sub.recv().await {
-            Ok(progress) => progress,
-            Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!("Torrent progress persister lagged, dropped {n} messages");
-                continue;
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        };
-        let Progress {
-            session_update,
-            changed_torrents,
-            tick_num,
-            ..
-        } = progress.as_ref();
-        tracing::debug!(
-            tick_num,
-            connected_peers = ?session_update.as_ref().map(|v| v.connected_peers),
-            "Received torrent progress"
-        );
-        let mut new_pieces = Vec::new();
+    tracing::debug!(
+        tick_num,
+        connected_peers = ?session_update.as_ref().map(|v| v.connected_peers),
+        "Received torrent progress"
+    );
+    let mut finished_pieces = Vec::new();
+
+    {
+        let pending_torrents = torrents.lock().unwrap();
+        let mut torrent_tasks = tasks.torrent_tasks.tasks.lock().unwrap();
         for torrent in changed_torrents {
-            for event in &torrent.events {
-                if let ProgressEvent::StoragePiece(StoragePieceEvent {
-                    piece,
-                    piece_event: StoragePieceEventKind::Finished,
-                }) = event
-                {
-                    new_pieces.push(*piece);
-                }
-            }
-            if !new_pieces.is_empty() {
-                if let Err(e) = manager
-                    .update_torrent(&torrent.info_hash, &new_pieces)
-                    .await
-                {
-                    tracing::error!("Failed to update torrent state: {e}");
-                    continue;
-                };
-            }
-            new_pieces.clear();
-            let (progress, info_hash) = {
-                let torrents = torrents.lock().unwrap();
-                let Some(pending_torrent) =
-                    torrents.iter().find(|t| t.info_hash == torrent.info_hash)
-                else {
-                    tracing::error!(
-                        "Torrent with info_hash {} is not found",
-                        utils::stringify_info_hash(&torrent.info_hash)
-                    );
-                    continue;
-                };
-                (
-                    CompactTorrentProgress::new(torrent, pending_torrent.torrent_size),
-                    pending_torrent.info_hash,
-                )
-            };
-            let task_id = tasks
-                .torrent_tasks
-                .tasks
-                .lock()
-                .unwrap()
+            let pieces: Vec<usize> = torrent
+                .events
                 .iter()
-                .find(|t| t.kind.info_hash == info_hash)
-                .map(|t| t.id);
-            if let Some(task_id) = task_id {
-                tasks
-                    .torrent_tasks
-                    .send_progress(task_id, ProgressStatus::Pending { progress });
+                .filter_map(|event| match event {
+                    ProgressEvent::StoragePiece(StoragePieceEvent {
+                        piece,
+                        piece_event: StoragePieceEventKind::Finished,
+                    }) => Some(*piece),
+                    _ => None,
+                })
+                .collect();
+            if !pieces.is_empty() {
+                finished_pieces.push(FinishedPieces {
+                    info_hash: torrent.info_hash,
+                    pieces,
+                });
             }
+
+            let Some(pending_torrent) = pending_torrents
+                .iter()
+                .find(|t| t.info_hash == torrent.info_hash)
+            else {
+                tracing::error!(
+                    "Torrent with info_hash {} is not found",
+                    utils::stringify_info_hash(&torrent.info_hash)
+                );
+                continue;
+            };
+            let Some(task) = torrent_tasks
+                .iter_mut()
+                .find(|t| t.kind.info_hash == torrent.info_hash)
+            else {
+                continue;
+            };
+            let progress = CompactTorrentProgress::new(torrent, pending_torrent.torrent_size);
+            tasks
+                .torrent_tasks
+                .send_task_progress(task, ProgressStatus::Pending { progress });
         }
+    }
+
+    if !finished_pieces.is_empty() {
+        if let Err(e) = manager.update_torrents(&finished_pieces).await {
+            tracing::error!("Failed to update torrent state: {e}");
+        };
     }
 }
 
@@ -632,14 +618,23 @@ impl TorrentClient {
             ..Default::default()
         };
         let progress_broadcast = TorrentProgressChannel::new();
-        let client = torrent::Client::new(config, progress_broadcast.clone()).await?;
         let torrents = Arc::new(Mutex::new(Vec::new()));
-        tokio::spawn(handle_progress(
-            progress_broadcast.clone(),
-            tasks,
-            torrents.clone(),
-            manager.clone(),
-        ));
+        let dyn_handler = {
+            let torrents = torrents.clone();
+            let manager = manager.clone();
+            let progress_broadcast = progress_broadcast.clone();
+            move |p: torrent::Progress| {
+                let torrents = torrents.clone();
+                let manager = manager.clone();
+                let progress_broadcast = progress_broadcast.clone();
+                let progress: Arc<Progress> = Arc::new(Progress::from(p));
+                progress_broadcast.send(progress.clone());
+                async move {
+                    handle_progress(&progress, tasks, torrents, manager).await;
+                }
+            }
+        };
+        let client = torrent::Client::new(config, dyn_handler).await?;
         Ok(Self {
             client,
             resolved_magnet_links: Default::default(),

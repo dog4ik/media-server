@@ -180,7 +180,7 @@ impl<T: ProgressConsumer> Session<T> {
             tick_num: self.tick_num,
         };
         if !progress.is_empty() {
-            self.progress_consumer.consume_progress(progress);
+            self.progress_consumer.consume_progress(progress).await;
         }
     }
 
@@ -212,65 +212,64 @@ impl<T: ProgressConsumer> Session<T> {
                 }
             }
 
-            tracing::debug_span!(parent: None, "torrent_session_tick", tick_num = %self.tick_num)
-                .in_scope(|| {
-                    let mut tick_context = TickContext {
-                        allowed_connections: u8::MAX as usize,
-                        tick_start: std::time::Instant::now(),
-                        events: TorrentTickEvents::new(),
-                        tick_num: self.tick_num,
-                        tick_interval: self.config.tick_interval,
-                        ban_list: &self.ban_list,
-                    };
-                    for download in &mut self.torrent_list.items {
-                        let downloaded_before = download.total_download();
-                        let uploaded_before = download.total_uploaded();
-                        download.tick(&mut tick_context);
-                        let downloaded_after = download.total_download();
-                        let uploaded_after = download.total_uploaded();
-                        self.metrics.downloaded += downloaded_after - downloaded_before;
-                        self.metrics.uploaded += uploaded_after - uploaded_before;
-                        let (download_speed, upload_speed) = download.performance().speed();
-                        let state = download.state();
-                        connected_peers += download.connections_count() as u16;
+            let mut tick_context = TickContext {
+                allowed_connections: u8::MAX as usize,
+                tick_start: std::time::Instant::now(),
+                events: TorrentTickEvents::new(),
+                tick_num: self.tick_num,
+                tick_interval: self.config.tick_interval,
+                ban_list: &self.ban_list,
+            };
+            for download in &mut self.torrent_list.items {
+                let downloaded_before = download.total_download();
+                let uploaded_before = download.total_uploaded();
+                download.tick(&mut tick_context);
+                let downloaded_after = download.total_download();
+                let uploaded_after = download.total_uploaded();
+                self.metrics.downloaded += downloaded_after - downloaded_before;
+                self.metrics.uploaded += uploaded_after - uploaded_before;
+                let (download_speed, upload_speed) = download.performance().speed();
+                let state = download.state();
+                connected_peers += download.connections_count() as u16;
 
-                        if !tick_context.events.is_empty() {
-                            changed_torrents.push(progress::TorrentUpdate {
-                                events: tick_context.take_events(),
-                                download_speed,
-                                state,
-                                total_downloaded: downloaded_after,
-                                total_uploaded: uploaded_after,
-                                upload_speed,
-                                info_hash: download.info_hash,
-                            })
-                        }
-                    }
-                    self.running_performance.update(
-                        tick_context.tick_start,
-                        Performance {
-                            downloaded: self.metrics.downloaded,
-                            uploaded: self.metrics.uploaded,
-                        },
-                    );
+                if !tick_context.events.is_empty() {
+                    changed_torrents.push(progress::TorrentUpdate {
+                        events: tick_context.take_events(),
+                        download_speed,
+                        state,
+                        total_downloaded: downloaded_after,
+                        total_uploaded: uploaded_after,
+                        upload_speed,
+                        info_hash: download.info_hash,
+                    })
+                }
+            }
+            self.running_performance.update(
+                tick_context.tick_start,
+                Performance {
+                    downloaded: self.metrics.downloaded,
+                    uploaded: self.metrics.uploaded,
+                },
+            );
 
-                    if !changed_torrents.is_empty() {
-                        let (download_speed, upload_speed) = self.running_performance.speed();
-                        let session_update = Some(progress::SessionUpdate {
-                            connected_peers,
-                            download_speed,
-                            upload_speed,
-                        });
-                        self.progress_consumer.consume_progress(progress::Progress {
-                            changed_torrents,
-                            session_update,
-                            session_events: Vec::new(),
-                            tick_num: self.tick_num,
-                        });
-                    }
-                    self.peer_connections = connected_peers;
-                    self.tick_num = self.tick_num.wrapping_add(1);
+            if !changed_torrents.is_empty() {
+                let (download_speed, upload_speed) = self.running_performance.speed();
+                let session_update = Some(progress::SessionUpdate {
+                    connected_peers,
+                    download_speed,
+                    upload_speed,
                 });
+                self.progress_consumer
+                    .consume_progress(progress::Progress {
+                        changed_torrents,
+                        session_update,
+                        session_events: Vec::new(),
+                        tick_num: self.tick_num,
+                    })
+                    .await;
+            }
+            self.peer_connections = connected_peers;
+            self.tick_num = self.tick_num.wrapping_add(1);
         }
     }
 
