@@ -6,52 +6,112 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "backdrop",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "backdrop"
+          }
+        }
       },
       {
         "name": "duration",
         "ordinal": 2,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "duration"
+          }
+        }
       },
       {
         "name": "metadata_id",
         "ordinal": 3,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "metadata_id"
+          }
+        }
       },
       {
         "name": "title",
         "ordinal": 4,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "title"
+          }
+        }
       },
       {
         "name": "plot",
         "ordinal": 5,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "plot"
+          }
+        }
       },
       {
         "name": "poster",
         "ordinal": 6,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "poster"
+          }
+        }
       },
       {
         "name": "release_date",
         "ordinal": 7,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "release_date"
+          }
+        }
       },
       {
         "name": "original_language",
         "ordinal": 8,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "original_language"
+          }
+        }
       },
       {
         "name": "original_title",
         "ordinal": 9,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "original_title"
+          }
+        }
       }
     ],
     "parameters": {

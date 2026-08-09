@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT OR REPLACE INTO intros\n            (episode_id, start_sec, end_sec)\n            VALUES (?, ?, ?) RETURNING id as \"id!\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "intros",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "5da41106f74e91c0bdafc2e6b462a7d8b6d1519174aa9dd3481e44390464f9c8"
+}

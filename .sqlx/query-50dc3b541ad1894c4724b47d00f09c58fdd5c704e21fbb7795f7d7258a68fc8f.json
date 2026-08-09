@@ -6,37 +6,79 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seasons",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "number",
         "ordinal": 1,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seasons",
+            "name": "number"
+          }
+        }
       },
       {
         "name": "metadata_id",
         "ordinal": 2,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seasons",
+            "name": "metadata_id"
+          }
+        }
       },
       {
         "name": "title",
         "ordinal": 3,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "title"
+          }
+        }
       },
       {
         "name": "plot",
         "ordinal": 4,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "plot"
+          }
+        }
       },
       {
         "name": "poster",
         "ordinal": 5,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "poster"
+          }
+        }
       },
       {
         "name": "release_date",
         "ordinal": 6,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "release_date"
+          }
+        }
       }
     ],
     "parameters": {

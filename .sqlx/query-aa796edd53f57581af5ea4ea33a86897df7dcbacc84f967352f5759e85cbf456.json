@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO external_ids\n            (external_provider, external_id, metadata_id, is_prime)\n            VALUES (?, ?, ?, ?) RETURNING id as \"id!\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "external_ids",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "aa796edd53f57581af5ea4ea33a86897df7dcbacc84f967352f5759e85cbf456"
+}

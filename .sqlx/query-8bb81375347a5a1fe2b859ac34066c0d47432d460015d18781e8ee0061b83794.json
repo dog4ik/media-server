@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO subtitles\n            (language, external_path, file_stem, video_id)\n            VALUES (?, ?, ?, ?) RETURNING id as \"id!\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "subtitles",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8bb81375347a5a1fe2b859ac34066c0d47432d460015d18781e8ee0061b83794"
+}

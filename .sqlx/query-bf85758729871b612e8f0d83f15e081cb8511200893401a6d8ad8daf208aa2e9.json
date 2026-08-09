@@ -6,7 +6,13 @@
       {
         "name": "season_id",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "episodes",
+            "name": "season_id"
+          }
+        }
       }
     ],
     "parameters": {

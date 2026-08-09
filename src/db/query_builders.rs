@@ -394,7 +394,7 @@ pub struct DbActorsQuery {
 }
 
 impl DbActorsQuery {
-    pub fn build(builder: &mut DbQueryBuilder<'_>) {
+    pub fn build(builder: &mut DbQueryBuilder) {
         builder.push(format_args!(
             "select {actor} from actors",
             actor = DbActor::SQL,

@@ -6,12 +6,24 @@
       {
         "name": "start_sec",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "intros",
+            "name": "start_sec"
+          }
+        }
       },
       {
         "name": "end_sec",
         "ordinal": 1,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "intros",
+            "name": "end_sec"
+          }
+        }
       }
     ],
     "parameters": {

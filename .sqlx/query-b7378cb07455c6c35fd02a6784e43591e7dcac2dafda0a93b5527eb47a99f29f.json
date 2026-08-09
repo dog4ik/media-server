@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO history\n            (time, is_finished, metadata_id, update_time)\n            VALUES (?, ?, ?, ?)\n            ON CONFLICT(metadata_id) DO UPDATE SET\n                is_finished = excluded.is_finished,\n                update_time = excluded.update_time\n            RETURNING id as \"id!\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b7378cb07455c6c35fd02a6784e43591e7dcac2dafda0a93b5527eb47a99f29f"
+}

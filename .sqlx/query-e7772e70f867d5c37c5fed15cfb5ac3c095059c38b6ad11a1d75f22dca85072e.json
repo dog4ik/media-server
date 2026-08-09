@@ -6,20 +6,27 @@
       {
         "name": "video_id!: i64",
         "ordinal": 0,
-        "type_info": "Null"
+        "type_info": "Integer",
+        "origin": "Expression"
       },
       {
         "name": "episode_id!",
         "ordinal": 1,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "episodes",
+            "name": "id"
+          }
+        }
       }
     ],
     "parameters": {
       "Right": 2
     },
     "nullable": [
-      null,
-      false
+      false,
+      true
     ]
   },
   "hash": "e7772e70f867d5c37c5fed15cfb5ac3c095059c38b6ad11a1d75f22dca85072e"

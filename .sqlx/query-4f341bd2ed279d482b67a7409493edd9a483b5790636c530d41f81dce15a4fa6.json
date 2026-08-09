@@ -6,39 +6,60 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "title",
         "ordinal": 1,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "title"
+          }
+        }
       },
       {
         "name": "media_type: DbContentType",
         "ordinal": 2,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "content_type"
+          }
+        }
       },
       {
         "name": "self_in_list!: i64",
         "ordinal": 3,
-        "type_info": "Null"
+        "type_info": "Null",
+        "origin": "Expression"
       },
       {
         "name": "episodes!: sqlx::types::Json<HashMap<i64, Vec<i64>>>",
         "ordinal": 4,
-        "type_info": "Null"
+        "type_info": "Null",
+        "origin": "Expression"
       },
       {
         "name": "external_ids!: sqlx::types::Json<Vec<ExternalIdsQueryJson>>",
         "ordinal": 5,
-        "type_info": "Null"
+        "type_info": "Null",
+        "origin": "Expression"
       }
     ],
     "parameters": {
       "Right": 1
     },
     "nullable": [
-      false,
+      null,
       false,
       false,
       null,

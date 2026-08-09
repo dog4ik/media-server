@@ -6,27 +6,57 @@
       {
         "name": "id",
         "ordinal": 0,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "id"
+          }
+        }
       },
       {
         "name": "time",
         "ordinal": 1,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "time"
+          }
+        }
       },
       {
         "name": "is_finished",
         "ordinal": 2,
-        "type_info": "Bool"
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "is_finished"
+          }
+        }
       },
       {
         "name": "metadata_id",
         "ordinal": 3,
-        "type_info": "Integer"
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "metadata_id"
+          }
+        }
       },
       {
         "name": "update_time",
         "ordinal": 4,
-        "type_info": "Datetime"
+        "type_info": "Datetime",
+        "origin": {
+          "Table": {
+            "table": "history",
+            "name": "update_time"
+          }
+        }
       }
     ],
     "parameters": {

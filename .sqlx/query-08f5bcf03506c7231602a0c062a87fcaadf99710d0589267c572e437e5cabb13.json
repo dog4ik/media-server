@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO external_ids\n            (external_provider, external_id, metadata_id, is_prime)\n            VALUES (?, ?, ?, ?)\n            ON CONFLICT(external_provider, external_id) DO NOTHING\n            RETURNING id as \"id!\";",
+  "describe": {
+    "columns": [
+      {
+        "name": "id!",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "external_ids",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "08f5bcf03506c7231602a0c062a87fcaadf99710d0589267c572e437e5cabb13"
+}

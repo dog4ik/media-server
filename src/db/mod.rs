@@ -73,7 +73,7 @@ impl Default for ContentFetchParams {
 }
 
 impl ContentFetchParams {
-    pub fn build<'a>(&'a self, content_type: DbContentType, builder: &mut DbQueryBuilder<'a>) {
+    pub fn build(&self, content_type: DbContentType, builder: &mut DbQueryBuilder) {
         let content_table = content_type.table_name();
 
         if self.actors.is_some() {
@@ -83,7 +83,7 @@ impl ContentFetchParams {
         // Tracks whether the `where` keyword has already been emitted so that
         // every subsequent condition is chained with `and`.
         let mut has_where = false;
-        let mut push_connector = |builder: &mut DbQueryBuilder<'a>| {
+        let mut push_connector = |builder: &mut DbQueryBuilder| {
             builder.push(if has_where { " and " } else { " where " });
             has_where = true;
         };
@@ -173,8 +173,9 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
+            // Regression in sqlx 0.9.0 requires non-null cast in RETURNING clause
             sqlx::query_scalar!(
-                "INSERT INTO list_items (list_id, metadata_id, release_viewed, created_at) VALUES (?, ?, ?, ?) RETURNING id;",
+                r#"INSERT INTO list_items (list_id, metadata_id, release_viewed, created_at) VALUES (?, ?, ?, ?) RETURNING id as "id!";"#,
                 item.list_id,
                 item.metadata_id,
                 item.release_viewed,
@@ -192,7 +193,7 @@ where
         async move {
             let mut conn = self.acquire().await?;
             let movie_id = sqlx::query!(
-                "INSERT INTO movies (metadata_id, backdrop, duration) VALUES (?, ?, ?) RETURNING id;",
+                r#"INSERT INTO movies (metadata_id, backdrop, duration) VALUES (?, ?, ?) RETURNING id as "id!";"#,
                 movie.metadata_id,
                 movie.backdrop,
                 movie.duration,
@@ -234,15 +235,13 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let show_id = sqlx::query!(
-                "INSERT INTO shows (metadata_id, backdrop) VALUES (?, ?) RETURNING id;",
+            sqlx::query_scalar!(
+                r#"INSERT INTO shows (metadata_id, backdrop) VALUES (?, ?) RETURNING id as "id!";"#,
                 show.metadata_id,
                 show.backdrop,
             )
             .fetch_one(&mut *conn)
-            .await?
-            .id;
-            Ok(show_id)
+            .await
         }
     }
 
@@ -252,16 +251,14 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let season_id = sqlx::query!(
-                "INSERT INTO seasons (show_id, number, metadata_id) VALUES (?, ?, ?) RETURNING id;",
+            sqlx::query_scalar!(
+                r#"INSERT INTO seasons (show_id, number, metadata_id) VALUES (?, ?, ?) RETURNING id as "id!";"#,
                 season.show_id,
                 season.number,
                 season.metadata_id,
             )
             .fetch_one(&mut *conn)
-            .await?
-            .id;
-            Ok(season_id)
+            .await
         }
     }
 
@@ -271,18 +268,16 @@ where
     ) -> impl std::future::Future<Output = sqlx::Result<i64>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let episode_id = sqlx::query!(
-                "INSERT INTO episodes (season_id, number, duration, metadata_id)
-                VALUES (?, ?, ?, ?) RETURNING id;",
+            sqlx::query_scalar!(
+                r#"INSERT INTO episodes (season_id, number, duration, metadata_id)
+                VALUES (?, ?, ?, ?) RETURNING id as "id!";"#,
                 episode.season_id,
                 episode.number,
                 episode.duration,
                 episode.metadata_id,
             )
             .fetch_one(&mut *conn)
-            .await?
-            .id;
-            Ok(episode_id)
+            .await
         }
     }
 
@@ -313,8 +308,8 @@ where
         async move {
             let mut conn = self.acquire().await?;
             sqlx::query_scalar!(
-                "INSERT INTO roles (actor_id, metadata_id, character)
-                VALUES (?, ?, ?) RETURNING id;",
+                r#"INSERT INTO roles (actor_id, metadata_id, character)
+                VALUES (?, ?, ?) RETURNING id as "id!";"#,
                 role.actor_id,
                 role.metadata_id,
                 role.character,
@@ -350,16 +345,17 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let subtitles_query = sqlx::query!(
-                "INSERT INTO subtitles
+            sqlx::query_scalar!(
+                r#"INSERT INTO subtitles
             (language, external_path, file_stem, video_id)
-            VALUES (?, ?, ?, ?) RETURNING id;",
+            VALUES (?, ?, ?, ?) RETURNING id as "id!";"#,
                 db_subtitles.language,
                 db_subtitles.external_path,
                 db_subtitles.file_stem,
                 db_subtitles.video_id
-            );
-            subtitles_query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -369,20 +365,21 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let history_query = sqlx::query!(
-                "INSERT INTO history
+            sqlx::query_scalar!(
+                r#"INSERT INTO history
             (time, is_finished, metadata_id, update_time)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(metadata_id) DO UPDATE SET
                 is_finished = excluded.is_finished,
                 update_time = excluded.update_time
-            RETURNING id;",
+            RETURNING id as "id!";"#,
                 db_history.time,
                 db_history.is_finished,
                 db_history.metadata_id,
                 db_history.update_time,
-            );
-            history_query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -392,16 +389,17 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query_scalar!(
-                "INSERT INTO external_ids
+            sqlx::query_scalar!(
+                r#"INSERT INTO external_ids
             (external_provider, external_id, metadata_id, is_prime)
-            VALUES (?, ?, ?, ?) RETURNING id;",
+            VALUES (?, ?, ?, ?) RETURNING id as "id!";"#,
                 db_external_id.external_provider,
                 db_external_id.external_id,
                 db_external_id.metadata_id,
                 db_external_id.is_prime,
-            );
-            query.fetch_one(&mut *conn).await
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -413,18 +411,19 @@ where
     ) -> impl std::future::Future<Output = Result<Option<i64>, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query_scalar!(
-                "INSERT INTO external_ids
+            sqlx::query_scalar!(
+                r#"INSERT INTO external_ids
             (external_provider, external_id, metadata_id, is_prime)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(external_provider, external_id) DO NOTHING
-            RETURNING id;",
+            RETURNING id as "id!";"#,
                 db_external_id.external_provider,
                 db_external_id.external_id,
                 db_external_id.metadata_id,
                 db_external_id.is_prime,
-            );
-            query.fetch_optional(&mut *conn).await
+            )
+            .fetch_optional(&mut *conn)
+            .await
         }
     }
 
@@ -453,15 +452,16 @@ where
         async move {
             let mut conn = self.acquire().await?;
             tracing::trace!("Inserting intro for episode {}", intro.episode_id);
-            let query = sqlx::query!(
-                "INSERT OR REPLACE INTO intros
+            sqlx::query_scalar!(
+                r#"INSERT OR REPLACE INTO intros
             (episode_id, start_sec, end_sec)
-            VALUES (?, ?, ?) RETURNING id;",
+            VALUES (?, ?, ?) RETURNING id as "id!";"#,
                 intro.episode_id,
                 intro.start_sec,
                 intro.end_sec,
-            );
-            query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -492,17 +492,17 @@ where
     ) -> impl std::future::Future<Output = Result<i64, Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
-            let query = sqlx::query!(
-                "INSERT INTO torrent_files
+            sqlx::query_scalar!(
+                r#"INSERT INTO torrent_files
             (torrent_id, relative_path, priority, idx)
-            VALUES (?, ?, ?, ?) RETURNING id;",
+            VALUES (?, ?, ?, ?) RETURNING id as "id!";"#,
                 file.torrent_id,
                 file.relative_path,
                 file.priority,
                 file.idx,
-            );
-
-            query.fetch_one(&mut *conn).await.map(|x| x.id)
+            )
+            .fetch_one(&mut *conn)
+            .await
         }
     }
 
@@ -1479,7 +1479,7 @@ impl<'a> DbActions<'a> for &'a Pool<Sqlite> {}
 impl<'a> DbActions<'a> for &'a mut SqliteConnection {}
 
 pub type DbTransaction = Transaction<'static, Sqlite>;
-pub type DbQueryBuilder<'a> = QueryBuilder<'a, Sqlite>;
+pub type DbQueryBuilder = QueryBuilder<Sqlite>;
 
 /// Database connection pool
 #[derive(Debug, Clone)]

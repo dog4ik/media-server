@@ -6,7 +6,13 @@
       {
         "name": "title",
         "ordinal": 0,
-        "type_info": "Text"
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "title"
+          }
+        }
       }
     ],
     "parameters": {
