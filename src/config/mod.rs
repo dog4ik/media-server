@@ -843,7 +843,7 @@ pub mod scan {
     pub struct MaxAssetConcurrency(pub usize);
     impl Default for MaxAssetConcurrency {
         fn default() -> Self {
-            Self(16)
+            Self(32)
         }
     }
     impl ConfigValue for MaxAssetConcurrency {}
