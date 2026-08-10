@@ -57,6 +57,7 @@ pub struct Show {
     pub cast: Option<Vec<Actor>>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
     pub genres: Option<Vec<Genre>>,
+    pub next_episode_air_date: Option<crate::OffsetDateTime>,
     pub local: Option<LocalShowData>,
 }
 
@@ -87,6 +88,7 @@ impl Show {
             cast: meta.cast.map(|v| v.into_iter().map(Into::into).collect()),
             external_ids: meta.external_ids,
             genres: meta.genres,
+            next_episode_air_date: meta.next_episode_air_date,
             local,
         }
     }

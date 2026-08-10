@@ -31,6 +31,7 @@ pub struct DbShowQuery {
     pub genres: Option<Vec<GenreQueryJson>>,
     #[sqlx(json, default, nullish)]
     pub lists: Option<Vec<ListsQueryJson>>,
+    pub next_episode_air_date: Option<time::OffsetDateTime>,
 }
 
 impl DbShowQuery {
@@ -62,6 +63,7 @@ impl From<DbShowQuery> for Show {
             external_ids,
             genres,
             lists,
+            next_episode_air_date,
         }: DbShowQuery,
     ) -> Self {
         let locale_metadata = metadata.original_language.zip(metadata.original_title).map(
@@ -96,6 +98,7 @@ impl From<DbShowQuery> for Show {
                 metadata_id: metadata.id.unwrap(),
                 lists: lists.into_iter().flatten().map(Into::into).collect(),
             }),
+            next_episode_air_date: next_episode_air_date.map(Into::into),
         }
     }
 }

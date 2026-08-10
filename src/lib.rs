@@ -86,6 +86,12 @@ impl From<time::OffsetDateTime> for OffsetDateTime {
     }
 }
 
+impl From<OffsetDateTime> for time::OffsetDateTime {
+    fn from(OffsetDateTime(value): OffsetDateTime) -> Self {
+        value
+    }
+}
+
 /// Wrapper around [std::time::Duration] that is serialized in milliseconds
 #[derive(Debug, utoipa::ToSchema, Clone, PartialEq, PartialOrd, Eq, Ord)]
 #[schema(value_type = u128)]

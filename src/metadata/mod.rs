@@ -339,6 +339,7 @@ pub struct ShowMetadata {
     pub locale_metadata: Option<LocaleMetadata>,
     pub cast: Option<Vec<PersonMetadata>>,
     pub genres: Option<Vec<Genre>>,
+    pub next_episode_air_date: Option<crate::OffsetDateTime>,
     pub external_ids: Option<Vec<ExternalIdMetadata>>,
 }
 
@@ -460,6 +461,7 @@ impl ShowMetadata {
             id: None,
             metadata_id,
             backdrop,
+            next_episode_air_date: self.next_episode_air_date.clone().map(Into::into),
         }
     }
 }

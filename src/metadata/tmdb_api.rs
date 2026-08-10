@@ -6,6 +6,7 @@ use reqwest::{
     header::{ACCEPT_ENCODING, AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde::Deserialize;
+use time::OffsetDateTime;
 
 use crate::metadata::{PersonMetadata, ProviderIdentifier, RoleMetadata};
 
@@ -370,6 +371,7 @@ impl From<TmdbSearchShowResult> for ShowMetadata {
             cast: None,
             genres: None,
             external_ids: None,
+            next_episode_air_date: None,
         }
     }
 }
@@ -607,6 +609,18 @@ impl From<TmdbShowDetails> for ShowMetadata {
                 .map(|v| v.cast.into_iter().map(Into::into).collect()),
             genres,
             external_ids: val.external_ids.map(Into::into),
+            next_episode_air_date: val
+                .next_episode_to_air
+                .and_then(|v| v.air_date)
+                .and_then(|air_date| {
+                    time::Date::parse(
+                        &air_date,
+                        &time::format_description::well_known::Iso8601::DATE,
+                    )
+                    .ok()
+                })
+                .map(|air_date| OffsetDateTime::new_utc(air_date, time::Time::MIDNIGHT))
+                .map(Into::into),
         }
     }
 }
@@ -726,6 +740,11 @@ struct TmdbExternalIds {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+struct NextEpisodeAirDate {
+    pub air_date: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
 struct TmdbShowDetails {
     // adult: bool,
     backdrop_path: Option<String>,
@@ -742,6 +761,7 @@ struct TmdbShowDetails {
     poster_path: Option<String>,
     credits: Option<TmdbCredits>,
     external_ids: Option<TmdbExternalIds>,
+    next_episode_to_air: Option<NextEpisodeAirDate>,
 }
 
 #[derive(Deserialize, Debug, Clone)]

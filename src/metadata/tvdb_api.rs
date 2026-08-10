@@ -365,6 +365,7 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
             cast: None,
             genres: None,
             external_ids: None,
+            next_episode_air_date: None,
         }
     }
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT shows.id, shows.backdrop,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date,\n                metadata.original_language, metadata.original_title,\n                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as \"seasons!: String\",\n                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as \"episodes_count!: i64\"\n                FROM metadata_fts\n                JOIN metadata ON metadata.rowid = metadata_fts.rowid\n                JOIN shows ON shows.metadata_id = metadata.id\n                WHERE metadata_fts MATCH ? AND metadata.content_type = 'show'",
+  "query": "SELECT shows.id, shows.backdrop, shows.next_episode_air_date,\n                metadata.title, metadata.plot, metadata.poster, metadata.release_date,\n                metadata.original_language, metadata.original_title,\n                (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as \"seasons!: String\",\n                (SELECT COUNT(*) FROM episodes JOIN seasons ON episodes.season_id = seasons.id WHERE seasons.show_id = shows.id) as \"episodes_count!: i64\"\n                FROM metadata_fts\n                JOIN metadata ON metadata.rowid = metadata_fts.rowid\n                JOIN shows ON shows.metadata_id = metadata.id\n                WHERE metadata_fts MATCH ? AND metadata.content_type = 'show'",
   "describe": {
     "columns": [
       {
@@ -26,8 +26,19 @@
         }
       },
       {
-        "name": "title",
+        "name": "next_episode_air_date",
         "ordinal": 2,
+        "type_info": "Datetime",
+        "origin": {
+          "Table": {
+            "table": "shows",
+            "name": "next_episode_air_date"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +49,7 @@
       },
       {
         "name": "plot",
-        "ordinal": 3,
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "poster",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "release_date",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "original_language",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "original_title",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -93,13 +104,13 @@
       },
       {
         "name": "seasons!: String",
-        "ordinal": 8,
+        "ordinal": 9,
         "type_info": "Integer",
         "origin": "Expression"
       },
       {
         "name": "episodes_count!: i64",
-        "ordinal": 9,
+        "ordinal": 10,
         "type_info": "Integer",
         "origin": "Expression"
       }
@@ -109,6 +120,7 @@
     },
     "nullable": [
       false,
+      true,
       true,
       false,
       true,
@@ -120,5 +132,5 @@
       false
     ]
   },
-  "hash": "00b9409358d22ad104b662bb5b14b6bac2d7f726e19eda9f5a7fe9a4e17fc29a"
+  "hash": "0bb743cba118c78330ae654df5913b6c0a8e9b7eb03cd77a84ce6cfea7ca0c03"
 }

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "INSERT INTO shows (metadata_id, backdrop) VALUES (?, ?) RETURNING id as \"id!\";",
+  "query": "INSERT INTO shows (metadata_id, backdrop, next_episode_air_date) VALUES (?, ?, ?) RETURNING id as \"id!\";",
   "describe": {
     "columns": [
       {
@@ -16,11 +16,11 @@
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       null
     ]
   },
-  "hash": "961d7bb0266fb6d88bfbf4843adbeee9d3a051869a8cc9a5c51bcfe6d19e99ef"
+  "hash": "027396aebd03cbed093b4c37d55dd371c99f6a32bad29c3368322521affc1cf1"
 }

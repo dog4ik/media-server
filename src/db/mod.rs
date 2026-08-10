@@ -236,9 +236,10 @@ where
         async move {
             let mut conn = self.acquire().await?;
             sqlx::query_scalar!(
-                r#"INSERT INTO shows (metadata_id, backdrop) VALUES (?, ?) RETURNING id as "id!";"#,
+                r#"INSERT INTO shows (metadata_id, backdrop, next_episode_air_date) VALUES (?, ?, ?) RETURNING id as "id!";"#,
                 show.metadata_id,
                 show.backdrop,
+                &show.next_episode_air_date,
             )
             .fetch_one(&mut *conn)
             .await
@@ -1347,7 +1348,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
             let mut conn = self.acquire().await?;
             let query = format!("\"{}\"", query.trim().to_lowercase());
             let shows = sqlx::query!(
-                r#"SELECT shows.id, shows.backdrop,
+                r#"SELECT shows.id, shows.backdrop, shows.next_episode_air_date,
                 metadata.title, metadata.plot, metadata.poster, metadata.release_date,
                 metadata.original_language, metadata.original_title,
                 (SELECT GROUP_CONCAT(seasons.number) FROM seasons WHERE seasons.show_id = shows.id) as "seasons!: String",
@@ -1388,6 +1389,7 @@ where (actors.external_metadata_provider = ? and actors.external_metadata_id = ?
                         cast: None,
                         genres: None,
                         external_ids: None,
+                        next_episode_air_date: show.next_episode_air_date.map(Into::into),
                     }
                 })
                 .collect())
@@ -1641,10 +1643,12 @@ pub struct DbShow {
     pub metadata_id: i64,
     #[sqlx(rename = "show_backdrop")]
     pub backdrop: Option<String>,
+    pub next_episode_air_date: Option<time::OffsetDateTime>,
 }
 
 impl DbShow {
-    pub const SQL: &str = "shows.id as show_table_id, shows.metadata_id as show_metadata_id, shows.backdrop as show_backdrop";
+    pub const SQL: &str = "shows.id as show_table_id, shows.metadata_id as show_metadata_id,\
+shows.backdrop as show_backdrop, shows.next_episode_air_date";
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
