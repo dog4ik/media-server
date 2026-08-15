@@ -31,6 +31,8 @@ pub mod history;
 pub mod intros;
 /// Liked, watched, custom lists endpoints
 pub mod lists;
+/// Resources api endpoints
+pub mod resources;
 pub mod server;
 pub mod subtitles;
 /// Torrent client specific endpoints
@@ -156,6 +158,7 @@ pub mod torrent;
         lists::remove_item,
         lists::remove_watchlist_item,
         lists::remove_saved_item,
+        resources::resources,
         ws::ws,
     ),
     components(
@@ -229,7 +232,6 @@ pub mod torrent;
         (name = "Movies", description = "Movies operations"),
         (name = "Metadata", description = "Metadata operations"),
         (name = "History", description = "History operations"),
-        (name = "Logs", description = "Log operations"),
         (name = "Tasks", description = "Tasks operations"),
         (name = "Search", description = "Endopoints for searching content"),
         (name = "Torrent", description = "Torrent client operations"),
@@ -237,6 +239,7 @@ pub mod torrent;
         (name = "Videos", description = "Video files operations"),
         (name = "Subtitles", description = "Subtitles operations"),
         (name = "Actors", description = "Actors operations"),
+        (name = "Resources", description = "Server resources monitoring"),
     )
 )]
 pub struct OpenApiDoc;

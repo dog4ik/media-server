@@ -277,6 +277,15 @@ pub enum ParentMediaType {
     Show,
 }
 
+impl From<DbContentType> for ParentMediaType {
+    fn from(value: DbContentType) -> Self {
+        match value {
+            DbContentType::Movie => Self::Movie,
+            DbContentType::Show | DbContentType::Season | DbContentType::Episode => Self::Show,
+        }
+    }
+}
+
 /// Leaf node type of the any content tree
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]

@@ -37,6 +37,8 @@ pub mod lists;
 pub mod metadata;
 /// Progress notifications dispatched to the connected Websockets clients
 pub mod progress;
+/// Server resources
+pub mod resources;
 /// Library scan module
 ///
 /// There are 3 things must be done during scan.

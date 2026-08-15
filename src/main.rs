@@ -384,7 +384,12 @@ async fn main() {
 
         let http_trace = tower_http::trace::TraceLayer::new_for_http();
         let app = Router::new()
-            .nest("/api", server_api.nest("/lists", api::lists::router()))
+            .nest(
+                "/api",
+                server_api
+                    .nest("/lists", api::lists::router())
+                    .nest("/resources", api::resources::router()),
+            )
             .nest("/debug", debug_api)
             .merge(
                 SwaggerUi::new("/swagger-ui").url("/api-docs/openapi.json", OpenApiDoc::openapi()),

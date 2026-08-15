@@ -1,0 +1,69 @@
+{
+  "db_name": "SQLite",
+  "query": "select\n            metadata.id as metadata_id, movies.id, metadata.title, metadata.poster, sum(videos.size) as \"size\"\n            from videos\n            join movies on movies.metadata_id = videos.metadata_id\n            join metadata on metadata.id = videos.metadata_id\n            where videos.path like ? || '%'\n            group by videos.metadata_id order by size desc",
+  "describe": {
+    "columns": [
+      {
+        "name": "metadata_id",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "id",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "movies",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "title"
+          }
+        }
+      },
+      {
+        "name": "poster",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "metadata",
+            "name": "poster"
+          }
+        }
+      },
+      {
+        "name": "size",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "03ed058226e8dde62ede83c6c1dac19a8d259ed616921b52e13643a4bc2e95b2"
+}

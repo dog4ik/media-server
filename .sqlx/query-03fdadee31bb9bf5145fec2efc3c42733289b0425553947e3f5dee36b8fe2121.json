@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "\nwith useful_seasons as (\n  select distinct seasons.metadata_id from episodes\n  join metadata on metadata.id = episodes.metadata_id\n  join seasons on seasons.id = episodes.season_id\n  left join videos on videos.metadata_id = episodes.metadata_id\n  left join list_items on list_items.metadata_id = episodes.metadata_id\n  left join history on history.metadata_id = episodes.metadata_id\n  left join torrent_files on torrent_files.metadata_id = episodes.metadata_id\n  where\n  videos.id is not null or\n  list_items.id is not null or\n  history.id is not null or\n  torrent_files.id is not null\n),\nuseful_shows as (\n  select distinct shows.metadata_id from seasons\n  join shows on shows.id = seasons.show_id\n  where seasons.metadata_id in useful_seasons\n)\nselect count(metadata.id) from metadata\nleft join videos on videos.metadata_id = metadata.id\nleft join list_items on list_items.metadata_id = metadata.id\nleft join history on history.metadata_id = metadata.id\nleft join torrent_files on torrent_files.metadata_id = metadata.id\nleft join shows on shows.metadata_id = metadata.id\nleft join seasons on seasons.metadata_id = metadata.id\nwhere\nmetadata.id not in useful_seasons and\nmetadata.id not in useful_shows and\nvideos.id is null and\nlist_items.id is null and\nhistory.id is null and\ntorrent_files.id is null;\n",
+  "describe": {
+    "columns": [
+      {
+        "name": "count(metadata.id)",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "03fdadee31bb9bf5145fec2efc3c42733289b0425553947e3f5dee36b8fe2121"
+}
