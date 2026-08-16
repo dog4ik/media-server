@@ -12,21 +12,7 @@ pub struct MagnetLink {
 
 impl Display for MagnetLink {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        let mut url = Url::parse(&format!("magnet:?xt=urn:btih:{}", self.info_hash)).unwrap();
-        {
-            let mut query = url.query_pairs_mut();
-            if let Some(name) = &self.name {
-                query.append_pair("dn", name);
-            };
-            if let Some(announce_list) = &self.announce_list {
-                for tracker in announce_list {
-                    query.append_pair("tr", tracker.as_str());
-                }
-            }
-            query.finish();
-        }
-
-        write!(f, "{}", url)
+        write!(f, "{}", self.url())
     }
 }
 
@@ -83,6 +69,23 @@ impl MagnetLink {
     }
     pub fn all_trackers(&self) -> Option<Vec<Url>> {
         self.announce_list.clone()
+    }
+
+    pub fn url(&self) -> Url {
+        let mut url = Url::parse(&format!("magnet:?xt=urn:btih:{}", self.info_hash)).unwrap();
+        {
+            let mut query = url.query_pairs_mut();
+            if let Some(name) = &self.name {
+                query.append_pair("dn", name);
+            };
+            if let Some(announce_list) = &self.announce_list {
+                for tracker in announce_list {
+                    query.append_pair("tr", tracker.as_str());
+                }
+            }
+            query.finish();
+        }
+        url
     }
 }
 

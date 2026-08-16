@@ -6,8 +6,8 @@ use serde::{Serialize, ser::SerializeStruct};
 use crate::{
     config,
     torrent_index::{
-        Torrent, TorrentIndex, TorrentIndexIdentifier, rutracker::ProvodRuTrackerAdapter,
-        tpb::TpbApi,
+        Torrent, TorrentIndex, TorrentIndexIdentifier, nyaa::NyaaApi,
+        rutracker::ProvodRuTrackerAdapter, tpb::TpbApi,
     },
 };
 
@@ -21,6 +21,7 @@ pub struct MetadataProvidersStack {
     pub tmdb: Option<&'static TmdbApi>,
     pub tvdb: Option<&'static TvdbApi>,
     pub tpb: Option<&'static TpbApi>,
+    pub nyaa: Option<&'static NyaaApi>,
     pub rutracker: Option<&'static ProvodRuTrackerAdapter>,
     pub discover_providers_stack: Mutex<Vec<&'static (dyn DiscoverMetadataProvider + Send + Sync)>>,
     pub movie_providers_stack: Mutex<Vec<&'static (dyn MovieMetadataProvider + Send + Sync)>>,
@@ -75,6 +76,7 @@ impl MetadataProvidersStack {
             tvdb: None,
             tmdb: None,
             tpb: None,
+            nyaa: None,
             rutracker: None,
             discover_providers_stack: Mutex::new(Vec::new()),
             movie_providers_stack: Mutex::new(Vec::new()),
@@ -97,6 +99,10 @@ impl MetadataProvidersStack {
         let tpb_api = TpbApi::new(http_client.clone());
         let tpb_api = Box::leak(Box::new(tpb_api));
         self.tpb = Some(tpb_api);
+
+        let nyaa_api = NyaaApi::new(http_client.clone());
+        let nyaa_api = Box::leak(Box::new(nyaa_api));
+        self.nyaa = Some(nyaa_api);
 
         match ProvodRuTrackerAdapter::new(http_client.clone()) {
             Ok(rutracker_api) => {
@@ -452,6 +458,9 @@ impl MetadataProvidersStack {
     ) -> Option<&'static (dyn TorrentIndex + Send + Sync)> {
         match provider {
             TorrentIndexIdentifier::Tpb => self.tpb.map(|p| p as &(dyn TorrentIndex + Send + Sync)),
+            TorrentIndexIdentifier::Nyaa => {
+                self.nyaa.map(|p| p as &(dyn TorrentIndex + Send + Sync))
+            }
             TorrentIndexIdentifier::RuTracker => self
                 .rutracker
                 .map(|p| p as &(dyn TorrentIndex + Send + Sync)),

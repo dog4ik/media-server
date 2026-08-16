@@ -6,6 +6,7 @@ use time::OffsetDateTime;
 
 use crate::metadata::FetchParams;
 
+pub mod nyaa;
 pub mod rutracker;
 pub mod tpb;
 
@@ -13,6 +14,7 @@ pub mod tpb;
 #[serde(rename_all = "lowercase")]
 pub enum TorrentIndexIdentifier {
     Tpb,
+    Nyaa,
     RuTracker,
 }
 
@@ -22,6 +24,7 @@ impl FromStr for TorrentIndexIdentifier {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "tpb" => Ok(Self::Tpb),
+            "nyaa" => Ok(Self::Nyaa),
             "rutracker" => Ok(Self::RuTracker),
             _ => Err(anyhow::anyhow!("Unrecoginzed torrent index: {s}")),
         }
@@ -32,6 +35,7 @@ impl Display for TorrentIndexIdentifier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             TorrentIndexIdentifier::Tpb => write!(f, "tpb"),
+            TorrentIndexIdentifier::Nyaa => write!(f, "nyaa"),
             TorrentIndexIdentifier::RuTracker => write!(f, "rutracker"),
         }
     }
