@@ -35,6 +35,8 @@ pub mod library;
 pub mod lists;
 /// Integrations with movie and TV databases.
 pub mod metadata;
+/// Title parsing
+pub mod parser;
 /// Progress notifications dispatched to the connected Websockets clients
 pub mod progress;
 /// Server resources

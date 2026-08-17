@@ -5,10 +5,11 @@ use tracing::instrument;
 
 use crate::{
     db::{Db, DbActions},
-    library::{LibraryItem, Media, show::ShowIdentifier},
+    library::{LibraryItem, Media},
     metadata::{
         EpisodeMetadata, ParentMediaType, SeasonMetadata, ShowMetadata, ShowMetadataProvider,
     },
+    parser::show::ShowIdentifier,
     scan::scan_progress::FailedContent,
 };
 

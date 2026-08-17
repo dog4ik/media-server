@@ -2,53 +2,67 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::{
-    ContentIdentifier, Media,
-    identification::{Parseable as Parsable, Parser, SPECIAL_CHARS, Token},
+use crate::{
+    library::{ContentIdentifier, Media},
+    parser::{
+        attributes::{self, Attributes},
+        symbol::Symbol,
+        tokenizer::{Token, Tokenizer},
+    },
 };
+
+use super::{Parseable as Parsable, Parser, SPECIAL_CHARS};
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MovieIdent {
     pub title: String,
     pub year: Option<u16>,
+    pub attributes: Attributes,
 }
 
 impl Parsable for MovieIdent {
-    fn parse_parent(&mut self, folder_tokens: Vec<Token<'_>>) {
+    fn parse_parent(&mut self, folder_tokens: Tokenizer<'_>) {
         self.parse_tokens(folder_tokens);
     }
 
-    fn parse_name(&mut self, name_tokens: Vec<Token<'_>>) {
+    fn parse_name(&mut self, name_tokens: Tokenizer<'_>) {
         self.parse_tokens(name_tokens);
     }
 }
 
 impl MovieIdent {
-    pub fn parse_tokens(&mut self, tokens: Vec<Token<'_>>) {
+    pub fn parse_tokens(&mut self, mut tokens: Tokenizer<'_>) {
         let mut past_name = false;
         let mut title = String::new();
         let mut in_group = false;
         let mut year = None;
-        for token in tokens.into_iter() {
+        while let Some(token) = tokens.advance() {
             match token {
-                Token::Unknown(t) => {
-                    if !past_name && !in_group {
-                        if title.is_empty() {
-                            title += t;
-                        } else {
-                            title += " ";
-                            title += t;
-                        }
-                    }
-                }
-                Token::Noise(_) => {
+                Token::Symbol(_)
+                    if let Some(attr_match) =
+                        attributes::recognize(&tokens.tokens()[tokens.position() - 1..]) =>
+                {
+                    self.attributes.insert(attr_match.attribute);
+                    tokens.advance_by(attr_match.consumed - 1);
                     past_name = true;
                 }
-                Token::Year(y) => {
+                Token::Symbol(s) if s.is_noise() => {
+                    past_name = true;
+                }
+                Token::Symbol(s) if let Some(y) = s.as_release_year() => {
                     year = Some(y);
                     past_name = true;
                 }
-                Token::GroupStart => {
+                Token::Symbol(Symbol(t)) if !past_name && !in_group => {
+                    if title.is_empty() {
+                        title += t;
+                    } else {
+                        title += " ";
+                        title += t;
+                    }
+                }
+                Token::Symbol(_) => {}
+                Token::GroupStart(_) => {
                     in_group = true;
                     if !title.is_empty() {
                         past_name = true;
@@ -57,7 +71,7 @@ impl MovieIdent {
                 Token::ExplicitSeparator => {
                     past_name = true;
                 }
-                Token::GroupEnd => {
+                Token::GroupEnd(_) => {
                     in_group = false;
                 }
             }
@@ -76,6 +90,7 @@ impl MovieIdent {
 pub struct MovieIdentifier {
     pub title: String,
     pub year: Option<u16>,
+    pub attributes: Attributes,
 }
 
 impl MovieIdentifier {
@@ -87,6 +102,7 @@ impl MovieIdentifier {
             Ok(Self {
                 title: ident.title,
                 year: ident.year,
+                attributes: ident.attributes,
             })
         }
     }
@@ -115,7 +131,7 @@ impl Media for MovieIdentifier {
 mod tests {
     use std::path::Path;
 
-    use crate::library::{identification::Parser, movie::MovieIdent};
+    use super::*;
 
     macro_rules! movie_tests {
         ($($name:ident: ($input:expr, $title:expr, $year:expr);)*) => {
@@ -123,7 +139,7 @@ mod tests {
                 #[test]
                 fn $name() {
                     let id = Parser::parse_filename(Path::new($input), MovieIdent::default());
-                    let expected = MovieIdent { title: $title.into(), year: $year };
+                    let expected = MovieIdent { title: $title.into(), year: $year, ..Default::default() };
                     assert_eq!(expected, id, "mismatch for {:?}", $input);
                 }
             )*

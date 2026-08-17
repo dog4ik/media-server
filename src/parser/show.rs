@@ -2,10 +2,16 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use super::{
-    ContentIdentifier, Media,
-    identification::{Parseable, Parser, SPECIAL_CHARS, Token},
+use crate::{
+    library::{ContentIdentifier, Media},
+    parser::{
+        attributes::{self, Attributes},
+        symbol::Symbol,
+        tokenizer::{Token, Tokenizer},
+    },
 };
+
+use super::{Parseable, Parser, SPECIAL_CHARS};
 
 mod helpers {
     pub fn take_till_non_number(input: &mut &str) -> Option<u16> {
@@ -66,24 +72,28 @@ pub struct ShowIdent {
     pub season: Option<u16>,
     pub title: String,
     pub year: Option<u16>,
+    pub attributes: Attributes,
 }
 
 impl Parseable for ShowIdent {
-    fn parse_parent(&mut self, directory_tokens: Vec<Token<'_>>) {
-        self.apply_parent_tokens(&directory_tokens);
+    fn parse_parent(&mut self, directory_tokens: Tokenizer<'_>) {
+        self.apply_parent_tokens(directory_tokens);
     }
 
-    fn parse_name(&mut self, name_tokens: Vec<Token<'_>>) {
-        self.apply_name_tokens(&name_tokens);
+    fn parse_name(&mut self, name_tokens: Tokenizer<'_>) {
+        self.apply_name_tokens(name_tokens);
     }
 }
 
 const SEASON_IDENTS: [&str; 2] = ["Season", "season"];
 
 impl ShowIdent {
-    pub fn apply_parent_tokens(&mut self, tokens: &[Token<'_>]) {
-        if let (Some(Token::Unknown(season_ident)), Some(Token::Unknown(season_num))) =
-            (tokens.first(), tokens.get(1))
+    pub fn apply_parent_tokens(&mut self, mut tokens: Tokenizer<'_>) {
+        if let [
+            Token::Symbol(Symbol(season_ident)),
+            Token::Symbol(Symbol(season_num)),
+            ..,
+        ] = tokens.remaining()
         {
             if SEASON_IDENTS.contains(season_ident) {
                 if let Ok(season_num) = season_num.parse() {
@@ -92,13 +102,13 @@ impl ShowIdent {
                 }
             }
         }
-        self.apply_name(tokens);
+        self.apply_name(&mut tokens);
     }
 
     /// Read the tokens and apply name, year, episode number etc. to the identifier
     ///
-    /// Returns all [Token::Unknown] tokens that "may" be title
-    pub fn apply_name<'a>(&mut self, tokens: &[Token<'a>]) -> Vec<&'a str> {
+    /// Returns all [Token::Symbol] tokens that "may" be title
+    pub fn apply_name<'a>(&mut self, tokens: &mut Tokenizer<'a>) -> Vec<&'a str> {
         let mut title = String::new();
         let mut season = None;
         let mut episode = None;
@@ -110,12 +120,29 @@ impl ShowIdent {
         // gather all unidentified tokens that *might* represent the name for the cases where title detection fails
         let mut fallback_name_tokens = Vec::new();
 
-        for (i, token) in tokens.iter().enumerate() {
+        while let Some(token) = tokens.advance() {
             match token {
-                Token::Unknown(t) => {
-                    if in_group {
-                        continue;
-                    }
+                // the cursor already moved past `token`, so the match has to start one back
+                Token::Symbol(_)
+                    if let Some(attr_match) =
+                        attributes::recognize(&tokens.tokens()[tokens.position() - 1..]) =>
+                {
+                    self.attributes.insert(attr_match.attribute);
+                    tokens.advance_by(attr_match.consumed - 1);
+                    past_name = true;
+                }
+                Token::Symbol(_) if in_group => {
+                    continue;
+                }
+                Token::Symbol(s) if s.is_noise() => {
+                    // noise tokens are usually appear after the name
+                    past_name = true;
+                }
+                Token::Symbol(s) if let Some(y) = s.as_release_year() => {
+                    year = Some(y);
+                    past_name = true;
+                }
+                Token::Symbol(Symbol(t)) => {
                     // try to parse common episode formats
                     if let Some((s, e)) = parse_se_format(t).or_else(|| parse_0x0_episode(t)) {
                         season = Some(s);
@@ -126,16 +153,16 @@ impl ShowIdent {
                     // if we couldn't parse common season/episode try other formats
                     if season.is_none() {
                         {
-                            let t = &mut &**t;
+                            let t = &mut &*t;
                             if let Some(s) = parse_se_season(t) {
                                 season = Some(s);
                                 past_name = true;
                                 continue;
                             }
                         }
-                        if *t == "Season" {
-                            if let Some(s) = tokens.get(i + 1).and_then(|t| match t {
-                                Token::Unknown(t) => t.parse().ok(),
+                        if t == "Season" {
+                            if let Some(s) = tokens.peek().and_then(|t| match t {
+                                Token::Symbol(Symbol(t)) => t.parse().ok(),
                                 _ => None,
                             }) {
                                 past_name = true;
@@ -146,16 +173,16 @@ impl ShowIdent {
                     }
                     if episode.is_none() {
                         {
-                            let t = &mut &**t;
+                            let t = &mut &*t;
                             if let Some(s) = parse_se_episode(t) {
                                 episode = Some(s);
                                 past_name = true;
                                 continue;
                             }
                         }
-                        if *t == "Episode" {
-                            if let Some(e) = tokens.get(i + 1).and_then(|t| match t {
-                                Token::Unknown(t) => t.parse().ok(),
+                        if t == "Episode" {
+                            if let Some(e) = tokens.peek().and_then(|t| match t {
+                                Token::Symbol(Symbol(t)) => t.parse().ok(),
                                 _ => None,
                             }) {
                                 episode = Some(e);
@@ -166,7 +193,7 @@ impl ShowIdent {
                     }
 
                     // collect all unknown tokens in case we fail to detect title
-                    fallback_name_tokens.push(*t);
+                    fallback_name_tokens.push(t);
                     // if we could not parse any season/episode yet, collect title tokens
                     let is_digits = || t.chars().all(|c| c.is_ascii_digit());
                     if !past_name && !in_group && !is_digits() {
@@ -178,20 +205,10 @@ impl ShowIdent {
                         }
                     }
                 }
-                Token::Noise(_) => {
-                    // noise tokens are usually appear after the name
-                    past_name = true;
-                }
-                Token::Year(y) => {
-                    year = Some(*y);
-                    past_name = true;
-                }
-                Token::GroupStart => {
+                Token::GroupStart(_) => {
                     in_group = true;
                     // A group whose sole content is an explicit `SxxExx` marker (e.g. `(S02E10)`)
-                    if let (Some(Token::Unknown(t)), Some(Token::GroupEnd)) =
-                        (tokens.get(i + 1), tokens.get(i + 2))
-                    {
+                    if let [Token::Symbol(Symbol(t)), Token::GroupEnd(_), ..] = tokens.remaining() {
                         if let Some((s, e)) = parse_se_format(t) {
                             season = Some(s);
                             episode = Some(e);
@@ -199,7 +216,7 @@ impl ShowIdent {
                         }
                     }
                 }
-                Token::GroupEnd => {
+                Token::GroupEnd(_) => {
                     in_group = false;
                 }
                 Token::ExplicitSeparator => {
@@ -218,8 +235,8 @@ impl ShowIdent {
         fallback_name_tokens
     }
 
-    pub fn apply_name_tokens(&mut self, tokens: &[Token<'_>]) {
-        let fallback_tokens = self.apply_name(tokens);
+    pub fn apply_name_tokens(&mut self, mut tokens: Tokenizer<'_>) {
+        let fallback_tokens = self.apply_name(&mut tokens);
 
         let missing_title = self.title.is_empty();
         if self.episode.is_none() || missing_title {
@@ -271,12 +288,89 @@ impl ShowIdent {
     }
 
     /// Combine 2 idents. If 2 fields are same use self.
-    pub fn merge(&mut self, other: ShowIdent) {
-        self.episode = self.episode.or(other.episode);
-        self.season = self.season.or(other.season);
-        if self.title.is_empty() && !other.title.is_empty() {
-            self.title = other.title;
+    pub fn merge(
+        &mut self,
+        ShowIdent {
+            episode,
+            season,
+            title,
+            year,
+            attributes,
+        }: ShowIdent,
+    ) {
+        self.episode = self.episode.or(episode);
+        self.season = self.season.or(season);
+        self.year = self.year.or(year);
+        self.attributes.merge(attributes);
+        if self.title.is_empty() && !title.is_empty() {
+            self.title = title;
         }
+    }
+}
+
+/// Full show identifier representation
+///
+/// Usually constructed from episode file name and parent directories
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct ShowIdentifier {
+    pub episode: u16,
+    pub season: u16,
+    pub title: String,
+    pub year: Option<u16>,
+    pub attributes: Attributes,
+}
+
+impl ShowIdentifier {
+    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ShowIdent> {
+        let ident = Parser::parse_filename(path.as_ref(), ShowIdent::default());
+        if let Some((episode, season)) = ident.episode.zip(ident.season) {
+            Ok(Self {
+                episode,
+                season,
+                title: ident.title,
+                year: ident.year,
+                attributes: ident.attributes,
+            })
+        } else {
+            Err(ident)
+        }
+    }
+}
+
+impl From<ShowIdentifier> for ContentIdentifier {
+    fn from(val: ShowIdentifier) -> Self {
+        ContentIdentifier::Show(val)
+    }
+}
+
+impl TryFrom<ShowIdent> for ShowIdentifier {
+    type Error = ShowIdent;
+
+    fn try_from(ident: ShowIdent) -> Result<Self, Self::Error> {
+        if let Some((episode, season)) = ident.episode.zip(ident.season) {
+            Ok(Self {
+                episode,
+                season,
+                title: ident.title,
+                year: ident.year,
+                attributes: ident.attributes,
+            })
+        } else {
+            Err(ident)
+        }
+    }
+}
+
+impl Media for ShowIdentifier {
+    type Ident = ShowIdent;
+    fn identify(path: impl AsRef<Path>) -> Result<Self, Self::Ident>
+    where
+        Self: Sized,
+    {
+        Self::from_path(path)
+    }
+    fn title(&self) -> &str {
+        &self.title
     }
 }
 
@@ -284,7 +378,7 @@ impl ShowIdent {
 mod tests {
     use std::path::Path;
 
-    use crate::library::{identification::Parser, show::ShowIdent};
+    use super::*;
 
     macro_rules! episode_tests {
         ($($name:ident: ($input:expr, $title:expr, $season:expr, $episode:expr);)*) => {
@@ -643,68 +737,5 @@ mod tests {
                 4,
             ),
         ];
-    }
-}
-
-/// Full show identifier representation
-///
-/// Usually constructed from episode file name and parent directories
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct ShowIdentifier {
-    pub episode: u16,
-    pub season: u16,
-    pub title: String,
-    pub year: Option<u16>,
-}
-
-impl ShowIdentifier {
-    pub fn from_path(path: impl AsRef<Path>) -> Result<Self, ShowIdent> {
-        let ident = Parser::parse_filename(path.as_ref(), ShowIdent::default());
-        if let Some((episode, season)) = ident.episode.zip(ident.season) {
-            Ok(Self {
-                episode,
-                season,
-                title: ident.title,
-                year: ident.year,
-            })
-        } else {
-            Err(ident)
-        }
-    }
-}
-
-impl From<ShowIdentifier> for ContentIdentifier {
-    fn from(val: ShowIdentifier) -> Self {
-        ContentIdentifier::Show(val)
-    }
-}
-
-impl TryFrom<ShowIdent> for ShowIdentifier {
-    type Error = ShowIdent;
-
-    fn try_from(ident: ShowIdent) -> Result<Self, Self::Error> {
-        if let Some((episode, season)) = ident.episode.zip(ident.season) {
-            Ok(Self {
-                episode,
-                season,
-                title: ident.title,
-                year: ident.year,
-            })
-        } else {
-            Err(ident)
-        }
-    }
-}
-
-impl Media for ShowIdentifier {
-    type Ident = ShowIdent;
-    fn identify(path: impl AsRef<Path>) -> Result<Self, Self::Ident>
-    where
-        Self: Sized,
-    {
-        Self::from_path(path)
-    }
-    fn title(&self) -> &str {
-        &self.title
     }
 }

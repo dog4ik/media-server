@@ -16,12 +16,12 @@ use crate::{
     library::{
         LibraryItem,
         assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
-        movie::MovieIdentifier,
     },
     metadata::{
         ExternalIdMetadata, MovieMetadata, MovieMetadataProvider, ParentMediaType,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
+    parser::movie::MovieIdentifier,
     scan::{
         ContentScanner, insert_roles,
         scan_progress::{FailedContent, MetadataProgressEmitter},

@@ -17,12 +17,12 @@ use crate::{
     library::{
         LibraryItem,
         assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
-        show::ShowIdentifier,
     },
     metadata::{
         ExternalIdMetadata, MetadataProvider, ParentMediaType, ShowMetadata, ShowMetadataProvider,
         metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
     },
+    parser::show::ShowIdentifier,
     scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
 };
 

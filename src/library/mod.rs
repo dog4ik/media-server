@@ -5,41 +5,28 @@ use std::{
 };
 
 use anyhow::Context;
-use identification::{walk_movie_dirs, walk_show_dirs};
 use serde::{Deserialize, Serialize};
 
 use self::media::codec::audio::AudioCodec;
 use self::media::codec::video::VideoCodec;
 use self::media::container::VideoContainer;
 use self::media::{Resolution, Video};
-use crate::db::Db;
+use crate::{
+    db::Db,
+    parser::{movie::MovieIdentifier, show::ShowIdentifier, walk_movie_dirs, walk_show_dirs},
+};
 
-use self::{
-    assets::{
-        AssetDir, PreviewAsset, PreviewsDirAsset, SubtitleAsset, SubtitlesDirAsset, VideoAssetsDir,
-    },
-    movie::MovieIdentifier,
+use self::assets::{
+    AssetDir, PreviewAsset, PreviewsDirAsset, SubtitleAsset, SubtitlesDirAsset, VideoAssetsDir,
 };
-use self::{
-    assets::{VariantAsset, VariantsDirAsset},
-    show::ShowIdentifier,
-};
+use self::assets::{VariantAsset, VariantsDirAsset};
 
 /// Saved local assets like posters
 pub mod assets;
-/// Identification for extras file names
-#[allow(unused)]
-pub mod extras;
-/// Local files tokenizer
-pub mod identification;
 /// Library videos and it's components
 pub mod media;
-/// Identification for movie file names
-pub mod movie;
-/// Identification for show file names
-pub mod show;
 
-const EXTRAS_FOLDERS: [&str; 14] = [
+pub const EXTRAS_FOLDERS: &[&str] = &[
     "behind the scenes",
     "deleted scenes",
     "interviews",
