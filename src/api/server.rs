@@ -1139,6 +1139,7 @@ pub async fn get_episode(
     ),
     responses(
         (status = 200, description = "Torrent search results", body = Vec<Torrent>),
+        (status = 400, body = AppError),
     ),
     tag = "Torrent",
 )]
