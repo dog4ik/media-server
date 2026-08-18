@@ -37,6 +37,7 @@ Feel free to try out demo [here](https://demo.provod.rs)
 ## Supported torrent indexes
 
 - TPB
+- Nyaa
 - RuTracker
 
 # Installation

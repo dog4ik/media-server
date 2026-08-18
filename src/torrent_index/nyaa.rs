@@ -106,10 +106,10 @@ impl NyaaApi {
 impl TorrentIndex for NyaaApi {
     async fn search_movie_torrent(
         &self,
-        _query: &str,
+        query: &str,
         _: &FetchParams,
     ) -> crate::Result<Vec<super::TorrentMetadata>> {
-        Err(AppError::bad_request("movie search is not supported"))
+        Ok(self.search(query).await?)
     }
 
     async fn search_show_torrent(
