@@ -6,7 +6,7 @@ use time::OffsetDateTime;
 
 use crate::metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient};
 
-use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
+use super::{TorrentIndex, TorrentIndexIdentifier, TorrentMetadata};
 
 /// List of default trackers appended to each [Magnet Link](torrent::MagnetLink) in ThePirateBay
 const TRACKERS: [&str; 9] = [
@@ -111,7 +111,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Ok(self
             .search(query, Category::Movie)
             .await?
@@ -123,7 +123,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Ok(self
             .search(query, Category::Show)
             .await?
@@ -135,7 +135,7 @@ impl TorrentIndex for TpbApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Ok(self
             .search(query, Category::Any)
             .await?
@@ -182,12 +182,12 @@ impl TpbTorrent {
     }
 }
 
-impl From<TpbTorrent> for Torrent {
+impl From<TpbTorrent> for TorrentMetadata {
     fn from(val: TpbTorrent) -> Self {
         let magnet_link = val.magnet_link();
         let t: i64 = val.added.parse().unwrap();
         let created = OffsetDateTime::from_unix_timestamp(t).unwrap();
-        Torrent {
+        TorrentMetadata {
             name: val.name,
             magnet: Some(magnet_link),
             author: Some(val.username),

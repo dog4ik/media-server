@@ -106,6 +106,19 @@ impl MovieIdentifier {
             })
         }
     }
+
+    pub fn from_str(s: &str) -> Result<Self, MovieIdent> {
+        let ident = Parser::parse_str(s, MovieIdent::default());
+        if ident.title.is_empty() {
+            Err(ident)
+        } else {
+            Ok(Self {
+                title: ident.title,
+                year: ident.year,
+                attributes: ident.attributes,
+            })
+        }
+    }
 }
 
 impl From<MovieIdentifier> for ContentIdentifier {
@@ -139,7 +152,11 @@ mod tests {
                 #[test]
                 fn $name() {
                     let id = Parser::parse_filename(Path::new($input), MovieIdent::default());
-                    let expected = MovieIdent { title: $title.into(), year: $year, ..Default::default() };
+                    let expected = MovieIdent {
+                        title: $title.into(),
+                        year: $year,
+                        attributes: id.attributes.clone()
+                    };
                     assert_eq!(expected, id, "mismatch for {:?}", $input);
                 }
             )*

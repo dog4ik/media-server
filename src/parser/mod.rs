@@ -118,6 +118,12 @@ impl<T: Parseable> Parser<T> {
         }
     }
 
+    pub fn parse_str(s: &str, mut parsable: T) -> T {
+        let tokens = Tokenizer::new(&s);
+        parsable.parse_name(tokens);
+        return parsable;
+    }
+
     pub fn feed_filename(mut self, file_name: &OsStr) -> T {
         let file_name = file_name.to_string_lossy();
         self.inner.parse_name(Tokenizer::new(&file_name));

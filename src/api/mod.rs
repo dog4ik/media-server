@@ -206,7 +206,7 @@ pub mod torrent;
             progress::Notification,
             progress::TaskProgress,
             crate::tracing::JsonTracingEvent,
-            torrent_index::Torrent,
+            torrent_index::TorrentMetadata,
             db::DbExternalId,
             library::TranscodePayload,
             library::media::codec::audio::AudioCodec,

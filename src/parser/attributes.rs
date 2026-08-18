@@ -64,6 +64,8 @@ pub enum Tag {
     Dubbed,
     Subbed,
     DualAudio,
+    MultiAudio,
+    MultiSubs,
     Uncensored,
     Hdr,
     Extended,
@@ -116,6 +118,8 @@ static PHRASES: &[(&[&str], Attribute)] = &[
     (&["subbed"], Attribute::Tag(Tag::Subbed)),
     (&["dual", "audio"], Attribute::Tag(Tag::DualAudio)),
     (&["dual"], Attribute::Tag(Tag::DualAudio)),
+    (&["multi", "audio"], Attribute::Tag(Tag::MultiAudio)),
+    (&["multi", "subs"], Attribute::Tag(Tag::MultiSubs)),
     (&["uncensored"], Attribute::Tag(Tag::Uncensored)),
     (&["hdr"], Attribute::Tag(Tag::Hdr)),
     (&["extended"], Attribute::Tag(Tag::Extended)),
@@ -171,7 +175,7 @@ impl Attributes {
             match recognize(tokens.remaining()) {
                 Some(found) => {
                     attributes.insert(found.attribute);
-                    tokens.seek(tokens.position() + found.consumed);
+                    tokens.advance_by(found.consumed);
                 }
                 None => {
                     tokens.advance();
@@ -341,6 +345,13 @@ mod tests {
         assert_eq!(Some(Resolution::P1080), attributes.resolution);
         assert_eq!(Some(Source::Web), attributes.source);
         assert_eq!(vec![Tag::DualAudio], attributes.tags);
+
+        let attributes = parse(
+            "Smoking Behind the Supermarket With You S01E06 Smoke 6 1080p NF WEB-DL DUAL AAC2.0 H.264-VARYG (Super no Ura de Yani Suu Futari, Dual-Audio, Multi-Subs)",
+        );
+        assert_eq!(Some(Resolution::P1080), attributes.resolution);
+        assert_eq!(Some(Source::WebDl), attributes.source);
+        assert_eq!(vec![Tag::DualAudio, Tag::MultiSubs], attributes.tags);
     }
 
     #[test]

@@ -41,7 +41,7 @@ impl NyaaApi {
         }
     }
 
-    pub async fn search(&self, query: &str) -> anyhow::Result<Vec<super::Torrent>> {
+    pub async fn search(&self, query: &str) -> anyhow::Result<Vec<super::TorrentMetadata>> {
         let mut url = self.base_url.clone();
         url.query_pairs_mut()
             .append_pair("page", "rss")
@@ -84,7 +84,7 @@ impl NyaaApi {
                     .and_then(parse_nyaa_size)
                     .unwrap_or_default();
 
-                Some(super::Torrent {
+                Some(super::TorrentMetadata {
                     name,
                     magnet: Some(magnet),
                     author: item.author,
@@ -108,7 +108,7 @@ impl TorrentIndex for NyaaApi {
         &self,
         _query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Err(AppError::bad_request("movie search is not supported"))
     }
 
@@ -116,7 +116,7 @@ impl TorrentIndex for NyaaApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Ok(self.search(query).await?)
     }
 
@@ -124,7 +124,7 @@ impl TorrentIndex for NyaaApi {
         &self,
         query: &str,
         _: &FetchParams,
-    ) -> crate::Result<Vec<super::Torrent>> {
+    ) -> crate::Result<Vec<super::TorrentMetadata>> {
         Ok(self.search(query).await?)
     }
 

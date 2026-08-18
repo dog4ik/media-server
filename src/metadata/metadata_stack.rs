@@ -6,7 +6,7 @@ use serde::{Serialize, ser::SerializeStruct};
 use crate::{
     config,
     torrent_index::{
-        Torrent, TorrentIndex, TorrentIndexIdentifier, nyaa::NyaaApi,
+        TorrentIndex, TorrentIndexIdentifier, TorrentMetadata, nyaa::NyaaApi,
         rutracker::ProvodRuTrackerAdapter, tpb::TpbApi,
     },
 };
@@ -293,7 +293,7 @@ impl MetadataProvidersStack {
         &self,
         query: &str,
         content_type: Option<ParentMediaType>,
-    ) -> Vec<Torrent> {
+    ) -> Vec<TorrentMetadata> {
         let torrent_indexes = { self.torrent_indexes_stack.lock().unwrap().clone() };
         let mut out = Vec::new();
         let lang: config::MetadataLanguage = config::CONFIG.get_value();

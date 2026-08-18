@@ -1152,31 +1152,37 @@ pub async fn search_torrent(
     if search.is_empty() {
         return Ok(Json(Vec::new()));
     }
-    Ok(Json(match provider {
-        Some(p) => {
-            let lang: config::MetadataLanguage = config::CONFIG.get_value();
-            let fetch_params = crate::metadata::FetchParams { lang: lang.0 };
-            let provider = providers
-                .torrent_index(p)
-                .ok_or(AppError::not_found("Provider is not found"))?;
-            match content_type.content_type {
-                Some(ParentMediaType::Show) => {
-                    provider.search_show_torrent(&search, &fetch_params).await?
+    Ok(Json(
+        match provider {
+            Some(p) => {
+                let lang: config::MetadataLanguage = config::CONFIG.get_value();
+                let fetch_params = crate::metadata::FetchParams { lang: lang.0 };
+                let provider = providers
+                    .torrent_index(p)
+                    .ok_or(AppError::not_found("Provider is not found"))?;
+                match content_type.content_type {
+                    Some(ParentMediaType::Show) => {
+                        provider.search_show_torrent(&search, &fetch_params).await?
+                    }
+                    Some(ParentMediaType::Movie) => {
+                        provider
+                            .search_movie_torrent(&search, &fetch_params)
+                            .await?
+                    }
+
+                    None => provider.search_any_torrent(&search, &fetch_params).await?,
                 }
-                Some(ParentMediaType::Movie) => {
-                    provider
-                        .search_movie_torrent(&search, &fetch_params)
-                        .await?
-                }
-                None => provider.search_any_torrent(&search, &fetch_params).await?,
+            }
+            None => {
+                providers
+                    .get_torrents(&search, content_type.content_type)
+                    .await
             }
         }
-        None => {
-            providers
-                .get_torrents(&search, content_type.content_type)
-                .await
-        }
-    }))
+        .into_iter()
+        .map(|meta| Torrent::from_meta(meta, content_type.content_type))
+        .collect(),
+    ))
 }
 
 /// Get trending shows

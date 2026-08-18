@@ -4,7 +4,7 @@ use serde::Deserialize;
 
 use crate::metadata::{FetchParams, provod_agent, request_client::LimitedRequestClient};
 
-use super::{Torrent, TorrentIndex, TorrentIndexIdentifier};
+use super::{TorrentIndex, TorrentIndexIdentifier, TorrentMetadata};
 
 /// Rutracker torrent index Provod adapter.
 ///
@@ -32,7 +32,7 @@ pub struct ProvodRuTrackerMagnetLink {
     magnet_link: String,
 }
 
-impl From<ProvodRuTrackerTorrent> for Torrent {
+impl From<ProvodRuTrackerTorrent> for TorrentMetadata {
     fn from(value: ProvodRuTrackerTorrent) -> Self {
         let created = time::OffsetDateTime::parse(
             &value.created_at,
@@ -101,7 +101,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>> {
+    ) -> crate::Result<Vec<TorrentMetadata>> {
         Ok(self
             .search(query)
             .await?
@@ -114,7 +114,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>> {
+    ) -> crate::Result<Vec<TorrentMetadata>> {
         Ok(self
             .search(query)
             .await?
@@ -127,7 +127,7 @@ impl TorrentIndex for ProvodRuTrackerAdapter {
         &self,
         query: &str,
         _fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>> {
+    ) -> crate::Result<Vec<TorrentMetadata>> {
         Ok(self
             .search(query)
             .await?

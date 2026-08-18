@@ -335,6 +335,21 @@ impl ShowIdentifier {
             Err(ident)
         }
     }
+
+    pub fn from_str(s: &str) -> Result<Self, ShowIdent> {
+        let ident = Parser::parse_str(s, ShowIdent::default());
+        if let Some((episode, season)) = ident.episode.zip(ident.season) {
+            Ok(Self {
+                episode,
+                season,
+                title: ident.title,
+                year: ident.year,
+                attributes: ident.attributes,
+            })
+        } else {
+            Err(ident)
+        }
+    }
 }
 
 impl From<ShowIdentifier> for ContentIdentifier {

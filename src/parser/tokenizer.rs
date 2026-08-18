@@ -43,7 +43,7 @@ impl<'a> Tokenizer<'a> {
         while let Some((byte_idx, char)) = iter.next() {
             if OPEN_BRACKETS.contains(&char) {
                 if byte_idx - token_start_byte != 0 {
-                    let token = &file_name[token_start_byte..byte_idx];
+                    let token = &file_name[token_start_byte..byte_idx].trim_matches(',');
                     tokens.push(Token::Symbol(Symbol(token)));
                 }
                 tokens.push(Token::GroupStart(char));
@@ -52,7 +52,7 @@ impl<'a> Tokenizer<'a> {
             }
             if CLOSE_BRACKETS.contains(&char) {
                 if byte_idx - token_start_byte != 0 {
-                    let token = &file_name[token_start_byte..byte_idx];
+                    let token = &file_name[token_start_byte..byte_idx].trim_matches(',');
                     tokens.push(Token::Symbol(Symbol(token)));
                 }
                 tokens.push(Token::GroupEnd(char));
@@ -61,7 +61,7 @@ impl<'a> Tokenizer<'a> {
             }
             if SEPARATORS.contains(&char) {
                 if byte_idx - token_start_byte != 0 {
-                    let token = &file_name[token_start_byte..byte_idx];
+                    let token = &file_name[token_start_byte..byte_idx].trim_matches(',');
                     tokens.push(Token::Symbol(Symbol(token)));
                 }
 
@@ -83,7 +83,7 @@ impl<'a> Tokenizer<'a> {
         }
 
         if token_start_byte != file_name.len() {
-            let remainder = &file_name[token_start_byte..file_name.len()];
+            let remainder = &file_name[token_start_byte..file_name.len()].trim_matches(',');
             tokens.push(Token::Symbol(Symbol(remainder)));
         }
 

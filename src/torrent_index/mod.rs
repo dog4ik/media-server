@@ -4,7 +4,11 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize, Serializer};
 use time::OffsetDateTime;
 
-use crate::metadata::FetchParams;
+use crate::{
+    library::ContentIdentifier,
+    metadata::{FetchParams, ParentMediaType},
+    parser::{movie::MovieIdentifier, show::ShowIdentifier},
+};
 
 pub mod nyaa;
 pub mod rutracker;
@@ -50,7 +54,7 @@ fn serialize_magnet<S: Serializer>(url: &Option<Url>, serializer: S) -> Result<S
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct Torrent {
+pub struct TorrentMetadata {
     pub name: String,
     #[serde(serialize_with = "serialize_magnet")]
     pub magnet: Option<Url>,
@@ -65,23 +69,45 @@ pub struct Torrent {
     pub provider_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+pub struct Torrent {
+    #[serde(flatten)]
+    meta: TorrentMetadata,
+    identifier: Option<ContentIdentifier>,
+}
+
+impl Torrent {
+    pub fn from_meta(meta: TorrentMetadata, media_type: Option<ParentMediaType>) -> Self {
+        let identifier = match media_type {
+            Some(ParentMediaType::Movie) => MovieIdentifier::from_str(&meta.name)
+                .ok()
+                .map(ContentIdentifier::Movie),
+            Some(ParentMediaType::Show) => ShowIdentifier::from_str(&meta.name)
+                .ok()
+                .map(ContentIdentifier::Show),
+            None => None,
+        };
+        Self { meta, identifier }
+    }
+}
+
 #[async_trait::async_trait]
 pub trait TorrentIndex {
     async fn search_show_torrent(
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>>;
+    ) -> crate::Result<Vec<TorrentMetadata>>;
     async fn search_movie_torrent(
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>>;
+    ) -> crate::Result<Vec<TorrentMetadata>>;
     async fn search_any_torrent(
         &self,
         query: &str,
         fetch_params: &FetchParams,
-    ) -> crate::Result<Vec<Torrent>>;
+    ) -> crate::Result<Vec<TorrentMetadata>>;
     async fn fetch_magnet_link(&self, torrent_id: &str) -> crate::Result<torrent::MagnetLink>;
     fn provider_identifier(&self) -> TorrentIndexIdentifier;
 }
