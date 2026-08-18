@@ -1,7 +1,7 @@
 use crate::parser::{symbol::Symbol, tokenizer::Token};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
-pub enum Resolution {
+pub enum ResolutionAttr {
     #[serde(rename = "480p")]
     P480,
     #[serde(rename = "720p")]
@@ -12,7 +12,7 @@ pub enum Resolution {
     P2160,
 }
 
-impl Resolution {
+impl ResolutionAttr {
     fn from_height(height: u16) -> Option<Self> {
         Some(match height {
             480 => Self::P480,
@@ -42,17 +42,18 @@ impl Resolution {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Source {
+pub enum SourceAttr {
     Web,
     WebDl,
     WebRip,
     BluRay,
     Dvd,
+    Telesync,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum Codec {
+pub enum CodecAttr {
     H264,
     H265,
     Av1,
@@ -75,9 +76,9 @@ pub enum Tag {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case", untagged)]
 pub enum Attribute {
-    Resolution(Resolution),
-    Source(Source),
-    Codec(Codec),
+    Resolution(ResolutionAttr),
+    Source(SourceAttr),
+    Codec(CodecAttr),
     Tag(Tag),
 }
 
@@ -90,29 +91,30 @@ pub struct Match {
 
 static PHRASES: &[(&[&str], Attribute)] = &[
     // Source
-    (&["web"], Attribute::Source(Source::Web)),
-    (&["webdl"], Attribute::Source(Source::WebDl)),
-    (&["web", "dl"], Attribute::Source(Source::WebDl)),
-    (&["webrip"], Attribute::Source(Source::WebRip)),
-    (&["web", "rip"], Attribute::Source(Source::WebRip)),
-    (&["bluray"], Attribute::Source(Source::BluRay)),
-    (&["blu", "ray"], Attribute::Source(Source::BluRay)),
-    (&["bd"], Attribute::Source(Source::BluRay)),
-    (&["bdrip"], Attribute::Source(Source::BluRay)),
-    (&["brrip"], Attribute::Source(Source::BluRay)),
-    (&["dvd"], Attribute::Source(Source::Dvd)),
-    (&["dvdrip"], Attribute::Source(Source::Dvd)),
-    (&["dvd", "rip"], Attribute::Source(Source::Dvd)),
+    (&["web"], Attribute::Source(SourceAttr::Web)),
+    (&["webdl"], Attribute::Source(SourceAttr::WebDl)),
+    (&["web", "dl"], Attribute::Source(SourceAttr::WebDl)),
+    (&["webrip"], Attribute::Source(SourceAttr::WebRip)),
+    (&["web", "rip"], Attribute::Source(SourceAttr::WebRip)),
+    (&["bluray"], Attribute::Source(SourceAttr::BluRay)),
+    (&["blu", "ray"], Attribute::Source(SourceAttr::BluRay)),
+    (&["bd"], Attribute::Source(SourceAttr::BluRay)),
+    (&["bdrip"], Attribute::Source(SourceAttr::BluRay)),
+    (&["brrip"], Attribute::Source(SourceAttr::BluRay)),
+    (&["dvd"], Attribute::Source(SourceAttr::Dvd)),
+    (&["dvdrip"], Attribute::Source(SourceAttr::Dvd)),
+    (&["dvd", "rip"], Attribute::Source(SourceAttr::Dvd)),
+    (&["telesync"], Attribute::Source(SourceAttr::Telesync)),
     // Codec
-    (&["x264"], Attribute::Codec(Codec::H264)),
-    (&["h264"], Attribute::Codec(Codec::H264)),
-    (&["h", "264"], Attribute::Codec(Codec::H264)),
-    (&["avc"], Attribute::Codec(Codec::H264)),
-    (&["x265"], Attribute::Codec(Codec::H265)),
-    (&["h265"], Attribute::Codec(Codec::H265)),
-    (&["h", "265"], Attribute::Codec(Codec::H265)),
-    (&["hevc"], Attribute::Codec(Codec::H265)),
-    (&["av1"], Attribute::Codec(Codec::Av1)),
+    (&["x264"], Attribute::Codec(CodecAttr::H264)),
+    (&["h264"], Attribute::Codec(CodecAttr::H264)),
+    (&["h", "264"], Attribute::Codec(CodecAttr::H264)),
+    (&["avc"], Attribute::Codec(CodecAttr::H264)),
+    (&["x265"], Attribute::Codec(CodecAttr::H265)),
+    (&["h265"], Attribute::Codec(CodecAttr::H265)),
+    (&["h", "265"], Attribute::Codec(CodecAttr::H265)),
+    (&["hevc"], Attribute::Codec(CodecAttr::H265)),
+    (&["av1"], Attribute::Codec(CodecAttr::Av1)),
     // Tags
     (&["dubbed"], Attribute::Tag(Tag::Dubbed)),
     (&["subbed"], Attribute::Tag(Tag::Subbed)),
@@ -151,7 +153,7 @@ pub fn recognize(tokens: &[Token<'_>]) -> Option<Match> {
     let Token::Symbol(symbol) = tokens.first()? else {
         return None;
     };
-    Resolution::from_symbol(*symbol).map(|resolution| Match {
+    ResolutionAttr::from_symbol(*symbol).map(|resolution| Match {
         attribute: Attribute::Resolution(resolution),
         consumed: 1,
     })
@@ -160,9 +162,9 @@ pub fn recognize(tokens: &[Token<'_>]) -> Option<Match> {
 /// Everything recognized in a single file name.
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, utoipa::ToSchema)]
 pub struct Attributes {
-    pub resolution: Option<Resolution>,
-    pub source: Option<Source>,
-    pub codec: Option<Codec>,
+    pub resolution: Option<ResolutionAttr>,
+    pub source: Option<SourceAttr>,
+    pub codec: Option<CodecAttr>,
     pub tags: Vec<Tag>,
 }
 
@@ -238,12 +240,12 @@ mod tests {
     #[test]
     fn multi_word_phrases_match_across_separators() {
         for (input, expected) in [
-            ("WEB-DL", Attribute::Source(Source::WebDl)),
-            ("web.dl", Attribute::Source(Source::WebDl)),
-            ("WEB DL", Attribute::Source(Source::WebDl)),
-            ("Blu-Ray", Attribute::Source(Source::BluRay)),
+            ("WEB-DL", Attribute::Source(SourceAttr::WebDl)),
+            ("web.dl", Attribute::Source(SourceAttr::WebDl)),
+            ("WEB DL", Attribute::Source(SourceAttr::WebDl)),
+            ("Blu-Ray", Attribute::Source(SourceAttr::BluRay)),
             ("Dual Audio", Attribute::Tag(Tag::DualAudio)),
-            ("H.264", Attribute::Codec(Codec::H264)),
+            ("H.264", Attribute::Codec(CodecAttr::H264)),
         ] {
             let found = head(input).unwrap_or_else(|| panic!("{input:?} matched nothing"));
             assert_eq!(expected, found.attribute, "wrong attribute for {input:?}");
@@ -255,14 +257,14 @@ mod tests {
         // `web` alone is a source, but `web dl` is a longer entry and must take precedence
         assert_eq!(
             Some(Match {
-                attribute: Attribute::Source(Source::WebDl),
+                attribute: Attribute::Source(SourceAttr::WebDl),
                 consumed: 2
             }),
             head("WEB-DL.1080p")
         );
         assert_eq!(
             Some(Match {
-                attribute: Attribute::Source(Source::Web),
+                attribute: Attribute::Source(SourceAttr::Web),
                 consumed: 1
             }),
             head("web.h265")
@@ -272,14 +274,14 @@ mod tests {
     #[test]
     fn phrases_do_not_reach_across_group_edges() {
         let found = head("WEB[DL]").unwrap();
-        assert_eq!(Attribute::Source(Source::Web), found.attribute);
+        assert_eq!(Attribute::Source(SourceAttr::Web), found.attribute);
         assert_eq!(1, found.consumed);
     }
 
     #[test]
     fn phrases_do_not_reach_across_explicit_separators() {
         let found = head("WEB - DL").unwrap();
-        assert_eq!(Attribute::Source(Source::Web), found.attribute);
+        assert_eq!(Attribute::Source(SourceAttr::Web), found.attribute);
         assert_eq!(1, found.consumed);
     }
 
@@ -287,7 +289,7 @@ mod tests {
     fn matching_is_case_insensitive() {
         for input in ["WEBRIP", "webrip", "WebRip"] {
             assert_eq!(
-                Some(Attribute::Source(Source::WebRip)),
+                Some(Attribute::Source(SourceAttr::WebRip)),
                 head(input).map(|m| m.attribute),
                 "{input:?}"
             );
@@ -297,14 +299,14 @@ mod tests {
     #[test]
     fn resolutions() {
         for (input, expected) in [
-            ("1080p", Resolution::P1080),
-            ("720i", Resolution::P720),
-            ("2160p", Resolution::P2160),
-            ("480P", Resolution::P480),
-            ("1920x1080", Resolution::P1080),
-            ("1280X720", Resolution::P720),
-            ("4k", Resolution::P2160),
-            ("UHD", Resolution::P2160),
+            ("1080p", ResolutionAttr::P1080),
+            ("720i", ResolutionAttr::P720),
+            ("2160p", ResolutionAttr::P2160),
+            ("480P", ResolutionAttr::P480),
+            ("1920x1080", ResolutionAttr::P1080),
+            ("1280X720", ResolutionAttr::P720),
+            ("4k", ResolutionAttr::P2160),
+            ("UHD", ResolutionAttr::P2160),
         ] {
             assert_eq!(
                 Some(Attribute::Resolution(expected)),
@@ -324,33 +326,33 @@ mod tests {
     #[test]
     fn real_release_names() {
         let attributes = parse("Fleabag.S01E01.1080p.AMZN.WEB-DL.DD+5.1.H.264-NTb");
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Source::WebDl), attributes.source);
-        assert_eq!(Some(Codec::H264), attributes.codec);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(SourceAttr::WebDl), attributes.source);
+        assert_eq!(Some(CodecAttr::H264), attributes.codec);
 
         let attributes =
             parse("[Judas] Fullmetal Alchemist Brotherhood - 01 [BD 1080p HEVC x265 10bit FLAC]");
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Source::BluRay), attributes.source);
-        assert_eq!(Some(Codec::H265), attributes.codec);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(SourceAttr::BluRay), attributes.source);
+        assert_eq!(Some(CodecAttr::H265), attributes.codec);
 
         let attributes = parse("Cyberpunk.Edgerunners.S01E02.DUBBED.1080p.WEBRip.x265-RARBG");
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Source::WebRip), attributes.source);
-        assert_eq!(Some(Codec::H265), attributes.codec);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(SourceAttr::WebRip), attributes.source);
+        assert_eq!(Some(CodecAttr::H265), attributes.codec);
         assert_eq!(vec![Tag::Dubbed], attributes.tags);
 
         let attributes =
             parse("[9volt] Sousou no Frieren - 38 (S02E10) (Dual Audio) (WEB 1080p HEVC EAC-3)");
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Source::Web), attributes.source);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(SourceAttr::Web), attributes.source);
         assert_eq!(vec![Tag::DualAudio], attributes.tags);
 
         let attributes = parse(
             "Smoking Behind the Supermarket With You S01E06 Smoke 6 1080p NF WEB-DL DUAL AAC2.0 H.264-VARYG (Super no Ura de Yani Suu Futari, Dual-Audio, Multi-Subs)",
         );
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Source::WebDl), attributes.source);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(SourceAttr::WebDl), attributes.source);
         assert_eq!(vec![Tag::DualAudio, Tag::MultiSubs], attributes.tags);
     }
 
@@ -358,7 +360,7 @@ mod tests {
     fn tags_are_deduplicated() {
         let attributes = parse("Show.DUBBED.1080p.dubbed.720p.x264.x265");
         assert_eq!(vec![Tag::Dubbed], attributes.tags);
-        assert_eq!(Some(Resolution::P1080), attributes.resolution);
-        assert_eq!(Some(Codec::H264), attributes.codec);
+        assert_eq!(Some(ResolutionAttr::P1080), attributes.resolution);
+        assert_eq!(Some(CodecAttr::H264), attributes.codec);
     }
 }

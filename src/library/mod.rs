@@ -119,7 +119,7 @@ pub async fn explore_movie_dirs(
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "lowercase", tag = "media_type")]
 pub enum ContentIdentifier {
     Show(ShowIdentifier),
     Movie(MovieIdentifier),
