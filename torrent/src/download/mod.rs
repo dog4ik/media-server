@@ -578,8 +578,8 @@ impl Download {
             self.handle_peer_messages(i, ctx);
             let peer = &mut self.scheduler.peers[i];
             let pex_idx = peer.pex_idx;
-            if peer.last_pex_message_time.duration_since(ctx.tick_start) > PEX_MESSAGE_INTERVAL {
-                peer.send_pex_message(&self.pex_history);
+            if ctx.tick_start - peer.last_pex_message_time > PEX_MESSAGE_INTERVAL {
+                peer.send_pex_message(&self.pex_history, ctx.tick_start);
             }
             if pex_idx < min_pex_tip {
                 min_pex_tip = pex_idx

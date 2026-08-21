@@ -124,7 +124,7 @@ impl Default for PerformanceHistory {
 #[derive(Debug)]
 pub struct InterestedPieces {
     bf: BitField,
-    interested_amount: usize,
+    interested_count: usize,
 }
 
 impl InterestedPieces {
@@ -133,21 +133,21 @@ impl InterestedPieces {
 
         let mut this = Self {
             bf,
-            interested_amount: 0,
+            interested_count: 0,
         };
         this.recalculate(piece_table, peer_bf);
         this
     }
 
-    pub fn amount(&self) -> usize {
-        self.interested_amount
+    pub fn count(&self) -> usize {
+        self.interested_count
     }
 
     pub fn recalculate(&mut self, piece_table: &[scheduler::SchedulerPiece], peer_bf: &BitField) {
-        self.interested_amount = 0;
+        self.interested_count = 0;
         for (i, piece) in piece_table.iter().enumerate() {
             if !piece.is_finished && !piece.priority.is_disabled() && peer_bf.has(i) {
-                self.interested_amount += 1;
+                self.interested_count += 1;
                 self.bf.add(i).unwrap();
             } else {
                 self.bf.remove(i).unwrap();
@@ -157,14 +157,14 @@ impl InterestedPieces {
 
     pub fn add_piece(&mut self, piece: usize) {
         if !self.bf.has(piece) {
-            self.interested_amount += 1;
+            self.interested_count += 1;
             self.bf.add(piece).unwrap();
         }
     }
 
     pub fn remove_piece(&mut self, piece: usize) {
         if self.bf.has(piece) {
-            self.interested_amount -= 1;
+            self.interested_count -= 1;
             self.bf.remove(piece).unwrap();
         }
     }
@@ -273,11 +273,11 @@ impl ActivePeer {
         Ok(())
     }
 
-    pub fn send_pex_message(&mut self, history: &PexHistory) {
+    pub fn send_pex_message(&mut self, history: &PexHistory, tick_start: Instant) {
         tracing::info!("Sending pex message to the peer");
         let message = history.pex_message(self.pex_idx);
         if self.send_extension_message(message).is_ok() {
-            self.last_pex_message_time = Instant::now();
+            self.last_pex_message_time = tick_start;
             self.pex_idx = history.tip();
         };
     }
@@ -321,21 +321,21 @@ impl ActivePeer {
 
     pub fn add_interested(&mut self, piece: usize) {
         self.interested_pieces.add_piece(piece);
-        if self.interested_pieces.amount() > 1 && !self.out_status.is_interested() {
+        if self.interested_pieces.count() > 0 && !self.out_status.is_interested() {
             let _ = self.set_out_interest(true);
         }
     }
 
     pub fn remove_interested(&mut self, piece: usize) {
         self.interested_pieces.remove_piece(piece);
-        if self.interested_pieces.amount() == 0 && self.out_status.is_interested() {
+        if self.interested_pieces.count() == 0 && self.out_status.is_interested() {
             let _ = self.set_out_interest(false);
         }
     }
 
     pub fn recalculate_interested_amount(&mut self, table: &[scheduler::SchedulerPiece]) {
         self.interested_pieces.recalculate(table, &self.bitfield);
-        let amount = self.interested_pieces.amount();
+        let amount = self.interested_pieces.count();
         if amount == 0 && self.out_status.is_interested() {
             let _ = self.set_out_interest(false);
         }
@@ -373,10 +373,10 @@ impl ActivePeer {
             uploaded: self.uploaded,
             upload_speed: self
                 .performance_history
-                .avg_down_speed_sec(&DEFAULT_TICK_DURATION),
+                .avg_up_speed_sec(&DEFAULT_TICK_DURATION),
             download_speed: self
                 .performance_history
-                .avg_up_speed_sec(&DEFAULT_TICK_DURATION),
+                .avg_down_speed_sec(&DEFAULT_TICK_DURATION),
             in_choked: self.in_status.is_choked(),
             in_interested: self.in_status.is_interested(),
             out_choked: self.out_status.is_choked(),
@@ -397,7 +397,7 @@ impl ActivePeer {
                 .avg_down_speed_sec(&ctx.tick_interval),
             in_status: self.in_status,
             out_status: self.out_status,
-            interested_amount: self.interested_pieces.amount(),
+            interested_amount: self.interested_pieces.count(),
             pending_blocks_amount: self.pending_blocks,
             client_name: self.client_name().to_string(),
         }

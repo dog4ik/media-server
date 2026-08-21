@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZeroUsize};
+use std::collections::HashMap;
 
 use bytes::Bytes;
 
@@ -7,8 +7,6 @@ use crate::{
     peers::PeerCommandMessage,
     storage::StorageHandle,
 };
-
-const CACHE_SIZE: usize = 4;
 
 #[derive(Debug)]
 struct Retrieve {
@@ -30,7 +28,6 @@ impl Retrieve {
 #[derive(Debug)]
 pub struct Seeder {
     pending_retrieves: HashMap<usize, Vec<Retrieve>>,
-    piece_cache: lru::LruCache<u32, Bytes>,
     storage: StorageHandle,
 }
 
@@ -38,7 +35,6 @@ impl Seeder {
     pub fn new(storage: StorageHandle) -> Self {
         Self {
             pending_retrieves: HashMap::new(),
-            piece_cache: lru::LruCache::new(NonZeroUsize::new(CACHE_SIZE).unwrap()),
             storage,
         }
     }
@@ -48,9 +44,6 @@ impl Seeder {
         block: Block,
         sender: flume::Sender<PeerCommandMessage>,
     ) -> Option<Bytes> {
-        if let Some(cache_piece) = self.piece_cache.get(&block.piece) {
-            return Some(cache_piece.slice(block.range()));
-        }
         self.pending_retrieves
             .entry(block.piece as usize)
             .or_default()

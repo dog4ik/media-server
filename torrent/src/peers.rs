@@ -2,7 +2,7 @@ use std::{fmt::Display, net::SocketAddr, time::Duration};
 
 use anyhow::{Context, anyhow, ensure};
 use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    io::{AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter},
     net::TcpStream,
 };
 use tokio_stream::StreamExt;
@@ -42,39 +42,30 @@ pub enum PeerCommandMessage {
 }
 
 impl PeerCommandMessage {
-    pub async fn write_message(self, stream: &mut TcpStream) -> std::io::Result<()> {
-        let mut buf_writer = BufWriter::new(stream);
+    pub async fn write_message<T: AsyncWrite + Unpin>(self, mut stream: T) -> std::io::Result<()> {
         match self {
-            PeerCommandMessage::HeartBeat => {
-                PeerMessage::HeartBeat.write_to(&mut buf_writer).await?
-            }
-            PeerCommandMessage::Choke => PeerMessage::Choke.write_to(&mut buf_writer).await?,
-            PeerCommandMessage::Unchoke => PeerMessage::Unchoke.write_to(&mut buf_writer).await?,
-            PeerCommandMessage::Interested => {
-                PeerMessage::Interested.write_to(&mut buf_writer).await?
-            }
+            PeerCommandMessage::HeartBeat => PeerMessage::HeartBeat.write_to(&mut stream).await?,
+            PeerCommandMessage::Choke => PeerMessage::Choke.write_to(&mut stream).await?,
+            PeerCommandMessage::Unchoke => PeerMessage::Unchoke.write_to(&mut stream).await?,
+            PeerCommandMessage::Interested => PeerMessage::Interested.write_to(&mut stream).await?,
             PeerCommandMessage::NotInterested => {
-                PeerMessage::NotInterested.write_to(&mut buf_writer).await?
+                PeerMessage::NotInterested.write_to(&mut stream).await?
             }
             PeerCommandMessage::Have { index } => {
-                PeerMessage::Have { index }
-                    .write_to(&mut buf_writer)
-                    .await?
+                PeerMessage::Have { index }.write_to(&mut stream).await?
             }
             PeerCommandMessage::Request(blocks) => {
                 for block in blocks {
-                    PeerMessage::Request(block)
-                        .write_to(&mut buf_writer)
-                        .await?;
+                    PeerMessage::Request(block).write_to(&mut stream).await?;
                 }
             }
             PeerCommandMessage::Piece(data_blocks) => {
                 for block in data_blocks {
-                    PeerMessage::Piece(block).write_to(&mut buf_writer).await?;
+                    PeerMessage::Piece(block).write_to(&mut stream).await?;
                 }
             }
             PeerCommandMessage::Cancel(block) => {
-                PeerMessage::Cancel(block).write_to(&mut buf_writer).await?
+                PeerMessage::Cancel(block).write_to(&mut stream).await?
             }
             PeerCommandMessage::Extension {
                 extension_id,
@@ -84,11 +75,11 @@ impl PeerCommandMessage {
                     extension_id,
                     payload,
                 }
-                .write_to(&mut buf_writer)
+                .write_to(&mut stream)
                 .await?
             }
         };
-        buf_writer.flush().await?;
+        stream.flush().await?;
         Ok(())
     }
 }
@@ -182,7 +173,7 @@ impl From<anyhow::Error> for PeerLogicError {
 pub struct Peer {
     pub uuid: Uuid,
     pub peer_ip: SocketAddr,
-    pub stream: Framed<TcpStream, MessageFramer>,
+    pub stream: Framed<BufWriter<TcpStream>, MessageFramer>,
     pub bitfield: BitField,
     pub handshake: HandShake,
     pub extension_handshake: Option<Box<ExtensionHandshake>>,
@@ -208,7 +199,7 @@ impl Peer {
         let his_handshake = HandShake::from_bytes(&handshake_response)?;
         ensure!(his_handshake.info_hash == info_hash);
 
-        let mut messages_stream = Framed::new(socket, MessageFramer);
+        let mut messages_stream = Framed::new(BufWriter::new(socket), MessageFramer);
         let first_message = messages_stream
             .next()
             .await
@@ -216,7 +207,7 @@ impl Peer {
             .context("bitfield/extension handshake")?;
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
-            let socket = messages_stream.get_mut();
+            let socket = messages_stream.get_mut().get_mut();
             let mut payload = Box::new(ExtensionHandshake::my_handshake());
             if let Ok(peer_addr) = socket.peer_addr() {
                 payload.set_your_ip(peer_addr.ip());
@@ -290,7 +281,7 @@ impl Peer {
             .await
             .context("send my handshake")?;
 
-        let mut messages_stream = Framed::new(socket, MessageFramer);
+        let mut messages_stream = Framed::new(BufWriter::new(socket), MessageFramer);
         let first_message = messages_stream
             .next()
             .await
@@ -299,7 +290,7 @@ impl Peer {
 
         let (bitfield, his_extension_handshake) = if his_handshake.supports_extensions() {
             let mut payload = Box::new(ExtensionHandshake::my_handshake());
-            let socket = messages_stream.get_mut();
+            let socket = messages_stream.get_mut().get_mut();
             if let Ok(peer_ip) = socket.peer_addr() {
                 payload.set_your_ip(peer_ip.ip());
             }
@@ -451,17 +442,32 @@ impl Peer {
                         tracing::warn!(reqq, in_flight = self.in_flight, "Excessing reqq size");
                     }
                 },
-                Some(Ok(peer_msg)) = self.stream.next() => {
+                peer_msg = self.stream.next() => {
+                    let peer_msg = match peer_msg {
+                        Some(Err(e)) => {
+                            tracing::error!("Peer framer error: {e}");
+                            continue;
+                        },
+                        Some(Ok(v)) => v,
+                        None => {
+                            tracing::debug!("Peer tcp stream closed");
+                            break Ok(());
+                        }
+                    };
                     if peer_msg == PeerMessage::HeartBeat {
                         continue;
                     }
-                    if let PeerMessage::Piece(DataBlock { piece, .. }) = peer_msg {
-                        match self.in_flight.checked_sub(1) {
-                            Some(v) => self.in_flight = v,
-                            None => {
-                                tracing::warn!(%piece, "Received unexpected block");
-                            },
-                        };
+                    match peer_msg {
+                        PeerMessage::HeartBeat => { continue },
+                        PeerMessage::Piece(DataBlock { piece, .. }) => {
+                            match self.in_flight.checked_sub(1) {
+                                Some(v) => self.in_flight = v,
+                                None => {
+                                    tracing::warn!(%piece, "Received unexpected block");
+                                },
+                            };
+                        }
+                        _ => {}
                     }
                     if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
                         tracing::error!("Peer -> scheduler channel is closed");
@@ -470,10 +476,6 @@ impl Peer {
                 },
                 _ = cancellation_token.cancelled() => {
                     tracing::debug!("Peer quit using cancellation token");
-                    break Ok(());
-                }
-                else => {
-                    tracing::debug!("Peer tcp stream closed");
                     break Ok(());
                 }
             };

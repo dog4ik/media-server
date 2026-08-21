@@ -27,7 +27,7 @@ impl PiecePicker {
 
     pub fn pop_closest_for_bitfield(&mut self, bf: &BitField) -> Option<usize> {
         self.queue.iter().rev().position(|p| bf.has(*p)).map(|pos| {
-            let idx = self.queue.len() - pos;
+            let idx = self.queue.len() - 1 - pos;
             self.queue.remove(idx)
         })
     }
@@ -113,5 +113,22 @@ impl TryFrom<usize> for Priority {
             _ => return Err(anyhow::anyhow!("expected value in range 0..4, got {value}",)),
         };
         Ok(priority)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn closest_to_bitfield() {
+        let mut bf = BitField::empty(16);
+        bf.add(2).unwrap();
+        let mut picker = PiecePicker {
+            strategy: ScheduleStrategy::Linear,
+            queue: vec![1, 2, 3],
+        };
+        assert_eq!(picker.pop_closest_for_bitfield(&bf), Some(2));
+        assert_eq!(picker.pop_closest_for_bitfield(&bf), None);
     }
 }

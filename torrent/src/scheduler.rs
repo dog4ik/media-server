@@ -738,7 +738,7 @@ impl Scheduler {
     }
 
     pub fn add_peer(&mut self, mut peer: ActivePeer) {
-        if peer.interested_pieces.amount() > 0 {
+        if peer.interested_pieces.count() > 0 {
             peer.set_out_interest(true).expect("channel is empty");
         }
         for piece in peer.bitfield.pieces() {
