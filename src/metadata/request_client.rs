@@ -71,7 +71,7 @@ impl LimitedRequestClient {
                     };
                     tokio::select! {
                         response = client.execute(req) => {
-                            if let Err(_) = res.send(response) {
+                            if res.send(response).is_err() {
                                 tracing::error!("Failed to send response: channel closed")
                             };
                         },

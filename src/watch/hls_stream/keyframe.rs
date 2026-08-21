@@ -56,10 +56,10 @@ pub async fn retrieve_keyframes(
     let mut lines = BufReader::new(stdout).lines();
     let mut key_frames = Vec::new();
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(frame) = Frame::from_ffprobe_csv_output_line(line) {
-            if frame.is_key {
-                key_frames.push(frame.time);
-            }
+        if let Some(frame) = Frame::from_ffprobe_csv_output_line(line)
+            && frame.is_key
+        {
+            key_frames.push(frame.time);
         };
     }
     Ok(KeyFrames { key_frames })

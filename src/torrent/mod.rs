@@ -599,11 +599,11 @@ async fn handle_progress(
         }
     }
 
-    if !finished_pieces.is_empty() {
-        if let Err(e) = manager.update_torrents(&finished_pieces).await {
-            tracing::error!("Failed to update torrent state: {e}");
-        };
-    }
+    if !finished_pieces.is_empty()
+        && let Err(e) = manager.update_torrents(&finished_pieces).await
+    {
+        tracing::error!("Failed to update torrent state: {e}");
+    };
 }
 
 impl TorrentClient {

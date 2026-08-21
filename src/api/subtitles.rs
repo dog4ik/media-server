@@ -106,8 +106,8 @@ pub async fn upload_subtitles(
             let subtitles_id = tx.insert_subtitles(&db_subtitles).await?;
             let subtitles_asset = assets::SubtitleAsset::new(video_id, subtitles_id);
 
-            use std::io::{Error, ErrorKind};
-            let mut stream = field.map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
+            use std::io::Error;
+            let mut stream = field.map(|data| data.map_err(Error::other));
             let output_path = subtitles_asset.path();
             if let Some(parent) = output_path.parent() {
                 tokio::fs::create_dir_all(parent).await?;

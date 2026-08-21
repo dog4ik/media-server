@@ -329,37 +329,37 @@ impl DiscoverMetadataProvider for TvdbApi {
     }
 }
 
-impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
-    fn into(self) -> ShowMetadata {
+impl From<TvdbSeriesExtendedRecord> for ShowMetadata {
+    fn from(val: TvdbSeriesExtendedRecord) -> Self {
         // 3 means 16 / 9 image
-        let backdrop = self.artworks.into_iter().find(|a| a.artwork_type == 3);
+        let backdrop = val.artworks.into_iter().find(|a| a.artwork_type == 3);
 
         // season_number 0 is extras
-        let seasons: BTreeSet<_> = self
+        let seasons: BTreeSet<_> = val
             .seasons
             .iter()
             .map(|s| s.number)
             .filter(|s| *s != 0)
             .collect();
-        let locale_metadata = self
+        let locale_metadata = val
             .translations
             .name_translations
             .into_iter()
-            .find(|t| t.language == self.original_language && t.is_primary && !t.is_alias)
+            .find(|t| t.language == val.original_language && t.is_primary && !t.is_alias)
             .map(|translation| LocaleMetadata {
-                original_language: self.original_language,
+                original_language: val.original_language,
                 original_title: translation.overview,
             });
 
         ShowMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
-            poster: self.image,
+            poster: val.image,
             backdrop: backdrop.map(|v| v.image),
-            plot: self.overview,
-            release_date: self.first_aired,
-            title: self.name,
-            episodes_amount: Some(self.episodes.len()),
+            plot: val.overview,
+            release_date: val.first_aired,
+            title: val.name,
+            episodes_amount: Some(val.episodes.len()),
             seasons: Some(seasons.into_iter().collect()),
             locale_metadata,
             cast: None,
@@ -370,37 +370,37 @@ impl Into<ShowMetadata> for TvdbSeriesExtendedRecord {
     }
 }
 
-impl Into<MovieMetadata> for TvdbMovieExtendedRecord {
-    fn into(self) -> MovieMetadata {
+impl From<TvdbMovieExtendedRecord> for MovieMetadata {
+    fn from(val: TvdbMovieExtendedRecord) -> Self {
         // 3 is somehow 16 / 9 image
-        let backdrop = self.artworks.into_iter().find(|a| a.artwork_type == 3);
-        let plot = self
+        let backdrop = val.artworks.into_iter().find(|a| a.artwork_type == 3);
+        let plot = val
             .translations
             .overview_translations
             .into_iter()
             .find(|t| t.is_primary)
             .map(|t| t.overview);
-        let locale_metadata = self
+        let locale_metadata = val
             .translations
             .name_translations
             .into_iter()
-            .find(|t| t.language == self.original_language && t.is_primary && !t.is_alias)
+            .find(|t| t.language == val.original_language && t.is_primary && !t.is_alias)
             .map(|translation| LocaleMetadata {
-                original_language: self.original_language,
+                original_language: val.original_language,
                 original_title: translation.overview,
             });
         MovieMetadata {
-            metadata_id: self.id.to_string(),
+            metadata_id: val.id.to_string(),
             metadata_provider: MetadataProvider::Tvdb,
-            poster: self.image,
+            poster: val.image,
             backdrop: backdrop.map(|v| v.image),
             plot,
-            release_date: self.first_release.map(|r| r.date),
-            runtime: self
+            release_date: val.first_release.map(|r| r.date),
+            runtime: val
                 .runtime
                 .map(|t| Duration::from_secs(t as u64 * 60))
                 .map(Into::into),
-            title: self.name,
+            title: val.name,
             locale_metadata,
             cast: None,
             genres: None,

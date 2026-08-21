@@ -69,13 +69,13 @@ impl<'a> Tokenizer<'a> {
                     .checked_sub(1)
                     .and_then(|idx| bytes.get(idx))
                     .zip(bytes.get(byte_idx + 1))
+                    && *prev == b' '
+                    && next == prev
                 {
-                    if *prev == b' ' && next == prev {
-                        tokens.push(Token::ExplicitSeparator);
-                        token_start_byte = byte_idx + 2;
-                        iter.next();
-                        continue;
-                    }
+                    tokens.push(Token::ExplicitSeparator);
+                    token_start_byte = byte_idx + 2;
+                    iter.next();
+                    continue;
                 };
                 token_start_byte = byte_idx + 1;
                 continue;

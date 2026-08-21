@@ -541,7 +541,7 @@ impl SubtitlesJob {
             .find(|t| t.index == track && t.stream.codec.supports_text())
             .map(|t| Self {
                 source_path: input.path().to_path_buf(),
-                track: t.index as usize,
+                track: t.index,
                 output_file_path: output_path(t.stream.language.as_deref()),
             })
             .context("cant find track in file")

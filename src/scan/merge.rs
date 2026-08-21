@@ -4,7 +4,7 @@ use crate::metadata::ExternalIdMetadata;
 
 use super::MetadataLookupWithIds;
 
-pub fn try_merge_chunks<T, M>(statuses: &[MetadataLookupWithIds<M>], items: &mut Vec<Vec<T>>) {
+pub fn try_merge_chunks<T, M>(statuses: &[MetadataLookupWithIds<M>], items: &mut [Vec<T>]) {
     let mut id_to_chunk_idx: hash_map::HashMap<ExternalIdMetadata, usize> =
         hash_map::HashMap::new();
     let mut local_id_to_chunk_idx: hash_map::HashMap<i64, usize> = hash_map::HashMap::new();

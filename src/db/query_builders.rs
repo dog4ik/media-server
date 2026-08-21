@@ -534,7 +534,7 @@ impl From<DbEpisodeQuery> for Episode {
                     id,
                     time: history.time,
                     is_finished: history.is_finished,
-                    update_time: history.update_time.unwrap().into(),
+                    update_time: history.update_time.unwrap(),
                 }),
             }),
         }

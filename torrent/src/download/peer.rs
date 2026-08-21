@@ -335,11 +335,11 @@ impl ActivePeer {
 
     pub fn recalculate_interested_amount(&mut self, table: &[scheduler::SchedulerPiece]) {
         self.interested_pieces.recalculate(table, &self.bitfield);
-        let amount = self.interested_pieces.count();
-        if amount == 0 && self.out_status.is_interested() {
+        let count = self.interested_pieces.count();
+        if count == 0 && self.out_status.is_interested() {
             let _ = self.set_out_interest(false);
         }
-        if amount > 0 && !self.out_status.is_interested() {
+        if count > 0 && !self.out_status.is_interested() {
             let _ = self.set_out_interest(true);
         }
     }

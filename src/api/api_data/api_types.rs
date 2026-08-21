@@ -29,7 +29,7 @@ impl From<db::DbHistory> for History {
             id: id.expect("id is not null"),
             time,
             is_finished,
-            update_time: update_time.unwrap().into(),
+            update_time: update_time.unwrap(),
         }
     }
 }

@@ -4,44 +4,32 @@ use upnp::connection_manager::ConnectionManagerHandler;
 pub struct MediaServerConnectionManager;
 
 impl ConnectionManagerHandler for MediaServerConnectionManager {
-    fn get_protocol_info(
-        &self,
-    ) -> impl std::future::Future<Output = Result<(String, String), upnp::action::ActionError>> + Send
-    {
-        async { todo!() }
+    async fn get_protocol_info(&self) -> Result<(String, String), upnp::action::ActionError> {
+        todo!()
     }
 
-    fn get_current_connection_ids(
-        &self,
-    ) -> impl std::future::Future<Output = Result<String, upnp::action::ActionError>> + Send + Sync
-    {
-        async { todo!() }
+    async fn get_current_connection_ids(&self) -> Result<String, upnp::action::ActionError> {
+        todo!()
     }
 
-    fn get_current_connection_info(
+    async fn get_current_connection_info(
         &self,
         _connection_id: String,
-    ) -> impl std::future::Future<
-        Output = Result<
-            (
-                String,
-                String,
-                String,
-                String,
-                upnp::connection_manager::ArgDirection,
-                String,
-            ),
-            upnp::action::ActionError,
-        >,
-    > + Send
-    + Sync {
-        async { todo!() }
+    ) -> Result<
+        (
+            String,
+            String,
+            String,
+            String,
+            upnp::connection_manager::ArgDirection,
+            String,
+        ),
+        upnp::action::ActionError,
+    > {
+        todo!()
     }
 
-    fn get_feature_list(
-        &self,
-    ) -> impl std::future::Future<Output = Result<String, upnp::action::ActionError>> + Send + Sync
-    {
-        async { todo!() }
+    async fn get_feature_list(&self) -> Result<String, upnp::action::ActionError> {
+        todo!()
     }
 }

@@ -158,7 +158,7 @@ struct Chromaprint {
 impl Chromaprint {
     pub fn new(fingerprint: Vec<u8>) -> Self {
         assert!(
-            fingerprint.len() % 4 == 0,
+            fingerprint.len().is_multiple_of(4),
             "vector length must be a multiple of 4"
         );
 
@@ -176,7 +176,7 @@ struct EpisodesIntersections {
     intersections: Vec<Option<IntroRange>>,
 }
 
-impl<'a> EpisodesIntersections {
+impl EpisodesIntersections {
     pub fn new() -> Self {
         Self {
             intersections: Vec::new(),

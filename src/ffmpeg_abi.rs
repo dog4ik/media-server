@@ -28,12 +28,9 @@ impl TryFrom<ffmpeg_next::Chapter<'_>> for Chapter {
     fn try_from(chapter: ffmpeg_next::Chapter<'_>) -> Result<Self, Self::Error> {
         let mut title = None;
         for (k, v) in &chapter.metadata() {
-            match k {
-                "title" => {
-                    title = Some(v.to_owned());
-                    break;
-                }
-                _ => {}
+            if k == "title" {
+                title = Some(v.to_owned());
+                break;
             }
         }
         // start/end are expressed in units of the chapter's time_base.
@@ -192,12 +189,9 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
         let mut language = None;
 
         for (k, v) in &stream.metadata() {
-            match k {
-                "language" => {
-                    language = Some(v.to_owned());
-                    break;
-                }
-                _ => {}
+            if k == "language" {
+                language = Some(v.to_owned());
+                break;
             }
         }
 
@@ -270,12 +264,9 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
         let mut language = None;
 
         for (k, v) in &stream.metadata() {
-            match k {
-                "language" => {
-                    language = Some(v.to_owned());
-                    break;
-                }
-                _ => {}
+            if k == "language" {
+                language = Some(v.to_owned());
+                break;
             }
         }
 

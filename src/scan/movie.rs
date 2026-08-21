@@ -294,10 +294,9 @@ async fn fetch_single_movie_chunk(
                         continue;
                     };
                     let mut external_ids = Vec::new();
-                    movie_metadata
-                        .external_ids
-                        .as_mut()
-                        .map(|v| external_ids.append(v));
+                    if let Some(v) = movie_metadata.external_ids.as_mut() {
+                        external_ids.append(v)
+                    }
                     external_ids.insert(
                         0,
                         ExternalIdMetadata {
@@ -328,7 +327,7 @@ async fn fetch_single_movie_chunk(
         let fallback = movie_fallback(&title);
         progress.dispatch_fail(
             FailedContent {
-                title: title,
+                title,
                 videos: videos
                     .iter()
                     .map(|v| v.source.video.path().to_path_buf())

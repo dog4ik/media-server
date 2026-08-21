@@ -100,7 +100,7 @@ impl TpbApi {
         let request = Request::new(Method::GET, url);
         let torrent: TpbTorrent = self.client.request(request).await?;
         Ok(torrent::MagnetLink::from_str(
-            &torrent.magnet_link().to_string(),
+            torrent.magnet_link().as_ref(),
         )?)
     }
 }

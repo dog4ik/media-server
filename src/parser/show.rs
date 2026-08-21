@@ -94,13 +94,11 @@ impl ShowIdent {
             Token::Symbol(Symbol(season_num)),
             ..,
         ] = tokens.remaining()
+            && SEASON_IDENTS.contains(season_ident)
+            && let Ok(season_num) = season_num.parse()
         {
-            if SEASON_IDENTS.contains(season_ident) {
-                if let Ok(season_num) = season_num.parse() {
-                    self.season = Some(season_num);
-                    return;
-                }
-            }
+            self.season = Some(season_num);
+            return;
         }
         self.apply_name(&mut tokens);
     }
@@ -160,15 +158,15 @@ impl ShowIdent {
                                 continue;
                             }
                         }
-                        if t == "Season" {
-                            if let Some(s) = tokens.peek().and_then(|t| match t {
+                        if t == "Season"
+                            && let Some(s) = tokens.peek().and_then(|t| match t {
                                 Token::Symbol(Symbol(t)) => t.parse().ok(),
                                 _ => None,
-                            }) {
-                                past_name = true;
-                                season = Some(s);
-                                continue;
-                            }
+                            })
+                        {
+                            past_name = true;
+                            season = Some(s);
+                            continue;
                         }
                     }
                     if episode.is_none() {
@@ -180,15 +178,15 @@ impl ShowIdent {
                                 continue;
                             }
                         }
-                        if t == "Episode" {
-                            if let Some(e) = tokens.peek().and_then(|t| match t {
+                        if t == "Episode"
+                            && let Some(e) = tokens.peek().and_then(|t| match t {
                                 Token::Symbol(Symbol(t)) => t.parse().ok(),
                                 _ => None,
-                            }) {
-                                episode = Some(e);
-                                past_name = true;
-                                continue;
-                            }
+                            })
+                        {
+                            episode = Some(e);
+                            past_name = true;
+                            continue;
                         }
                     }
 
@@ -208,12 +206,12 @@ impl ShowIdent {
                 Token::GroupStart(_) => {
                     in_group = true;
                     // A group whose sole content is an explicit `SxxExx` marker (e.g. `(S02E10)`)
-                    if let [Token::Symbol(Symbol(t)), Token::GroupEnd(_), ..] = tokens.remaining() {
-                        if let Some((s, e)) = parse_se_format(t) {
-                            season = Some(s);
-                            episode = Some(e);
-                            past_name = true;
-                        }
+                    if let [Token::Symbol(Symbol(t)), Token::GroupEnd(_), ..] = tokens.remaining()
+                        && let Some((s, e)) = parse_se_format(t)
+                    {
+                        season = Some(s);
+                        episode = Some(e);
+                        past_name = true;
                     }
                 }
                 Token::GroupEnd(_) => {
@@ -336,6 +334,7 @@ impl ShowIdentifier {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Result<Self, ShowIdent> {
         let ident = Parser::parse_str(s, ShowIdent::default());
         if let Some((episode, season)) = ident.episode.zip(ident.season) {

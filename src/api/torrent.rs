@@ -89,9 +89,9 @@ impl AsRef<[u8; 20]> for InfoHash {
     }
 }
 
-impl Into<[u8; 20]> for InfoHash {
-    fn into(self) -> [u8; 20] {
-        self.0
+impl From<InfoHash> for [u8; 20] {
+    fn from(val: InfoHash) -> Self {
+        val.0
     }
 }
 

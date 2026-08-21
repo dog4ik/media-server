@@ -205,14 +205,14 @@ async fn save_asset_from_url(
     url: reqwest::Url,
     asset: impl FileAsset,
 ) -> anyhow::Result<()> {
-    use std::io::{Error, ErrorKind};
+    use std::io::Error;
     use tokio_stream::StreamExt;
     use tokio_util::io::StreamReader;
 
     let response = http_client.get(url).send().await?;
     let stream = response
         .bytes_stream()
-        .map(|data| data.map_err(|e| Error::new(ErrorKind::Other, e)));
+        .map(|data| data.map_err(Error::other));
     let mut stream_reader = StreamReader::new(stream);
     asset.save_from_reader(&mut stream_reader).await?;
     Ok(())

@@ -136,10 +136,10 @@ impl AppResources {
 
     fn temp_storage() -> PathBuf {
         #[cfg(target_os = "linux")]
-        if Self::is_prod() {
-            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Cache) {
-                return dir;
-            }
+        if Self::is_prod()
+            && let Some(dir) = Self::systemd_dir(SystemdDirectory::Cache)
+        {
+            return dir;
         }
         Self::data_storage().join("tmp")
     }
@@ -158,10 +158,10 @@ impl AppResources {
 
     pub fn log() -> PathBuf {
         #[cfg(target_os = "linux")]
-        if Self::is_prod() {
-            if let Some(dir) = Self::systemd_dir(SystemdDirectory::Logs) {
-                return dir.join("log.log");
-            }
+        if Self::is_prod()
+            && let Some(dir) = Self::systemd_dir(SystemdDirectory::Logs)
+        {
+            return dir.join("log.log");
         }
         Self::data_storage().join("log.log")
     }
@@ -174,12 +174,14 @@ impl AppResources {
         fs::OpenOptions::new()
             .read(true)
             .write(true)
+            .truncate(false)
             .create(true)
             .open(Self::database())?;
         fs::OpenOptions::new()
             .read(true)
-            .write(true)
             .create(true)
+            .truncate(false)
+            .write(true)
             .open(Self::log())?;
         Ok(())
     }

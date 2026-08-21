@@ -70,13 +70,13 @@ impl From<DbHistoryQuery> for HistoryEntry {
             runtime,
         }: DbHistoryQuery,
     ) -> Self {
-        let history_content_type = if episode.id.is_some() {
+        let history_content_type = if let Some(episode_id) = episode.id {
             HistoryContentType::Episode {
                 show_id,
                 show_title,
                 season_number,
                 number: episode.number,
-                episode_id: episode.id.expect("episode id is not null"),
+                episode_id,
             }
         } else {
             let movie_id = movie

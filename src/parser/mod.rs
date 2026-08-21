@@ -119,9 +119,9 @@ impl<T: Parseable> Parser<T> {
     }
 
     pub fn parse_str(s: &str, mut parsable: T) -> T {
-        let tokens = Tokenizer::new(&s);
+        let tokens = Tokenizer::new(s);
         parsable.parse_name(tokens);
-        return parsable;
+        parsable
     }
 
     pub fn feed_filename(mut self, file_name: &OsStr) -> T {
@@ -204,10 +204,10 @@ pub fn walk_show_dirs(dirs: Vec<PathBuf>) -> Vec<(Video, ShowIdentifier)> {
                 let metadata_parser = parser.clone();
                 let show_ident: Result<ShowIdentifier, ShowIdent> =
                     metadata_parser.feed_filename(file_name).try_into();
-                if let Err(ident) = &show_ident {
-                    if ident.episode.is_none() {
-                        need_sort = true;
-                    }
+                if let Err(ident) = &show_ident
+                    && ident.episode.is_none()
+                {
+                    need_sort = true;
                 }
                 supported_paths.push((path, show_ident));
             } else {

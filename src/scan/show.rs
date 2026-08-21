@@ -275,7 +275,7 @@ impl ContentScanner for ShowScanner {
                                     season_id,
                                     PosterContentType::Season,
                                 )),
-                                source: AssetTaskSource::Url(url.into()),
+                                source: AssetTaskSource::Url(url),
                             });
                         }
                         season_id
@@ -320,11 +320,10 @@ impl ContentScanner for ShowScanner {
                             let first_source = videos.first().map(|v| v.source.clone());
                             if let Some(url) = poster {
                                 let task_source = match first_source {
-                                    Some(source) => AssetTaskSource::UrlWithFrameFallback {
-                                        url: url.into(),
-                                        source,
-                                    },
-                                    None => AssetTaskSource::Url(url.into()),
+                                    Some(source) => {
+                                        AssetTaskSource::UrlWithFrameFallback { url, source }
+                                    }
+                                    None => AssetTaskSource::Url(url),
                                 };
                                 asset_tasks.push(AssetSaveTask {
                                     kind: AssetKind::Poster(PosterAsset::new(
@@ -399,10 +398,9 @@ async fn fetch_single_show_chunk(
                         continue;
                     };
                     let mut external_ids = Vec::new();
-                    show_metadata
-                        .external_ids
-                        .as_mut()
-                        .map(|v| external_ids.append(v));
+                    if let Some(v) = show_metadata.external_ids.as_mut() {
+                        external_ids.append(v)
+                    }
                     external_ids.insert(
                         0,
                         ExternalIdMetadata {

@@ -625,53 +625,70 @@ impl From<TmdbShowDetails> for ShowMetadata {
     }
 }
 
-impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
-    type Error = anyhow::Error;
-    fn try_into(self) -> Result<MetadataSearchResult, Self::Error> {
-        let title;
-        let poster;
-        let tmdb_id;
-        let plot;
-        let content_type;
-        let original_title;
-        let original_language;
-        match self {
-            Self::Movie(movie) => {
-                title = movie.title;
-                poster = movie
-                    .poster_path
-                    .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
-                tmdb_id = movie.id;
-                plot = movie.overview;
-                content_type = ParentMediaType::Movie;
-                original_title = movie.original_title;
-                original_language = movie.original_language;
-            }
-            Self::Show(show) => {
-                title = show.name;
-                poster = show
-                    .poster_path
-                    .map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string());
-                tmdb_id = show.id;
-                plot = show.overview;
-                content_type = ParentMediaType::Show;
-                original_title = show.original_name;
-                original_language = show.original_language;
-            }
-            Self::Other {} => return Err(anyhow!("Other is not implemented")),
-        };
-        Ok(MetadataSearchResult {
+impl From<TmdbSearchMovieResult> for MetadataSearchResult {
+    fn from(
+        TmdbSearchMovieResult {
+            backdrop_path: _,
+            poster_path,
+            id,
+            overview,
+            release_date: _,
             title,
-            poster,
-            plot,
-            metadata_id: tmdb_id.to_string(),
+            original_title,
+            original_language,
+        }: TmdbSearchMovieResult,
+    ) -> Self {
+        MetadataSearchResult {
+            title,
+            poster: poster_path.map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string()),
+            plot: overview,
+            metadata_id: id.to_string(),
             metadata_provider: MetadataProvider::Tmdb,
-            content_type,
+            content_type: ParentMediaType::Movie,
             locale_metadata: Some(LocaleMetadata {
                 original_title,
                 original_language,
             }),
-        })
+        }
+    }
+}
+
+impl From<TmdbSearchShowResult> for MetadataSearchResult {
+    fn from(
+        TmdbSearchShowResult {
+            poster_path,
+            id,
+            backdrop_path: _,
+            overview,
+            first_air_date: _,
+            name,
+            original_name,
+            original_language,
+        }: TmdbSearchShowResult,
+    ) -> Self {
+        MetadataSearchResult {
+            title: name,
+            poster: poster_path.map(|p| TmdbImage::new(&p, PosterSizes::default()).to_string()),
+            plot: overview,
+            metadata_id: id.to_string(),
+            metadata_provider: MetadataProvider::Tmdb,
+            content_type: ParentMediaType::Show,
+            locale_metadata: Some(LocaleMetadata {
+                original_title: original_name,
+                original_language,
+            }),
+        }
+    }
+}
+
+impl TryInto<MetadataSearchResult> for TmdbFindMultiResult {
+    type Error = anyhow::Error;
+    fn try_into(self) -> Result<MetadataSearchResult, Self::Error> {
+        match self {
+            Self::Movie(movie) => Ok(movie.into()),
+            Self::Show(show) => Ok(show.into()),
+            Self::Other {} => Err(anyhow!("Other is not implemented")),
+        }
     }
 }
 

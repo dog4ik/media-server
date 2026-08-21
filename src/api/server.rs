@@ -228,21 +228,9 @@ impl DetailedVideo {
             duration: video_metadata.duration().into(),
             variants: detailed_variants,
             scan_date: date,
-            video_tracks: video_metadata
-                .video_streams()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            audio_tracks: video_metadata
-                .audio_streams()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            subtitle_tracks: video_metadata
-                .subtitle_streams()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            video_tracks: video_metadata.video_streams().map(Into::into).collect(),
+            audio_tracks: video_metadata.audio_streams().map(Into::into).collect(),
+            subtitle_tracks: video_metadata.subtitle_streams().map(Into::into).collect(),
             chapters: video_metadata.chapters().iter().map(Into::into).collect(),
             subtitles,
             container: source.video.container(),
@@ -359,16 +347,8 @@ impl DetailedVariant {
             id,
             size: video.file_size().await?,
             duration: crate::MediaDuration(metadata.duration()),
-            video_tracks: metadata
-                .video_streams()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
-            audio_tracks: metadata
-                .audio_streams()
-                .into_iter()
-                .map(Into::into)
-                .collect(),
+            video_tracks: metadata.video_streams().map(Into::into).collect(),
+            audio_tracks: metadata.audio_streams().map(Into::into).collect(),
             path: video.path().to_path_buf(),
             container: video.container(),
         })
@@ -2192,7 +2172,7 @@ pub async fn start_hls_stream(
     )
     .await;
     let stream = WatchTask::spawn_hls(
-        &video,
+        video,
         configuration.clone(),
         dispatcher,
         exit_token.clone(),

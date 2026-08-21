@@ -118,7 +118,7 @@ impl ContentFetchParams {
         }
 
         builder
-            .push(&format_args!(" order by {content_table}.id desc limit "))
+            .push(format_args!(" order by {content_table}.id desc limit "))
             .push_bind(self.take.unwrap_or(DEFAULT_LIMIT));
     }
 }
@@ -1002,7 +1002,7 @@ where
                     lists: db_episode.lists.into_iter().flatten().map(Into::into).collect(),
                     history: db_episode.history_id.map(|id| api_types::History {
                         id,
-                        time: db_episode.history_time.map(Into::into).unwrap(),
+                        time: db_episode.history_time.unwrap(),
                         is_finished: db_episode.is_finished.unwrap(),
                         update_time: db_episode.history_update_time.map(Into::into).unwrap(),
                     }),

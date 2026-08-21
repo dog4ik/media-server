@@ -107,7 +107,7 @@ impl MetadataProvidersStack {
         match ProvodRuTrackerAdapter::new(http_client.clone()) {
             Ok(rutracker_api) => {
                 let rutracker_api: &'static _ = Box::leak(Box::new(rutracker_api));
-                self.rutracker = Some(&rutracker_api);
+                self.rutracker = Some(rutracker_api);
             }
             Err(e) => tracing::warn!("Failed to initialize RuTracker api: {e}"),
         }
@@ -465,5 +465,11 @@ impl MetadataProvidersStack {
                 .rutracker
                 .map(|p| p as &(dyn TorrentIndex + Send + Sync)),
         }
+    }
+}
+
+impl Default for MetadataProvidersStack {
+    fn default() -> Self {
+        Self::new()
     }
 }

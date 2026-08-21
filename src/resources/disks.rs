@@ -14,7 +14,7 @@ pub fn disk_list() -> Vec<Disk> {
     let disks = Disks::new_with_refreshed_list();
     disks
         .list()
-        .into_iter()
+        .iter()
         .map(|d| Disk {
             mountpoint: d.mount_point().to_string_lossy().to_string(),
             fs: d.file_system().to_string_lossy().to_string(),

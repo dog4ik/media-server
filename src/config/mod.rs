@@ -345,14 +345,14 @@ impl ConfigStore {
         self.settings.send_modify(|settings| {
             for setting in settings.values_mut() {
                 let key = setting.key();
-                if let Some(val) = table.get(&key).cloned() {
-                    if let Err(err) = setting.deserialize_toml(val) {
-                        tracing::warn!(
-                            "Failed to deserialize toml value for {}: {err}",
-                            setting.type_name()
-                        )
-                    };
-                }
+                if let Some(val) = table.get(&key).cloned()
+                    && let Err(err) = setting.deserialize_toml(val)
+                {
+                    tracing::warn!(
+                        "Failed to deserialize toml value for {}: {err}",
+                        setting.type_name()
+                    )
+                };
             }
         });
     }

@@ -23,9 +23,9 @@ const TRACKER_LIST: &[&str] = &[
     "udp://tracker.torrent.eu.org:451/announce",
 ];
 
-fn extension_value<'a, 'b>(
+fn extension_value<'a>(
     extension: &'a BTreeMap<String, Vec<rss::extension::Extension>>,
-    key: &'b str,
+    key: &str,
 ) -> Option<&'a str> {
     extension
         .get(key)

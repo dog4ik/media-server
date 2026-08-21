@@ -96,7 +96,7 @@ where
     ) -> anyhow::Result<MetadataLookup<MovieMetadata>> {
         match self
             .db
-            .crossreference_movie(self.provider.provider_identifier(), &id)
+            .crossreference_movie(self.provider.provider_identifier(), id)
             .await
         {
             Ok(Some(local)) => Ok(MetadataLookup::Local(local)),

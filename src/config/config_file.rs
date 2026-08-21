@@ -18,6 +18,7 @@ impl ConfigFile {
         let file = fs::OpenOptions::new()
             .read(true)
             .write(true)
+            .truncate(false)
             .create(true)
             .open(&config_path)
             .await?;

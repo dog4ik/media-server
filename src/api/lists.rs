@@ -404,7 +404,7 @@ async fn resolve_content(
                     ));
                 };
                 let movie_api =
-                    MovieMetadataApi::new(movie_provider, &db, app_state.http_client.clone());
+                    MovieMetadataApi::new(movie_provider, db, app_state.http_client.clone());
                 let resolved = movie_api.get_or_insert_movie(&id).await?;
                 Ok(PendingInsert {
                     content: vec![resolved.content.metadata_id],
@@ -419,7 +419,7 @@ async fn resolve_content(
                     ));
                 };
                 let show_api =
-                    ShowMetadataApi::new(show_provider, &db, app_state.http_client.clone());
+                    ShowMetadataApi::new(show_provider, db, app_state.http_client.clone());
                 let flushed = show_api
                     .get_or_insert_show_tree(
                         &id,

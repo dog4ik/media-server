@@ -195,19 +195,18 @@ impl EpisodeScanner {
         videos: Vec<LibraryItem<ShowIdentifier>>,
     ) -> ResolvedEpisode {
         let content_type = ParentMediaType::Show;
-        if let Some(show_id) = show_id {
-            if let Ok(local) = self
+        if let Some(show_id) = show_id
+            && let Ok(local) = self
                 .db
                 .get_episode_id(show_id, season_number, episode_number)
                 .await
-            {
-                self.progress.dispatch_success(videos.len());
-                return ResolvedEpisode {
-                    lookup: MetadataLookup::Local(local.id),
-                    duration: Duration::ZERO,
-                    videos,
-                };
-            }
+        {
+            self.progress.dispatch_success(videos.len());
+            return ResolvedEpisode {
+                lookup: MetadataLookup::Local(local.id),
+                duration: Duration::ZERO,
+                videos,
+            };
         }
 
         let duration = if let Some(first) = videos.first() {

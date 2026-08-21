@@ -64,10 +64,9 @@ pub(crate) trait FileAsset {
 
         if let (Some(if_modified_since), Ok(metadata_modified)) =
             (if_modified_since, metadata.modified())
+            && !if_modified_since.is_modified(*start_time.max(&metadata_modified))
         {
-            if !if_modified_since.is_modified(*start_time.max(&metadata_modified)) {
-                return Ok(StatusCode::NOT_MODIFIED.into_response());
-            }
+            return Ok(StatusCode::NOT_MODIFIED.into_response());
         }
 
         let crated_header = metadata
