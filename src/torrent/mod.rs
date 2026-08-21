@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::Path,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
@@ -179,6 +179,8 @@ pub struct TorrentState {
     pub downloaded_pieces: Vec<u8>,
     pub state: DownloadState,
     pub pending_pieces: Vec<usize>,
+    #[schema(value_type = String)]
+    pub save_location: PathBuf,
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]

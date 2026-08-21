@@ -1,5 +1,6 @@
 use std::{
     net::SocketAddr,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -65,4 +66,5 @@ pub struct FullState {
     pub bitfield: BitField,
     pub state: crate::DownloadState,
     pub pending_pieces: Vec<usize>,
+    pub save_location: PathBuf,
 }

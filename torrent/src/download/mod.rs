@@ -2,6 +2,7 @@ use std::{
     fmt::Display,
     net::SocketAddr,
     ops::Range,
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -245,6 +246,7 @@ pub struct Download {
     pub info_hash: [u8; 20],
     peers_handles: JoinSet<(Uuid, Result<(), PeerError>)>,
     storage_rx: mpsc::Receiver<StorageFeedback>,
+    save_location: PathBuf,
     new_peers: mpsc::Receiver<NewPeer>,
     trackers: Vec<DownloadTracker>,
     scheduler: Scheduler,
@@ -309,6 +311,7 @@ impl Download {
         let state = scheduler.torrent_state();
         let seeder = Seeder::new(storage.clone());
         let peer_storage = PeerStorage::new(vec![], client_external_ip);
+        let now = Instant::now();
 
         Self {
             new_peers,
@@ -321,13 +324,14 @@ impl Download {
             pex_history: PexHistory::new(),
             cancellation_token,
             state,
-            last_optimistic_unchoke: Instant::now(),
-            last_choke: Instant::now(),
+            last_optimistic_unchoke: now,
+            last_choke: now,
             stat,
             seeder,
             info,
             peer_storage,
             running_performance: metric::RollingSpeedMeter::new(),
+            save_location: download_params.save_location,
         }
     }
 
@@ -912,6 +916,7 @@ impl Download {
             bitfield,
             state: self.state.into(),
             pending_pieces: self.scheduler.pending_pieces.clone(),
+            save_location: self.save_location.clone(),
         }
     }
 

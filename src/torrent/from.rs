@@ -62,18 +62,31 @@ impl From<torrent::DownloadState> for super::DownloadState {
 }
 
 impl From<full::FullStatePeer> for super::StatePeer {
-    fn from(value: torrent::FullStatePeer) -> Self {
+    fn from(
+        torrent::FullStatePeer {
+            addr,
+            uploaded,
+            downloaded,
+            download_speed,
+            upload_speed,
+            in_status,
+            out_status,
+            interested_amount,
+            pending_blocks_amount,
+            client_name,
+        }: torrent::FullStatePeer,
+    ) -> Self {
         Self {
-            addr: value.addr.to_string(),
-            uploaded: value.uploaded,
-            upload_speed: value.upload_speed,
-            downloaded: value.downloaded,
-            download_speed: value.download_speed,
-            in_status: value.in_status.into(),
-            out_status: value.out_status.into(),
-            interested_amount: value.interested_amount,
-            pending_blocks_amount: value.pending_blocks_amount,
-            client_name: value.client_name,
+            addr: addr.to_string(),
+            uploaded,
+            upload_speed,
+            downloaded,
+            download_speed,
+            in_status: in_status.into(),
+            out_status: out_status.into(),
+            interested_amount,
+            pending_blocks_amount,
+            client_name,
         }
     }
 }
@@ -99,14 +112,23 @@ impl From<torrent::FullStateTracker> for super::StateTracker {
 }
 
 impl From<torrent::FullStateFile> for super::StateFile {
-    fn from(value: torrent::FullStateFile) -> Self {
+    fn from(
+        torrent::FullStateFile {
+            path,
+            size,
+            index,
+            start_piece,
+            end_piece,
+            priority,
+        }: torrent::FullStateFile,
+    ) -> Self {
         Self {
-            index: value.index,
-            size: value.size,
-            start_piece: value.start_piece,
-            end_piece: value.end_piece,
-            path: super::path_components(value.path),
-            priority: value.priority.into(),
+            index,
+            size,
+            start_piece,
+            end_piece,
+            path: super::path_components(path),
+            priority: priority.into(),
         }
     }
 }
@@ -142,21 +164,39 @@ impl From<torrent::FullSessionState> for super::SessionState {
 }
 
 impl From<torrent::FullState> for super::TorrentState {
-    fn from(value: torrent::FullState) -> Self {
+    fn from(
+        torrent::FullState {
+            name,
+            total_pieces,
+            percent,
+            download_speed,
+            upload_speed,
+            total_size,
+            info_hash,
+            trackers,
+            peers,
+            files,
+            bitfield,
+            state,
+            pending_pieces,
+            save_location,
+        }: torrent::FullState,
+    ) -> Self {
         Self {
-            info_hash: crate::utils::stringify_info_hash(&value.info_hash),
-            name: value.name,
-            total_pieces: value.total_pieces,
-            percent: value.percent,
-            download_speed: value.download_speed,
-            upload_speed: value.upload_speed,
-            total_size: value.total_size,
-            trackers: value.trackers.into_iter().map(Into::into).collect(),
-            peers: value.peers.into_iter().map(Into::into).collect(),
-            files: value.files.into_iter().map(Into::into).collect(),
-            downloaded_pieces: value.bitfield.0,
-            state: value.state.into(),
-            pending_pieces: value.pending_pieces,
+            info_hash: crate::utils::stringify_info_hash(&info_hash),
+            name,
+            total_pieces,
+            percent,
+            download_speed,
+            upload_speed,
+            total_size,
+            trackers: trackers.into_iter().map(Into::into).collect(),
+            peers: peers.into_iter().map(Into::into).collect(),
+            files: files.into_iter().map(Into::into).collect(),
+            downloaded_pieces: bitfield.0,
+            state: state.into(),
+            pending_pieces,
+            save_location,
         }
     }
 }
