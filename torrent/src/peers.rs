@@ -412,7 +412,7 @@ impl Peer {
             }
         }
 
-        Info::from_bytes(&ut_metadata.as_bytes())
+        Info::from_bytes(&ut_metadata.into_bytes())
     }
 
     #[tracing::instrument(name = "peer", skip_all, fields(peer_uuid = %self.uuid, peer_ip = %self.peer_ip, info_hash = %hex::encode(self.handshake.info_hash)))]
@@ -469,7 +469,7 @@ impl Peer {
                         }
                         _ => {}
                     }
-                    if let Err(_) = ipc.message_tx.send_async(peer_msg).await {
+                    if ipc.message_tx.send_async(peer_msg).await.is_err() {
                         tracing::error!("Peer -> scheduler channel is closed");
                         break Err(PeerError::timeout("Channel is closed or overflowed"));
                     };

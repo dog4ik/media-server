@@ -123,11 +123,10 @@ impl PeerListener {
                         map.insert(info_hash, sender);
                     },
                     _ = cancellation_token.cancelled() => {
-                        if let Ok(port_manager) = &mut port_manager {
-                            if let Err(e) = port_manager.delete_mapping().await {
+                        if let Ok(port_manager) = &mut port_manager
+                            && let Err(e) = port_manager.delete_mapping().await {
                                 tracing::error!("Failed to cleanup port mapping: {e}");
                             };
-                        }
                         break;
                     }
                     _ = renew_interval.tick() => {

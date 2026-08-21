@@ -164,7 +164,7 @@ impl PendingPiece {
     }
 
     /// Panics if piece is not full
-    pub fn as_bytes(self) -> Vec<Bytes> {
+    pub fn into_bytes(self) -> Vec<Bytes> {
         self.piece.into_iter().map(|x| x.data.unwrap()).collect()
     }
 
@@ -415,7 +415,7 @@ impl Scheduler {
                 stat.rational += 1;
                 peer.pending_blocks += 1;
                 if schedule_batch.add_block(block) {
-                    schedule_batch.send(&peer)?;
+                    schedule_batch.send(peer)?;
                     return Ok(stat);
                 };
             }
@@ -439,7 +439,7 @@ impl Scheduler {
                         stat.rational += 1;
                         peer.pending_blocks += 1;
                         if schedule_batch.add_block(block) {
-                            schedule_batch.send(&peer)?;
+                            schedule_batch.send(peer)?;
                             return Ok(stat);
                         };
                     }
@@ -467,7 +467,7 @@ impl Scheduler {
                         stat.sub_rational += 1;
                         peer.pending_blocks += 1;
                         if schedule_batch.add_block(block) {
-                            schedule_batch.send(&peer)?;
+                            schedule_batch.send(peer)?;
                             return Ok(stat);
                         };
                     }
@@ -499,11 +499,11 @@ impl Scheduler {
                 schedule_batch.add_block(block);
             }
             if schedule_batch.left() == 0 {
-                schedule_batch.send(&peer)?;
+                schedule_batch.send(peer)?;
                 return Ok(stat);
             }
         }
-        schedule_batch.send(&peer)?;
+        schedule_batch.send(peer)?;
         Ok(stat)
     }
 
@@ -615,7 +615,6 @@ impl Scheduler {
             // ISSUE: Prevent this piece to be send to storage if it is currently pending
             // We run into a lot of race conditions / storage/scheduler synchronisation issues
             self.add_piece(piece_idx);
-            return;
         }
     }
 
@@ -628,21 +627,21 @@ impl Scheduler {
                 .unwrap();
             let blocks_amount = pending_piece.piece.len();
             for (block_idx, block) in pending_piece.piece.iter_mut().enumerate() {
-                if block.data.is_none() {
-                    if let Some(peer_idx) = block.scheduled_to.iter().position(|p| p == &peer_id) {
-                        block.scheduled_to.swap_remove(peer_idx);
-                        if block.scheduled_to.is_empty() {
-                            block.requested_at = None;
-                            let offset = block_idx as u32 * BLOCK_LENGTH;
-                            let length = if block_idx == blocks_amount - 1 {
-                                piece_size - offset
-                            } else {
-                                BLOCK_LENGTH
-                            };
-                            pending_piece
-                                .blocks_queue
-                                .push(BlockPosition { offset, length });
-                        }
+                if block.data.is_none()
+                    && let Some(peer_idx) = block.scheduled_to.iter().position(|p| p == &peer_id)
+                {
+                    block.scheduled_to.swap_remove(peer_idx);
+                    if block.scheduled_to.is_empty() {
+                        block.requested_at = None;
+                        let offset = block_idx as u32 * BLOCK_LENGTH;
+                        let length = if block_idx == blocks_amount - 1 {
+                            piece_size - offset
+                        } else {
+                            BLOCK_LENGTH
+                        };
+                        pending_piece
+                            .blocks_queue
+                            .push(BlockPosition { offset, length });
                     }
                 }
             }
@@ -783,15 +782,15 @@ impl Scheduler {
         }
 
         // Keep priority of neighbor pieces
-        if let Some(prev_file) = prev_file {
-            if prev_file.priority > new_priority {
-                self.piece_table[prev_file.end_piece].priority = prev_file.priority;
-            }
+        if let Some(prev_file) = prev_file
+            && prev_file.priority > new_priority
+        {
+            self.piece_table[prev_file.end_piece].priority = prev_file.priority;
         }
-        if let Some(next_file) = next_file {
-            if next_file.priority > new_priority {
-                self.piece_table[next_file.start_piece].priority = next_file.priority;
-            }
+        if let Some(next_file) = next_file
+            && next_file.priority > new_priority
+        {
+            self.piece_table[next_file.start_piece].priority = next_file.priority;
         }
 
         if is_disabled || is_enabled {
@@ -977,7 +976,7 @@ impl Scheduler {
                 if pending_blocks.is_sub_rational() {
                     *sub_rational_amount -= 1;
                 }
-                on_piece_ready(piece_idx, pending_blocks.as_bytes());
+                on_piece_ready(piece_idx, pending_blocks.into_bytes());
             }
             !is_full
         });

@@ -113,7 +113,7 @@ impl TorrentFile {
             .as_ref()
             .into_iter()
             .chain(self.announce_list.as_ref().into_iter().flatten().flatten())
-            .filter_map(|announce| Url::parse(&announce).ok())
+            .filter_map(|announce| Url::parse(announce).ok())
             .collect()
     }
 }

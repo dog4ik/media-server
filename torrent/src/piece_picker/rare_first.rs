@@ -31,7 +31,7 @@ pub struct RareFirst {
 }
 
 impl RareFirst {
-    pub fn new(pieces: &Vec<SchedulerPiece>) -> Self {
+    pub fn new(pieces: &[SchedulerPiece]) -> Self {
         let pieces = pieces
             .iter()
             .enumerate()

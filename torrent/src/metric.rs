@@ -35,24 +35,23 @@ impl RollingSpeedMeter {
         self.history.push_back((now, current));
 
         // Compute speed: (latest_bytes - oldest_bytes) / window_duration
-        if self.history.len() >= 2 {
-            if let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
+        if self.history.len() >= 2
+            && let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
                 (self.history.front(), self.history.back())
-            {
-                debug_assert!(current.downloaded >= latest_bytes.downloaded);
-                debug_assert!(current.uploaded >= latest_bytes.uploaded);
-                let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
-                let delta_uploaded = latest_bytes.uploaded.saturating_sub(oldest_bytes.uploaded);
-                let delta_downloaded = latest_bytes
-                    .downloaded
-                    .saturating_sub(oldest_bytes.downloaded);
+        {
+            debug_assert!(current.downloaded >= latest_bytes.downloaded);
+            debug_assert!(current.uploaded >= latest_bytes.uploaded);
+            let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
+            let delta_uploaded = latest_bytes.uploaded.saturating_sub(oldest_bytes.uploaded);
+            let delta_downloaded = latest_bytes
+                .downloaded
+                .saturating_sub(oldest_bytes.downloaded);
 
-                if delta_time > 0.0 {
-                    return (
-                        delta_downloaded as f64 / delta_time,
-                        delta_uploaded as f64 / delta_time,
-                    );
-                }
+            if delta_time > 0.0 {
+                return (
+                    delta_downloaded as f64 / delta_time,
+                    delta_uploaded as f64 / delta_time,
+                );
             }
         }
 
@@ -63,22 +62,21 @@ impl RollingSpeedMeter {
     // Returns the average speed over the window based on existing data.
     pub fn speed(&self) -> (f64, f64) {
         // Compute speed: (latest_bytes - oldest_bytes) / window_duration
-        if self.history.len() >= 2 {
-            if let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
+        if self.history.len() >= 2
+            && let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
                 (self.history.front(), self.history.back())
-            {
-                let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
-                let delta_downloaded = latest_bytes
-                    .downloaded
-                    .saturating_sub(oldest_bytes.downloaded);
-                let delta_uploaded = latest_bytes.uploaded.saturating_sub(oldest_bytes.uploaded);
+        {
+            let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
+            let delta_downloaded = latest_bytes
+                .downloaded
+                .saturating_sub(oldest_bytes.downloaded);
+            let delta_uploaded = latest_bytes.uploaded.saturating_sub(oldest_bytes.uploaded);
 
-                if delta_time > 0.0 {
-                    return (
-                        delta_downloaded as f64 / delta_time,
-                        delta_uploaded as f64 / delta_time,
-                    );
-                }
+            if delta_time > 0.0 {
+                return (
+                    delta_downloaded as f64 / delta_time,
+                    delta_uploaded as f64 / delta_time,
+                );
             }
         }
 
@@ -134,16 +132,15 @@ mod capacity_speed_meter {
 
         pub fn get_speed(&self) -> f64 {
             // Compute speed: (latest_bytes - oldest_bytes) / time_between_ticks
-            if self.history.len() >= 2 {
-                if let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
+            if self.history.len() >= 2
+                && let (Some(&(oldest_time, oldest_bytes)), Some(&(latest_time, latest_bytes))) =
                     (self.history.front(), self.history.back())
-                {
-                    let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
-                    let delta_bytes = latest_bytes.saturating_sub(oldest_bytes);
+            {
+                let delta_time = latest_time.duration_since(oldest_time).as_secs_f64();
+                let delta_bytes = latest_bytes.saturating_sub(oldest_bytes);
 
-                    if delta_time > 0.0 {
-                        return delta_bytes as f64 / delta_time;
-                    }
+                if delta_time > 0.0 {
+                    return delta_bytes as f64 / delta_time;
                 }
             }
 
@@ -151,12 +148,11 @@ mod capacity_speed_meter {
         }
 
         pub fn get_time_span(&self) -> Duration {
-            if self.history.len() >= 2 {
-                if let (Some(&(oldest_time, _)), Some(&(latest_time, _))) =
+            if self.history.len() >= 2
+                && let (Some(&(oldest_time, _)), Some(&(latest_time, _))) =
                     (self.history.front(), self.history.back())
-                {
-                    return latest_time.duration_since(oldest_time);
-                }
+            {
+                return latest_time.duration_since(oldest_time);
             }
             Duration::from_secs(0)
         }

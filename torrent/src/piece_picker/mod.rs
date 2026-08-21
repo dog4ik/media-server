@@ -16,7 +16,7 @@ pub struct PiecePicker {
 }
 
 impl PiecePicker {
-    pub fn new(piece_table: &Vec<SchedulerPiece>) -> Self {
+    pub fn new(piece_table: &[SchedulerPiece]) -> Self {
         let mut this = Self {
             strategy: ScheduleStrategy::default(),
             queue: Vec::new(),
@@ -41,7 +41,7 @@ impl PiecePicker {
         self.queue.pop()
     }
 
-    pub fn rebuild_queue(&mut self, piece_table: &Vec<SchedulerPiece>) {
+    pub fn rebuild_queue(&mut self, piece_table: &[SchedulerPiece]) {
         self.queue = self.strategy.build(piece_table);
     }
 
@@ -67,7 +67,7 @@ pub enum ScheduleStrategy {
 }
 
 impl ScheduleStrategy {
-    pub fn build(&self, piece_table: &Vec<SchedulerPiece>) -> Vec<usize> {
+    pub fn build(&self, piece_table: &[SchedulerPiece]) -> Vec<usize> {
         match self {
             ScheduleStrategy::Linear => Linear::build(piece_table),
             ScheduleStrategy::RareFirst => todo!(),

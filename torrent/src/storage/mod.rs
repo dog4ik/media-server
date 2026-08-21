@@ -265,15 +265,15 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
                     .is_some_and(|prev| {
                         prev.end_piece(self.base_piece_length()) == file_start_piece
                     });
-                if border_next || border_prev {
-                    if let Err(e) = self.parts_file.write_piece(piece_i, &blocks.0).await {
-                        tracing::error!("Failed to write piece {piece_i} to the parts file: {e}");
-                    };
-                }
+                if (border_next || border_prev)
+                    && let Err(e) = self.parts_file.write_piece(piece_i, &blocks.0).await
+                {
+                    tracing::error!("Failed to write piece {piece_i} to the parts file: {e}");
+                };
                 continue;
             }
 
-            let f = self.sinks.open(file_idx, &file).await?;
+            let f = self.sinks.open(file_idx, file).await?;
             let insert_offset = piece_start.saturating_sub(file_start);
             f.seek(SeekFrom::Start(insert_offset)).await?;
 
@@ -319,7 +319,7 @@ impl<T: sink::StorageSink, P: parts::PartsResource> TorrentStorage<T, P> {
             }
 
             let read_offset = piece_start.saturating_sub(file_start);
-            let f = self.sinks.open(file_idx, &file).await?;
+            let f = self.sinks.open(file_idx, file).await?;
             f.seek(SeekFrom::Start(read_offset)).await?;
             let range_start = if piece_start < file_start {
                 (file_start - piece_start) as usize

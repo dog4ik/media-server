@@ -74,22 +74,20 @@ impl PeerFP {
     fn parse_shadow_style(id: &[u8; 20]) -> anyhow::Result<Self> {
         let first = char::from(id[0]);
         anyhow::ensure!(first.is_alphanumeric());
-        let major;
-        let minor;
-        let revision;
-        if &id[4..6] == b"--" {
-            major = char::from(id[1]).to_digit(10).context("major version")?;
-            minor = char::from(id[2]).to_digit(10).context("minor version")?;
-            revision = char::from(id[3]).to_digit(10).context("revision version")?;
+
+        let (major, minor, revision) = if &id[4..6] == b"--" {
+            (
+                char::from(id[1]).to_digit(10).context("major version")?,
+                char::from(id[2]).to_digit(10).context("minor version")?,
+                char::from(id[3]).to_digit(10).context("revision version")?,
+            )
         } else {
             anyhow::ensure!(id[8] == 0);
             anyhow::ensure!(id[1] <= 127);
             anyhow::ensure!(id[2] <= 127);
             anyhow::ensure!(id[3] <= 127);
-            major = id[1] as u32;
-            minor = id[2] as u32;
-            revision = id[3] as u32;
-        }
+            (id[1] as u32, id[2] as u32, id[3] as u32)
+        };
 
         let tag = 0;
         Ok(Self {

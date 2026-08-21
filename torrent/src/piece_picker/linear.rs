@@ -29,7 +29,7 @@ impl Ord for Piece {
 }
 
 impl Linear {
-    pub fn new(table: &Vec<SchedulerPiece>) -> Self {
+    pub fn new(table: &[SchedulerPiece]) -> Self {
         let mut pieces: Vec<Piece> = table
             .iter()
             .enumerate()
@@ -50,7 +50,7 @@ impl Linear {
         Self { pieces }
     }
 
-    pub fn build(table: &Vec<SchedulerPiece>) -> Vec<usize> {
+    pub fn build(table: &[SchedulerPiece]) -> Vec<usize> {
         let mut pieces = Vec::new();
         let mut extend_with_priority = |priority: Priority| {
             pieces.extend(table.iter().enumerate().filter_map(|(index, p)| {

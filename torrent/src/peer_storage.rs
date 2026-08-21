@@ -92,7 +92,7 @@ impl TorrentPeer {
     fn can_connect(&self) -> bool {
         self.status == PeerStatus::Stored
             && self.failcount < MAX_FAILCOUNT
-            && self.last_connected.map_or(true, |t| {
+            && self.last_connected.is_none_or(|t| {
                 t.elapsed() >= Duration::from_secs((self.failcount + 1) as u64 * MIN_RECONNECT_SECS)
             })
     }
@@ -150,12 +150,12 @@ impl PeerStorage {
     }
 
     fn try_update_my_ip(&mut self, peer: &Peer) {
-        if self.my_ip.is_none() {
-            if let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip()) {
-                tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
-                self.my_ip = Some(SocketAddr::new(my_ip, 0));
-                self.candidate_cache.clear();
-            }
+        if self.my_ip.is_none()
+            && let Some(my_ip) = peer.extension_handshake.as_ref().and_then(|e| e.your_ip())
+        {
+            tracing::info!(%my_ip, peer = %peer.ip(), "Resolving my_ip from peer");
+            self.my_ip = Some(SocketAddr::new(my_ip, 0));
+            self.candidate_cache.clear();
         }
     }
 

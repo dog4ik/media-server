@@ -86,9 +86,12 @@ mod unstable {
     /// 2. Current bitfield does not contain this piece (this piece is not already in parts file)
     ///
     /// We should restructure it when:
+    ///
     /// - One of the disabled files gets enabled.
+    ///
     /// In that case we move piece data in newly enabled output file and remove border piece from parts
     /// file
+    ///
     /// - Added piece that shared between files where one of the files is disabled
     ///
     /// Border piece exists in parts file when:
@@ -134,6 +137,7 @@ mod unstable {
             let created_files = created_files(&files).await;
             let file = fs::OpenOptions::new()
                 .write(true)
+                .truncate(false)
                 .read(true)
                 .create(true)
                 .open(&location)
@@ -267,6 +271,7 @@ impl PartsResource for PartsPath {
         tracing::debug!(path = %self.0.display(), "Opening .parts file");
         fs::OpenOptions::new()
             .write(true)
+            .truncate(false)
             .read(true)
             .create(true)
             .open(&self.0)
@@ -300,36 +305,31 @@ impl<T> PartsFile<T>
 where
     T: PartsResource + Send,
 {
-    pub fn init(
-        measurer: LengthCalculator,
-        io: T,
-    ) -> impl Future<Output = anyhow::Result<PartsFile<T>>> + Send {
-        async move {
-            let mut pieces = Vec::new();
-            match io.open_io().await {
-                Ok(mut file) => {
-                    let len = T::len(&file).await?;
-                    let mut position = 0;
-                    while position < len {
-                        file.seek(SeekFrom::Start(position)).await?;
-                        let piece = file.read_u32().await? as usize;
-                        let piece_length = measurer.piece_length(piece) as u64;
-                        pieces.push(piece);
-                        position += 4 + piece_length;
-                    }
+    pub async fn init(measurer: LengthCalculator, io: T) -> anyhow::Result<PartsFile<T>> {
+        let mut pieces = Vec::new();
+        match io.open_io().await {
+            Ok(mut file) => {
+                let len = T::len(&file).await?;
+                let mut position = 0;
+                while position < len {
+                    file.seek(SeekFrom::Start(position)).await?;
+                    let piece = file.read_u32().await? as usize;
+                    let piece_length = measurer.piece_length(piece) as u64;
+                    pieces.push(piece);
+                    position += 4 + piece_length;
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => Err(e)?,
             }
-
-            tracing::debug!("Initiated .parts file with {} parts", pieces.len());
-
-            Ok(Self {
-                pieces,
-                io,
-                piece_length_measurer: measurer,
-            })
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => Err(e)?,
         }
+
+        tracing::debug!("Initiated .parts file with {} parts", pieces.len());
+
+        Ok(Self {
+            pieces,
+            io,
+            piece_length_measurer: measurer,
+        })
     }
 
     pub async fn write_piece(&mut self, piece_i: usize, piece: &[Bytes]) -> anyhow::Result<()> {

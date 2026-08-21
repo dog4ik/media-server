@@ -68,7 +68,7 @@ impl AnnouncePayload {
             "{}{separator}{}&info_hash={}",
             self.announce,
             serde_urlencoded::to_string(&url_params)?,
-            &urlencode(&self.info_hash)
+            urlencode(&self.info_hash)
         );
         tracing::debug!(tracker_url, "Announcing tracker {} via HTTP", self.announce);
         let response = client
@@ -218,7 +218,7 @@ impl HttpAnnounceResponse {
                 }
             }
             HttpPeerList::Compact(bytes) => {
-                for slice in bytes.chunks_exact(6) {
+                for slice in bytes.as_chunks::<6>().0 {
                     let ip = u32::from_be_bytes(slice[0..4].try_into().unwrap());
                     let port = u16::from_be_bytes(slice[4..6].try_into().unwrap());
                     let ip = Ipv4Addr::from_bits(ip);
@@ -619,7 +619,7 @@ impl DownloadTracker {
                         events::TrackerEventKind::Reannounce { interval },
                     );
                     self.announce_interval = interval;
-                    announce_peers.extend(peers.into_iter());
+                    announce_peers.extend(peers);
                     self.status = TrackerStatus::Working;
                 }
             }

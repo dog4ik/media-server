@@ -222,30 +222,24 @@ impl Visitor<'_> for HashesVisitor {
     where
         E: serde::de::Error,
     {
-        if v.len() % 20 != 0 {
+        if !v.len().is_multiple_of(20) {
             return Err(serde::de::Error::custom(
                 "payload is not multiple of 20 bytes long",
             ));
         }
-        Ok(Hashes(
-            v.chunks_exact(20)
-                .map(|c| <[u8; 20]>::try_from(c).unwrap())
-                .collect(),
-        ))
+        let (chunks, _) = v.as_chunks::<20>();
+        Ok(Hashes(chunks.into()))
     }
 
     fn visit_borrowed_bytes<E>(self, v: &'_ [u8]) -> Result<Self::Value, E>
     where
         E: serde::de::Error,
     {
-        if v.len() % 20 != 0 {
+        if !v.len().is_multiple_of(20) {
             return Err(serde::de::Error::custom("payload is not 20 bytes long"));
         }
-        Ok(Hashes(
-            v.chunks_exact(20)
-                .map(|c| <[u8; 20]>::try_from(c).unwrap())
-                .collect(),
-        ))
+        let (chunks, _) = v.as_chunks::<20>();
+        Ok(Hashes(chunks.into()))
     }
 }
 

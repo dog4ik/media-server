@@ -128,7 +128,7 @@ pub struct InterestedPieces {
 }
 
 impl InterestedPieces {
-    pub fn new(piece_table: &Vec<scheduler::SchedulerPiece>, peer_bf: &BitField) -> Self {
+    pub fn new(piece_table: &[scheduler::SchedulerPiece], peer_bf: &BitField) -> Self {
         let bf = BitField::empty(piece_table.len());
 
         let mut this = Self {

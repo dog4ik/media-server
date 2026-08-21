@@ -34,6 +34,7 @@ impl StorageSink for FileHandles {
         tracing::debug!("Creating file handle: {}", file.path.display());
         let file_handle = fs::OpenOptions::new()
             .create(true)
+            .truncate(false)
             .read(true)
             .write(true)
             .open(&file.path)

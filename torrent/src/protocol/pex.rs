@@ -184,11 +184,8 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
         );
 
         if let Some(added) = added {
-            for (i, chunk) in added
-                .chunks_exact(6)
-                .map(|c| <[u8; 6]>::try_from(c).unwrap())
-                .enumerate()
-            {
+            let (chunks, _) = added.as_chunks::<6>();
+            for (i, &chunk) in chunks.iter().enumerate() {
                 let flags = added_flags
                     .as_ref()
                     .and_then(|f| f.get(i))
@@ -201,11 +198,8 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
         }
 
         if let Some(added6) = added6 {
-            for (i, chunk) in added6
-                .chunks_exact(18)
-                .map(|c| <[u8; 18]>::try_from(c).unwrap())
-                .enumerate()
-            {
+            let (chunks, _) = added6.as_chunks::<18>();
+            for (i, &chunk) in chunks.iter().enumerate() {
                 let flags = added6_flags
                     .as_ref()
                     .and_then(|f| f.get(i))
@@ -223,19 +217,15 @@ impl<'v> Visitor<'v> for UtMessageVisitor {
         );
 
         if let Some(dropped) = dropped {
-            for chunk in dropped
-                .chunks_exact(6)
-                .map(|c| <[u8; 6]>::try_from(c).unwrap())
-            {
+            let (chunks, _) = dropped.as_chunks::<6>();
+            for &chunk in chunks {
                 dropped_list.push(parse_ipv4(chunk));
             }
         }
 
         if let Some(dropped6) = dropped6 {
-            for chunk in dropped6
-                .chunks_exact(18)
-                .map(|c| <[u8; 18]>::try_from(c).unwrap())
-            {
+            let (chunks, _) = dropped6.as_chunks::<18>();
+            for &chunk in chunks {
                 dropped_list.push(parse_ipv6(chunk));
             }
         }

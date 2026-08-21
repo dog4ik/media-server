@@ -269,7 +269,7 @@ impl Download {
     }
 
     pub fn state(&self) -> DownloadState {
-        self.state.clone()
+        self.state
     }
 
     pub fn connections_count(&self) -> usize {
@@ -489,7 +489,7 @@ impl Download {
             self.handle_storage_feedback(ctx, storage_update);
         }
 
-        self.scheduler.register_performance(&ctx);
+        self.scheduler.register_performance(ctx);
 
         self.running_performance.update(
             ctx.tick_start,
@@ -711,7 +711,7 @@ impl Download {
         ctx.events.emit_peer(
             active_peer.ip,
             events::PeerEventKind::Connect {
-                state: Box::new(active_peer.state(&ctx)),
+                state: Box::new(active_peer.state(ctx)),
             },
         );
         // self.session.add_peer();
@@ -914,7 +914,7 @@ impl Download {
             peers,
             files,
             bitfield,
-            state: self.state.into(),
+            state: self.state,
             pending_pieces: self.scheduler.pending_pieces.clone(),
             save_location: self.save_location.clone(),
         }
@@ -923,7 +923,7 @@ impl Download {
     pub async fn handle_shutdown(&mut self) {
         tracing::info!("Gracefully shutting down download");
         // wait for peers to close
-        while let Some(_) = self.peers_handles.join_next().await {}
+        while self.peers_handles.join_next().await.is_some() {}
     }
 
     fn shrink_pex_history(&mut self, min_tip: usize) {
