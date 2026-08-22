@@ -1144,7 +1144,7 @@ async fn parse_torrent_files(
             let mut resolved_movies = Vec::new();
             for (file_idx, movie) in movie_identifiers {
                 if let Some(movie) = providers_stack
-                    .search_movie(movie.title())
+                    .search_movie(movie.title(), movie.year)
                     .await
                     .ok()
                     .and_then(|r| r.into_iter().next())

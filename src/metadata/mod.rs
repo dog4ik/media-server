@@ -94,6 +94,7 @@ pub trait MovieMetadataProvider: ProviderIdentifier {
     async fn movie_search(
         &self,
         query: &str,
+        year: Option<u16>,
         fetch_params: FetchParams,
     ) -> crate::Result<Vec<MovieMetadata>>;
 }
@@ -111,9 +112,10 @@ impl<T: MovieMetadataProvider + Send + Sync + ?Sized> MovieMetadataProvider for 
     async fn movie_search(
         &self,
         query: &str,
+        year: Option<u16>,
         fetch_params: FetchParams,
     ) -> crate::Result<Vec<MovieMetadata>> {
-        (**self).movie_search(query, fetch_params).await
+        (**self).movie_search(query, year, fetch_params).await
     }
 }
 

@@ -153,8 +153,10 @@ impl TmdbApi {
     pub async fn search_movie(
         &self,
         query: &str,
+        year: Option<u16>,
         lang: Language,
     ) -> crate::Result<TmdbSearch<TmdbSearchMovieResult>> {
+        let str_year = year.map(|v| v.to_string());
         let query = [("query", query)];
         let mut url = self.base_url.clone();
         url.path_segments_mut()
@@ -162,7 +164,11 @@ impl TmdbApi {
             .push("search")
             .push("movie");
         url.query_pairs_mut()
-            .extend_pairs(query)
+            .extend_pairs(
+                query
+                    .into_iter()
+                    .chain(str_year.as_deref().map(|year| ("year", year))),
+            )
             .append_pair("language", &lang.to_string());
         let req = Request::new(Method::GET, url);
         self.client.request(req).await
@@ -440,9 +446,10 @@ impl MovieMetadataProvider for TmdbApi {
     async fn movie_search(
         &self,
         query: &str,
+        year: Option<u16>,
         fetch_params: FetchParams,
     ) -> crate::Result<Vec<MovieMetadata>> {
-        let content = self.search_movie(query, fetch_params.lang).await?;
+        let content = self.search_movie(query, year, fetch_params.lang).await?;
         Ok(content.results.into_iter().map(Into::into).collect())
     }
 }

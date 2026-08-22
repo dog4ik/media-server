@@ -254,13 +254,16 @@ async fn fetch_single_movie_chunk(
 ) -> ResolvedMovie {
     let first = videos.first().expect("movies are chunked");
     let db_movies = db.search_movie(&title).await.unwrap_or_default();
+    let year = videos.iter().find_map(|v| v.identifier.year);
 
     if db_movies.is_empty()
         || db_movies.first().unwrap().title.split_whitespace().count()
             != title.split_whitespace().count()
     {
         for provider in movie_providers {
-            let Ok(search_results) = provider.movie_search(&title, config.fetch_params).await
+            let Ok(search_results) = provider
+                .movie_search(&title, year, config.fetch_params)
+                .await
             else {
                 continue;
             };

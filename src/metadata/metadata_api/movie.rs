@@ -61,8 +61,12 @@ where
     pub async fn search_movie_title(
         &self,
         title: &str,
+        year: Option<u16>,
     ) -> anyhow::Result<Option<MetadataLookup<MovieMetadata>>> {
-        let search_results = self.provider.movie_search(title, self.fetch_params).await?;
+        let search_results = self
+            .provider
+            .movie_search(title, year, self.fetch_params)
+            .await?;
         let Some(first_result) = search_results.into_iter().next() else {
             return Ok(None);
         };

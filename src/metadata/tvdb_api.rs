@@ -189,6 +189,7 @@ impl MovieMetadataProvider for TvdbApi {
     async fn movie_search(
         &self,
         query: &str,
+        _year: Option<u16>,
         fetch_params: FetchParams,
     ) -> crate::Result<Vec<MovieMetadata>> {
         Ok(self

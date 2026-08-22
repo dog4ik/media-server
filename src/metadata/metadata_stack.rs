@@ -137,7 +137,11 @@ impl MetadataProvidersStack {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    pub async fn search_movie(&self, query: &str) -> anyhow::Result<Vec<MovieMetadata>> {
+    pub async fn search_movie(
+        &self,
+        query: &str,
+        year: Option<u16>,
+    ) -> anyhow::Result<Vec<MovieMetadata>> {
         let movie_providers = { self.movie_providers_stack.lock().unwrap().clone() };
         let lang: config::MetadataLanguage = config::CONFIG.get_value();
         let fetch_params = FetchParams { lang: lang.0 };
@@ -146,7 +150,7 @@ impl MetadataProvidersStack {
             .into_iter()
             .map(|p| {
                 let query = query.to_string();
-                tokio::spawn(async move { p.movie_search(&query, fetch_params).await })
+                tokio::spawn(async move { p.movie_search(&query, year, fetch_params).await })
             })
             .collect();
 
