@@ -514,7 +514,12 @@ impl MovieMetadataProvider for MockProvider {
         self.get_movie(movie_metadata_id).cloned()
     }
 
-    async fn movie_search(&self, query: &str, _: FetchParams) -> crate::Result<Vec<MovieMetadata>> {
+    async fn movie_search(
+        &self,
+        query: &str,
+        _year: Option<u16>,
+        _: FetchParams,
+    ) -> crate::Result<Vec<MovieMetadata>> {
         Ok(self
             .movies
             .values()
