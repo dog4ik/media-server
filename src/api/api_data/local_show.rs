@@ -1,19 +1,17 @@
-use std::collections::HashMap;
-
 use serde::Serialize;
 
 use crate::{
     api::{
         api_data::{
             LocalDataLookup,
-            api_types::{Actor, CompactList, History},
+            api_types::{Actor, CompactList},
         },
         server::Intro,
     },
-    db::query_builders::ListsQueryJson,
+    db::{Db, DbQueryBuilder, query_builders},
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider,
-        SeasonMetadata, ShowMetadata,
+        SeasonMetadata, ShowMetadata, metadata_api::MetadataLookup,
     },
 };
 
@@ -66,30 +64,33 @@ impl Show {
         meta: ShowMetadata,
         lookup: LocalDataLookup,
     ) -> sqlx::Result<Self> {
-        let local = lookup
-            .show_data(meta.metadata_provider, &meta.metadata_id)
-            .await?;
+        let extended_show = lookup
+            .extend_shows_with_local_data(vec![meta])
+            .await?
+            .into_iter()
+            .next()
+            .expect("input length should match output");
 
-        Ok(Self::extend_meta(meta, local))
+        Ok(extended_show)
     }
 
-    pub fn extend_meta(meta: ShowMetadata, local: Option<LocalShowData>) -> Self {
-        Self {
-            provider_id: meta.metadata_id,
-            provider: meta.metadata_provider,
-            poster: meta.poster,
-            backdrop: meta.backdrop,
-            plot: meta.plot,
-            seasons: meta.seasons,
-            episodes_amount: meta.episodes_amount,
-            release_date: meta.release_date,
-            title: meta.title,
-            locale_metadata: meta.locale_metadata,
-            cast: meta.cast.map(|v| v.into_iter().map(Into::into).collect()),
-            external_ids: meta.external_ids,
-            genres: meta.genres,
-            next_episode_air_date: meta.next_episode_air_date,
-            local,
+    pub async fn from_lookup(lookup: MetadataLookup<ShowMetadata>, db: Db) -> sqlx::Result<Self> {
+        match lookup {
+            MetadataLookup::New { metadata } => {
+                Self::extend_with_lookup(metadata, LocalDataLookup { db }).await
+            }
+            MetadataLookup::Local(local_content_id) => {
+                let mut query = DbQueryBuilder::default();
+                query_builders::DbShowQuery::build(&mut query);
+                query
+                    .push(" where metadata.id = ")
+                    .push_bind(local_content_id.metadata_id)
+                    .build_query_as::<query_builders::DbShowQuery>()
+                    .fetch_one(&db.pool)
+                    .await
+                    .map(Into::into)
+            }
+            MetadataLookup::Missing => Err(sqlx::Error::RowNotFound),
         }
     }
 }
@@ -116,85 +117,9 @@ impl Season {
         let local = lookup
             .season_data(meta.metadata_provider, &meta.metadata_id, meta.number)
             .await?;
-        let mut episodes = Vec::with_capacity(meta.episodes.len());
-        #[derive(sqlx::FromRow)]
-        struct Record {
-            id: i64,
-            metadata_id: i64,
-            videos_count: i64,
-            history_id: Option<i64>,
-            time: Option<i64>,
-            update_time: Option<time::OffsetDateTime>,
-            is_finished: Option<bool>,
-            external_provider: MetadataProvider,
-            external_id: String,
-            intro_id: Option<i64>,
-            start_sec: Option<i64>,
-            end_sec: Option<i64>,
-            #[sqlx(json, default, nullish)]
-            lists: Option<Vec<ListsQueryJson>>,
-        }
-        let mut local_episodes = sqlx::QueryBuilder::new(format!(
-            "select episodes.id, episodes.metadata_id,
-            (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
-            external_ids.external_id, external_ids.external_provider,
-            history.id as history_id, history.time, history.update_time, history.is_finished,
-            intros.id as intro_id, intros.start_sec, intros.end_sec, {lists}
-            from external_ids
-            join episodes on episodes.metadata_id = external_ids.metadata_id
-            join metadata on metadata.id = episodes.metadata_id
-            left join intros on intros.episode_id = episodes.id
-            left join history on history.metadata_id = episodes.metadata_id
-            where (external_ids.external_provider, external_ids.external_id) in",
-            lists = ListsQueryJson::SQL_JSON_AGGR,
-        ))
-        .push_tuples(meta.episodes.iter(), |mut b, meta| {
-            b.push_bind(meta.metadata_provider)
-                .push_bind(&meta.metadata_id);
-        })
-        .build_query_as::<Record>()
-        .fetch_all(&lookup.db.pool)
-        .await?
-        .into_iter()
-        .map(|r| {
-            (
-                (r.external_provider, r.external_id),
-                LocalEpisodeData {
-                    metadata_id: r.metadata_id,
-                    id: r.id,
-                    videos_count: r.videos_count,
-                    lists: r.lists.into_iter().flatten().map(Into::into).collect(),
-                    history: r.history_id.map(|id| History {
-                        id,
-                        time: r.time.unwrap(),
-                        is_finished: r.is_finished.unwrap(),
-                        update_time: r.update_time.map(Into::into).unwrap(),
-                    }),
-                    intro: r.intro_id.map(|_| Intro {
-                        start_sec: r.start_sec.unwrap(),
-                        end_sec: r.end_sec.unwrap(),
-                    }),
-                },
-            )
-        })
-        .collect::<HashMap<_, _>>();
-        for episode_meta in meta.episodes {
-            let local_episode = Episode {
-                provider_id: episode_meta.metadata_id.clone(),
-                provider: episode_meta.metadata_provider,
-                release_date: episode_meta.release_date,
-                number: episode_meta.number,
-                title: episode_meta.title,
-                plot: episode_meta.plot,
-                season_number: episode_meta.season_number,
-                runtime: episode_meta.runtime,
-                poster: episode_meta.poster,
-                cast: None,
-                local: local_episodes
-                    .remove(&(episode_meta.metadata_provider, episode_meta.metadata_id)),
-            };
-            episodes.push(local_episode);
-        }
+        let episodes = lookup
+            .extend_episodes_with_local_data(meta.episodes)
+            .await?;
 
         Ok(Self {
             metadata_id: meta.metadata_id,
@@ -230,31 +155,18 @@ impl Episode {
         mut meta: EpisodeMetadata,
         lookup: LocalDataLookup,
     ) -> sqlx::Result<Self> {
-        let local = lookup
-            .episode_data(
-                meta.metadata_provider,
-                &meta.metadata_id,
-                meta.season_number,
-                meta.number,
-            )
-            .await?;
         let cast = if let Some(cast) = std::mem::take(&mut meta.cast) {
             Some(lookup.extend_actors(cast).await?)
         } else {
             None
         };
-        Ok(Episode {
-            provider_id: meta.metadata_id,
-            provider: meta.metadata_provider,
-            release_date: meta.release_date,
-            number: meta.number,
-            title: meta.title,
-            plot: meta.plot,
-            season_number: meta.season_number,
-            runtime: meta.runtime,
-            poster: meta.poster,
-            cast,
-            local,
-        })
+        let mut extended_episode = lookup
+            .extend_episodes_with_local_data(vec![meta])
+            .await?
+            .into_iter()
+            .next()
+            .expect("input length must match output");
+        extended_episode.cast = cast;
+        Ok(extended_episode)
     }
 }

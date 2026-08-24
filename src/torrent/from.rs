@@ -127,7 +127,7 @@ impl From<torrent::FullStateFile> for super::StateFile {
             size,
             start_piece,
             end_piece,
-            path: super::path_components(path),
+            path: super::torrent_contents::path_components(path),
             priority: priority.into(),
         }
     }

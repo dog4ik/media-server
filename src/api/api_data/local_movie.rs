@@ -5,7 +5,11 @@ use crate::{
         LocalDataLookup,
         api_types::{Actor, CompactList, History},
     },
-    metadata::{ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider, MovieMetadata},
+    db::{Db, DbQueryBuilder, query_builders},
+    metadata::{
+        ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider, MovieMetadata,
+        metadata_api::MetadataLookup,
+    },
 };
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
@@ -59,34 +63,39 @@ impl Movie {
         mut meta: MovieMetadata,
         lookup: LocalDataLookup,
     ) -> sqlx::Result<Self> {
-        let local = lookup
-            .movie_data(meta.metadata_provider, &meta.metadata_id)
-            .await?;
+        // TODO: consider handling cast in extend_movies call
         let cast = if let Some(cast) = std::mem::take(&mut meta.cast) {
             Some(lookup.extend_actors(cast).await?)
         } else {
             None
         };
-        let mut extended_movie = Self::extend_meta(meta, local);
+        let mut extended_movie = lookup
+            .extend_movies_with_local_data(vec![meta])
+            .await?
+            .into_iter()
+            .next()
+            .expect("input length should match output");
         extended_movie.cast = cast;
         Ok(extended_movie)
     }
 
-    pub fn extend_meta(meta: MovieMetadata, local: Option<LocalMovieData>) -> Self {
-        Self {
-            provider_id: meta.metadata_id,
-            provider: meta.metadata_provider,
-            poster: meta.poster,
-            backdrop: meta.backdrop,
-            plot: meta.plot,
-            release_date: meta.release_date,
-            runtime: meta.runtime,
-            title: meta.title,
-            locale_metadata: meta.locale_metadata,
-            cast: None,
-            external_ids: meta.external_ids,
-            genres: meta.genres,
-            local,
+    pub async fn from_lookup(lookup: MetadataLookup<MovieMetadata>, db: Db) -> sqlx::Result<Self> {
+        match lookup {
+            MetadataLookup::New { metadata } => {
+                Self::extend_with_lookup(metadata, LocalDataLookup { db }).await
+            }
+            MetadataLookup::Local(local_content_id) => {
+                let mut query = DbQueryBuilder::default();
+                query_builders::DbMovieQuery::build(&mut query);
+                query
+                    .push(" where metadata.id = ")
+                    .push_bind(local_content_id.metadata_id)
+                    .build_query_as::<query_builders::DbMovieQuery>()
+                    .fetch_one(&db.pool)
+                    .await
+                    .map(Into::into)
+            }
+            MetadataLookup::Missing => Err(sqlx::Error::RowNotFound),
         }
     }
 }

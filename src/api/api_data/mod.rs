@@ -4,11 +4,15 @@ use sqlx::QueryBuilder;
 
 use crate::{
     api::{
-        api_data::api_types::{Actor, History},
+        api_data::{
+            api_types::{Actor, History},
+            local_movie::Movie,
+            local_show::{Episode, LocalEpisodeData},
+        },
         server::Intro,
     },
     db::{Db, DbActions, LocalContentId, query_builders::ListsQueryJson},
-    metadata::{MetadataProvider, MovieMetadata, PersonMetadata, ShowMetadata},
+    metadata::{EpisodeMetadata, MetadataProvider, MovieMetadata, PersonMetadata, ShowMetadata},
 };
 
 pub mod api_types;
@@ -16,6 +20,7 @@ pub mod local_actor;
 pub mod local_movie;
 pub mod local_show;
 
+/// Extend external metadata with local information
 #[derive(Debug)]
 pub struct LocalDataLookup {
     db: Db,
@@ -102,7 +107,107 @@ impl LocalDataLookup {
             .into_iter()
             .map(|meta| {
                 let local = local_map.remove(&(meta.metadata_provider, meta.metadata_id.clone()));
-                local_show::Show::extend_meta(meta, local)
+                local_show::Show {
+                    provider_id: meta.metadata_id,
+                    provider: meta.metadata_provider,
+                    poster: meta.poster,
+                    backdrop: meta.backdrop,
+                    plot: meta.plot,
+                    seasons: meta.seasons,
+                    episodes_amount: meta.episodes_amount,
+                    release_date: meta.release_date,
+                    title: meta.title,
+                    locale_metadata: meta.locale_metadata,
+                    cast: meta.cast.map(|v| v.into_iter().map(Into::into).collect()),
+                    external_ids: meta.external_ids,
+                    genres: meta.genres,
+                    next_episode_air_date: meta.next_episode_air_date,
+                    local,
+                }
+            })
+            .collect())
+    }
+
+    pub async fn extend_episodes_with_local_data(
+        &self,
+        meta: Vec<EpisodeMetadata>,
+    ) -> sqlx::Result<Vec<Episode>> {
+        #[derive(sqlx::FromRow)]
+        struct Record {
+            id: i64,
+            metadata_id: i64,
+            videos_count: i64,
+            history_id: Option<i64>,
+            time: Option<i64>,
+            update_time: Option<time::OffsetDateTime>,
+            is_finished: Option<bool>,
+            external_provider: MetadataProvider,
+            external_id: String,
+            intro_id: Option<i64>,
+            start_sec: Option<i64>,
+            end_sec: Option<i64>,
+            #[sqlx(json, default, nullish)]
+            lists: Option<Vec<ListsQueryJson>>,
+        }
+        let mut local_episodes = sqlx::QueryBuilder::new(format!(
+            "select episodes.id, episodes.metadata_id,
+            (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
+            external_ids.external_id, external_ids.external_provider,
+            history.id as history_id, history.time, history.update_time, history.is_finished,
+            intros.id as intro_id, intros.start_sec, intros.end_sec, {lists}
+            from external_ids
+            join episodes on episodes.metadata_id = external_ids.metadata_id
+            join metadata on metadata.id = episodes.metadata_id
+            left join intros on intros.episode_id = episodes.id
+            left join history on history.metadata_id = episodes.metadata_id
+            where (external_ids.external_provider, external_ids.external_id) in",
+            lists = ListsQueryJson::SQL_JSON_AGGR,
+        ))
+        .push_tuples(meta.iter(), |mut b, meta| {
+            b.push_bind(meta.metadata_provider)
+                .push_bind(&meta.metadata_id);
+        })
+        .build_query_as::<Record>()
+        .fetch_all(&self.db.pool)
+        .await?
+        .into_iter()
+        .map(|r| {
+            (
+                (r.external_provider, r.external_id),
+                LocalEpisodeData {
+                    metadata_id: r.metadata_id,
+                    id: r.id,
+                    videos_count: r.videos_count,
+                    lists: r.lists.into_iter().flatten().map(Into::into).collect(),
+                    history: r.history_id.map(|id| History {
+                        id,
+                        time: r.time.unwrap(),
+                        is_finished: r.is_finished.unwrap(),
+                        update_time: r.update_time.map(Into::into).unwrap(),
+                    }),
+                    intro: r.intro_id.map(|_| Intro {
+                        start_sec: r.start_sec.unwrap(),
+                        end_sec: r.end_sec.unwrap(),
+                    }),
+                },
+            )
+        })
+        .collect::<HashMap<_, _>>();
+        Ok(meta
+            .into_iter()
+            .map(|episode_meta| Episode {
+                provider_id: episode_meta.metadata_id.clone(),
+                provider: episode_meta.metadata_provider,
+                release_date: episode_meta.release_date,
+                number: episode_meta.number,
+                title: episode_meta.title,
+                plot: episode_meta.plot,
+                season_number: episode_meta.season_number,
+                runtime: episode_meta.runtime,
+                poster: episode_meta.poster,
+                cast: None,
+                local: local_episodes
+                    .remove(&(episode_meta.metadata_provider, episode_meta.metadata_id)),
             })
             .collect())
     }
@@ -173,7 +278,21 @@ impl LocalDataLookup {
             .into_iter()
             .map(|meta| {
                 let local = local_map.remove(&(meta.metadata_provider, meta.metadata_id.clone()));
-                local_movie::Movie::extend_meta(meta, local)
+                Movie {
+                    provider_id: meta.metadata_id,
+                    provider: meta.metadata_provider,
+                    poster: meta.poster,
+                    backdrop: meta.backdrop,
+                    plot: meta.plot,
+                    release_date: meta.release_date,
+                    runtime: meta.runtime,
+                    title: meta.title,
+                    locale_metadata: meta.locale_metadata,
+                    cast: None,
+                    external_ids: meta.external_ids,
+                    genres: meta.genres,
+                    local,
+                }
             })
             .collect())
     }
@@ -218,94 +337,6 @@ impl LocalDataLookup {
             .collect())
     }
 
-    async fn movie_data(
-        &self,
-        external_provider: MetadataProvider,
-        external_id: &str,
-    ) -> sqlx::Result<Option<local_movie::LocalMovieData>> {
-        let Some(local) = self
-            .crossreference_movie(external_provider, external_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        #[derive(sqlx::FromRow)]
-        struct Record {
-            id: i64,
-            metadata_id: i64,
-            duration: i64,
-            videos_count: i64,
-            history_id: Option<i64>,
-            time: Option<i64>,
-            is_finished: Option<bool>,
-            history_update_time: Option<time::OffsetDateTime>,
-            #[sqlx(json, default, nullish)]
-            lists: Option<Vec<ListsQueryJson>>,
-        }
-        Ok(QueryBuilder::new(format!(
-            r#"select movies.id, movies.metadata_id, movies.duration,
-            (select count(id) from videos where videos.metadata_id = movies.metadata_id) as videos_count,
-            history.id as history_id, history.time, history.is_finished, history.update_time as history_update_time, {lists}
-            from movies
-            join metadata on metadata.id = movies.metadata_id
-            left join history on history.metadata_id = movies.metadata_id
-            where movies.id = "#,
-            lists = ListsQueryJson::SQL_JSON_AGGR,
-        ))
-        .push_bind(local.id)
-        .push(" limit 1")
-        .build_query_as::<Record>()
-        .fetch_optional(&self.db.pool).await?.map(|r| local_movie::LocalMovieData {
-            id: r.id,
-            metadata_id: r.metadata_id,
-            local_duration: Duration::from_secs(r.duration as u64).into(),
-            videos_count: r.videos_count,
-            lists: r.lists.into_iter().flatten().map(Into::into).collect(),
-            history: r.history_id.map(|id| api_types::History {
-                id,
-                time: r.time.unwrap(),
-                is_finished: r.is_finished.unwrap(),
-                update_time: r.history_update_time.map(Into::into).unwrap()
-            })
-        }))
-    }
-
-    async fn show_data(
-        &self,
-        external_provider: MetadataProvider,
-        external_id: &str,
-    ) -> sqlx::Result<Option<local_show::LocalShowData>> {
-        let Some(local) = self
-            .crossreference_show(external_provider, external_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        // `crossreference_show` already resolved both the show id and its metadata id.
-        #[derive(sqlx::FromRow)]
-        struct Record {
-            #[sqlx(json, default, nullish)]
-            lists: Option<Vec<ListsQueryJson>>,
-        }
-        let lists = QueryBuilder::new(format!(
-            "select {lists} from metadata where metadata.id = ",
-            lists = ListsQueryJson::SQL_JSON_AGGR,
-        ))
-        .push_bind(local.metadata_id)
-        .build_query_as::<Record>()
-        .fetch_one(&self.db.pool)
-        .await?
-        .lists;
-
-        Ok(Some(local_show::LocalShowData {
-            id: local.id,
-            metadata_id: local.metadata_id,
-            lists: lists.into_iter().flatten().map(Into::into).collect(),
-        }))
-    }
-
     async fn season_data(
         &self,
         external_provider: MetadataProvider,
@@ -328,73 +359,5 @@ impl LocalDataLookup {
         .fetch_optional(&self.db.pool)
         .await?
         .map(|v| local_show::LocalSeasonData { id: v.id, metadata_id: v.metadata_id }))
-    }
-
-    async fn episode_data(
-        &self,
-        external_provider: MetadataProvider,
-        external_id: &str,
-        season: usize,
-        episode: usize,
-    ) -> sqlx::Result<Option<local_show::LocalEpisodeData>> {
-        let season = season as i64;
-        let episode = episode as i64;
-        let Some(local_id) = self
-            .crossreference_show(external_provider, external_id)
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        #[derive(sqlx::FromRow)]
-        struct Record {
-            episode_id: i64,
-            metadata_id: i64,
-            videos_count: i64,
-            history_id: Option<i64>,
-            is_finished: Option<bool>,
-            history_time: Option<i64>,
-            history_update_time: Option<time::OffsetDateTime>,
-            intro_start: Option<i64>,
-            intro_end: Option<i64>,
-            #[sqlx(json, default, nullish)]
-            lists: Option<Vec<ListsQueryJson>>,
-        }
-        Ok(QueryBuilder::new(format!(
-            r#"select episodes.id as episode_id, episodes.metadata_id,
-            (select count(id) from videos where videos.metadata_id = episodes.metadata_id) as videos_count,
-            history.id as history_id, history.is_finished, history.time as history_time, history.update_time as history_update_time,
-            intros.start_sec as intro_start, intros.end_sec as intro_end, {lists}
-            from episodes
-            join seasons on seasons.id = episodes.season_id
-            join metadata on metadata.id = episodes.metadata_id
-            left join intros on intros.episode_id = episodes.id
-            left join history on history.metadata_id = episodes.metadata_id
-            where seasons.show_id = "#,
-            lists = ListsQueryJson::SQL_JSON_AGGR,
-        ))
-            .push_bind(local_id.id)
-            .push(" and seasons.number = ")
-            .push_bind(season)
-            .push(" and episodes.number = ")
-            .push_bind(episode)
-            .push(" limit 1")
-            .build_query_as::<Record>()
-            .fetch_optional(&self.db.pool)
-            .await?
-            .map(|r|
-                local_show::LocalEpisodeData {
-                    id: r.episode_id,
-                    metadata_id: r.metadata_id,
-                    videos_count: r.videos_count,
-                    lists: r.lists.into_iter().flatten().map(Into::into).collect(),
-                    history: r.history_id.map(|id| api_types::History {
-                        id,
-                        time: r.history_time.unwrap(),
-                        is_finished: r.is_finished.unwrap(),
-                        update_time: r.history_update_time.map(Into::into).unwrap(),
-                    }),
-                    intro: r.intro_start.zip(r.intro_end).map(|(start_sec, end_sec)| Intro { start_sec, end_sec })
-                }))
     }
 }

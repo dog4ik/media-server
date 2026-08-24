@@ -19,10 +19,9 @@ use crate::{
     api::{OptionalContentTypeQuery, Path, Query},
     app_state::AppState,
     config,
-    metadata::{ParentMediaType, metadata_stack::MetadataProvidersStack},
+    metadata::{MetadataProvider, ParentMediaType},
     torrent::{
-        Action, DownloadContentHint, Priority, ResolveMagnetLinkPayload, SessionState,
-        TorrentClient, TorrentDownloadPayload, TorrentInfo, TorrentState,
+        Action, Priority, SessionState, TorrentClient, TorrentState, torrent_contents::TorrentInfo,
     },
 };
 
@@ -31,6 +30,29 @@ use super::{StringIdQuery, TorrentIndexQuery};
 #[derive(Debug, Clone, utoipa::ToSchema)]
 #[schema(value_type = String)]
 pub struct InfoHash(pub [u8; 20]);
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct DownloadContentHint {
+    pub content_type: ParentMediaType,
+    pub metadata_provider: MetadataProvider,
+    pub metadata_id: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::ToSchema)]
+pub struct TorrentDownloadPayload {
+    // TODO: look up how other clients handle paths
+    // They must be cross platform
+    pub save_location: String,
+    pub content_hint: Option<DownloadContentHint>,
+    pub enabled_files: Option<Vec<usize>>,
+    pub magnet_link: String,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub struct ResolveMagnetLinkPayload {
+    pub magnet_link: String,
+    pub hint: Option<DownloadContentHint>,
+}
 
 impl<'de> Deserialize<'de> for InfoHash {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -110,7 +132,7 @@ pub struct PriorityPayload {
 #[derive(Debug, utoipa::ToSchema)]
 pub struct MultipartTorrent {
     #[schema(value_type = Option<String>)]
-    save_location: Option<PathBuf>,
+    save_location: PathBuf,
     #[schema(format = Binary, value_type = String, content_media_type = "application/octet-stream")]
     torrent_file: TorrentFile,
 }
@@ -129,7 +151,7 @@ impl MultipartTorrent {
         }
         Ok(Self {
             torrent_file: torrent_file.context("get torrent file")?,
-            save_location,
+            save_location: save_location.context("get save location")?,
         })
     }
 }
@@ -195,17 +217,7 @@ pub async fn set_files_priority(
     State(client): State<&'static TorrentClient>,
     Json(payload): Json<PriorityPayload>,
 ) -> crate::Result<()> {
-    let torrent = client
-        .get_download(info_hash.as_ref())
-        .ok_or(AppError::not_found("Torrent is not found"))?;
     let priority: torrent::Priority = payload.priority.into();
-    if payload
-        .files
-        .iter()
-        .any(|&file| file >= torrent.torrent_info.contents.files.len())
-    {
-        return Err(AppError::bad_request("File index is out of bounds"));
-    }
     client
         .update_files_priority(info_hash.as_ref(), payload.files, priority)
         .await?;
@@ -227,11 +239,7 @@ pub async fn set_files_priority(
 )]
 #[tracing::instrument(skip_all)]
 pub async fn open_torrent(
-    State(AppState {
-        providers_stack,
-        torrent_client,
-        ..
-    }): State<AppState>,
+    State(AppState { torrent_client, .. }): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
 ) -> crate::Result<StatusCode> {
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
@@ -240,40 +248,19 @@ pub async fn open_torrent(
         "Magnet links without tracker list are not supported",
     ))?;
     let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
-    let mut torrent_info = TorrentInfo::new(&info, payload.content_hint, providers_stack).await;
     let mut files_priorities = vec![torrent::Priority::Disabled; info.files_amount()];
     let enabled_files = payload
         .enabled_files
         .unwrap_or_else(|| (0..info.files_amount()).collect());
     for enabled_idx in &enabled_files {
-        if let Some(file) = torrent_info.contents.files.get_mut(*enabled_idx) {
-            file.priority = Priority::Medium;
-        }
         if let Some(priority) = files_priorities.get_mut(*enabled_idx) {
             *priority = torrent::Priority::Medium;
         }
     }
-    let save_location = payload
-        .save_location
-        .map(PathBuf::from)
-        .or_else(|| {
-            let content_type = torrent_info
-                .contents
-                .content
-                .as_ref()
-                .map(|c| c.content_type())?;
-            let folders = match content_type {
-                ParentMediaType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-                ParentMediaType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
-            };
-            folders
-                .into_iter()
-                .find(|f| f.try_exists().unwrap_or(false))
-        })
-        .ok_or(AppError::bad_request("Could not determine save location"))?;
+    let save_location = PathBuf::from(payload.save_location);
     tracing::debug!("Selected torrent output: {}", save_location.display());
     let params = DownloadParams::empty(info, tracker_list, files_priorities, save_location);
-    torrent_client.add_torrent(params, torrent_info).await?;
+    torrent_client.add_torrent(params).await?;
 
     Ok(StatusCode::CREATED)
 }
@@ -293,11 +280,17 @@ pub async fn open_torrent(
     tag = "Torrent",
 )]
 pub async fn parse_torrent_file(
-    State(providers_stack): State<&'static MetadataProvidersStack>,
+    State(AppState {
+        db,
+        providers_stack,
+        http_client,
+        ..
+    }): State<AppState>,
     Query(hint): Query<Option<DownloadContentHint>>,
     MultipartTorrent { torrent_file, .. }: MultipartTorrent,
 ) -> crate::Result<Json<TorrentInfo>> {
-    let torrent_info = TorrentInfo::new(&torrent_file.info, hint, providers_stack).await;
+    let torrent_info =
+        TorrentInfo::new(&torrent_file.info, db, http_client, hint, providers_stack).await;
     Ok(Json(torrent_info))
 }
 
@@ -319,24 +312,6 @@ pub async fn open_torrent_file(
         torrent_file,
     }: MultipartTorrent,
 ) -> crate::Result<()> {
-    let torrent_info = TorrentInfo::new(&torrent_file.info, None, app_state.providers_stack).await;
-    let save_location = save_location
-        .or_else(|| {
-            let content_type = torrent_info
-                .contents
-                .content
-                .as_ref()
-                .map(|c| c.content_type())?;
-            let folders = match content_type {
-                ParentMediaType::Movie => config::CONFIG.get_value::<config::MovieFolders>().0,
-                ParentMediaType::Show => config::CONFIG.get_value::<config::ShowFolders>().0,
-            };
-            folders
-                .into_iter()
-                .find(|f| f.try_exists().unwrap_or(false))
-        })
-        .ok_or(AppError::bad_request("Could not determine save location"))?;
-
     let file_priorities = (0..torrent_file.info.files_amount())
         .map(|_| torrent::Priority::default())
         .collect();
@@ -346,7 +321,7 @@ pub async fn open_torrent_file(
 
     app_state
         .torrent_client
-        .add_torrent(download_params, torrent_info)
+        .add_torrent(download_params)
         .await?;
     Ok(())
 }
@@ -369,15 +344,20 @@ pub async fn open_torrent_file(
 )]
 #[tracing::instrument(skip_all)]
 pub async fn resolve_magnet_link(
-    State(app_state): State<AppState>,
+    State(AppState {
+        db,
+        torrent_client,
+        http_client,
+        providers_stack,
+        ..
+    }): State<AppState>,
     Query(payload): Query<ResolveMagnetLinkPayload>,
 ) -> crate::Result<Json<TorrentInfo>> {
-    let client = app_state.torrent_client;
-    let providers_stack = app_state.providers_stack;
     let magnet_link = MagnetLink::from_str(&payload.magnet_link)
         .map_err(|_| AppError::bad_request("Failed to parse magnet link"))?;
-    let info = client.resolve_magnet_link(&magnet_link).await?;
-    let torrent_info = TorrentInfo::new(&info, payload.hint, providers_stack).await;
+    let info = torrent_client.resolve_magnet_link(&magnet_link).await?;
+    let torrent_info =
+        TorrentInfo::new(&info, db, http_client, payload.hint, providers_stack).await;
     Ok(Json(torrent_info))
 }
 
