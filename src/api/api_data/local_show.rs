@@ -8,7 +8,6 @@ use crate::{
         },
         server::Intro,
     },
-    db::{Db, DbQueryBuilder, query_builders},
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, Genre, LocaleMetadata, MetadataProvider,
         SeasonMetadata, ShowMetadata, metadata_api::MetadataLookup,
@@ -28,7 +27,7 @@ pub struct LocalSeasonData {
     pub metadata_id: i64,
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct LocalEpisodeData {
     pub id: i64,
     pub metadata_id: i64,
@@ -59,6 +58,45 @@ pub struct Show {
     pub local: Option<LocalShowData>,
 }
 
+impl From<ShowMetadata> for Show {
+    fn from(
+        ShowMetadata {
+            metadata_id,
+            metadata_provider,
+            poster,
+            backdrop,
+            plot,
+            seasons,
+            episodes_amount,
+            release_date,
+            title,
+            locale_metadata,
+            cast,
+            genres,
+            next_episode_air_date,
+            external_ids,
+        }: ShowMetadata,
+    ) -> Self {
+        Self {
+            provider_id: metadata_id,
+            provider: metadata_provider,
+            poster,
+            backdrop,
+            plot,
+            seasons,
+            episodes_amount,
+            release_date,
+            title,
+            locale_metadata,
+            cast: cast.map(|v| v.into_iter().map(Into::into).collect()),
+            external_ids,
+            genres,
+            next_episode_air_date,
+            local: None,
+        }
+    }
+}
+
 impl Show {
     pub async fn extend_with_lookup(
         meta: ShowMetadata,
@@ -74,23 +112,11 @@ impl Show {
         Ok(extended_show)
     }
 
-    pub async fn from_lookup(lookup: MetadataLookup<ShowMetadata>, db: Db) -> sqlx::Result<Self> {
+    pub fn from_lookup(lookup: MetadataLookup<ShowMetadata, Show>) -> Option<Self> {
         match lookup {
-            MetadataLookup::New { metadata } => {
-                Self::extend_with_lookup(metadata, LocalDataLookup { db }).await
-            }
-            MetadataLookup::Local(local_content_id) => {
-                let mut query = DbQueryBuilder::default();
-                query_builders::DbShowQuery::build(&mut query);
-                query
-                    .push(" where metadata.id = ")
-                    .push_bind(local_content_id.metadata_id)
-                    .build_query_as::<query_builders::DbShowQuery>()
-                    .fetch_one(&db.pool)
-                    .await
-                    .map(Into::into)
-            }
-            MetadataLookup::Missing => Err(sqlx::Error::RowNotFound),
+            MetadataLookup::New { metadata } => Some(Show::from(metadata)),
+            MetadataLookup::Local(show) => Some(show),
+            MetadataLookup::Missing => None,
         }
     }
 }
@@ -135,7 +161,7 @@ impl Season {
     }
 }
 
-#[derive(Debug, Serialize, utoipa::ToSchema)]
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Episode {
     pub provider_id: String,
     pub provider: MetadataProvider,
@@ -148,6 +174,37 @@ pub struct Episode {
     pub poster: Option<String>,
     pub cast: Option<Vec<Actor>>,
     pub local: Option<LocalEpisodeData>,
+}
+
+impl From<EpisodeMetadata> for Episode {
+    fn from(
+        EpisodeMetadata {
+            metadata_id,
+            metadata_provider,
+            release_date,
+            number,
+            title,
+            plot,
+            season_number,
+            runtime,
+            poster,
+            cast,
+        }: EpisodeMetadata,
+    ) -> Self {
+        Self {
+            provider_id: metadata_id,
+            provider: metadata_provider,
+            release_date,
+            number,
+            title,
+            plot,
+            season_number,
+            runtime,
+            poster,
+            cast: cast.map(|cast| cast.into_iter().map(Into::into).collect()),
+            local: None,
+        }
+    }
 }
 
 impl Episode {
@@ -168,5 +225,16 @@ impl Episode {
             .expect("input length must match output");
         extended_episode.cast = cast;
         Ok(extended_episode)
+    }
+
+    /// Convert lookup that has enough data to episode object.
+    ///
+    /// Note that if lookup variant is [MetadataLookup::New], cast will not contain any local references.
+    pub fn from_lookup(lookup: MetadataLookup<EpisodeMetadata, Episode>) -> Option<Self> {
+        match lookup {
+            MetadataLookup::New { metadata } => Some(metadata.into()),
+            MetadataLookup::Local(episode) => Some(episode),
+            MetadataLookup::Missing => None,
+        }
     }
 }

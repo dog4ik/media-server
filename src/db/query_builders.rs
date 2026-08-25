@@ -7,7 +7,7 @@ use crate::{
             api_types::{Actor, CompactList, History},
             local_actor,
             local_movie::{LocalMovieData, Movie},
-            local_show::{Episode, LocalEpisodeData, LocalShowData, Show},
+            local_show::{Episode, LocalEpisodeData, LocalSeasonData, LocalShowData, Season, Show},
         },
         server::Intro,
     },
@@ -417,6 +417,48 @@ impl From<DbActorsQuery> for Actor {
             poster: actor.poster,
             imdb_id: actor.imdb_id,
             character: None,
+        }
+    }
+}
+
+#[derive(Debug, sqlx::FromRow)]
+pub struct DbSeasonQuery {
+    #[sqlx(flatten)]
+    pub season: db::DbSeason,
+    #[sqlx(flatten)]
+    pub metadata: db::DbMetadata,
+}
+
+impl DbSeasonQuery {
+    pub fn build(builder: &mut DbQueryBuilder) {
+        builder.push(format_args!(
+            "select {season}, {metadata}
+            from seasons
+            join metadata on metadata.id = seasons.metadata_id
+            ",
+            season = db::DbSeason::SQL,
+            metadata = db::DbMetadata::SQL,
+        ));
+    }
+}
+
+/// Episodes are left empty: a season reached through this query is a node in a
+/// show tree, whose episodes are resolved and carried separately.
+impl From<DbSeasonQuery> for Season {
+    fn from(DbSeasonQuery { season, metadata }: DbSeasonQuery) -> Self {
+        Season {
+            metadata_id: season.id.unwrap().to_string(),
+            metadata_provider: MetadataProvider::Local,
+            release_date: metadata.release_date,
+            title: Some(metadata.title),
+            episodes: Vec::new(),
+            plot: metadata.plot,
+            poster: metadata.poster,
+            number: season.number as usize,
+            local: Some(LocalSeasonData {
+                id: season.id.unwrap(),
+                metadata_id: metadata.id.unwrap(),
+            }),
         }
     }
 }

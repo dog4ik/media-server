@@ -52,27 +52,6 @@ impl LocalDataLookup {
         }
     }
 
-    async fn crossreference_movie(
-        &self,
-        metadata_provider: MetadataProvider,
-        metadata_id: &str,
-    ) -> sqlx::Result<Option<LocalContentId>> {
-        if metadata_provider == MetadataProvider::Local {
-            let id: i64 = metadata_id.parse().unwrap();
-            sqlx::query_as!(
-                LocalContentId,
-                r#"SELECT id as "id!", metadata_id FROM movies WHERE id = ?"#,
-                id
-            )
-            .fetch_optional(&self.db.pool)
-            .await
-        } else {
-            self.db
-                .crossreference_movie(metadata_provider, metadata_id)
-                .await
-        }
-    }
-
     pub async fn extend_shows_with_local_data(
         &self,
         shows: Vec<ShowMetadata>,

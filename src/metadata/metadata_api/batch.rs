@@ -3,6 +3,7 @@ use crate::{
     metadata::{
         MovieMetadataProvider, ShowMetadataProvider,
         metadata_api::{
+            LocalLookupScope,
             asset_saver::AssetTasks,
             movie::{BatchMovieApi, MovieMetadataApi},
             show::{BatchShowApi, HasSource, ShowMetadataApi, ShowTree, WrittenShow},
@@ -10,18 +11,19 @@ use crate::{
     },
 };
 
-pub struct BatchApi<T, S, M = ()> {
-    show_batch: BatchShowApi<T, S>,
+pub struct BatchApi<T, S, M = (), L: LocalLookupScope = LocalContentId> {
+    show_batch: BatchShowApi<T, S, L>,
     movie_batch: BatchMovieApi<M>,
     assets: AssetTasks,
     db: Db,
 }
 
-impl<T, S, M> BatchApi<T, S, M>
+impl<T, S, M, L> BatchApi<T, S, M, L>
 where
     M: Send + 'static,
     S: Send + 'static,
     T: HasSource + Send + 'static,
+    L: LocalLookupScope + 'static,
 {
     pub fn new(db: Db, http_client: reqwest::Client) -> Self {
         Self {

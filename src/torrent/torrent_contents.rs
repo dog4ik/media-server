@@ -6,7 +6,6 @@ use torrent::{Info, OutputFile};
 use crate::{
     api::{
         api_data::{
-            LocalDataLookup,
             local_movie::Movie,
             local_show::{Episode, Show},
         },
@@ -17,6 +16,7 @@ use crate::{
     metadata::{
         ParentMediaType,
         metadata_api::{
+            ApiObjectScope,
             movie::MovieMetadataApi,
             show::{ShowItem, ShowMetadataApi, ShowTree},
         },
@@ -66,12 +66,15 @@ impl TorrentInfo {
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
+#[serde(tag = "media_type", rename_all = "snake_case")]
 pub enum TorrentContent {
     Show {
         show: Show,
-        seasons: HashMap<u16, TorrentEpisode>,
+        seasons: HashMap<u16, Vec<TorrentEpisode>>,
     },
-    Movie(Vec<TorrentMovie>),
+    Movie {
+        movies: Vec<TorrentMovie>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
@@ -119,7 +122,7 @@ impl TorrentContent {
     pub fn content_type(&self) -> ParentMediaType {
         match self {
             TorrentContent::Show { .. } => ParentMediaType::Show,
-            TorrentContent::Movie(_) => ParentMediaType::Movie,
+            TorrentContent::Movie { .. } => ParentMediaType::Movie,
         }
     }
 }
@@ -198,8 +201,9 @@ async fn resolve_torrent_files(
     files: &[OutputFile],
     content_hint: Option<DownloadContentHint>,
 ) -> (Vec<ResolvedTorrentFile>, Option<TorrentContent>) {
-    let content_type = detect_media_type(files);
-    let local_lookup_api = LocalDataLookup::new(db.clone());
+    let content_type = content_hint
+        .map(|v| v.content_type)
+        .unwrap_or_else(|| detect_media_type(files));
     match content_type {
         ParentMediaType::Movie => {
             let (mut other_files, content) = group_files::<MovieIdentifier>(files);
@@ -221,23 +225,61 @@ async fn resolve_torrent_files(
             }
             (
                 other_files,
-                (!resolved_movies.is_empty()).then_some(TorrentContent::Movie(resolved_movies)),
+                (!resolved_movies.is_empty()).then_some(TorrentContent::Movie {
+                    movies: resolved_movies,
+                }),
             )
         }
         ParentMediaType::Show => {
-            let (other_files, content) = group_files::<ShowIdentifier>(files);
+            let (mut other_files, content) = group_files::<ShowIdentifier>(files);
             let Some(title) = content.first().map(|v| v.ident.title()) else {
                 return (other_files, None);
             };
             let api = ShowMetadataApi::new(providers_stack.tmdb.unwrap(), db, http_client);
-            if let Ok(Some(show)) = api.search_show_title(title).await
+            if let Ok(Some(show)) = api.search_show_title::<ApiObjectScope>(title).await
                 && let Ok(show_tree) = api
-                    .fetch_show_tree(show, ShowTree::from_flat(content))
+                    .fetch_show_tree::<_, ApiObjectScope>(show, ShowTree::from_flat(content))
                     .await
-                && let Ok(show) = Show::from_lookup(show_tree.show_lookup, db.clone()).await
+                && let Some(show) = Show::from_lookup(show_tree.show_lookup)
             {
-                let seasons = HashMap::new();
-
+                let seasons = show_tree
+                    .seasons
+                    .into_iter()
+                    .map(|s| {
+                        (
+                            s.number as u16,
+                            s.episodes
+                                .into_iter()
+                                .filter_map(|resolved_episode| {
+                                    if let Some(metadata) =
+                                        Episode::from_lookup(resolved_episode.lookup)
+                                    {
+                                        let priority = if metadata.local.is_some() {
+                                            Priority::Disabled
+                                        } else {
+                                            Priority::Medium
+                                        };
+                                        Some(resolved_episode.items.into_iter().map(
+                                            move |mut item| {
+                                                item.file.priority = priority;
+                                                TorrentEpisode {
+                                                    file: item.file,
+                                                    metadata: metadata.clone(),
+                                                }
+                                            },
+                                        ))
+                                    } else {
+                                        other_files.extend(
+                                            resolved_episode.items.into_iter().map(|v| v.file),
+                                        );
+                                        None
+                                    }
+                                })
+                                .flatten()
+                                .collect(),
+                        )
+                    })
+                    .collect();
                 (other_files, Some(TorrentContent::Show { show, seasons }))
             } else {
                 (other_files, None)

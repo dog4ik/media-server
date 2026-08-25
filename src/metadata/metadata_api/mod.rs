@@ -9,46 +9,59 @@ pub mod tests;
 
 use crate::{
     api::api_data::local_show::{Episode, Season, Show},
-    db::{Db, DbActions, DbTransaction, LocalContentId},
+    db::{Db, DbActions, DbQueryBuilder, DbTransaction, LocalContentId, query_builders},
     metadata::MetadataProvider,
 };
 
 use self::asset_saver::AssetTasks;
 
 #[derive(Debug, Clone)]
-pub enum MetadataLookup<T> {
+pub enum MetadataLookup<T, L = LocalContentId> {
     New {
         metadata: T,
     },
-    Local(LocalContentId),
+    Local(L),
     /// Provider returned no metadata
     Missing,
 }
 
-trait LocalLookupScope {
-    type Show: LocalMetadataIdentifier;
-    type Season: LocalMetadataIdentifier;
-    type Episode: LocalMetadataIdentifier;
-    async fn show_lookup(
+/// Selects which local representation a show tree resolves its reused nodes into.
+///
+/// Picking a scope at the call site decides
+/// whether a locally known show/season/episode comes back as a bare
+/// [LocalContentId] or as a full api object, so callers that need the
+/// latter do not have to re-query after resolving.
+pub trait LocalLookupScope {
+    type Show: LocalMetadataIdentifier + Send + 'static;
+    type Season: LocalMetadataIdentifier + Send + 'static;
+    type Episode: LocalMetadataIdentifier + Send + 'static;
+
+    fn show_lookup(
         db: &Db,
         provider: MetadataProvider,
         metadata_id: &str,
-    ) -> sqlx::Result<Option<Self::Show>>;
-    async fn seasons_lookup(
+    ) -> impl Future<Output = sqlx::Result<Option<Self::Show>>> + Send;
+
+    /// Load the show's seasons
+    fn seasons_lookup(
         db: &Db,
         show_id: i64,
         seasons_scope: Vec<usize>,
-    ) -> sqlx::Result<Vec<(usize, Self::Season)>>;
-    async fn episodes_lookup(
+    ) -> impl Future<Output = sqlx::Result<impl IntoIterator<Item = (usize, Self::Season)> + Send>> + Send;
+
+    /// Loads the show's episodes as `(season number, episode number, local)`
+    fn episodes_lookup(
         db: &Db,
         show_id: i64,
         episodes_scope: Vec<(usize, usize)>,
-    ) -> sqlx::Result<Vec<(usize, usize, Self::Episode)>>;
+    ) -> impl Future<
+        Output = sqlx::Result<impl IntoIterator<Item = (usize, usize, Self::Episode)> + Send>,
+    > + Send;
 }
 
 /// Trait that is implemented by all local objects connected to the metadata
 /// e.g. show, season, episode, movie.
-trait LocalMetadataIdentifier {
+pub trait LocalMetadataIdentifier {
     fn local_id(&self) -> LocalContentId;
 }
 
@@ -97,6 +110,7 @@ impl LocalMetadataIdentifier for Season {
     }
 }
 
+/// Id-only scope
 impl LocalLookupScope for LocalContentId {
     type Show = Self;
     type Season = Self;
@@ -114,7 +128,7 @@ impl LocalLookupScope for LocalContentId {
         db: &Db,
         show_id: i64,
         seasons_scope: Vec<usize>,
-    ) -> sqlx::Result<Vec<(usize, Self::Season)>> {
+    ) -> sqlx::Result<impl IntoIterator<Item = (usize, Self::Season)>> {
         let seasons = db.get_show_season_nodes(show_id).await?;
         Ok(seasons
             .into_iter()
@@ -127,14 +141,14 @@ impl LocalLookupScope for LocalContentId {
                     },
                 )
             })
-            .collect())
+            .filter(move |(number, _)| seasons_scope.is_empty() || seasons_scope.contains(number)))
     }
 
     async fn episodes_lookup(
         db: &Db,
         show_id: i64,
         episodes_scope: Vec<(usize, usize)>,
-    ) -> sqlx::Result<Vec<(usize, usize, Self::Episode)>> {
+    ) -> sqlx::Result<impl IntoIterator<Item = (usize, usize, Self::Episode)> + Send> {
         let episodes = db.get_show_episode_nodes(show_id).await?;
         Ok(episodes
             .into_iter()
@@ -148,7 +162,95 @@ impl LocalLookupScope for LocalContentId {
                     },
                 )
             })
-            .collect())
+            .filter(move |(season, episode, _)| {
+                episodes_scope.is_empty() || episodes_scope.contains(&(*season, *episode))
+            }))
+    }
+}
+
+/// Scope that captures full api objects in local metadata
+///
+/// Useful when full metadata is needed after resolving the tree
+pub struct ApiObjectScope;
+
+impl LocalLookupScope for ApiObjectScope {
+    type Show = Show;
+    type Season = Season;
+    type Episode = Episode;
+
+    async fn show_lookup(
+        db: &Db,
+        provider: MetadataProvider,
+        metadata_id: &str,
+    ) -> sqlx::Result<Option<Self::Show>> {
+        let mut query = DbQueryBuilder::default();
+        query_builders::DbShowQuery::build(&mut query);
+        query
+            .push(
+                " where shows.metadata_id in
+                (select external_ids.metadata_id from external_ids
+                where external_ids.external_provider = ",
+            )
+            .push_bind(provider.to_string())
+            .push(" and external_ids.external_id = ")
+            .push_bind(metadata_id.to_string())
+            .push(")");
+        Ok(query
+            .build_query_as::<query_builders::DbShowQuery>()
+            .fetch_optional(&db.pool)
+            .await?
+            .map(Into::into))
+    }
+
+    async fn seasons_lookup(
+        db: &Db,
+        show_id: i64,
+        seasons_scope: Vec<usize>,
+    ) -> sqlx::Result<impl IntoIterator<Item = (usize, Self::Season)> + Send> {
+        let mut query = DbQueryBuilder::default();
+        query_builders::DbSeasonQuery::build(&mut query);
+        query.push(" where seasons.show_id = ").push_bind(show_id);
+        if !seasons_scope.is_empty() {
+            query.push(" and seasons.number in (");
+            let mut numbers = query.separated(", ");
+            for number in seasons_scope {
+                numbers.push_bind(number as i64);
+            }
+            query.push(")");
+        }
+        Ok(query
+            .build_query_as::<query_builders::DbSeasonQuery>()
+            .fetch_all(&db.pool)
+            .await?
+            .into_iter()
+            .map(|season| (season.season.number as usize, season.into())))
+    }
+
+    async fn episodes_lookup(
+        db: &Db,
+        show_id: i64,
+        episodes_scope: Vec<(usize, usize)>,
+    ) -> sqlx::Result<impl IntoIterator<Item = (usize, usize, Self::Episode)> + Send> {
+        let mut query = DbQueryBuilder::default();
+        query_builders::DbEpisodeQuery::build(&mut query);
+        query.push(" where seasons.show_id = ").push_bind(show_id);
+        if !episodes_scope.is_empty() {
+            query.push(" and (seasons.number, episodes.number) in ");
+            query.push_tuples(episodes_scope, |mut tuple, (season, episode)| {
+                tuple.push_bind(season as i64);
+                tuple.push_bind(episode as i64);
+            });
+        }
+        Ok(query
+            .build_query_as::<query_builders::DbEpisodeQuery>()
+            .fetch_all(&db.pool)
+            .await?
+            .into_iter()
+            .map(|episode| {
+                let season_number = episode.season_number as usize;
+                let episode_number = episode.episode.number as usize;
+                (season_number, episode_number, episode.into())
+            }))
     }
 }
 

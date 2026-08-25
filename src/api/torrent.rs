@@ -9,6 +9,7 @@ use axum::{
         sse::{Event, KeepAlive},
     },
 };
+use axum_extra::extract::OptionalQuery;
 use reqwest::StatusCode;
 use serde::{Deserialize, Deserializer};
 use tokio_stream::{Stream, StreamExt};
@@ -16,7 +17,7 @@ use torrent::{DownloadParams, MagnetLink, TorrentFile};
 
 use crate::{
     AppError,
-    api::{OptionalContentTypeQuery, Path, Query},
+    api::{Path, Query},
     app_state::AppState,
     config,
     metadata::{MetadataProvider, ParentMediaType},
@@ -31,7 +32,7 @@ use super::{StringIdQuery, TorrentIndexQuery};
 #[schema(value_type = String)]
 pub struct InfoHash(pub [u8; 20]);
 
-#[derive(Debug, Deserialize, utoipa::ToSchema)]
+#[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct DownloadContentHint {
     pub content_type: ParentMediaType,
     pub metadata_provider: MetadataProvider,
@@ -270,7 +271,9 @@ pub async fn open_torrent(
     post,
     path = "/api/torrent/parse_torrent_file",
     params(
-        OptionalContentTypeQuery,
+        ("content_type" = Option<ParentMediaType>, Query, description = "Content type"),
+        ("metadata_provider" = Option<crate::metadata::MetadataProvider>, Query, description = "Metadata provider"),
+        ("metadata_id" = Option<String>, Query, description = "Metadata id"),
     ),
     request_body(content = inline(MultipartTorrent), content_type = "multipart/form-data"),
     responses(
@@ -286,7 +289,7 @@ pub async fn parse_torrent_file(
         http_client,
         ..
     }): State<AppState>,
-    Query(hint): Query<Option<DownloadContentHint>>,
+    OptionalQuery(hint): OptionalQuery<DownloadContentHint>,
     MultipartTorrent { torrent_file, .. }: MultipartTorrent,
 ) -> crate::Result<Json<TorrentInfo>> {
     let torrent_info =

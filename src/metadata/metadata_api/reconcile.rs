@@ -16,7 +16,7 @@
 use anyhow::bail;
 
 use crate::{
-    db::{Db, DbActions, DbExternalId, DbTransaction},
+    db::{Db, DbActions, DbExternalId, DbTransaction, LocalContentId},
     library::assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
     metadata::{ExternalIdMetadata, metadata_api::asset_saver::AssetTasks},
     scan::{AssetKind, AssetSaveTask, AssetTaskSource},
@@ -43,7 +43,7 @@ pub async fn reconcile_show_tree<T>(
 where
     T: HasSource,
 {
-    let old_tree = LocalTree::load(db, old_show_id).await?;
+    let old_tree = LocalTree::<LocalContentId>::load(db, old_show_id, vec![], vec![]).await?;
     let show_metadata_id =
         sqlx::query_scalar!("SELECT metadata_id FROM shows WHERE id = ?", old_show_id)
             .fetch_one(&mut **tx)
@@ -144,7 +144,8 @@ where
 
             let (episode_id, episode_metadata_id) = match old_tree
                 .episodes
-                .get(&(season_number, episode_number))
+                .get(&season_number)
+                .and_then(|s| s.get(&episode_number))
             {
                 Some(local) => {
                     tx.update_metadata(local.metadata_id, &ep_meta.into_db_metadata())

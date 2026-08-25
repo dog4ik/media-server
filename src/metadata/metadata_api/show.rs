@@ -30,7 +30,7 @@
 //!  2. Fetch fresh metadata
 //!  3. Write new metadata tree
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, time::Duration};
 
 use anyhow::bail;
 use tokio::task::JoinSet;
@@ -44,7 +44,8 @@ use crate::{
     },
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, FetchParams, SeasonMetadata, ShowMetadata,
-        ShowMetadataProvider, metadata_api::asset_saver::AssetTasks,
+        ShowMetadataProvider,
+        metadata_api::{LocalLookupScope, LocalMetadataIdentifier, asset_saver::AssetTasks},
     },
     scan::{AssetKind, AssetSaveTask, AssetTaskSource, insert_roles},
 };
@@ -178,25 +179,22 @@ where
 }
 
 /// Carries everything needed to flush a complete show tree to the database.
-#[derive(Debug)]
-pub struct ResolvedShow<T> {
-    pub show_lookup: MetadataLookup<ShowMetadata>,
-    pub seasons: Vec<ResolvedSeason<T>>,
+pub struct ResolvedShow<T, L: LocalLookupScope = LocalContentId> {
+    pub show_lookup: MetadataLookup<ShowMetadata, L::Show>,
+    pub seasons: Vec<ResolvedSeason<T, L>>,
 }
 
 /// Season resolved to full metadata or existing local ID.
-#[derive(Debug)]
-pub struct ResolvedSeason<T> {
+pub struct ResolvedSeason<T, L: LocalLookupScope = LocalContentId> {
     pub number: usize,
-    pub lookup: MetadataLookup<SeasonMetadata>,
-    pub episodes: Vec<ResolvedEpisode<T>>,
+    pub lookup: MetadataLookup<SeasonMetadata, L::Season>,
+    pub episodes: Vec<ResolvedEpisode<T, L>>,
 }
 
 /// Episode resolved to full metadata or existing local ID.
-#[derive(Debug)]
-pub struct ResolvedEpisode<T> {
+pub struct ResolvedEpisode<T, L: LocalLookupScope = LocalContentId> {
     pub number: usize,
-    pub lookup: MetadataLookup<EpisodeMetadata>,
+    pub lookup: MetadataLookup<EpisodeMetadata, L::Episode>,
     /// Duration probed from the item's video during the resolve phase (never
     /// inside the flush transaction). `ZERO` for reused/local or video-less nodes.
     pub duration: Duration,
@@ -237,44 +235,46 @@ impl<T> WrittenShow<T> {
     }
 }
 
-/// In-memory snapshot of an existing show's season/episode ids, loaded up front
+/// In-memory snapshot of an existing show's season/episode nodes, loaded up front
 /// so tree resolution and reconciliation can match nodes by number without per-node database lookups.
-pub(super) struct LocalTree {
-    pub seasons: HashMap<usize, LocalContentId>,
-    pub episodes: HashMap<(usize, usize), LocalContentId>,
+pub(super) struct LocalTree<L: LocalLookupScope = LocalContentId> {
+    pub seasons: HashMap<usize, L::Season>,
+    pub episodes: HashMap<usize, HashMap<usize, L::Episode>>,
 }
 
-impl LocalTree {
-    pub(super) async fn load(db: &Db, show_id: i64) -> anyhow::Result<Self> {
+/// One season's slice of a [`LocalTree`], owned by the task resolving that season.
+pub(super) struct LocalSeason<L: LocalLookupScope = LocalContentId> {
+    pub season: Option<L::Season>,
+    pub episodes: HashMap<usize, L::Episode>,
+}
+
+impl<L> LocalTree<L>
+where
+    L: LocalLookupScope,
+{
+    pub(super) async fn load(
+        db: &Db,
+        show_id: i64,
+        seasons_scope: Vec<usize>,
+        episodes_scope: Vec<(usize, usize)>,
+    ) -> anyhow::Result<Self> {
         let (season_nodes, episode_nodes) = tokio::try_join!(
-            db.get_show_season_nodes(show_id),
-            db.get_show_episode_nodes(show_id)
+            L::seasons_lookup(db, show_id, seasons_scope),
+            L::episodes_lookup(db, show_id, episodes_scope),
         )?;
-        let seasons = season_nodes
-            .into_iter()
-            .map(|n| {
-                (
-                    n.number as usize,
-                    LocalContentId {
-                        id: n.id,
-                        metadata_id: n.metadata_id,
-                    },
-                )
-            })
-            .collect();
-        let episodes = episode_nodes
-            .into_iter()
-            .map(|n| {
-                (
-                    (n.season_number as usize, n.number as usize),
-                    LocalContentId {
-                        id: n.id,
-                        metadata_id: n.metadata_id,
-                    },
-                )
-            })
-            .collect();
+        let seasons = season_nodes.into_iter().collect();
+        let mut episodes: HashMap<usize, HashMap<usize, L::Episode>> = HashMap::new();
+        for (season, episode, local) in episode_nodes {
+            episodes.entry(season).or_default().insert(episode, local);
+        }
         Ok(Self { seasons, episodes })
+    }
+
+    pub(super) fn take_season(&mut self, season_number: usize) -> LocalSeason<L> {
+        LocalSeason {
+            season: self.seasons.remove(&season_number),
+            episodes: self.episodes.remove(&season_number).unwrap_or_default(),
+        }
     }
 }
 
@@ -343,18 +343,23 @@ where
         }
     }
 
-    pub async fn search_show_title(
+    pub async fn search_show_title<L>(
         &self,
         title: &str,
-    ) -> anyhow::Result<Option<MetadataLookup<ShowMetadata>>> {
+    ) -> anyhow::Result<Option<MetadataLookup<ShowMetadata, L::Show>>>
+    where
+        L: LocalLookupScope,
+    {
         let search_results = self.provider.show_search(title, self.fetch_params).await?;
         let Some(first_result) = search_results.into_iter().next() else {
             return Ok(None);
         };
-        match self
-            .db
-            .crossreference_show(first_result.metadata_provider, &first_result.metadata_id)
-            .await
+        match L::show_lookup(
+            self.db,
+            first_result.metadata_provider,
+            &first_result.metadata_id,
+        )
+        .await
         {
             Ok(Some(local)) => Ok(Some(MetadataLookup::Local(local))),
             Ok(None) | Err(_) => {
@@ -375,16 +380,15 @@ where
         }
     }
 
-    pub async fn search_show_by_id(
+    pub async fn search_show_by_id<L>(
         &self,
         id: &str,
-    ) -> anyhow::Result<MetadataLookup<ShowMetadata>> {
+    ) -> anyhow::Result<MetadataLookup<ShowMetadata, L::Show>>
+    where
+        L: LocalLookupScope,
+    {
         let mut show = self.provider.show(id, self.fetch_params).await?;
-        match self
-            .db
-            .crossreference_show(show.metadata_provider, &show.metadata_id)
-            .await
-        {
+        match L::show_lookup(self.db, show.metadata_provider, &show.metadata_id).await {
             Ok(Some(local)) => Ok(MetadataLookup::Local(local)),
             Ok(None) | Err(_) => {
                 let external_ids = show.external_ids.get_or_insert_default();
@@ -404,13 +408,14 @@ where
     ///
     /// `items` are grouped by season and episode; each leaf carries the items that belong to
     /// that episode. Local nodes are reused; missing nodes are fetched from the provider.
-    pub async fn fetch_show_tree<C>(
+    pub async fn fetch_show_tree<C, L>(
         &self,
-        show: MetadataLookup<ShowMetadata>,
+        show: MetadataLookup<ShowMetadata, L::Show>,
         tree: impl Into<ShowTree<C>>,
-    ) -> anyhow::Result<ResolvedShow<C>>
+    ) -> anyhow::Result<ResolvedShow<C, L>>
     where
         C: HasSource + Send + 'static,
+        L: LocalLookupScope + 'static,
     {
         let tree = tree.into();
         // Provider-side id of the show, used to fetch seasons/episodes.
@@ -418,28 +423,46 @@ where
             MetadataLookup::New { metadata } => Some(metadata.metadata_id.clone()),
             MetadataLookup::Local(local) => self
                 .db
-                .get_external_id(local.metadata_id, self.provider.provider_identifier())
+                .get_external_id(
+                    local.local_id().metadata_id,
+                    self.provider.provider_identifier(),
+                )
                 .await?
                 .map(|ext| ext.id),
             MetadataLookup::Missing => None,
         };
 
-        // For a local show, load its whole tree once so per-node lookups become
+        // For a local show, load the tree once so per-node lookups become
         // in-memory hits instead of one query per season/episode.
-        let local_tree = match &show {
+        let mut local_tree = match &show {
             MetadataLookup::Local(local) => {
-                Some(Arc::new(LocalTree::load(self.db, local.id).await?))
+                let seasons_scope = tree.seasons.iter().map(|s| s.number).collect();
+                let episodes_scope = tree
+                    .seasons
+                    .iter()
+                    .flat_map(|s| s.episodes.iter().map(|e| (s.number, e.number)))
+                    .collect();
+                Some(
+                    LocalTree::<L>::load(
+                        self.db,
+                        local.local_id().id,
+                        seasons_scope,
+                        episodes_scope,
+                    )
+                    .await?,
+                )
             }
             MetadataLookup::New { .. } | MetadataLookup::Missing => None,
         };
 
-        let mut handles: JoinSet<ResolvedSeason<C>> = JoinSet::new();
+        let mut handles: JoinSet<ResolvedSeason<C, L>> = JoinSet::new();
         for season in tree.seasons {
             let api = self.clone();
             let provider_show_id = provider_show_id.clone();
-            let local_tree = local_tree.clone();
+            // Each season owns its slice, so the nodes never shared.
+            let local_season = local_tree.as_mut().map(|t| t.take_season(season.number));
             handles.spawn(async move {
-                api.resolve_season(local_tree.as_deref(), provider_show_id.as_deref(), season)
+                api.resolve_season(local_season, provider_show_id.as_deref(), season)
                     .await
             });
         }
@@ -468,8 +491,10 @@ where
             if attempt != 0 {
                 tracing::warn!(%attempt, "External id unique constraint violated, retrying show tree lookup");
             }
-            let show = self.search_show_by_id(id).await?;
-            let resolved = self.fetch_show_tree(show, tree.clone()).await?;
+            let show = self.search_show_by_id::<LocalContentId>(id).await?;
+            let resolved = self
+                .fetch_show_tree::<_, LocalContentId>(show, tree.clone())
+                .await?;
             let mut tx = self.db.pool.begin_with("BEGIN IMMEDIATE").await?;
             let mut assets = AssetTasks::new(self.http_client.clone());
             match self.flush_show_tree(&mut tx, &mut assets, resolved).await {
@@ -496,17 +521,21 @@ where
     /// Writes a resolved tree to the database and returns the concrete ids.
     ///
     /// Missing nodes are skipped and dropped
-    pub async fn flush_show_tree<C>(
+    pub async fn flush_show_tree<C, L>(
         &self,
         tx: &mut DbTransaction,
         asset_tasks: &mut AssetTasks,
-        resolved: ResolvedShow<C>,
+        resolved: ResolvedShow<C, L>,
     ) -> anyhow::Result<WrittenShow<C>>
     where
         C: HasSource,
+        L: LocalLookupScope,
     {
         let (show_id, show_metadata_id) = match resolved.show_lookup {
-            MetadataLookup::Local(local) => (local.id, local.metadata_id),
+            MetadataLookup::Local(local) => {
+                let local = local.local_id();
+                (local.id, local.metadata_id)
+            }
             MetadataLookup::Missing => bail!("cannot flush a show without metadata"),
             MetadataLookup::New { metadata } => {
                 let poster = metadata.poster.clone();
@@ -564,7 +593,10 @@ where
             } = resolved_season;
 
             let (season_id, season_metadata_id) = match lookup {
-                MetadataLookup::Local(local) => (local.id, local.metadata_id),
+                MetadataLookup::Local(local) => {
+                    let local = local.local_id();
+                    (local.id, local.metadata_id)
+                }
                 MetadataLookup::Missing => {
                     tracing::warn!(season = season_number, "Skipping season without metadata");
                     continue;
@@ -601,7 +633,10 @@ where
                 } = resolved_episode;
 
                 let (episode_id, episode_metadata_id) = match lookup {
-                    MetadataLookup::Local(local) => (local.id, local.metadata_id),
+                    MetadataLookup::Local(local) => {
+                        let local = local.local_id();
+                        (local.id, local.metadata_id)
+                    }
                     MetadataLookup::Missing => {
                         tracing::warn!(
                             season = season_number,
@@ -664,42 +699,51 @@ where
         })
     }
 
-    async fn season_lookup(
+    async fn season_lookup<L>(
         &self,
-        local_tree: Option<&LocalTree>,
+        local_season: Option<L::Season>,
         provider_show_id: Option<&str>,
         season_number: usize,
-    ) -> MetadataLookup<SeasonMetadata> {
-        match local_tree.and_then(|t| t.seasons.get(&season_number)) {
-            Some(local) => MetadataLookup::Local(*local),
+    ) -> MetadataLookup<SeasonMetadata, L::Season>
+    where
+        L: LocalLookupScope,
+    {
+        match local_season {
+            Some(local) => MetadataLookup::Local(local),
             None => {
-                self.fetch_season_metadata(provider_show_id, season_number)
+                self.fetch_season_metadata::<L>(provider_show_id, season_number)
                     .await
             }
         }
     }
 
-    async fn resolve_season<C>(
+    async fn resolve_season<C, L>(
         &self,
-        local_tree: Option<&LocalTree>,
+        local_season: Option<LocalSeason<L>>,
         provider_show_id: Option<&str>,
         season: SeasonInput<C>,
-    ) -> ResolvedSeason<C>
+    ) -> ResolvedSeason<C, L>
     where
         C: HasSource,
+        L: LocalLookupScope,
     {
         let SeasonInput {
             number: season_number,
             episodes,
         } = season;
+        let (local, mut local_episodes) = match local_season {
+            Some(LocalSeason { season, episodes }) => (season, episodes),
+            None => (None, HashMap::new()),
+        };
         let season_lookup = self
-            .season_lookup(local_tree, provider_show_id, season_number)
+            .season_lookup::<L>(local, provider_show_id, season_number)
             .await;
 
         let mut resolved_episodes = Vec::new();
         for episode in episodes {
+            let local_episode = local_episodes.remove(&episode.number);
             resolved_episodes.push(
-                self.resolve_episode(local_tree, provider_show_id, season_number, episode)
+                self.resolve_episode(local_episode, provider_show_id, season_number, episode)
                     .await,
             );
         }
@@ -711,11 +755,14 @@ where
         }
     }
 
-    async fn fetch_season_metadata(
+    async fn fetch_season_metadata<L>(
         &self,
         provider_show_id: Option<&str>,
         season_number: usize,
-    ) -> MetadataLookup<SeasonMetadata> {
+    ) -> MetadataLookup<SeasonMetadata, L::Season>
+    where
+        L: LocalLookupScope,
+    {
         let Some(provider_show_id) = provider_show_id else {
             return MetadataLookup::Missing;
         };
@@ -729,26 +776,25 @@ where
         }
     }
 
-    async fn resolve_episode<C>(
+    async fn resolve_episode<C, L>(
         &self,
-        local_tree: Option<&LocalTree>,
+        local_episode: Option<L::Episode>,
         provider_show_id: Option<&str>,
         season_number: usize,
         episode: EpisodeInput<C>,
-    ) -> ResolvedEpisode<C>
+    ) -> ResolvedEpisode<C, L>
     where
         C: HasSource,
+        L: LocalLookupScope,
     {
         let EpisodeInput {
             number: episode_number,
             items,
         } = episode;
-        if let Some(local) =
-            local_tree.and_then(|t| t.episodes.get(&(season_number, episode_number)))
-        {
+        if let Some(local) = local_episode {
             return ResolvedEpisode {
                 number: episode_number,
-                lookup: MetadataLookup::Local(*local),
+                lookup: MetadataLookup::Local(local),
                 duration: Duration::ZERO,
                 items,
             };
@@ -788,21 +834,22 @@ where
     }
 }
 
-pub(super) struct BatchResult<T, S = ()> {
+pub(super) struct BatchResult<T, S = (), L: LocalLookupScope = LocalContentId> {
     pub api: ShowMetadataApi<&'static (dyn ShowMetadataProvider + Send + Sync + 'static)>,
-    pub resolved: ResolvedShow<T>,
+    pub resolved: ResolvedShow<T, L>,
     pub state: S,
 }
 
 /// Wrapper around [ShowMetadataApi] that allows processing many shows
-pub(super) struct BatchShowApi<T, S> {
-    pub join_set: JoinSet<anyhow::Result<BatchResult<T, S>>>,
+pub(super) struct BatchShowApi<T, S, L: LocalLookupScope = LocalContentId> {
+    pub join_set: JoinSet<anyhow::Result<BatchResult<T, S, L>>>,
 }
 
-impl<T, S> BatchShowApi<T, S>
+impl<T, S, L> BatchShowApi<T, S, L>
 where
     T: HasSource + Send + 'static,
     S: Send + 'static,
+    L: LocalLookupScope + 'static,
 {
     pub fn new() -> Self {
         Self {
@@ -820,7 +867,7 @@ where
     ) {
         let tree = tree.into();
         self.join_set.spawn(async move {
-            let show = api.search_show_by_id(&show_id).await?;
+            let show = api.search_show_by_id::<L>(&show_id).await?;
             let resolved = api.fetch_show_tree(show, tree).await?;
             Ok(BatchResult {
                 api,

@@ -3,7 +3,7 @@
 use sqlx::SqlitePool;
 
 use crate::{
-    db::{Db, DbActions, DbHistory},
+    db::{Db, DbActions, DbHistory, LocalContentId},
     library::Source,
     metadata::metadata_api::asset_saver::AssetTasks,
 };
@@ -54,7 +54,9 @@ mod search_show {
         let expected = show_tree.show_key().show_metadata();
         let api = ShowMetadataApi::new_test(MockProvider::new([show_tree], []), db);
 
-        let show = api.search_show_by_id(&expected.metadata_id).await?;
+        let show = api
+            .search_show_by_id::<LocalContentId>(&expected.metadata_id)
+            .await?;
         let MetadataLookup::New { metadata } = show else {
             panic!("metadata must be new");
         };
@@ -73,7 +75,7 @@ mod search_show {
         let api = ShowMetadataApi::new_test(MockProvider::new([builder], []), db);
 
         let show = api
-            .search_show_by_id(&saved.key.show_metadata().metadata_id)
+            .search_show_by_id::<LocalContentId>(&saved.key.show_metadata().metadata_id)
             .await?;
         let MetadataLookup::Local(local_id) = show else {
             panic!("metadata must be local");
@@ -117,7 +119,9 @@ async fn reconcile_updates_in_place(pool: SqlitePool) -> anyhow::Result<()> {
     let api = ShowMetadataApi::new_test(MockProvider::new([corrected], []), db);
 
     // The corrected show is not in the local db -> all New nodes.
-    let show = api.search_show_by_id(&corrected_meta.metadata_id).await?;
+    let show = api
+        .search_show_by_id::<LocalContentId>(&corrected_meta.metadata_id)
+        .await?;
     assert_matches!(show, MetadataLookup::New { .. });
     let fresh = api
         .fetch_show_tree(
