@@ -21,146 +21,26 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde::de::Visitor;
 use utoipa::OpenApi;
+use utoipa_axum::router::OpenApiRouter;
 
 /// API data types
 ///
 /// This module defines the data types used by the API, as well as the methods required for their construction.
 pub mod api_data;
-pub mod file_browser;
-pub mod history;
-pub mod intros;
+mod file_browser;
+mod history;
+mod intros;
 /// Liked, watched, custom lists endpoints
-pub mod lists;
+mod lists;
 /// Resources api endpoints
-pub mod resources;
+mod resources;
 pub mod server;
-pub mod subtitles;
+mod subtitles;
 /// Torrent client specific endpoints
 pub mod torrent;
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(
-        server::all_local_shows,
-        server::local_episode,
-        server::all_local_movies,
-        server::external_ids,
-        server::get_movie,
-        server::fix_show_metadata,
-        server::fix_movie_metadata,
-        server::fix_metadata,
-        server::reset_show_metadata,
-        server::reset_movie_metadata,
-        server::reset_metadata,
-        server::alter_movie_metadata,
-        server::movie_poster,
-        server::movie_backdrop,
-        server::get_show,
-        server::alter_show_metadata,
-        server::show_poster,
-        server::show_backdrop,
-        server::get_season,
-        server::season_poster,
-        server::alter_season_metadata,
-        server::get_episode,
-        server::alter_episode_metadata,
-        server::episode_poster,
-        server::get_all_variants,
-        server::contents_video,
-        server::get_video_by_id,
-        server::remove_video,
-        server::previews,
-        server::generate_previews,
-        server::delete_previews,
-        server::transcode_video,
-        server::watch,
-        server::watch_episode,
-        server::watch_movie,
-        server::remove_variant,
-        server::search_torrent,
-        server::search_content,
-        server::get_trending_shows,
-        server::get_trending_movies,
-        server::server_configuration,
-        server::server_version,
-        server::update_server_configuration,
-        server::reset_server_configuration,
-        server::server_capabilities,
-        server::order_providers,
-        server::get_providers_order,
-        server::transcode_tasks,
-        server::cancel_transcode_task,
-        server::previews_tasks,
-        server::cancel_previews_task,
-        server::stop_watch_session,
-        server::progress,
-        server::reconciliate_lib,
-        server::start_direct_stream,
-        server::start_hls_stream,
-        server::hls_manifest,
-        server::hls_segment,
-        server::hls_init,
-        intros::detect_intros,
-        intros::update_video_intro,
-        intros::delete_season_intros,
-        intros::delete_episode_intros,
-        intros::delete_video_intro,
-        intros::video_intro,
-        server::video_content_metadata,
-        server::delete_episode,
-        server::delete_season,
-        server::delete_show,
-        server::delete_movie,
-        server::actor_poster,
-        server::actor_list,
-        file_browser::browse_directory,
-        file_browser::parent_directory,
-        file_browser::root_dirs,
-        torrent::all_torrents,
-        torrent::session_state,
-        torrent::set_files_priority,
-        torrent::resolve_magnet_link,
-        torrent::parse_torrent_file,
-        torrent::open_torrent,
-        torrent::open_torrent_file,
-        torrent::torrent_state,
-        torrent::index_magnet_link,
-        torrent::updates,
-        torrent::delete_torrent,
-        torrent::validate_torrent,
-        torrent::output_location,
-        torrent::batch_action,
-        history::all_history,
-        history::update_metadata_history,
-        history::remove_metadata_history,
-        history::clear_history,
-        history::remove_history_item,
-        history::update_history,
-        history::suggest_movies,
-        history::suggest_shows,
-        history::external_mark_as_watched,
-        subtitles::pull_video_subtitle,
-        subtitles::upload_subtitles,
-        subtitles::delete_subtitles,
-        subtitles::get_subtitles,
-        subtitles::reference_external_subtitles,
-        lists::update_list,
-        lists::delete_list,
-        lists::create_list,
-        lists::add_item,
-        lists::add_to_saved,
-        lists::add_to_watchlist,
-        lists::all_lists,
-        lists::get_list,
-        lists::export_list,
-        lists::import_list,
-        lists::list_contents,
-        lists::remove_item,
-        lists::remove_watchlist_item,
-        lists::remove_saved_item,
-        resources::resources,
-        ws::ws,
-    ),
     components(
         schemas(
             metadata::MovieMetadata,
@@ -236,6 +116,19 @@ pub mod torrent;
     )
 )]
 pub struct OpenApiDoc;
+
+pub fn router() -> OpenApiRouter<app_state::AppState> {
+    OpenApiRouter::with_openapi(OpenApiDoc::openapi())
+        .merge(server::router())
+        .merge(file_browser::router())
+        .merge(history::router())
+        .merge(intros::router())
+        .merge(lists::router())
+        .merge(resources::router())
+        .merge(subtitles::router())
+        .merge(torrent::router())
+        .merge(ws::router())
+}
 
 pub struct QueryShowProvider(&'static (dyn metadata::ShowMetadataProvider + Send + 'static + Sync));
 

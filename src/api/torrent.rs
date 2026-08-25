@@ -27,6 +27,7 @@ use crate::{
 };
 
 use super::{StringIdQuery, TorrentIndexQuery};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Clone, utoipa::ToSchema)]
 #[schema(value_type = String)]
@@ -176,33 +177,33 @@ where
 /// Get list of all torrents
 #[utoipa::path(
     get,
-    path = "/api/torrent/all",
+    path = "/torrent/all",
     responses(
         (status = 200, body = Vec<TorrentState>),
     ),
     tag = "Torrent",
 )]
-pub async fn all_torrents(State(client): State<&'static TorrentClient>) -> Json<Vec<TorrentState>> {
+async fn all_torrents(State(client): State<&'static TorrentClient>) -> Json<Vec<TorrentState>> {
     Json(client.all_downloads().await)
 }
 
 /// Get full session state
 #[utoipa::path(
     get,
-    path = "/api/torrent/session",
+    path = "/torrent/session_state",
     responses(
         (status = 200, body = SessionState),
     ),
     tag = "Torrent",
 )]
-pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json<SessionState> {
+async fn session_state(State(client): State<&'static TorrentClient>) -> Json<SessionState> {
     Json(client.fetch_session_state().await)
 }
 
 /// Set file priority
 #[utoipa::path(
     post,
-    path = "/api/torrent/{info_hash}/files_priority",
+    path = "/torrent/{info_hash}/files_priority",
     params(
         ("info_hash", description = "Hex encoded info_hash of the torrent"),
     ),
@@ -213,7 +214,7 @@ pub async fn session_state(State(client): State<&'static TorrentClient>) -> Json
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all, fields(%info_hash))]
-pub async fn set_files_priority(
+async fn set_files_priority(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
     Json(payload): Json<PriorityPayload>,
@@ -229,7 +230,7 @@ pub async fn set_files_priority(
 /// Open torrent using magnet link
 #[utoipa::path(
     post,
-    path = "/api/torrent/open",
+    path = "/torrent/open",
     request_body = TorrentDownloadPayload,
     responses(
         (status = 201, description = "Torrent is added"),
@@ -239,7 +240,7 @@ pub async fn set_files_priority(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all)]
-pub async fn open_torrent(
+async fn open_torrent(
     State(AppState { torrent_client, .. }): State<AppState>,
     Json(payload): Json<TorrentDownloadPayload>,
 ) -> crate::Result<StatusCode> {
@@ -269,7 +270,7 @@ pub async fn open_torrent(
 /// Parse .torrent file
 #[utoipa::path(
     post,
-    path = "/api/torrent/parse_torrent_file",
+    path = "/torrent/parse_torrent_file",
     params(
         ("content_type" = Option<ParentMediaType>, Query, description = "Content type"),
         ("metadata_provider" = Option<crate::metadata::MetadataProvider>, Query, description = "Metadata provider"),
@@ -282,7 +283,7 @@ pub async fn open_torrent(
     ),
     tag = "Torrent",
 )]
-pub async fn parse_torrent_file(
+async fn parse_torrent_file(
     State(AppState {
         db,
         providers_stack,
@@ -300,7 +301,7 @@ pub async fn parse_torrent_file(
 /// Open .torrent file
 #[utoipa::path(
     post,
-    path = "/api/torrent/open_torrent_file",
+    path = "/torrent/open_torrent_file",
     request_body(content = inline(MultipartTorrent), content_type = "multipart/form-data"),
     responses(
         (status = 200),
@@ -308,7 +309,7 @@ pub async fn parse_torrent_file(
     ),
     tag = "Torrent",
 )]
-pub async fn open_torrent_file(
+async fn open_torrent_file(
     State(app_state): State<AppState>,
     MultipartTorrent {
         save_location,
@@ -332,7 +333,7 @@ pub async fn open_torrent_file(
 /// Resolve magnet link
 #[utoipa::path(
     get,
-    path = "/api/torrent/resolve_magnet_link",
+    path = "/torrent/resolve_magnet_link",
     params(
         ResolveMagnetLinkPayload,
         ("content_type" = Option<ParentMediaType>, Query, description = "Content type"),
@@ -346,7 +347,7 @@ pub async fn open_torrent_file(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all)]
-pub async fn resolve_magnet_link(
+async fn resolve_magnet_link(
     State(AppState {
         db,
         torrent_client,
@@ -372,7 +373,7 @@ pub struct IndexMagnetLink {
 /// Get magnet link by torrent provider index
 #[utoipa::path(
     get,
-    path = "/api/torrent/index_magnet_link",
+    path = "/torrent/index_magnet_link",
     params(
         StringIdQuery,
         TorrentIndexQuery,
@@ -383,7 +384,7 @@ pub struct IndexMagnetLink {
     ),
     tag = "Torrent",
 )]
-pub async fn index_magnet_link(
+async fn index_magnet_link(
     Query(TorrentIndexQuery { provider }): Query<TorrentIndexQuery>,
     Query(StringIdQuery { id }): Query<StringIdQuery>,
     State(app_state): State<AppState>,
@@ -401,7 +402,7 @@ pub async fn index_magnet_link(
 /// Get fresh full torrent state
 #[utoipa::path(
     get,
-    path = "/api/torrent/{info_hash}/state",
+    path = "/torrent/{info_hash}/state",
     params(
         ("info_hash", description = "Hex encoded info_hash of the torrent"),
     ),
@@ -412,7 +413,7 @@ pub async fn index_magnet_link(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all, fields(%info_hash))]
-pub async fn torrent_state(
+async fn torrent_state(
     State(client): State<&'static TorrentClient>,
     Path(info_hash): Path<InfoHash>,
 ) -> crate::Result<Json<TorrentState>> {
@@ -426,13 +427,13 @@ pub async fn torrent_state(
 /// SSE stream of torrent updates
 #[utoipa::path(
     get,
-    path = "/api/torrent/updates",
+    path = "/torrent/updates",
     responses(
         (status = 200, body = [u8]),
     ),
     tag = "Torrent",
 )]
-pub async fn updates(
+async fn updates(
     State(client): State<&'static TorrentClient>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let channel = &client.progress_broadcast.clone();
@@ -452,7 +453,7 @@ pub async fn updates(
 /// Validate torrent by info hash
 #[utoipa::path(
     post,
-    path = "/api/torrent/{info_hash}/validate",
+    path = "/torrent/{info_hash}/validate",
     params(
         ("info_hash", description = "Hex encoded info_hash of the torrent"),
     ),
@@ -463,7 +464,7 @@ pub async fn updates(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all, fields(%info_hash))]
-pub async fn validate_torrent(
+async fn validate_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
 ) -> crate::Result<StatusCode> {
@@ -483,14 +484,14 @@ pub struct BatchActionPayload {
 /// Run action on a list of torrents
 #[utoipa::path(
     post,
-    path = "/api/torrent/batch_action",
+    path = "/torrent/batch_action",
     request_body = BatchActionPayload,
     responses(
         (status = 202),
     ),
     tag = "Torrent",
 )]
-pub async fn batch_action(
+async fn batch_action(
     State(client): State<&'static TorrentClient>,
     Json(BatchActionPayload { hashes, action }): Json<BatchActionPayload>,
 ) -> crate::Result<StatusCode> {
@@ -508,7 +509,7 @@ pub async fn batch_action(
 /// Remove torrent by its info hash
 #[utoipa::path(
     delete,
-    path = "/api/torrent/{info_hash}",
+    path = "/torrent/{info_hash}",
     params(
         ("info_hash", description = "Hex encoded info_hash of the torrent"),
     ),
@@ -519,7 +520,7 @@ pub async fn batch_action(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all, fields(%info_hash))]
-pub async fn delete_torrent(
+async fn delete_torrent(
     Path(info_hash): Path<InfoHash>,
     State(client): State<&'static TorrentClient>,
 ) -> crate::Result<()> {
@@ -539,13 +540,13 @@ pub struct TorrentDefaultLocation {
 /// Torrent default output location
 #[utoipa::path(
     get,
-    path = "/api/torrent/output_location",
+    path = "/torrent/output_location",
     responses(
         (status = 200, body = TorrentDefaultLocation),
     ),
     tag = "Torrent",
 )]
-pub async fn output_location() -> Json<TorrentDefaultLocation> {
+async fn output_location() -> Json<TorrentDefaultLocation> {
     let movie_dirs = config::CONFIG.get_value::<config::MovieFolders>().0;
     let show_dirs = config::CONFIG.get_value::<config::ShowFolders>().0;
     async fn find_try_exists(dirs: Vec<PathBuf>) -> Option<String> {
@@ -563,4 +564,22 @@ pub async fn output_location() -> Json<TorrentDefaultLocation> {
         movie_location,
         show_location,
     })
+}
+
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(all_torrents))
+        .routes(routes!(batch_action))
+        .routes(routes!(index_magnet_link))
+        .routes(routes!(open_torrent))
+        .routes(routes!(open_torrent_file))
+        .routes(routes!(output_location))
+        .routes(routes!(parse_torrent_file))
+        .routes(routes!(resolve_magnet_link))
+        .routes(routes!(session_state))
+        .routes(routes!(updates))
+        .routes(routes!(delete_torrent))
+        .routes(routes!(set_files_priority))
+        .routes(routes!(torrent_state))
+        .routes(routes!(validate_torrent))
 }

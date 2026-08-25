@@ -3,6 +3,7 @@ use std::time::Duration;
 use axum::extract::State;
 use reqwest::StatusCode;
 use serde::{Deserialize, Serialize};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     AppError,
@@ -19,8 +20,7 @@ use crate::{
     config,
     db::{self, Db, DbActions, LocalContentId, query_builders::DbHistoryQuery},
     metadata::{
-        EpisodeMetadata, MetadataProvider, MovieMetadata, MovieMetadataProvider,
-        ShowMetadataProvider,
+        MetadataProvider, MovieMetadata, MovieMetadataProvider, ShowMetadataProvider,
         metadata_api::{
             PendingInsert,
             movie::MovieMetadataApi,
@@ -97,7 +97,7 @@ impl From<DbHistoryQuery> for HistoryEntry {
 /// Get all watch history of the default user. Limit defaults to 50 if not specified
 #[utoipa::path(
     get,
-    path = "/api/history",
+    path = "/history",
     responses(
         (status = 200, description = "All history", body = CursoredResponse<HistoryEntry>),
     ),
@@ -107,7 +107,7 @@ impl From<DbHistoryQuery> for HistoryEntry {
     ),
     tag = "History",
 )]
-pub async fn all_history(
+async fn all_history(
     Query(TakeQuery { take }): Query<TakeQuery>,
     Query(CursorQuery { cursor }): Query<CursorQuery>,
     State(db): State<Db>,
@@ -141,12 +141,6 @@ pub struct MovieHistory {
     pub history: History,
 }
 
-#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
-pub struct ShowHistory {
-    pub show_id: i64,
-    pub episode: EpisodeMetadata,
-    pub history: History,
-}
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct ShowSuggestion {
     pub show_id: i64,
@@ -157,13 +151,13 @@ pub struct ShowSuggestion {
 /// Suggest to continue watching up to 3 movies based on history
 #[utoipa::path(
     get,
-    path = "/api/history/suggest/movies",
+    path = "/history/suggest/movies",
     responses(
         (status = 200, description = "Suggested movies", body = Vec<MovieHistory>),
     ),
     tag = "History",
 )]
-pub async fn suggest_movies(State(db): State<Db>) -> crate::Result<Json<Vec<MovieHistory>>> {
+async fn suggest_movies(State(db): State<Db>) -> crate::Result<Json<Vec<MovieHistory>>> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.metadata_id, movies.id AS movie_id FROM history
@@ -195,13 +189,13 @@ pub async fn suggest_movies(State(db): State<Db>) -> crate::Result<Json<Vec<Movi
 /// Suggest to continue watching up to 3 shows based on history
 #[utoipa::path(
     get,
-    path = "/api/history/suggest/shows",
+    path = "/history/suggest/shows",
     responses(
         (status = 200, description = "Suggested shows", body = Vec<ShowSuggestion>),
     ),
     tag = "History",
 )]
-pub async fn suggest_shows(State(db): State<Db>) -> crate::Result<Json<Vec<ShowSuggestion>>> {
+async fn suggest_shows(State(db): State<Db>) -> crate::Result<Json<Vec<ShowSuggestion>>> {
     let history = sqlx::query!(
         r#"SELECT history.id AS history_id, history.time, history.is_finished, history.update_time,
         history.metadata_id, episodes.number AS episode_number, seasons.show_id AS show_id,
@@ -254,13 +248,13 @@ pub async fn suggest_shows(State(db): State<Db>) -> crate::Result<Json<Vec<ShowS
 /// Delete all history for the default user
 #[utoipa::path(
     delete,
-    path = "/api/history",
+    path = "/history",
     responses(
         (status = 200),
     ),
     tag = "History",
 )]
-pub async fn clear_history(State(db): State<Db>) -> crate::Result<()> {
+async fn clear_history(State(db): State<Db>) -> crate::Result<()> {
     sqlx::query!("DELETE FROM history")
         .execute(&db.pool)
         .await?;
@@ -270,7 +264,7 @@ pub async fn clear_history(State(db): State<Db>) -> crate::Result<()> {
 /// Delete history entry
 #[utoipa::path(
     delete,
-    path = "/api/history/{id}",
+    path = "/history/{id}",
     params(
         ("id", description = "History id"),
     ),
@@ -280,7 +274,7 @@ pub async fn clear_history(State(db): State<Db>) -> crate::Result<()> {
     ),
     tag = "History",
 )]
-pub async fn remove_history_item(State(db): State<Db>, Path(id): Path<i64>) -> crate::Result<()> {
+async fn remove_history_item(State(db): State<Db>, Path(id): Path<i64>) -> crate::Result<()> {
     sqlx::query!("DELETE FROM history WHERE id = ?;", id)
         .execute(&db.pool)
         .await?;
@@ -296,7 +290,7 @@ pub struct UpdateHistoryPayload {
 /// Update history entry
 #[utoipa::path(
     put,
-    path = "/api/history/{id}",
+    path = "/history/{id}",
     params(
         ("id", description = "History id"),
         OptionalUuidQuery,
@@ -308,7 +302,7 @@ pub struct UpdateHistoryPayload {
     ),
     tag = "History",
 )]
-pub async fn update_history(
+async fn update_history(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
     Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
@@ -345,7 +339,7 @@ pub async fn update_history(
 /// Update/Insert history for specific metadata item
 #[utoipa::path(
     put,
-    path = "/api/metadata/{id}/history",
+    path = "/metadata/{id}/history",
     params(
         ("id", description = "Metadata id"),
         OptionalUuidQuery,
@@ -358,7 +352,7 @@ pub async fn update_history(
     ),
     tag = "Metadata",
 )]
-pub async fn update_metadata_history(
+async fn update_metadata_history(
     State(app_state): State<AppState>,
     Path(metadata_id): Path<i64>,
     Query(OptionalUuidQuery { id: task_id }): Query<OptionalUuidQuery>,
@@ -401,7 +395,7 @@ pub async fn update_metadata_history(
 /// Delete video history entry
 #[utoipa::path(
     delete,
-    path = "/api/metadata/{id}/history",
+    path = "/metadata/{id}/history",
     params(
         ("id", description = "Metadata id"),
     ),
@@ -411,10 +405,7 @@ pub async fn update_metadata_history(
     ),
     tag = "Videos",
 )]
-pub async fn remove_metadata_history(
-    State(db): State<Db>,
-    Path(id): Path<i64>,
-) -> crate::Result<()> {
+async fn remove_metadata_history(State(db): State<Db>, Path(id): Path<i64>) -> crate::Result<()> {
     let rows = sqlx::query!("DELETE FROM history WHERE metadata_id = ?;", id)
         .execute(&db.pool)
         .await?;
@@ -441,7 +432,7 @@ pub struct MarkAsWatched {
 /// Mark external metadata item as watched
 #[utoipa::path(
     post,
-    path = "/api/history/external_mark_as_watched",
+    path = "/history/external_mark_as_watched",
     request_body = MarkAsWatched,
     responses(
         (status = 201, description = "History entry is created"),
@@ -449,7 +440,7 @@ pub struct MarkAsWatched {
     ),
     tag = "Videos",
 )]
-pub async fn external_mark_as_watched(
+async fn external_mark_as_watched(
     State(AppState {
         db,
         providers_stack,
@@ -544,6 +535,16 @@ where
     let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
     assets.save(assets_concurrency, ()).await;
     Ok(local_id)
+}
+
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(all_history, clear_history))
+        .routes(routes!(external_mark_as_watched))
+        .routes(routes!(suggest_movies))
+        .routes(routes!(suggest_shows))
+        .routes(routes!(remove_history_item, update_history))
+        .routes(routes!(remove_metadata_history, update_metadata_history))
 }
 
 #[cfg(test)]

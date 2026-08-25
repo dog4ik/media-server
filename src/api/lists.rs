@@ -34,6 +34,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -56,7 +57,7 @@ pub struct AllLists {
 /// Get all lists
 #[utoipa::path(
     get,
-    path = "/api/lists",
+    path = "/lists",
     responses(
         (status = 200, description = "List of all lists", body = AllLists),
     ),
@@ -115,7 +116,7 @@ async fn all_lists(State(db): State<Db>) -> crate::Result<Json<AllLists>> {
 /// Get single list info
 #[utoipa::path(
     get,
-    path = "/api/lists/{id}",
+    path = "/lists/{id}",
     responses(
         (status = 200, description = "List info", body = List),
         (status = 404, description = "List was not found", body = AppError),
@@ -158,7 +159,7 @@ pub struct ListEpisode {
 /// Get list contents
 #[utoipa::path(
     get,
-    path = "/api/lists/{id}/items",
+    path = "/lists/{id}/items",
     params(
         ("id", description = "List id"),
     ),
@@ -293,7 +294,7 @@ pub(super) struct CreateList {
 /// Create custom list
 #[utoipa::path(
     post,
-    path = "/api/lists/create",
+    path = "/lists/create",
     request_body = CreateList,
     responses(
         (status = 201, description = "Successfully created list"),
@@ -320,7 +321,7 @@ async fn create_list(
 /// Update custom list
 #[utoipa::path(
     put,
-    path = "/api/lists/{id}",
+    path = "/lists/{id}",
     params(
         ("id", description = "List id"),
     ),
@@ -354,7 +355,7 @@ async fn update_list(
 /// Delete custom list
 #[utoipa::path(
     delete,
-    path = "/api/lists/{id}",
+    path = "/lists/{id}",
     params(
         ("id", description = "List id"),
     ),
@@ -481,7 +482,7 @@ async fn link_content(
 /// Add content to custom list
 #[utoipa::path(
     post,
-    path = "/api/lists/{id}/add",
+    path = "/lists/{id}/add",
     params(
         ("id", description = "List id"),
     ),
@@ -518,7 +519,7 @@ async fn remove_list_item(db: &Db, list_id: i64, metadata_id: i64) -> crate::Res
 /// Remove item from custom list
 #[utoipa::path(
     delete,
-    path = "/api/lists/{id}/remove/{metadata_id}",
+    path = "/lists/{id}/remove/{metadata_id}",
     params(
         ("id", description = "List id"),
         ("metadata_id", description = "Target metadata id"),
@@ -539,7 +540,7 @@ async fn remove_item(
 /// Export list in json but group all episodes into a single show
 #[utoipa::path(
     get,
-    path = "/api/lists/{id}/export",
+    path = "/lists/{id}/export",
     params(
         ("id", description = "List id"),
     ),
@@ -581,7 +582,7 @@ pub struct ImportResult {
 /// Import grouped list in json
 #[utoipa::path(
     post,
-    path = "/api/lists/{id}/import",
+    path = "/lists/{id}/import",
     params(
         ("id", description = "List id"),
     ),
@@ -708,7 +709,7 @@ async fn import_list(
 /// Add content to the saved list
 #[utoipa::path(
     post,
-    path = "/api/lists/saved/add",
+    path = "/lists/saved/add",
     responses(
         (status = 201, description = "Successfully saved content item"),
         (status = 404, description = "Content not found", body = AppError),
@@ -727,7 +728,7 @@ async fn add_to_saved(
 /// Remove item from saved list
 #[utoipa::path(
     delete,
-    path = "/api/lists/saved/remove/{metadata_id}",
+    path = "/lists/saved/remove/{metadata_id}",
     params(
         ("metadata_id", description = "Target metadata id"),
     ),
@@ -747,7 +748,7 @@ async fn remove_saved_item(
 /// Add content to the watchlist
 #[utoipa::path(
     post,
-    path = "/api/lists/watchlist/add",
+    path = "/lists/watchlist/add",
     responses(
         (status = 201, description = "Successfully added content to watchlist"),
         (status = 404, description = "Content not found", body = AppError),
@@ -766,7 +767,7 @@ async fn add_to_watchlist(
 /// Remove item from watch list
 #[utoipa::path(
     delete,
-    path = "/api/lists/watchlist/remove/{metadata_id}",
+    path = "/lists/watchlist/remove/{metadata_id}",
     params(
         ("metadata_id", description = "Target metadata id"),
     ),
@@ -783,22 +784,20 @@ async fn remove_watchlist_item(
     remove_list_item(&db, ListKind::WATCH_ID, metadata_id).await
 }
 
-pub fn router() -> axum::Router<AppState> {
-    use axum::routing::{delete, get, post, put};
-
-    axum::Router::new()
-        .route("/", get(all_lists))
-        .route("/create", post(create_list))
-        .route("/{id}", put(update_list).delete(delete_list).get(get_list))
-        .route("/{id}/items", get(list_contents))
-        .route("/{id}/add", post(add_item))
-        .route("/{id}/remove/{id}", delete(remove_item))
-        .route("/{id}/export", get(export_list))
-        .route("/{id}/import", post(import_list))
-        .route("/saved/add", post(add_to_saved))
-        .route("/saved/remove/{id}", delete(remove_saved_item))
-        .route("/watchlist/add", post(add_to_watchlist))
-        .route("/watchlist/remove/{id}", delete(remove_watchlist_item))
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(all_lists))
+        .routes(routes!(create_list))
+        .routes(routes!(add_to_saved))
+        .routes(routes!(remove_saved_item))
+        .routes(routes!(add_to_watchlist))
+        .routes(routes!(remove_watchlist_item))
+        .routes(routes!(delete_list, get_list, update_list))
+        .routes(routes!(add_item))
+        .routes(routes!(export_list))
+        .routes(routes!(import_list))
+        .routes(routes!(list_contents))
+        .routes(routes!(remove_item))
 }
 
 #[cfg(test)]

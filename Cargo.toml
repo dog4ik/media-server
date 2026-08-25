@@ -150,6 +150,7 @@ opentelemetry_sdk = "0.32.1"
 opentelemetry-semantic-conventions = { version = "0.32.1", features = ["semconv_experimental"] }
 opentelemetry-otlp = { version = "0.32.0", features = ["metrics", "grpc-tonic"] }
 rss = "2.1.0"
+utoipa-axum = "0.2.0"
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 tikv-jemallocator = { version = "0.7.0", optional = true, features = [

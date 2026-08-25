@@ -15,6 +15,7 @@ use axum::{
 };
 use axum_extra::{TypedHeader, headers};
 use tokio::sync::broadcast::error::RecvError;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 const SEND_TIMEOUT: Duration = Duration::from_secs(1);
 
@@ -89,13 +90,13 @@ impl Connection {
 /// Open websockets connection
 #[utoipa::path(
     method(get, post, put, delete, patch),
-    path = "/api/ws",
+    path = "/ws",
     responses(
         (status = 101, description = "Protocol upgrade"),
     ),
     tag = "Tasks",
 )]
-pub async fn ws(
+async fn ws(
     ws: WebSocketUpgrade,
     user_agent: Option<TypedHeader<headers::UserAgent>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -200,4 +201,8 @@ async fn handle_torrent_progress(
             .await?;
     }
     Ok(())
+}
+
+pub fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(ws))
 }

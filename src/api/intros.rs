@@ -7,6 +7,7 @@ use axum::{
     http::StatusCode,
 };
 use serde::{Deserialize, Serialize};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
 pub struct Intro {
@@ -17,7 +18,7 @@ pub struct Intro {
 /// Detect intros for given season
 #[utoipa::path(
     post,
-    path = "/api/show/{show_id}/{season}/detect_intros",
+    path = "/show/{show_id}/{season}/detect_intros",
     params(
         ("show_id", description = "Show id"),
         ("season", description = "Season number"),
@@ -28,7 +29,7 @@ pub struct Intro {
     ),
     tag = "Shows",
 )]
-pub async fn detect_intros(
+async fn detect_intros(
     Path((show_id, season)): Path<(i64, i64)>,
     State(app_state): State<AppState>,
 ) -> crate::Result<StatusCode> {
@@ -52,9 +53,9 @@ pub async fn detect_intros(
 /// Get intro for the video
 #[utoipa::path(
     get,
-    path = "/api/video/{video_id}/intro",
+    path = "/video/{id}/intro",
     params(
-        ("video_id", description = "Video Id"),
+        ("id", description = "Video Id"),
     ),
     responses(
         (status = 200, description = "Intro"),
@@ -62,7 +63,7 @@ pub async fn detect_intros(
     ),
     tag = "Videos",
 )]
-pub async fn video_intro(
+async fn video_intro(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
 ) -> crate::Result<Json<Intro>> {
@@ -81,9 +82,9 @@ pub async fn video_intro(
 /// Delete intro for the video
 #[utoipa::path(
     delete,
-    path = "/api/video/{video_id}/intro",
+    path = "/video/{id}/intro",
     params(
-        ("video_id", description = "Video Id"),
+        ("id", description = "Video Id"),
     ),
     responses(
         (status = 200, description = "Intro was removed successfully"),
@@ -91,10 +92,7 @@ pub async fn video_intro(
     ),
     tag = "Videos",
 )]
-pub async fn delete_video_intro(
-    Path(video_id): Path<i64>,
-    State(db): State<Db>,
-) -> crate::Result<()> {
+async fn delete_video_intro(Path(video_id): Path<i64>, State(db): State<Db>) -> crate::Result<()> {
     sqlx::query!(
         r#"DELETE FROM intros WHERE episode_id = (
             SELECT id FROM episodes WHERE metadata_id = (SELECT metadata_id FROM videos WHERE id = ?)
@@ -109,7 +107,7 @@ pub async fn delete_video_intro(
 /// Delete all season intros
 #[utoipa::path(
     delete,
-    path = "/api/show/{show_id}/{season}/intros",
+    path = "/show/{show_id}/{season}/intros",
     params(
         ("show_id", description = "Show id"),
         ("season", description = "Season number"),
@@ -120,7 +118,7 @@ pub async fn delete_video_intro(
     ),
     tag = "Shows",
 )]
-pub async fn delete_season_intros(
+async fn delete_season_intros(
     Path((show_id, season)): Path<(i64, i64)>,
     State(db): State<Db>,
 ) -> crate::Result<()> {
@@ -145,7 +143,7 @@ pub async fn delete_season_intros(
 /// Delete all intros for the episode
 #[utoipa::path(
     delete,
-    path = "/api/show/{show_id}/{season}/{episode}/intros",
+    path = "/show/{show_id}/{season}/{episode}/intros",
     params(
         ("show_id", description = "Show id"),
         ("season", description = "Season number"),
@@ -157,7 +155,7 @@ pub async fn delete_season_intros(
     ),
     tag = "Shows",
 )]
-pub async fn delete_episode_intros(
+async fn delete_episode_intros(
     Path((show_id, season, episode)): Path<(i64, i64, i64)>,
     State(db): State<Db>,
 ) -> crate::Result<()> {
@@ -192,9 +190,9 @@ pub struct EditIntroPayload {
 /// If into does not exist it will be created
 #[utoipa::path(
     put,
-    path = "/api/video/{video_id}/intro",
+    path = "/video/{id}/intro",
     params(
-        ("video_id", description = "Video Id"),
+        ("id", description = "Video Id"),
     ),
     request_body = EditIntroPayload,
     responses(
@@ -205,7 +203,7 @@ pub struct EditIntroPayload {
     ),
     tag = "Videos",
 )]
-pub async fn update_video_intro(
+async fn update_video_intro(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     Json(EditIntroPayload { start, end }): Json<EditIntroPayload>,
@@ -251,4 +249,12 @@ pub async fn update_video_intro(
         }
         Err(e) => Err(e)?,
     }
+}
+
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(detect_intros))
+        .routes(routes!(delete_season_intros))
+        .routes(routes!(delete_episode_intros))
+        .routes(routes!(delete_video_intro, update_video_intro, video_intro))
 }

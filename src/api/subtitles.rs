@@ -8,6 +8,7 @@ use axum::{
 use axum_extra::{headers, response::FileStream};
 use tokio_stream::StreamExt;
 use tokio_util::io::ReaderStream;
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{
     AppError,
@@ -20,7 +21,7 @@ use crate::{
 /// Pull subtitle from video file using its track number
 #[utoipa::path(
     get,
-    path = "/api/video/{id}/pull_subtitle",
+    path = "/video/{id}/pull_subtitle",
     params(
         ("id", description = "video id"),
         NumberQuery,
@@ -31,7 +32,7 @@ use crate::{
     ),
     tag = "Subtitles",
 )]
-pub async fn pull_video_subtitle(
+async fn pull_video_subtitle(
     Path(video_id): Path<i64>,
     Query(number): Query<NumberQuery>,
     State(state): State<AppState>,
@@ -71,7 +72,7 @@ impl MultipartSubtitles {
 /// Upload subtitles on the server
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/upload_subtitles",
+    path = "/video/{id}/upload_subtitles",
     params(
         ("id", description = "video id"),
     ),
@@ -82,7 +83,7 @@ impl MultipartSubtitles {
     ),
     tag = "Subtitles",
 )]
-pub async fn upload_subtitles(
+async fn upload_subtitles(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     mut multipart: Multipart,
@@ -147,7 +148,7 @@ pub struct SubtitlesReferencePayload {
 /// Read more about subtitles references here
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/reference_subtitles",
+    path = "/video/{id}/reference_subtitles",
     params(
         ("id", description = "video id"),
     ),
@@ -158,7 +159,7 @@ pub struct SubtitlesReferencePayload {
     ),
     tag = "Subtitles",
 )]
-pub async fn reference_external_subtitles(
+async fn reference_external_subtitles(
     Path(video_id): Path<i64>,
     State(db): State<Db>,
     Json(reference): Json<SubtitlesReferencePayload>,
@@ -188,7 +189,7 @@ pub async fn reference_external_subtitles(
 /// Note that if subtitles are referenced it will not delete referenced file
 #[utoipa::path(
     delete,
-    path = "/api/subtitles/{id}",
+    path = "/subtitles/{id}",
     params(
         ("id", description = "subtitles id"),
     ),
@@ -198,7 +199,7 @@ pub async fn reference_external_subtitles(
     ),
     tag = "Subtitles",
 )]
-pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<()> {
+async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<()> {
     let removed_subs = sqlx::query!(
         "DELETE FROM subtitles WHERE id = ? RETURNING video_id, external_path",
         id
@@ -222,7 +223,7 @@ pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> crat
 /// Get subtitles in text format
 #[utoipa::path(
     get,
-    path = "/api/subtitles/{id}",
+    path = "/subtitles/{id}",
     params(
         ("id", description = "subtitles id"),
     ),
@@ -232,7 +233,7 @@ pub async fn delete_subtitles(Path(id): Path<i64>, State(db): State<Db>) -> crat
     ),
     tag = "Subtitles",
 )]
-pub async fn get_subtitles(
+async fn get_subtitles(
     Path(id): Path<i64>,
     State(db): State<Db>,
 ) -> crate::Result<impl IntoResponse> {
@@ -253,4 +254,12 @@ pub async fn get_subtitles(
             .await?
             .into_response()),
     }
+}
+
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(delete_subtitles, get_subtitles))
+        .routes(routes!(pull_video_subtitle))
+        .routes(routes!(reference_external_subtitles))
+        .routes(routes!(upload_subtitles))
 }

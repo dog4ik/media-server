@@ -62,6 +62,7 @@ use crate::torrent_index::{Torrent, TorrentIndexIdentifier};
 use crate::watch::hls_stream::HlsStreamConfiguration;
 use crate::watch::{ClientType, WatchTask};
 use crate::{app_state::AppState, db::Db, progress::ProgressChannel};
+use utoipa_axum::{router::OpenApiRouter, routes};
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct DetailedSubtitlesAsset {
@@ -365,7 +366,7 @@ pub enum VideoContentMetadata {
 /// Get metadata related to the video
 #[utoipa::path(
     get,
-    path = "/api/video/{id}/metadata",
+    path = "/video/{id}/metadata",
     params(
         ("id", description = "Video id"),
     ),
@@ -374,7 +375,7 @@ pub enum VideoContentMetadata {
     ),
     tag = "Videos",
 )]
-pub async fn video_content_metadata(
+async fn video_content_metadata(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
 ) -> crate::Result<Json<VideoContentMetadata>> {
@@ -426,7 +427,7 @@ pub async fn video_content_metadata(
 /// Get preview by video id
 #[utoipa::path(
     get,
-    path = "/api/video/{id}/previews/{number}",
+    path = "/video/{id}/previews/{number}",
     params(
         ("id", description = "video id"),
         ("number", description = "preview number"),
@@ -438,7 +439,7 @@ pub async fn video_content_metadata(
     ),
     tag = "Videos",
 )]
-pub async fn previews(
+async fn previews(
     Path((video_id, number)): Path<(i64, usize)>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -452,7 +453,7 @@ pub async fn previews(
 /// Video stream
 #[utoipa::path(
     get,
-    path = "/api/video/{id}/watch",
+    path = "/video/{id}/watch",
     params(
         ("id", description = "video id"),
         VariantQuery,
@@ -464,7 +465,7 @@ pub async fn previews(
     tag = "Videos",
 )]
 #[tracing::instrument(skip_all, fields(%video_id))]
-pub async fn watch(
+async fn watch(
     Path(video_id): Path<i64>,
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
@@ -493,7 +494,7 @@ pub async fn watch(
 /// Watch episode video
 #[utoipa::path(
     get,
-    path = "/api/local_episode/{episode_id}/watch",
+    path = "/local_episode/{episode_id}/watch",
     params(
         ("episode_id", description = "episode id"),
         VariantQuery,
@@ -505,7 +506,7 @@ pub async fn watch(
     tag = "Shows",
 )]
 #[tracing::instrument(skip_all, fields(%episode_id))]
-pub async fn watch_episode(
+async fn watch_episode(
     Path(episode_id): Path<i64>,
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
@@ -525,7 +526,7 @@ pub async fn watch_episode(
 /// Watch movie video
 #[utoipa::path(
     get,
-    path = "/api/local_movie/{movie_id}/watch",
+    path = "/local_movie/{movie_id}/watch",
     params(
         ("movie_id", description = "movie id"),
         VariantQuery,
@@ -537,7 +538,7 @@ pub async fn watch_episode(
     tag = "Movies",
 )]
 #[tracing::instrument(skip_all, fields(%movie_id))]
-pub async fn watch_movie(
+async fn watch_movie(
     Path(movie_id): Path<i64>,
     variant: Query<VariantQuery>,
     State(state): State<AppState>,
@@ -555,7 +556,7 @@ pub async fn watch_movie(
 
 #[utoipa::path(
     get,
-    path = "/api/local_shows",
+    path = "/local_shows",
     responses(
         (status = 200, description = "All local shows", body = CursoredResponse<Show>),
     ),
@@ -565,7 +566,7 @@ pub async fn watch_movie(
     tag = "Shows",
 )]
 /// All local shows
-pub async fn all_local_shows(
+async fn all_local_shows(
     Query(filter): Query<ContentFilterQuery>,
     State(db): State<Db>,
 ) -> crate::Result<Json<CursoredResponse<Show>>> {
@@ -578,7 +579,7 @@ pub async fn all_local_shows(
 
 #[utoipa::path(
     get,
-    path = "/api/local_episode/{id}",
+    path = "/local_episode/{id}",
     params(
         ("id", description = "Local id"),
     ),
@@ -589,16 +590,13 @@ pub async fn all_local_shows(
     tag = "Shows",
 )]
 /// Local episode metadata by local episode id
-pub async fn local_episode(
-    Path(id): Path<i64>,
-    State(db): State<Db>,
-) -> crate::Result<Json<Episode>> {
+async fn local_episode(Path(id): Path<i64>, State(db): State<Db>) -> crate::Result<Json<Episode>> {
     Ok(Json(db.get_episode_by_id(id).await?))
 }
 
 #[utoipa::path(
     get,
-    path = "/api/local_movies",
+    path = "/local_movies",
     responses(
         (status = 200, description = "All local movies", body = CursoredResponse<Movie>),
     ),
@@ -608,7 +606,7 @@ pub async fn local_episode(
     tag = "Movies",
 )]
 /// All local movies
-pub async fn all_local_movies(
+async fn all_local_movies(
     State(db): State<Db>,
     Query(filter): Query<ContentFilterQuery>,
 ) -> crate::Result<Json<CursoredResponse<Movie>>> {
@@ -621,7 +619,7 @@ pub async fn all_local_movies(
 /// List external ids for desired content
 #[utoipa::path(
     get,
-    path = "/api/external_ids/{id}",
+    path = "/external_ids/{id}",
     params(
         ("id", description = "External id"),
         ProviderQuery,
@@ -632,7 +630,7 @@ pub async fn all_local_movies(
     ),
     tag = "Metadata",
 )]
-pub async fn external_ids(
+async fn external_ids(
     State(providers): State<&'static MetadataProvidersStack>,
     Path(id): Path<String>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -647,7 +645,7 @@ pub async fn external_ids(
 /// Videos for local content
 #[utoipa::path(
     get,
-    path = "/api/video/by_content",
+    path = "/video/by_content",
     params(
         ContentTypeQuery,
         IdQuery,
@@ -658,7 +656,7 @@ pub async fn external_ids(
     ),
     tag = "Videos",
 )]
-pub async fn contents_video(
+async fn contents_video(
     Query(IdQuery { id }): Query<IdQuery>,
     Query(content_type): Query<ContentTypeQuery>,
     State(state): State<AppState>,
@@ -705,13 +703,13 @@ pub async fn contents_video(
 /// Get all videos that have transcoded variants
 #[utoipa::path(
     get,
-    path = "/api/variants",
+    path = "/variants",
     responses(
         (status = 200, body = Vec<DetailedVideo>),
     ),
     tag = "Videos",
 )]
-pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<DetailedVideo>> {
+async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<DetailedVideo>> {
     let videos: Vec<Source> = {
         let library = state.library.lock().unwrap();
         library
@@ -737,7 +735,7 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Detaile
 /// Get video by id
 #[utoipa::path(
     get,
-    path = "/api/video/{id}",
+    path = "/video/{id}",
     params(
         ("id", description = "Video id")
     ),
@@ -746,7 +744,7 @@ pub async fn get_all_variants(State(state): State<AppState>) -> Json<Vec<Detaile
     ),
     tag = "Videos",
 )]
-pub async fn get_video_by_id(
+async fn get_video_by_id(
     Path(id): Path<i64>,
     State(state): State<AppState>,
 ) -> crate::Result<Json<DetailedVideo>> {
@@ -765,9 +763,9 @@ pub async fn get_video_by_id(
 /// Get show by id and provider
 #[utoipa::path(
     get,
-    path = "/api/show/{id}",
+    path = "/show/{show_id}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
         ProviderQuery,
     ),
     responses(
@@ -776,7 +774,7 @@ pub async fn get_video_by_id(
     ),
     tag = "Shows",
 )]
-pub async fn get_show(
+async fn get_show(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -794,9 +792,9 @@ pub async fn get_show(
 /// Get movie by id and provider
 #[utoipa::path(
     get,
-    path = "/api/movie/{id}",
+    path = "/movie/{movie_id}",
     params(
-        ("id", description = "Movie id"),
+        ("movie_id", description = "Movie id"),
         ProviderQuery,
     ),
     responses(
@@ -805,7 +803,7 @@ pub async fn get_show(
     ),
     tag = "Movies",
 )]
-pub async fn get_movie(
+async fn get_movie(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -823,9 +821,9 @@ pub async fn get_movie(
 /// Get show poster
 #[utoipa::path(
     get,
-    path = "/api/show/{id}/poster",
+    path = "/show/{show_id}/poster",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -834,7 +832,7 @@ pub async fn get_movie(
     ),
     tag = "Shows",
 )]
-pub async fn show_poster(
+async fn show_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -848,9 +846,9 @@ pub async fn show_poster(
 /// Get season poster
 #[utoipa::path(
     get,
-    path = "/api/season/{id}/poster",
+    path = "/season/{season_id}/poster",
     params(
-        ("id", description = "Season id"),
+        ("season_id", description = "Season id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -859,7 +857,7 @@ pub async fn show_poster(
     ),
     tag = "Shows",
 )]
-pub async fn season_poster(
+async fn season_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -873,9 +871,9 @@ pub async fn season_poster(
 /// Get show backdrop image
 #[utoipa::path(
     get,
-    path = "/api/show/{id}/backdrop",
+    path = "/show/{show_id}/backdrop",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -884,7 +882,7 @@ pub async fn season_poster(
     ),
     tag = "Shows",
 )]
-pub async fn show_backdrop(
+async fn show_backdrop(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -898,9 +896,9 @@ pub async fn show_backdrop(
 /// Get movie poster
 #[utoipa::path(
     get,
-    path = "/api/movie/{id}/poster",
+    path = "/movie/{movie_id}/poster",
     params(
-        ("id", description = "Movie id"),
+        ("movie_id", description = "Movie id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -909,7 +907,7 @@ pub async fn show_backdrop(
     ),
     tag = "Movies",
 )]
-pub async fn movie_poster(
+async fn movie_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -923,9 +921,9 @@ pub async fn movie_poster(
 /// Get movie backdrop image
 #[utoipa::path(
     get,
-    path = "/api/movie/{id}/backdrop",
+    path = "/movie/{movie_id}/backdrop",
     params(
-        ("id", description = "Movie id"),
+        ("movie_id", description = "Movie id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -934,7 +932,7 @@ pub async fn movie_poster(
     ),
     tag = "Movies",
 )]
-pub async fn movie_backdrop(
+async fn movie_backdrop(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -948,9 +946,9 @@ pub async fn movie_backdrop(
 /// Get episode poster
 #[utoipa::path(
     get,
-    path = "/api/episode/{id}/poster",
+    path = "/episode/{episode_id}/poster",
     params(
-        ("id", description = "Episode id"),
+        ("episode_id", description = "Episode id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -959,7 +957,7 @@ pub async fn movie_backdrop(
     ),
     tag = "Shows",
 )]
-pub async fn episode_poster(
+async fn episode_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -973,7 +971,7 @@ pub async fn episode_poster(
 /// Get actor poster
 #[utoipa::path(
     get,
-    path = "/api/actor/{id}/poster",
+    path = "/actor/{id}/poster",
     params(
         ("id", description = "Actor id"),
     ),
@@ -984,7 +982,7 @@ pub async fn episode_poster(
     ),
     tag = "Actors",
 )]
-pub async fn actor_poster(
+async fn actor_poster(
     Path(id): Path<i64>,
     is_modified_since: Option<TypedHeader<axum_extra::headers::IfModifiedSince>>,
 ) -> crate::Result<impl IntoResponse> {
@@ -998,7 +996,7 @@ pub async fn actor_poster(
 /// Get actor list
 #[utoipa::path(
     get,
-    path = "/api/actor/list",
+    path = "/actor/list",
     params(
         TakeQuery,
         CursorQuery,
@@ -1008,7 +1006,7 @@ pub async fn actor_poster(
     ),
     tag = "Actors",
 )]
-pub async fn actor_list(
+async fn actor_list(
     State(db): State<Db>,
     Query(CursorQuery { cursor }): Query<CursorQuery>,
     Query(TakeQuery { take }): Query<TakeQuery>,
@@ -1048,9 +1046,9 @@ pub async fn actor_list(
 /// Get season metadata
 #[utoipa::path(
     get,
-    path = "/api/show/{id}/{season}",
+    path = "/show/{show_id}/{season}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
         ("season", description = "Season number"),
         ProviderQuery,
     ),
@@ -1060,7 +1058,7 @@ pub async fn actor_list(
     ),
     tag = "Shows",
 )]
-pub async fn get_season(
+async fn get_season(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -1078,9 +1076,9 @@ pub async fn get_season(
 /// Get episode metadata
 #[utoipa::path(
     get,
-    path = "/api/show/{id}/{season}/{episode}",
+    path = "/show/{show_id}/{season}/{episode}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
         ("season", description = "Season number"),
         ("episode", description = "Episode number"),
         ProviderQuery,
@@ -1091,7 +1089,7 @@ pub async fn get_season(
     ),
     tag = "Shows",
 )]
-pub async fn get_episode(
+async fn get_episode(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
     Query(ProviderQuery { provider }): Query<ProviderQuery>,
@@ -1111,7 +1109,7 @@ pub async fn get_episode(
 /// Search for torrent
 #[utoipa::path(
     get,
-    path = "/api/torrent/search",
+    path = "/torrent/search",
     params(
         SearchQuery,
         OptionalContentTypeQuery,
@@ -1124,7 +1122,7 @@ pub async fn get_episode(
     tag = "Torrent",
 )]
 #[tracing::instrument(skip_all, fields(query = %search))]
-pub async fn search_torrent(
+async fn search_torrent(
     Query(SearchQuery { search }): Query<SearchQuery>,
     Query(content_type): Query<OptionalContentTypeQuery>,
     Query(OptionalTorrentIndexQuery { provider }): Query<OptionalTorrentIndexQuery>,
@@ -1169,13 +1167,13 @@ pub async fn search_torrent(
 /// Get trending shows
 #[utoipa::path(
     get,
-    path = "/api/search/trending_shows",
+    path = "/search/trending_shows",
     responses(
         (status = 200, description = "List of trending shows", body = Vec<Show>),
     ),
     tag = "Search",
 )]
-pub async fn get_trending_shows(
+async fn get_trending_shows(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
 ) -> crate::Result<Json<Vec<Show>>> {
@@ -1194,13 +1192,13 @@ pub async fn get_trending_shows(
 /// Get trending movies
 #[utoipa::path(
     get,
-    path = "/api/search/trending_movies",
+    path = "/search/trending_movies",
     responses(
         (status = 200, description = "List of trending shows", body = Vec<Movie>),
     ),
     tag = "Search",
 )]
-pub async fn get_trending_movies(
+async fn get_trending_movies(
     State(providers): State<&'static MetadataProvidersStack>,
     State(db): State<Db>,
 ) -> crate::Result<Json<Vec<Movie>>> {
@@ -1219,7 +1217,7 @@ pub async fn get_trending_movies(
 /// Search for content. Allows to search for all types of content at once
 #[utoipa::path(
     get,
-    path = "/api/search/content",
+    path = "/search/content",
     params(
         SearchQuery,
     ),
@@ -1229,7 +1227,7 @@ pub async fn get_trending_movies(
     tag = "Search",
 )]
 #[tracing::instrument(skip_all, fields(query = %query.search))]
-pub async fn search_content(
+async fn search_content(
     Query(query): Query<SearchQuery>,
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> crate::Result<Json<Vec<MetadataSearchResult>>> {
@@ -1257,14 +1255,14 @@ pub async fn library_state(
 /// Perform full library refresh
 #[utoipa::path(
     post,
-    path = "/api/scan",
+    path = "/scan",
     responses(
         (status = 202, description = "Scan is successfully started"),
         (status = 400, body = AppError, description = "Scan is already in progress"),
     ),
     tag = "Videos",
 )]
-pub async fn reconciliate_lib(State(app_state): State<AppState>) -> crate::Result<StatusCode> {
+async fn reconciliate_lib(State(app_state): State<AppState>) -> crate::Result<StatusCode> {
     let tasks = app_state.tasks;
     let config = scan::ScanConfig::new_from_server_configuration();
     let task_id = tasks
@@ -1321,7 +1319,7 @@ where
 /// Remove video from library. WARN: It will actually delete video file
 #[utoipa::path(
     delete,
-    path = "/api/video/{id}",
+    path = "/video/{id}",
     params(
         ("id", description = "Video id"),
     ),
@@ -1331,14 +1329,14 @@ where
     ),
     tag = "Videos",
 )]
-pub async fn remove_video(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
+async fn remove_video(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.remove_video(id).await
 }
 
 /// Delete episode from library. WARN: It will actually delete video files
 #[utoipa::path(
     delete,
-    path = "/api/local_episode/{id}",
+    path = "/local_episode/{id}",
     params(
         ("id", description = "Episode id"),
     ),
@@ -1348,17 +1346,14 @@ pub async fn remove_video(State(state): State<AppState>, Path(id): Path<i64>) ->
     ),
     tag = "Shows",
 )]
-pub async fn delete_episode(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> crate::Result<()> {
+async fn delete_episode(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_episode(id).await
 }
 
 /// Delete season from library. WARN: It will actually delete video files
 #[utoipa::path(
     delete,
-    path = "/api/local_season/{id}",
+    path = "/local_season/{id}",
     params(
         ("id", description = "Season id"),
     ),
@@ -1368,17 +1363,14 @@ pub async fn delete_episode(
     ),
     tag = "Shows",
 )]
-pub async fn delete_season(
-    State(state): State<AppState>,
-    Path(id): Path<i64>,
-) -> crate::Result<()> {
+async fn delete_season(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_season(id).await
 }
 
 /// Delete show from library. WARN: It will actually delete video files
 #[utoipa::path(
     delete,
-    path = "/api/local_show/{id}",
+    path = "/local_show/{id}",
     params(
         ("id", description = "Show id"),
     ),
@@ -1388,14 +1380,14 @@ pub async fn delete_season(
     ),
     tag = "Shows",
 )]
-pub async fn delete_show(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
+async fn delete_show(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_show(id).await
 }
 
 /// Delete movie from library. WARN: It will actually delete video files
 #[utoipa::path(
     delete,
-    path = "/api/local_movie/{id}",
+    path = "/local_movie/{id}",
     params(
         ("id", description = "Movie id"),
     ),
@@ -1405,14 +1397,14 @@ pub async fn delete_show(State(state): State<AppState>, Path(id): Path<i64>) -> 
     ),
     tag = "Movies",
 )]
-pub async fn delete_movie(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
+async fn delete_movie(State(state): State<AppState>, Path(id): Path<i64>) -> crate::Result<()> {
     state.delete_movie(id).await
 }
 
 /// Remove variant from the library. WARN: It will actually delete video file
 #[utoipa::path(
     delete,
-    path = "/api/video/{id}/variant/{variant_id}",
+    path = "/video/{id}/variant/{variant_id}",
     params(
         ("id", description = "Video id"),
         ("variant_id", description = "Variant id"),
@@ -1423,7 +1415,7 @@ pub async fn delete_movie(State(state): State<AppState>, Path(id): Path<i64>) ->
     ),
     tag = "Videos",
 )]
-pub async fn remove_variant(
+async fn remove_variant(
     State(state): State<AppState>,
     Path((video_id, variant_id)): Path<(i64, String)>,
 ) -> crate::Result<()> {
@@ -1434,9 +1426,9 @@ pub async fn remove_variant(
 /// Update show metadata
 #[utoipa::path(
     put,
-    path = "/api/show/{id}",
+    path = "/show/{show_id}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
     ),
     request_body = ShowMetadata,
     responses(
@@ -1445,7 +1437,7 @@ pub async fn remove_variant(
     ),
     tag = "Shows",
 )]
-pub async fn alter_show_metadata(
+async fn alter_show_metadata(
     State(db): State<Db>,
     Path(show_id): Path<i64>,
     Json(metadata): Json<ShowMetadata>,
@@ -1464,9 +1456,9 @@ pub async fn alter_show_metadata(
 /// Update season metadata
 #[utoipa::path(
     put,
-    path = "/api/show/{id}/{season}",
+    path = "/show/{show_id}/{season}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
         ("season", description = "Season number"),
     ),
     request_body = SeasonMetadata,
@@ -1476,7 +1468,7 @@ pub async fn alter_show_metadata(
     ),
     tag = "Shows",
 )]
-pub async fn alter_season_metadata(
+async fn alter_season_metadata(
     State(db): State<Db>,
     Path((show_id, season)): Path<(i64, i64)>,
     Json(metadata): Json<SeasonMetadata>,
@@ -1495,9 +1487,9 @@ pub async fn alter_season_metadata(
 /// Update episode metadata
 #[utoipa::path(
     put,
-    path = "/api/show/{id}/{season}/{episode}",
+    path = "/show/{show_id}/{season}/{episode}",
     params(
-        ("id", description = "Show id"),
+        ("show_id", description = "Show id"),
         ("season", description = "Season number"),
         ("episode", description = "Episode number"),
     ),
@@ -1508,7 +1500,7 @@ pub async fn alter_season_metadata(
     ),
     tag = "Shows",
 )]
-pub async fn alter_episode_metadata(
+async fn alter_episode_metadata(
     State(db): State<Db>,
     Path((show_id, season, episode)): Path<(i64, i64, i64)>,
     Json(metadata): Json<EpisodeMetadata>,
@@ -1534,9 +1526,9 @@ pub async fn alter_episode_metadata(
 /// Update movie metadata
 #[utoipa::path(
     put,
-    path = "/api/movie/{id}",
+    path = "/movie/{movie_id}",
     params(
-        ("id", description = "Movie id"),
+        ("movie_id", description = "Movie id"),
     ),
     request_body = MovieMetadata,
     responses(
@@ -1545,7 +1537,7 @@ pub async fn alter_episode_metadata(
     ),
     tag = "Movies",
 )]
-pub async fn alter_movie_metadata(
+async fn alter_movie_metadata(
     State(db): State<Db>,
     Path(id): Path<i64>,
     Json(metadata): Json<MovieMetadata>,
@@ -1564,7 +1556,7 @@ pub async fn alter_movie_metadata(
 /// Fix show metadata match
 #[utoipa::path(
     post,
-    path = "/api/show/{show_id}/fix_metadata",
+    path = "/show/{show_id}/fix_metadata",
     params(
         ("show_id", description = "Id of the show that needs to be fixed"),
         ProviderQuery,
@@ -1576,14 +1568,14 @@ pub async fn alter_movie_metadata(
     ),
     tag = "Shows",
 )]
-pub async fn fix_show_metadata() -> crate::Result<()> {
+async fn fix_show_metadata() -> crate::Result<()> {
     unimplemented!("Fixing show metadata is unimplemented");
 }
 
 /// Fix movie metadata match
 #[utoipa::path(
     post,
-    path = "/api/movie/{movie_id}/fix_metadata",
+    path = "/movie/{movie_id}/fix_metadata",
     params(
         ("movie_id", description = "Id of the movie that needs to be fixed"),
         ProviderQuery,
@@ -1595,14 +1587,14 @@ pub async fn fix_show_metadata() -> crate::Result<()> {
     ),
     tag = "Movies",
 )]
-pub async fn fix_movie_metadata() -> crate::Result<()> {
+async fn fix_movie_metadata() -> crate::Result<()> {
     unimplemented!("Fixing movie metadata is not implemented")
 }
 
 /// Fix metadata match
 #[utoipa::path(
     post,
-    path = "/api/fix_metadata/{metadata_id}",
+    path = "/fix_metadata/{metadata_id}",
     params(
         ("metadata_id", description = "Id of the content that needs to be fixed"),
         ProviderQuery,
@@ -1615,14 +1607,14 @@ pub async fn fix_movie_metadata() -> crate::Result<()> {
     ),
     tag = "Metadata",
 )]
-pub async fn fix_metadata() -> crate::Result<()> {
+async fn fix_metadata() -> crate::Result<()> {
     unimplemented!("fixing metadata is not yet implemented");
 }
 
 /// Reset show metadata
 #[utoipa::path(
     post,
-    path = "/api/show/{show_id}/reset_metadata",
+    path = "/show/{show_id}/reset_metadata",
     params(
         ("show_id", description = "Id of the show that needs to be fixed"),
     ),
@@ -1632,14 +1624,14 @@ pub async fn fix_metadata() -> crate::Result<()> {
     ),
     tag = "Shows",
 )]
-pub async fn reset_show_metadata() -> crate::Result<()> {
+async fn reset_show_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Reset movie metadata
 #[utoipa::path(
     post,
-    path = "/api/movie/{movie_id}/reset_metadata",
+    path = "/movie/{movie_id}/reset_metadata",
     params(
         ("movie_id", description = "Id of the movie that needs to be fixed"),
     ),
@@ -1648,14 +1640,14 @@ pub async fn reset_show_metadata() -> crate::Result<()> {
     ),
     tag = "Movies",
 )]
-pub async fn reset_movie_metadata() -> crate::Result<()> {
+async fn reset_movie_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Reset content's metadata
 #[utoipa::path(
     post,
-    path = "/api/reset_metadata/{metadata_id}",
+    path = "/reset_metadata/{metadata_id}",
     params(
         ("metadata_id", description = "Id of the content that needs to be fixed"),
         ContentTypeQuery,
@@ -1666,14 +1658,14 @@ pub async fn reset_movie_metadata() -> crate::Result<()> {
     ),
     tag = "Metadata",
 )]
-pub async fn reset_metadata() -> crate::Result<()> {
+async fn reset_metadata() -> crate::Result<()> {
     unimplemented!("Metadata reset is unimplemented");
 }
 
 /// Start transcode video job
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/transcode",
+    path = "/video/{id}/transcode",
     params(
         ("id", description = "Video id"),
     ),
@@ -1684,7 +1676,7 @@ pub async fn reset_metadata() -> crate::Result<()> {
     ),
     tag = "Videos",
 )]
-pub async fn transcode_video(
+async fn transcode_video(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
     Json(payload): Json<TranscodePayload>,
@@ -1696,7 +1688,7 @@ pub async fn transcode_video(
 /// Start previews generation job on video
 #[utoipa::path(
     post,
-    path = "/api/video/{id}/previews",
+    path = "/video/{id}/previews",
     params(
         ("id", description = "Video id"),
     ),
@@ -1706,7 +1698,7 @@ pub async fn transcode_video(
     ),
     tag = "Videos",
 )]
-pub async fn generate_previews(
+async fn generate_previews(
     State(app_state): State<AppState>,
     Path(id): Path<i64>,
 ) -> crate::Result<StatusCode> {
@@ -1717,7 +1709,7 @@ pub async fn generate_previews(
 /// Delete previews on video
 #[utoipa::path(
     delete,
-    path = "/api/video/{id}/previews",
+    path = "/video/{id}/previews",
     params(
         ("id", description = "Video id"),
     ),
@@ -1727,7 +1719,7 @@ pub async fn generate_previews(
     ),
     tag = "Videos",
 )]
-pub async fn delete_previews(Path(id): Path<i64>) -> crate::Result<()> {
+async fn delete_previews(Path(id): Path<i64>) -> crate::Result<()> {
     let previews_dir = PreviewsDirAsset::new(id);
     previews_dir.delete_dir().await?;
     Ok(())
@@ -1741,7 +1733,7 @@ pub struct CancelTaskPayload {
 /// Cancel task with provided id
 #[utoipa::path(
     delete,
-    path = "/api/tasks/transcode/{id}",
+    path = "/tasks/transcode/{id}",
     params(
         ("id", description = "Task id"),
     ),
@@ -1751,7 +1743,7 @@ pub struct CancelTaskPayload {
     ),
     tag = "Tasks",
 )]
-pub async fn cancel_transcode_task(
+async fn cancel_transcode_task(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
 ) -> Result<(), StatusCode> {
@@ -1764,22 +1756,20 @@ pub async fn cancel_transcode_task(
 /// Get all running transcode tasks
 #[utoipa::path(
     get,
-    path = "/api/tasks/transcode",
+    path = "/tasks/transcode",
     responses(
         (status = 200, body = inline(Vec<Task<TranscodeJob>>)),
     ),
     tag = "Tasks",
 )]
-pub async fn transcode_tasks(
-    State(tasks): State<&'static TaskResource>,
-) -> Json<serde_json::Value> {
+async fn transcode_tasks(State(tasks): State<&'static TaskResource>) -> Json<serde_json::Value> {
     Json(tasks.transcode_tasks.tasks())
 }
 
 /// Cancel task with provided id
 #[utoipa::path(
     delete,
-    path = "/api/tasks/previews/{id}",
+    path = "/tasks/previews/{id}",
     params(
         ("id", description = "Task id"),
     ),
@@ -1790,7 +1780,7 @@ pub async fn transcode_tasks(
     ),
     tag = "Tasks",
 )]
-pub async fn cancel_previews_task(
+async fn cancel_previews_task(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
 ) -> crate::Result<()> {
@@ -1801,7 +1791,7 @@ pub async fn cancel_previews_task(
 /// Stop watch session
 #[utoipa::path(
     delete,
-    path = "/api/tasks/watch_session/{id}",
+    path = "/tasks/watch_session/{id}",
     params(
         ("id", description = "Task id"),
     ),
@@ -1812,7 +1802,7 @@ pub async fn cancel_previews_task(
     ),
     tag = "Tasks",
 )]
-pub async fn stop_watch_session(
+async fn stop_watch_session(
     State(tasks): State<&'static TaskResource>,
     Path(task_id): Path<Uuid>,
 ) -> crate::Result<()> {
@@ -1823,26 +1813,26 @@ pub async fn stop_watch_session(
 /// Get all running tasks
 #[utoipa::path(
     get,
-    path = "/api/tasks/previews",
+    path = "/tasks/previews",
     responses(
         (status = 200, body = inline(Vec<Task<PreviewsJob>>))
     ),
     tag = "Tasks",
 )]
-pub async fn previews_tasks(State(tasks): State<&'static TaskResource>) -> Json<serde_json::Value> {
+async fn previews_tasks(State(tasks): State<&'static TaskResource>) -> Json<serde_json::Value> {
     Json(tasks.previews_tasks.tasks())
 }
 
 /// SSE stream of current tasks progress
 #[utoipa::path(
     get,
-    path = "/api/tasks/progress",
+    path = "/tasks/progress",
     responses(
         (status = 200, body = [u8]),
     ),
     tag = "Tasks",
 )]
-pub async fn progress(
+async fn progress(
     State(tasks): State<&'static TaskResource>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let ProgressChannel(channel) = &tasks.progress_channel;
@@ -1862,26 +1852,26 @@ pub async fn progress(
 /// Server configuration
 #[utoipa::path(
     get,
-    path = "/api/configuration",
+    path = "/configuration",
     responses(
         (status = 200, body = config::UtoipaConfigSchema),
     ),
     tag = "Configuration",
 )]
-pub async fn server_configuration() -> Json<Vec<SerializedSetting>> {
+async fn server_configuration() -> Json<Vec<SerializedSetting>> {
     Json(config::CONFIG.json())
 }
 
 /// Server version
 #[utoipa::path(
     get,
-    path = "/api/version",
+    path = "/version",
     responses(
         (status = 200, body = String),
     ),
     tag = "Configuration",
 )]
-pub async fn server_version() -> &'static str {
+async fn server_version() -> &'static str {
     #[cfg(debug_assertions)]
     {
         concat!(env!("CARGO_PKG_VERSION"), "\n", "debug build")
@@ -1895,20 +1885,20 @@ pub async fn server_version() -> &'static str {
 /// Server capabilities
 #[utoipa::path(
     get,
-    path = "/api/configuration/capabilities",
+    path = "/configuration/capabilities",
     responses(
         (status = 200, body = Capabilities),
     ),
     tag = "Configuration",
 )]
-pub async fn server_capabilities() -> Json<Capabilities> {
+async fn server_capabilities() -> Json<Capabilities> {
     Json(Capabilities::parse().await)
 }
 
 /// Update server configuration
 #[utoipa::path(
     patch,
-    path = "/api/configuration",
+    path = "/configuration",
     request_body(
         content = serde_json::Value, description = "Key/value configuration pairs", content_type = "application/json"
     ),
@@ -1917,7 +1907,7 @@ pub async fn server_capabilities() -> Json<Capabilities> {
     ),
     tag = "Configuration",
 )]
-pub async fn update_server_configuration(
+async fn update_server_configuration(
     Json(new_config): Json<serde_json::Value>,
 ) -> crate::Result<Json<ConfigurationApplyResult>> {
     let result = config::CONFIG.apply_json(new_config)?;
@@ -1933,13 +1923,13 @@ pub async fn update_server_configuration(
 /// Reset server configuration to its defaults
 #[utoipa::path(
     post,
-    path = "/api/configuration/reset",
+    path = "/configuration/reset",
     responses(
         (status = 200, description = "Server configuration is reset"),
     ),
     tag = "Configuration",
 )]
-pub async fn reset_server_configuration() -> crate::Result<()> {
+async fn reset_server_configuration() -> crate::Result<()> {
     config::CONFIG.reset_config_values();
 
     let table = config::CONFIG.construct_table();
@@ -1965,14 +1955,14 @@ pub enum ProviderOrder {
 /// Returns updated order
 #[utoipa::path(
     put,
-    path = "/api/configuration/providers",
+    path = "/configuration/providers",
     request_body = ProviderOrder,
     responses(
         (status = 200, body = Vec<String>, description = "Updated ordering of providers"),
     ),
     tag = "Configuration",
 )]
-pub async fn order_providers(
+async fn order_providers(
     State(providers): State<&'static MetadataProvidersStack>,
     Json(new_order): Json<ProviderOrder>,
 ) -> Json<Vec<String>> {
@@ -2012,13 +2002,13 @@ pub struct ProviderOrderResponse {
 /// Get providers order
 #[utoipa::path(
     get,
-    path = "/api/configuration/providers",
+    path = "/configuration/providers",
     responses(
         (status = 200, body = ProviderOrderResponse, description = "Ordering of providers"),
     ),
     tag = "Configuration",
 )]
-pub async fn get_providers_order(
+async fn get_providers_order(
     State(providers): State<&'static MetadataProvidersStack>,
 ) -> Json<ProviderOrderResponse> {
     let movie = providers
@@ -2074,7 +2064,7 @@ pub struct StartWatchSessionResponse {
 /// Start direct stream session
 #[utoipa::path(
     post,
-    path = "/api/watch/direct/start/{id}",
+    path = "/watch/direct/start/{id}",
     params(
         ("id", description = "Video id"),
     ),
@@ -2085,7 +2075,7 @@ pub struct StartWatchSessionResponse {
     tag = "Watch",
 )]
 #[tracing::instrument(skip_all, fields(%video_id))]
-pub async fn start_direct_stream(
+async fn start_direct_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
@@ -2113,7 +2103,7 @@ pub async fn start_direct_stream(
 /// Start new hls watch session
 #[utoipa::path(
     post,
-    path = "/api/watch/hls/start/{id}",
+    path = "/watch/hls/start/{id}",
     params(
         ("id", description = "Video id"),
     ),
@@ -2125,7 +2115,7 @@ pub async fn start_direct_stream(
     tag = "Watch",
 )]
 #[tracing::instrument(skip_all, fields(%video_id))]
-pub async fn start_hls_stream(
+async fn start_hls_stream(
     Path(video_id): Path<i64>,
     State(app_state): State<AppState>,
     TypedHeader(user_agent): TypedHeader<axum_extra::headers::UserAgent>,
@@ -2200,7 +2190,7 @@ pub async fn start_hls_stream(
 /// M3U8 manifest of live transcode task
 #[utoipa::path(
     get,
-    path = "/api/watch/hls/{id}/manifest",
+    path = "/watch/hls/{id}/manifest",
     params(
         ("id", description = "Task id"),
     ),
@@ -2211,7 +2201,7 @@ pub async fn start_hls_stream(
     ),
     tag = "Watch",
 )]
-pub async fn hls_manifest(
+async fn hls_manifest(
     Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
 ) -> crate::Result<String> {
@@ -2234,7 +2224,7 @@ pub async fn hls_manifest(
 /// Retrieve init segment
 #[utoipa::path(
     get,
-    path = "/api/watch/hls/{id}/init",
+    path = "/watch/hls/{id}/init",
     params(
         ("id", description = "Transcode job"),
         ("segment", description = "Desired segment"),
@@ -2246,7 +2236,7 @@ pub async fn hls_manifest(
     ),
     tag = "Watch",
 )]
-pub async fn hls_init(
+async fn hls_init(
     Path(stream_id): Path<uuid::Uuid>,
     State(tasks): State<&'static TaskResource>,
 ) -> crate::Result<axum::response::Response> {
@@ -2288,7 +2278,7 @@ pub async fn hls_init(
 /// Retrieve hls segment
 #[utoipa::path(
     get,
-    path = "/api/watch/hls/{id}/segment/{segment}",
+    path = "/watch/hls/{id}/segment/{segment}",
     params(
         ("id", description = "Transcode job"),
         ("segment", description = "Desired segment"),
@@ -2301,7 +2291,7 @@ pub async fn hls_init(
     tag = "Watch",
 )]
 #[tracing::instrument(level = "debug", skip(tasks), fields(%stream_id))]
-pub async fn hls_segment(
+async fn hls_segment(
     Path((stream_id, index)): Path<(uuid::Uuid, usize)>,
     State(tasks): State<&'static TaskResource>,
 ) -> crate::Result<axum::response::Response> {
@@ -2340,4 +2330,65 @@ pub async fn hls_segment(
         .file_name("init.mp4")
         .content_size(metadata.len());
     Ok((header_map, file_stream).into_response())
+}
+
+pub(super) fn router() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(actor_list))
+        .routes(routes!(actor_poster))
+        .routes(routes!(server_configuration, update_server_configuration))
+        .routes(routes!(server_capabilities))
+        .routes(routes!(get_providers_order, order_providers))
+        .routes(routes!(reset_server_configuration))
+        .routes(routes!(episode_poster))
+        .routes(routes!(external_ids))
+        .routes(routes!(fix_metadata))
+        .routes(routes!(watch_episode))
+        .routes(routes!(delete_episode, local_episode))
+        .routes(routes!(delete_movie))
+        .routes(routes!(watch_movie))
+        .routes(routes!(all_local_movies))
+        .routes(routes!(delete_season))
+        .routes(routes!(delete_show))
+        .routes(routes!(all_local_shows))
+        .routes(routes!(alter_movie_metadata, get_movie))
+        .routes(routes!(movie_backdrop))
+        .routes(routes!(fix_movie_metadata))
+        .routes(routes!(movie_poster))
+        .routes(routes!(reset_movie_metadata))
+        .routes(routes!(reset_metadata))
+        .routes(routes!(reconciliate_lib))
+        .routes(routes!(search_content))
+        .routes(routes!(get_trending_movies))
+        .routes(routes!(get_trending_shows))
+        .routes(routes!(season_poster))
+        .routes(routes!(alter_show_metadata, get_show))
+        .routes(routes!(show_backdrop))
+        .routes(routes!(fix_show_metadata))
+        .routes(routes!(show_poster))
+        .routes(routes!(reset_show_metadata))
+        .routes(routes!(alter_season_metadata, get_season))
+        .routes(routes!(alter_episode_metadata, get_episode))
+        .routes(routes!(previews_tasks))
+        .routes(routes!(cancel_previews_task))
+        .routes(routes!(progress))
+        .routes(routes!(transcode_tasks))
+        .routes(routes!(cancel_transcode_task))
+        .routes(routes!(stop_watch_session))
+        .routes(routes!(search_torrent))
+        .routes(routes!(get_all_variants))
+        .routes(routes!(server_version))
+        .routes(routes!(contents_video))
+        .routes(routes!(get_video_by_id, remove_video))
+        .routes(routes!(video_content_metadata))
+        .routes(routes!(delete_previews, generate_previews))
+        .routes(routes!(previews))
+        .routes(routes!(transcode_video))
+        .routes(routes!(remove_variant))
+        .routes(routes!(watch))
+        .routes(routes!(start_direct_stream))
+        .routes(routes!(start_hls_stream))
+        .routes(routes!(hls_init))
+        .routes(routes!(hls_manifest))
+        .routes(routes!(hls_segment))
 }
