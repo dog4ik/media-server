@@ -3,17 +3,12 @@ use axum::Router;
 use axum::routing::get;
 use clap::Parser;
 use dotenvy::dotenv;
-use media_server::api;
-use media_server::app_state::AppState;
-use media_server::config::{self, APP_RESOURCES, AppResources, Args, ConfigFile};
-use media_server::db::Db;
-use media_server::ffmpeg_abi;
-use media_server::library::Library;
-use media_server::metadata::metadata_stack::MetadataProvidersStack;
-use media_server::progress::TaskResource;
-use media_server::torrent::TorrentClient;
-use media_server::tracing::init_tracer;
-use media_server::upnp::Upnp;
+use media_server::{
+    APP_RESOURCES, AppResources, AppState, Args, CONFIG, ConfigFile, Db, Library,
+    MetadataProvidersStack, MovieFolders, OtelEndpoint, Port, ShowFolders, TaskResource,
+    TorrentClient, Upnp, WebUiPath, api_router, get_or_init_gpu_accelated_apis, init_tracer,
+    library_state,
+};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
 use tokio_util::sync::CancellationToken;
@@ -49,19 +44,19 @@ async fn main() {
     let dotenv_path = dotenv().ok();
     let config_error = match ConfigFile::open_and_read().await {
         Ok(toml) => {
-            config::CONFIG.apply_toml_settings(toml);
+            CONFIG.apply_toml_settings(toml);
             None
         }
         Err(err) => Some(err),
     };
 
     let (
-        config::OtelEndpoint(otel_endpoint),
-        config::Port(port),
-        config::ShowFolders(show_dirs),
-        config::MovieFolders(movie_dirs),
-        config::WebUiPath(web_ui_path),
-    ) = config::CONFIG.get_values();
+        OtelEndpoint(otel_endpoint),
+        Port(port),
+        ShowFolders(show_dirs),
+        MovieFolders(movie_dirs),
+        WebUiPath(web_ui_path),
+    ) = CONFIG.get_values();
     let _guard = init_tracer(otel_endpoint.as_deref());
 
     match dotenv_path {
@@ -79,7 +74,7 @@ async fn main() {
 
     // The whole boot sequence runs inside a single `startup` span
     let (cancellation_token, tracker, torrent_client) = async move {
-        tokio::spawn(ffmpeg_abi::get_or_init_gpu_accelated_apis());
+        tokio::spawn(get_or_init_gpu_accelated_apis());
 
         let cancellation_token = CancellationToken::new();
 
@@ -120,17 +115,15 @@ async fn main() {
         };
 
         #[cfg(feature = "windows-tray")]
-        tokio::spawn(media_server::tray::spawn_tray_icon(app_state.clone()));
+        tokio::spawn(media_server::spawn_tray_icon(app_state.clone()));
         // tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
         // tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
-        // Routes and OpenAPI paths come from the same `#[utoipa::path]`
-        // attribute, so a handler cannot be mounted at a path it does not document.
         let (server_api, openapi) = OpenApiRouter::new()
-            .nest("/api", api::router())
+            .nest("/api", api_router())
             .split_for_parts();
 
-        let debug_api = Router::new().route("/library", get(api::server::library_state));
+        let debug_api = Router::new().route("/library", get(library_state));
 
         let assets_service =
             ServeDir::new(&web_ui_path).fallback(ServeFile::new(web_ui_path.join("index.html")));

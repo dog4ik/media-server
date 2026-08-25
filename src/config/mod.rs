@@ -1,7 +1,6 @@
 use std::{
     any::{Any, TypeId, type_name},
     collections::HashMap,
-    fmt::Display,
     path::{Path, PathBuf},
     sync::LazyLock,
 };
@@ -37,22 +36,6 @@ fn camel_to_snake_case(input: &str) -> String {
     snake
 }
 
-#[derive(Debug)]
-pub enum ValidationError {
-    Bounds,
-}
-
-impl Display for ValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let msg = match self {
-            ValidationError::Bounds => "bounds",
-        };
-        write!(f, "{}", msg)
-    }
-}
-
-impl std::error::Error for ValidationError {}
-
 // TODO: derive macro
 pub trait ConfigValue:
     'static + Send + Sync + Default + Clone + Serialize + DeserializeOwned + utoipa::ToSchema
@@ -60,10 +43,6 @@ pub trait ConfigValue:
     const KEY: Option<&str> = None;
     const ENV_KEY: Option<&str> = None;
     const REQUIRE_RESTART: bool = false;
-
-    fn validate(&self) -> Result<(), ValidationError> {
-        Ok(())
-    }
 }
 
 #[derive(Debug, Default)]
@@ -652,40 +631,6 @@ impl AsRef<[PathBuf]> for MovieFolders {
     }
 }
 
-impl MovieFolders {
-    pub fn add(&mut self, path: impl AsRef<Path>) {
-        let path = path.as_ref().to_path_buf();
-        if !self.0.contains(&path) {
-            self.0.push(path);
-        }
-    }
-
-    pub fn remove(&mut self, path: impl AsRef<Path>) {
-        let path = path.as_ref();
-        self.0.retain(|p| p != path)
-    }
-
-    pub fn first(&self) -> Option<&PathBuf> {
-        self.0.first()
-    }
-
-    pub fn existing(&self) -> Vec<&PathBuf> {
-        self.0
-            .iter()
-            .filter(|path| {
-                let exists = path.try_exists().unwrap_or(false);
-                if !exists {
-                    tracing::warn!(
-                        "Failed to check existence for movie directory: {}",
-                        path.display()
-                    );
-                }
-                exists
-            })
-            .collect()
-    }
-}
-
 /// List of directories that contain show files. All episode files from these directories will show up in the library
 #[derive(Deserialize, Clone, Default, Serialize, Debug, utoipa::ToSchema)]
 #[schema(value_type = Vec<String>)]
@@ -703,31 +648,6 @@ impl ShowFolders {
         if !self.0.contains(&path) {
             self.0.push(path);
         }
-    }
-
-    pub fn remove(&mut self, path: impl AsRef<Path>) {
-        let path = path.as_ref();
-        self.0.retain(|p| p != path)
-    }
-
-    pub fn first(&self) -> Option<&PathBuf> {
-        self.0.first()
-    }
-
-    pub fn existing(&self) -> Vec<&PathBuf> {
-        self.0
-            .iter()
-            .filter(|path| {
-                let exists = path.try_exists().unwrap_or(false);
-                if !exists {
-                    tracing::warn!(
-                        "Failed to check existence for show directory: {}",
-                        path.display()
-                    );
-                }
-                exists
-            })
-            .collect()
     }
 }
 

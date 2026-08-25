@@ -8,62 +8,62 @@ use reqwest::StatusCode;
 use crate::api::Json;
 
 /// Api surface of the media server
-pub mod api;
+mod api;
 /// Shared state of the application
-pub mod app_state;
+mod app_state;
 /// All server related configuration
-pub mod config;
+mod config;
 /// Sqlite database
-pub mod db;
+mod db;
 /// FFmpeg cli api
 ///
 /// Currently used for everything except probing
-pub mod ffmpeg;
+mod ffmpeg;
 /// FFmpeg abi api
 ///
 /// Currently used only for metadata retrieval
-pub mod ffmpeg_abi;
+mod ffmpeg_abi;
 /// File browser
-pub mod file_browser;
+mod file_browser;
 /// Library files, config file watcher
 #[allow(unused)]
-pub mod file_watcher;
+mod file_watcher;
 /// Chromaprint intro detection module
-pub mod intro_detection;
+mod intro_detection;
 /// Everything related to local media files
-pub mod library;
-pub mod lists;
+mod library;
+mod lists;
 /// Integrations with movie and TV databases.
-pub mod metadata;
+mod metadata;
 /// Title parsing
-pub mod parser;
+mod parser;
 /// Progress notifications dispatched to the connected Websockets clients
-pub mod progress;
+mod progress;
 /// Server resources
-pub mod resources;
+mod resources;
 /// Library scan module
 ///
 /// There are 3 things must be done during scan.
 /// 1. Metadata fetch. It can be found locally or fetched from providers.
 /// 2. New metadata and assets must be saved.
 /// 3. Library items should be linked to their metadata
-pub mod scan;
+mod scan;
 /// Glue between torrent crate and media server
-pub mod torrent;
+mod torrent;
 /// Torrent providers
-pub mod torrent_index;
+mod torrent_index;
 /// Everything related to logging
-pub mod tracing;
+mod tracing;
 /// Tray icon implementation. Currently supports only windows
 #[cfg(feature = "windows-tray")]
-pub mod tray;
+mod tray;
 /// Universal Plug and Play capabilities of the server
-pub mod upnp;
-pub mod utils;
+mod upnp;
+mod utils;
 /// Content streams
-pub mod watch;
+mod watch;
 /// Websockets clients connection
-pub mod ws;
+mod ws;
 
 pub type BoxedFuture<'a, T> = std::pin::Pin<Box<dyn Future<Output = T> + 'a + Send>>;
 
@@ -292,3 +292,27 @@ impl axum::response::IntoResponse for AppError {
         (status, Json(self)).into_response()
     }
 }
+
+/// The complete surface this library offers its binary.
+/// Nothing else is reachable from outside, which is what keeps `dead_code` analysis honest for
+/// everything below.
+pub use crate::{
+    api::router as api_router,
+    api::server::library_state,
+    app_state::AppState,
+    config::{
+        APP_RESOURCES, AppResources, Args, CONFIG, ConfigFile, MovieFolders, OtelEndpoint, Port,
+        ShowFolders, WebUiPath,
+    },
+    db::Db,
+    ffmpeg_abi::get_or_init_gpu_accelated_apis,
+    library::Library,
+    metadata::metadata_stack::MetadataProvidersStack,
+    progress::TaskResource,
+    torrent::TorrentClient,
+    tracing::init_tracer,
+    upnp::Upnp,
+};
+
+#[cfg(feature = "windows-tray")]
+pub use crate::tray::spawn_tray_icon;
