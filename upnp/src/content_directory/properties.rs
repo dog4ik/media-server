@@ -16,8 +16,8 @@ macro_rules! impl_basic_property {
         impl ObjectProperty for $type {
             const NAME: &str = $name;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -25,7 +25,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }
@@ -36,8 +36,8 @@ macro_rules! impl_basic_property {
             const NAME: &str = $name;
             const MULTIVALUE: bool = true;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -45,7 +45,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }
@@ -55,8 +55,8 @@ macro_rules! impl_basic_property {
         impl ContainerProperty for $type {
             const NAME: &str = $name;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -64,7 +64,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }
@@ -75,8 +75,8 @@ macro_rules! impl_basic_property {
             const NAME: &str = $name;
             const MULTIVALUE: bool = true;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -84,7 +84,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }
@@ -94,8 +94,8 @@ macro_rules! impl_basic_property {
         impl ItemProperty for $type {
             const NAME: &str = $name;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -103,7 +103,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }
@@ -114,8 +114,8 @@ macro_rules! impl_basic_property {
             const NAME: &str = $name;
             const MULTIVALUE: bool = true;
         }
-        impl Into<PropertyValue> for $type {
-            fn into(self) -> PropertyValue {
+        impl From<$type> for PropertyValue {
+            fn from(value: $type) -> PropertyValue {
                 let (ns, name) = $name
                     .split_once(':')
                     .map_or((None, $name), |(ns, name)| (Some(ns), name));
@@ -123,7 +123,7 @@ macro_rules! impl_basic_property {
                     ns,
                     name,
                     is_allowed: false,
-                    value: ValueType::basic(self.0),
+                    value: ValueType::basic(value.0),
                     dependant_properties: vec![],
                 }
             }

@@ -37,10 +37,6 @@ impl AssetTasks {
         self.tasks.len()
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
-    }
-
     pub async fn save<T>(self, max_concurrency: usize, progress_handler: T)
     where
         T: AssetsProgressSink,

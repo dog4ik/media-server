@@ -1,6 +1,5 @@
 use std::path::PathBuf;
 
-use anyhow::Context;
 use axum::{
     extract::{Multipart, State},
     response::IntoResponse,
@@ -42,31 +41,14 @@ async fn pull_video_subtitle(
         .await
 }
 
+/// Multipart subtitles api data type
+// Not used in actuall implementation
+#[allow(dead_code)]
 #[derive(Debug, utoipa::ToSchema)]
 pub struct MultipartSubtitles {
     pub language: Option<String>,
     #[schema(format = Binary, value_type = String, content_media_type = "application/octet-stream")]
     pub subtitles: bytes::Bytes,
-}
-
-impl MultipartSubtitles {
-    pub async fn from_multipart(multipart: &mut Multipart) -> anyhow::Result<Self> {
-        let mut language = None;
-        let mut subtitles = None;
-        while let Ok(Some(field)) = multipart.next_field().await {
-            if let Some("language") = field.name() {
-                language = field.text().await.ok();
-                continue;
-            }
-            let data = field.bytes().await?;
-            subtitles = Some(data);
-        }
-
-        Ok(Self {
-            subtitles: subtitles.context("get subtitles field")?,
-            language,
-        })
-    }
 }
 
 /// Upload subtitles on the server
@@ -89,48 +71,55 @@ async fn upload_subtitles(
     mut multipart: Multipart,
 ) -> crate::Result<()> {
     let mut language = None;
+    let mut file_stem = String::new();
+    let id = db
+        .insert_subtitles(&db::DbSubtitles {
+            id: None,
+            language: None,
+            file_stem: String::new(),
+            external_path: None,
+            video_id,
+        })
+        .await?;
+
+    let subtitles_asset = assets::SubtitleAsset::new(video_id, id);
+
     while let Ok(Some(field)) = multipart.next_field().await {
-        if let Some("language") = field.name() {
-            language = field.text().await.ok();
-            continue;
-        }
-        if let Some("subtitles") = field.name() {
-            let file_stem = field.file_name().map(Into::into).unwrap_or_default();
-            let db_subtitles = db::DbSubtitles {
-                id: None,
-                file_stem,
-                external_path: None,
-                language,
-                video_id,
-            };
-            let mut tx = db.begin().await?;
-            let subtitles_id = tx.insert_subtitles(&db_subtitles).await?;
-            let subtitles_asset = assets::SubtitleAsset::new(video_id, subtitles_id);
-
-            use std::io::Error;
-            let mut stream = field.map(|data| data.map_err(Error::other));
-            let output_path = subtitles_asset.path();
-            if let Some(parent) = output_path.parent() {
-                tokio::fs::create_dir_all(parent).await?;
+        match field.name() {
+            Some("language") => {
+                language = field.text().await.ok();
             }
-            crate::ffmpeg::convert_and_save_srt(&output_path, &mut stream).await?;
-
-            if tx.commit().await.is_err() {
-                tracing::error!("Failed to commit subtitles transaction");
-                if let Err(e) = subtitles_asset.delete_file().await {
-                    tracing::error!(
-                        path = %output_path.display(),
-                        "Failed to clean up subtitles file: {e}"
-                    );
-                };
-            };
-            return Ok(());
+            Some("subtitles") => {
+                file_stem = field.file_name().map(Into::into).unwrap_or_default();
+                use std::io::Error;
+                let mut stream = field.map(|data| data.map_err(Error::other));
+                let output_path = subtitles_asset.path();
+                if let Some(parent) = output_path.parent() {
+                    tokio::fs::create_dir_all(parent).await?;
+                }
+                crate::ffmpeg::convert_and_save_srt(&output_path, &mut stream).await?;
+            }
+            _ => {}
         }
     }
+    if let Err(e) = db
+        .update_subtitles(db::DbSubtitles {
+            id: Some(id),
+            language,
+            file_stem,
+            external_path: None,
+            video_id,
+        })
+        .await
+    {
+        tracing::error!("Failed to commit updated subtitles: {e}");
+        if let Err(e) = subtitles_asset.delete_file().await {
+            tracing::error!("Failed to clean up subtitles file: {e}");
+        };
+        return Err(e.into());
+    };
 
-    Err(AppError::bad_request(
-        "multipart does not contain required subtitles field",
-    ))
+    Ok(())
 }
 
 #[derive(Debug, serde::Deserialize, utoipa::ToSchema)]

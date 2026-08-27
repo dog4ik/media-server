@@ -20,7 +20,6 @@ use crate::{
     },
     config,
     db::query_builders::{DbEpisodeQuery, DbMovieQuery},
-    library::assets::{self, AssetDir},
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, LocaleMetadata, MetadataProvider, MovieMetadata,
         ParentMediaType, ShowMetadata,
@@ -29,6 +28,7 @@ use crate::{
 
 pub mod query_builders;
 
+#[allow(dead_code)]
 pub const RFC_3339_FORMAT: &str = "%Y-%m-%dT%H:%M:%SZ";
 
 /// Number of times an idempotent content insert is retried when a concurrent writer wins the race
@@ -145,6 +145,7 @@ pub const DEFAULT_LIMIT: i64 = 50;
 /// All database queries and mutations
 // NOTE: This might not be the best way to share queries between `Pool`, `Transaction`, and `Connection`,
 // but it's the best I could come up with.
+#[allow(dead_code)]
 pub trait DbActions<'a>: Acquire<'a, Database = Sqlite> + Send
 where
     Self: Sized,
@@ -680,108 +681,6 @@ where
         }
     }
 
-    fn remove_episode(
-        self,
-        id: i64,
-    ) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            tracing::debug!(id, "Removing episode");
-            let episode = sqlx::query!("SELECT season_id FROM episodes WHERE id = ?", id)
-                .fetch_one(&mut *conn)
-                .await?;
-
-            // Cascade removes intros. Metadata row persists.
-            sqlx::query!("DELETE FROM episodes WHERE id = ?", id)
-                .execute(&mut *conn)
-                .await?;
-
-            let siblings_count = sqlx::query_scalar!(
-                "SELECT COUNT(*) FROM episodes WHERE season_id = ?",
-                episode.season_id
-            )
-            .fetch_one(&mut *conn)
-            .await?;
-            tracing::debug!("Removed episode siblings count: {}", siblings_count);
-            if siblings_count == 0 {
-                conn.remove_season(episode.season_id).await?;
-            }
-
-            let episode_assets = assets::EpisodeAssetsDir::new(id);
-            if let Err(e) = episode_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up episode directory: {e}")
-            };
-            Ok(())
-        }
-    }
-
-    fn remove_season(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            tracing::debug!(id, "Removing season");
-            let season = sqlx::query!("SELECT show_id FROM seasons WHERE id = ?", id)
-                .fetch_one(&mut *conn)
-                .await?;
-
-            // Cascade removes episodes and their intros. Metadata rows persist.
-            sqlx::query!("DELETE FROM seasons WHERE id = ?", id)
-                .execute(&mut *conn)
-                .await?;
-
-            let siblings_count = sqlx::query_scalar!(
-                "SELECT COUNT(*) FROM seasons WHERE show_id = ?",
-                season.show_id
-            )
-            .fetch_one(&mut *conn)
-            .await?;
-            if siblings_count == 0 {
-                conn.remove_show(season.show_id).await?;
-            }
-
-            let season_assets = assets::SeasonAssetsDir::new(id);
-            if let Err(e) = season_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up season directory: {e}")
-            };
-            Ok(())
-        }
-    }
-
-    fn remove_show(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            tracing::debug!(id, "Removing show");
-
-            sqlx::query!("delete from shows where id = ?", id)
-                .execute(&mut *conn)
-                .await?;
-
-            let show_assets = assets::ShowAssetsDir::new(id);
-            if let Err(e) = show_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up show directory: {e}")
-            };
-
-            Ok(())
-        }
-    }
-
-    fn remove_movie(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
-        async move {
-            let mut conn = self.acquire().await?;
-            tracing::debug!(id, "Removing movie");
-            // Metadata row persists.
-            sqlx::query!("DELETE FROM movies WHERE id = ?", id)
-                .execute(&mut *conn)
-                .await?;
-
-            let movie_assets = assets::MovieAssetsDir::new(id);
-            if let Err(e) = movie_assets.delete_dir().await {
-                tracing::warn!("Failed to clean up movie directory: {e}")
-            };
-
-            Ok(())
-        }
-    }
-
     fn remove_intro(self, id: i64) -> impl std::future::Future<Output = Result<(), Error>> + Send {
         async move {
             let mut conn = self.acquire().await?;
@@ -807,9 +706,8 @@ where
 
     fn update_subtitles(
         self,
-        id: i64,
         subtitles: DbSubtitles,
-    ) -> impl std::future::Future<Output = anyhow::Result<()>> + Send {
+    ) -> impl std::future::Future<Output = sqlx::Result<u64>> + Send {
         async move {
             let mut conn = self.acquire().await?;
             sqlx::query!(
@@ -817,11 +715,11 @@ where
                 subtitles.language,
                 subtitles.video_id,
                 subtitles.external_path,
-                id,
+                &subtitles.id,
             )
             .execute(&mut *conn)
-            .await?;
-            Ok(())
+            .await
+            .map(|r| r.rows_affected())
         }
     }
 
@@ -1799,6 +1697,7 @@ pub struct DbRole {
     pub character: Option<String>,
 }
 
+#[allow(dead_code)]
 impl DbRole {
     pub const SQL: &str = "roles.id as role_id, roles.actor_id as role_actor_id, roles.metadata_id as role_metadata_id, roles.character";
 }
@@ -1881,6 +1780,7 @@ impl ListKind {
 }
 
 #[derive(Debug, Clone, FromRow)]
+#[allow(dead_code)]
 pub struct DbList {
     #[sqlx(rename = "list_id")]
     pub id: Option<i64>,
@@ -1896,12 +1796,14 @@ pub struct DbList {
     pub updated_at: time::OffsetDateTime,
 }
 
+#[allow(dead_code)]
 impl DbList {
     pub const SQL: &str = "lists.id as list_id, lists.name as list_name, lists.kind as list_kind, \
 lists.description as list_description, lists.created_at as list_created_at, \
 lists.updated_at as list_updated_at";
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow)]
 pub struct DbListItem {
     #[sqlx(rename = "list_item_id")]
@@ -1916,12 +1818,14 @@ pub struct DbListItem {
     pub created_at: time::OffsetDateTime,
 }
 
+#[allow(dead_code)]
 impl DbListItem {
     pub const SQL: &str = "list_items.id as list_item_id, list_items.list_id as list_item_list_id, \
 list_items.metadata_id as list_item_metadata_id, list_items.release_viewed as list_item_release_viewed, \
 list_items.created_at as list_item_created_at";
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, FromRow, Serialize, Default)]
 pub struct DbContentGenres {
     #[sqlx(rename = "content_genres_id")]
@@ -1932,6 +1836,7 @@ pub struct DbContentGenres {
     pub genre_id: i64,
 }
 
+#[allow(dead_code)]
 impl DbContentGenres {
     pub const SQL: &str = "content_genres.id as content_genres_id, content_genres.metadata_id as content_genres_metadata_id, content_genres.genre_id as content_genres_genre_id";
 }

@@ -86,18 +86,6 @@ pub struct ResolvedTorrentFile {
     pub priority: Priority,
 }
 
-impl ResolvedTorrentFile {
-    pub fn from_output_file(output_file: &OutputFile, offset: u64, idx: usize) -> Self {
-        Self {
-            file_idx: idx,
-            offset,
-            size: output_file.length(),
-            path: path_components(output_file.path()),
-            priority: Priority::Disabled,
-        }
-    }
-}
-
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TorrentMovie {
     #[serde(flatten)]
@@ -106,25 +94,10 @@ pub struct TorrentMovie {
 }
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
-pub struct TorrentShow {
-    pub show: Show,
-    pub seasons: HashMap<u16, Vec<TorrentEpisode>>,
-}
-
-#[derive(Debug, Serialize, utoipa::ToSchema)]
 pub struct TorrentEpisode {
     #[serde(flatten)]
     pub file: ResolvedTorrentFile,
     pub metadata: Episode,
-}
-
-impl TorrentContent {
-    pub fn content_type(&self) -> ParentMediaType {
-        match self {
-            TorrentContent::Show { .. } => ParentMediaType::Show,
-            TorrentContent::Movie { .. } => ParentMediaType::Movie,
-        }
-    }
 }
 
 pub fn path_components(path: impl AsRef<std::path::Path>) -> Vec<String> {

@@ -401,12 +401,6 @@ impl Library {
     }
 }
 
-#[derive(Debug, Serialize, Clone)]
-pub struct Chapter {
-    pub title: String,
-    pub start_time: String,
-}
-
 pub trait Media {
     type Ident;
     fn identify(path: impl AsRef<Path>) -> Result<Self, Self::Ident>

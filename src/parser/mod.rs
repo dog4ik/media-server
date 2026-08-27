@@ -57,34 +57,6 @@ impl<T: Parseable> Parser<T> {
         }
     }
 
-    pub fn apply_file_path(mut self, file_path: &Path) -> T {
-        let mut path = file_path.components().peekable();
-        loop {
-            match path.next() {
-                Some(Component::Normal(comp)) => {
-                    let last_part = path
-                        .peek()
-                        .is_none()
-                        .then(|| Path::new(comp).file_stem())
-                        .flatten();
-
-                    match last_part {
-                        Some(last_part) => {
-                            return self.feed_filename(last_part);
-                        }
-                        None => {
-                            self.feed_directory(comp);
-                        }
-                    }
-                }
-                None => {
-                    return self.into_inner();
-                }
-                Some(_) => continue,
-            }
-        }
-    }
-
     pub fn parse_filename(file_path: &Path, mut parsable: T) -> T {
         let mut path = file_path.components().peekable();
         loop {
@@ -133,10 +105,6 @@ impl<T: Parseable> Parser<T> {
     pub fn feed_directory(&mut self, dir_name: &OsStr) {
         let dir_name = dir_name.to_string_lossy();
         self.inner.parse_parent(Tokenizer::new(&dir_name));
-    }
-
-    pub fn into_inner(self) -> T {
-        self.inner
     }
 }
 

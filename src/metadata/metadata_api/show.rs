@@ -75,7 +75,7 @@ impl<T: ShowItem> HasSource for T {
 
 /// The simplest type of tv show leaf node.
 #[derive(Debug, Clone, Copy, serde::Deserialize, utoipa::ToSchema)]
-pub struct EpisodeNumber(pub usize);
+pub struct EpisodeNumber;
 
 impl HasSource for EpisodeNumber {
     fn fallback_source(&self) -> Option<Source> {
@@ -206,6 +206,7 @@ pub struct ResolvedEpisode<T, L: LocalLookupScope = LocalContentId> {
 /// resolve ([`MetadataLookup::Missing`]) are omitted.
 #[derive(Debug)]
 pub struct WrittenShow<T> {
+    #[allow(unused)]
     pub show_id: i64,
     pub metadata_id: i64,
     pub seasons: Vec<WrittenSeason<T>>,
@@ -213,17 +214,23 @@ pub struct WrittenShow<T> {
 
 #[derive(Debug)]
 pub struct WrittenSeason<T> {
+    #[allow(unused)]
     pub season_id: i64,
+    #[allow(unused)]
     pub metadata_id: i64,
+    #[allow(unused)]
     pub number: usize,
     pub episodes: Vec<WrittenEpisode<T>>,
 }
 
 #[derive(Debug)]
 pub struct WrittenEpisode<T> {
+    #[allow(unused)]
     pub episode_id: i64,
     pub metadata_id: i64,
+    #[allow(unused)]
     pub number: usize,
+    #[allow(unused)]
     pub items: Vec<T>,
 }
 

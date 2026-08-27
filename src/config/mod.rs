@@ -14,7 +14,7 @@ mod resources;
 /// Storage, layering and serialization machinery behind every setting below
 mod store;
 
-pub use capabilities::{Capabilities, Codec, CodecType};
+pub use capabilities::Capabilities;
 pub use cli_args::Args;
 pub use config_file::ConfigFile;
 pub use resources::{APP_RESOURCES, AppResources};

@@ -88,8 +88,6 @@ pub mod torrent;
             library::media::Resolution,
             config::AppResources,
             config::Capabilities,
-            config::Codec,
-            config::CodecType,
             config::UtoipaConfigSchema,
             config::ConfigurationApplyResult,
             config::ConfigurationApplyError,
@@ -128,73 +126,6 @@ pub fn router() -> OpenApiRouter<app_state::AppState> {
         .merge(subtitles::router())
         .merge(torrent::router())
         .merge(ws::router())
-}
-
-pub struct QueryShowProvider(&'static (dyn metadata::ShowMetadataProvider + Send + 'static + Sync));
-
-impl FromRequestParts<app_state::AppState> for QueryShowProvider {
-    type Rejection = AppError;
-
-    async fn from_request_parts(
-        parts: &mut Parts,
-        state: &app_state::AppState,
-    ) -> Result<Self, Self::Rejection> {
-        let Query(provider) =
-            Query::<metadata::MetadataProvider>::from_request_parts(parts, state).await?;
-        let Some(provider) = state.providers_stack.show_provider(provider) else {
-            return Err(AppError::bad_request("requested provider is not available"));
-        };
-        Ok(Self(provider))
-    }
-}
-
-impl metadata::ProviderIdentifier for QueryShowProvider {
-    fn provider_identifier(&self) -> metadata::MetadataProvider {
-        self.0.provider_identifier()
-    }
-}
-
-#[async_trait::async_trait]
-impl metadata::ShowMetadataProvider for QueryShowProvider {
-    async fn show(
-        &self,
-        show_id: &str,
-        fetch_params: metadata::FetchParams,
-    ) -> crate::Result<metadata::ShowMetadata> {
-        self.0.show(show_id, fetch_params).await
-    }
-
-    async fn season(
-        &self,
-        show_id: &str,
-        season: usize,
-        fetch_params: metadata::FetchParams,
-    ) -> crate::Result<metadata::SeasonMetadata> {
-        self.0.season(show_id, season, fetch_params).await
-    }
-
-    async fn episode(
-        &self,
-        show_id: &str,
-        season: usize,
-        episode: usize,
-        fetch_params: metadata::FetchParams,
-    ) -> crate::Result<metadata::EpisodeMetadata> {
-        self.0.episode(show_id, season, episode, fetch_params).await
-    }
-
-    async fn show_search(
-        &self,
-        query: &str,
-        fetch_params: metadata::FetchParams,
-    ) -> crate::Result<Vec<metadata::ShowMetadata>> {
-        self.0.show_search(query, fetch_params).await
-    }
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
-pub struct PageQuery {
-    pub page: Option<usize>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
@@ -270,11 +201,6 @@ impl<'de> Deserialize<'de> for CursorQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
-pub struct UuidQuery {
-    pub id: uuid::Uuid,
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
 pub struct OptionalUuidQuery {
     pub id: Option<uuid::Uuid>,
 }
@@ -330,23 +256,8 @@ pub struct StringIdQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
-pub struct SeasonQuery {
-    pub season: usize,
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
-pub struct EpisodeQuery {
-    pub episode: usize,
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
 pub struct NumberQuery {
     pub number: usize,
-}
-
-#[derive(Deserialize, utoipa::IntoParams)]
-pub struct LanguageQuery {
-    pub lang: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]

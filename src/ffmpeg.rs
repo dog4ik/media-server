@@ -2,11 +2,10 @@ use std::ffi::OsStr;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::path::PathBuf;
-use std::process::{ExitStatus, Stdio};
-use std::str::FromStr;
+use std::process::Stdio;
 use std::time::Duration;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines};
 use tokio::process::{Child, ChildStdout};
 use tokio::sync::Semaphore;
@@ -14,8 +13,8 @@ use tokio_stream::StreamExt;
 
 use crate::config::{self};
 use crate::library::media::{
-    Resolution, Video,
-    codec::{audio::AudioCodec, subtitles::SubtitlesCodec, video::VideoCodec},
+    Resolution,
+    codec::{audio::AudioCodec, video::VideoCodec},
 };
 use crate::library::{Source, TranscodePayload};
 use crate::progress::ProgressDispatch;
@@ -24,365 +23,6 @@ use crate::progress::TaskProgress;
 use crate::progress::TaskTrait;
 use crate::utils;
 use anyhow::{Context, anyhow};
-
-const FFMPEG_IMAGE_CODECS: [&str; 6] = ["png", "jpeg", "mjpeg", "gif", "tiff", "bmp"];
-
-/// General track stream provided by FFprobe
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeStream {
-    pub index: i32,
-    pub codec_name: Option<String>,
-    pub codec_long_name: Option<String>,
-    pub profile: Option<String>,
-    pub codec_type: String,
-    pub codec_tag_string: String,
-    pub codec_tag: String,
-    pub channels: Option<i32>,
-    pub width: Option<i32>,
-    pub height: Option<i32>,
-    pub coded_width: Option<i32>,
-    pub coded_height: Option<i32>,
-    pub sample_rate: Option<String>,
-    pub sample_aspect_ratio: Option<String>,
-    pub display_aspect_ratio: Option<String>,
-    pub level: Option<i32>,
-    pub id: Option<String>,
-    pub avg_frame_rate: Option<String>,
-    pub start_time: Option<String>,
-    pub duration_ts: Option<i64>,
-    pub duration: Option<String>,
-    pub bit_rate: Option<String>,
-    pub disposition: FFprobeDisposition,
-    pub tags: Option<FFprobeTags>,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct FFprobeVideoStream<'a> {
-    pub index: i32,
-    pub codec_name: &'a str,
-    pub codec_long_name: &'a str,
-    pub profile: &'a str,
-    pub display_aspect_ratio: &'a str,
-    pub level: i32,
-    pub avg_frame_rate: &'a str,
-    pub width: i32,
-    pub height: i32,
-    pub disposition: &'a FFprobeDisposition,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct FFprobeAudioStream<'a> {
-    pub index: i32,
-    pub codec_name: &'a str,
-    pub codec_long_name: &'a str,
-    pub channels: i32,
-    pub profile: Option<&'a str>,
-    pub sample_rate: &'a str,
-    pub bit_rate: Option<&'a str>,
-    pub disposition: &'a FFprobeDisposition,
-}
-
-#[derive(Debug, Serialize, Clone)]
-pub struct FFprobeSubtitleStream<'a> {
-    pub index: i32,
-    pub codec_name: &'a str,
-    pub codec_long_name: &'a str,
-    pub disposition: &'a FFprobeDisposition,
-    pub language: Option<&'a str>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeFormat {
-    pub duration: String,
-    pub format_name: String,
-    pub bit_rate: String,
-    pub tags: FormatTags,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FormatTags {
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeTags {
-    pub language: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeChapterTags {
-    pub title: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeChapter {
-    pub id: isize,
-    pub time_base: String,
-    pub start: isize,
-    pub start_time: String,
-    pub end: isize,
-    pub end_time: String,
-    pub tags: Option<FFprobeChapterTags>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeDisposition {
-    pub default: i32,
-    pub dub: i32,
-    pub original: i32,
-    pub comment: i32,
-    pub lyrics: i32,
-    pub karaoke: i32,
-    pub forced: i32,
-    pub hearing_impaired: i32,
-    pub visual_impaired: i32,
-    pub clean_effects: i32,
-    pub attached_pic: i32,
-    pub timed_thumbnails: i32,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct FFprobeOutput {
-    pub streams: Vec<FFprobeStream>,
-    pub format: FFprobeFormat,
-    pub chapters: Vec<FFprobeChapter>,
-}
-
-impl FFprobeAudioStream<'_> {
-    pub fn codec(&self) -> AudioCodec {
-        AudioCodec::from_str(self.codec_name).expect("audio stream codec")
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.disposition.default == 1
-    }
-}
-
-impl FFprobeVideoStream<'_> {
-    pub fn codec(&self) -> VideoCodec {
-        VideoCodec::from_str(self.codec_name).expect("video stream codec")
-    }
-
-    pub fn resolution(&self) -> Resolution {
-        (self.width as usize, self.height as usize).into()
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.disposition.default == 1
-    }
-
-    pub fn framerate(&self) -> f64 {
-        let (frames, ms): (f64, f64) = self
-            .avg_frame_rate
-            .split_once('/')
-            .map(|(frames, ms)| (frames.parse().unwrap(), ms.parse().unwrap()))
-            .expect("look like 24000/1001");
-        frames / ms
-    }
-}
-
-impl FFprobeSubtitleStream<'_> {
-    pub fn codec(&self) -> SubtitlesCodec {
-        SubtitlesCodec::from_str(self.codec_name).expect("subtitles stream codec")
-    }
-
-    pub fn is_default(&self) -> bool {
-        self.disposition.default == 1
-    }
-}
-
-impl FFprobeOutput {
-    pub fn video_streams(&self) -> Vec<FFprobeVideoStream<'_>> {
-        self.streams
-            .iter()
-            .filter(|s| {
-                s.codec_type == "video"
-                    && !FFMPEG_IMAGE_CODECS.contains(
-                        &s.codec_name
-                            .as_ref()
-                            .expect("codec name is defined if codec type is video")
-                            .as_str(),
-                    )
-            })
-            .map(|s| s.video_stream().expect("video stream"))
-            .collect()
-    }
-
-    pub fn audio_streams(&self) -> Vec<FFprobeAudioStream<'_>> {
-        self.streams
-            .iter()
-            .filter(|s| s.codec_type == "audio")
-            .map(|s| s.audio_stream().expect("audio stream"))
-            .collect()
-    }
-
-    pub fn subtitle_streams(&self) -> Vec<FFprobeSubtitleStream<'_>> {
-        self.streams
-            .iter()
-            .filter(|s| s.codec_type == "subtitle")
-            .map(|s| s.subtitles_stream().expect("subtitles stream"))
-            .collect()
-    }
-
-    /// Default audio stream
-    pub fn default_audio(&self) -> Option<FFprobeAudioStream<'_>> {
-        self.audio_streams().into_iter().find(|a| a.is_default())
-    }
-
-    /// Default video stream
-    pub fn default_video(&self) -> Option<FFprobeVideoStream<'_>> {
-        self.video_streams().into_iter().find(|v| v.is_default())
-    }
-
-    /// Default subtitles stream
-    pub fn default_subtitles(&self) -> Option<FFprobeSubtitleStream<'_>> {
-        self.subtitle_streams().into_iter().find(|s| s.is_default())
-    }
-
-    /// Video resolution
-    pub fn resolution(&self) -> Option<Resolution> {
-        self.default_video().map(|v| v.resolution())
-    }
-
-    /// Video bitrate
-    pub fn bitrate(&self) -> usize {
-        self.format.bit_rate.parse().expect("bitrate to be number")
-    }
-
-    /// Duration
-    pub fn duration(&self) -> Duration {
-        Duration::from_secs(
-            self.format
-                .duration
-                .parse::<f64>()
-                .expect("duration to look like 123.1233")
-                .round() as u64,
-        )
-    }
-
-    /// Get mime type
-    pub fn guess_mime(&self) -> &'static str {
-        let format_name = &self.format.format_name;
-        match format_name.as_str() {
-            "matroska,webm" => "video/x-matroska",
-            "mov,mp4,m4a,3gp,3g2,mj2" => "video/mp4",
-            _ => "video/x-matroska",
-        }
-    }
-}
-
-impl FFprobeStream {
-    pub fn audio_stream(&self) -> Result<FFprobeAudioStream<'_>, anyhow::Error> {
-        Ok(FFprobeAudioStream {
-            index: self.index,
-            codec_name: self.codec_name.as_ref().context("audio codec name")?,
-            codec_long_name: self.codec_long_name.as_ref().context("codec long name")?,
-            bit_rate: self.bit_rate.as_deref(),
-            channels: self.channels.context("channel is absent")?,
-            profile: self.profile.as_deref(),
-            sample_rate: self.sample_rate.as_ref().context("sample rate is absent")?,
-            disposition: &self.disposition,
-        })
-    }
-
-    pub fn video_stream(&self) -> Result<FFprobeVideoStream<'_>, anyhow::Error> {
-        let video = FFprobeVideoStream {
-            index: self.index,
-            codec_name: self.codec_name.as_ref().context("video codec name")?,
-            codec_long_name: self.codec_long_name.as_ref().context("codec long name")?,
-            profile: self.profile.as_ref().context("profile is absent")?,
-            level: self.level.context("level is absent")?,
-            avg_frame_rate: self
-                .avg_frame_rate
-                .as_ref()
-                .context("avg_frame_rate is absent")?,
-            display_aspect_ratio: self
-                .display_aspect_ratio
-                .as_ref()
-                .context("aspect ratio is absent")?,
-            width: self.width.context("width is absent")?,
-            height: self.height.context("height is absent")?,
-            disposition: &self.disposition,
-        };
-        Ok(video)
-    }
-
-    pub fn subtitles_stream(&self) -> Result<FFprobeSubtitleStream<'_>, anyhow::Error> {
-        let tags = &self.tags.as_ref().context("tags are absent")?;
-        let video = FFprobeSubtitleStream {
-            index: self.index,
-            codec_name: self.codec_name.as_ref().context("subtitle codec name")?,
-            codec_long_name: self.codec_long_name.as_ref().context("long codec name")?,
-            language: tags.language.as_deref(),
-            disposition: &self.disposition,
-        };
-        Ok(video)
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum H264Preset {
-    Ultrafast,
-    Superfast,
-    Veryfast,
-    Faster,
-    Fast,
-    #[default]
-    Medium,
-    Slow,
-    Slower,
-    Veryslow,
-    Placebo,
-}
-
-impl FromStr for H264Preset {
-    type Err = anyhow::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ultrafast" => Ok(H264Preset::Ultrafast),
-            "superfast" => Ok(H264Preset::Superfast),
-            "veryfast" => Ok(H264Preset::Veryfast),
-            "faster" => Ok(H264Preset::Faster),
-            "fast" => Ok(H264Preset::Fast),
-            "medium" => Ok(H264Preset::Medium),
-            "slow" => Ok(H264Preset::Slow),
-            "slower" => Ok(H264Preset::Slower),
-            "veryslow" => Ok(H264Preset::Veryslow),
-            "placebo" => Ok(H264Preset::Placebo),
-            _ => Err(anyhow!("{} is not valid h264 preset", s)),
-        }
-    }
-}
-
-pub async fn get_metadata(path: impl AsRef<Path>) -> Result<FFprobeOutput, anyhow::Error> {
-    use tokio::process::Command;
-    let path = path.as_ref();
-    tracing::trace!(
-        "Getting metadata for a file: {}",
-        Path::new(path.file_name().unwrap()).display()
-    );
-    let ffprobe: config::FFprobePath = config::CONFIG.get_value();
-    let mut cmd = Command::new(ffprobe.as_ref());
-    #[cfg(windows)]
-    {
-        cmd.creation_flags(crate::utils::CREATE_NO_WINDOW);
-    }
-    cmd.args([
-        "-v".as_ref(),
-        "quiet".as_ref(),
-        "-print_format".as_ref(),
-        "json=compact=1".as_ref(),
-        "-show_streams".as_ref(),
-        "-show_chapters".as_ref(),
-        "-show_format".as_ref(),
-        path.as_os_str(),
-    ]);
-    let output = cmd.output().await?;
-    let metadata: FFprobeOutput = serde_json::from_slice(&output.stdout)?;
-    Ok(metadata)
-}
 
 #[derive(Debug, Serialize, Clone, utoipa::ToSchema, PartialEq)]
 pub struct TranscodeConfiguration {
@@ -395,14 +35,6 @@ pub struct TranscodeConfiguration {
 pub struct VideoProgress {
     relative_speed: f32,
     percent: f32,
-}
-
-#[derive(Debug, Clone)]
-pub enum JobType {
-    Previews,
-    Transcode,
-    Subtitles,
-    ImageResize,
 }
 
 pub trait FFmpegTask {
@@ -508,76 +140,6 @@ impl TaskTrait for PreviewsJob {
         Self: Sized,
     {
         TaskProgress::Previews(status)
-    }
-}
-
-#[derive(Debug)]
-pub struct SubtitlesJob {
-    track: usize,
-    source_path: PathBuf,
-    pub output_file_path: PathBuf,
-}
-
-impl SubtitlesJob {
-    pub async fn from_source(
-        input: &Video,
-        output_dir: impl AsRef<Path>,
-        track: usize,
-    ) -> anyhow::Result<Self> {
-        let video_metadata = input.metadata().await?;
-        let output_path = |lang: Option<&str>| {
-            let path = if let Some(lang) = lang {
-                PathBuf::new().with_file_name(lang).with_extension("srt")
-            } else {
-                PathBuf::new()
-                    .with_file_name(uuid::Uuid::new_v4().to_string())
-                    .with_extension("srt")
-            };
-            output_dir.as_ref().join(path)
-        };
-
-        video_metadata
-            .subtitle_streams()
-            .find(|t| t.index == track && t.stream.codec.supports_text())
-            .map(|t| Self {
-                source_path: input.path().to_path_buf(),
-                track: t.index,
-                output_file_path: output_path(t.stream.language.as_deref()),
-            })
-            .context("cant find track in file")
-    }
-
-    pub fn new(source_path: PathBuf, output_file: PathBuf, track: usize) -> Self {
-        Self {
-            source_path,
-            track,
-            output_file_path: output_file,
-        }
-    }
-}
-
-impl FFmpegTask for SubtitlesJob {
-    fn args(&self) -> Vec<String> {
-        let args = vec![
-            "-i".into(),
-            self.source_path.to_string_lossy().to_string(),
-            "-map".into(),
-            format!("0:{}", self.track),
-            self.output_file_path.to_string_lossy().to_string(),
-            "-c:s".into(),
-            "copy".into(),
-            "-y".into(),
-        ];
-        args
-    }
-
-    async fn cancel(path: &Path) -> Result<(), anyhow::Error>
-    where
-        Self: Sized,
-    {
-        use tokio::fs;
-        fs::remove_file(path).await?;
-        Ok(())
     }
 }
 
@@ -720,35 +282,6 @@ impl<T: FFmpegTask> FFmpegRunningJob<T> {
             .stderr(Stdio::null())
             .spawn()?)
     }
-
-    /// Kill the job
-    pub async fn kill(&mut self) {
-        if self.process.kill().await.is_err() {
-            tracing::error!("Failed to kill ffmpeg job")
-        };
-    }
-
-    /// Wait until process fully complete or terminated
-    pub async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
-        self.process.wait().await
-    }
-
-    /// Kill task cleaning up garbage
-    pub async fn cancel(mut self) -> Result<(), anyhow::Error> {
-        self.kill().await;
-        T::cancel(&self.output).await?;
-        Ok(())
-    }
-
-    /// Take child's stdout.
-    pub fn take_stdout(&mut self) -> Option<FFmpegProgressStdout> {
-        let stdout = self.process.stdout.take()?;
-        Some(FFmpegProgressStdout::new(stdout))
-    }
-
-    pub fn target_duration(&self) -> Duration {
-        self.duration
-    }
 }
 
 #[derive(Debug)]
@@ -788,11 +321,6 @@ impl FFmpegProgress {
     /// Get speed of operation relative to the video playback
     pub fn relative_speed(&self) -> f32 {
         self.speed
-    }
-
-    /// Get current progress time
-    pub fn time(&self) -> Duration {
-        self.time
     }
 }
 

@@ -20,7 +20,7 @@ use crate::{
     api::{Path, Query},
     app_state::AppState,
     config,
-    metadata::{MetadataProvider, ParentMediaType},
+    metadata::ParentMediaType,
     torrent::{
         Action, Priority, SessionState, TorrentClient, TorrentState, torrent_contents::TorrentInfo,
     },
@@ -36,8 +36,6 @@ pub struct InfoHash(pub [u8; 20]);
 #[derive(Debug, Deserialize, utoipa::ToSchema, utoipa::IntoParams)]
 pub struct DownloadContentHint {
     pub content_type: ParentMediaType,
-    pub metadata_provider: MetadataProvider,
-    pub metadata_id: String,
 }
 
 #[derive(Debug, Deserialize, utoipa::ToSchema)]
@@ -45,7 +43,6 @@ pub struct TorrentDownloadPayload {
     // TODO: look up how other clients handle paths
     // They must be cross platform
     pub save_location: String,
-    pub content_hint: Option<DownloadContentHint>,
     pub enabled_files: Option<Vec<usize>>,
     pub magnet_link: String,
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::RangeBounds, path::Path, time::Duration};
+use std::{collections::HashMap, path::Path, time::Duration};
 
 use media_intro::Segment;
 
@@ -108,7 +108,8 @@ impl From<&Segment> for IntroRange {
 }
 
 impl IntroRange {
-    pub fn new(range: impl RangeBounds<Duration>) -> Self {
+    #[cfg(test)]
+    pub fn new(range: impl std::ops::RangeBounds<Duration>) -> Self {
         let start = match range.start_bound() {
             std::ops::Bound::Included(d) => *d,
             std::ops::Bound::Excluded(d) => *d,
@@ -120,24 +121,6 @@ impl IntroRange {
             std::ops::Bound::Unbounded => panic!("intro range must be bounded"),
         };
         Self { start, end }
-    }
-
-    pub fn from_segments(segments: &[Segment], min_duration: Duration) -> Option<Self> {
-        let mut best_section: Option<IntroRange> = None;
-        for seg in segments {
-            let duration = seg.duration();
-            if duration < min_duration {
-                continue;
-            }
-            match best_section {
-                Some(best) if best.end - best.start > duration => {
-                    best_section = Some(IntroRange::from(seg))
-                }
-                Some(_) => {}
-                None => best_section = Some(IntroRange::from(seg)),
-            };
-        }
-        best_section
     }
 
     pub fn into_db_intro(self, episode_id: i64) -> crate::db::DbIntro {

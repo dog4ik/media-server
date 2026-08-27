@@ -114,7 +114,7 @@ async fn main() {
             cancelation_token: cancellation_token.clone(),
         };
 
-        #[cfg(feature = "windows-tray")]
+        #[cfg(all(feature = "windows-tray", target_os = "windows"))]
         tokio::spawn(media_server::spawn_tray_icon(app_state.clone()));
         // tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
         // tokio::spawn(watch::monitor_config(app_state.configuration, config_path));

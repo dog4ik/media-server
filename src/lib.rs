@@ -55,7 +55,7 @@ mod torrent_index;
 /// Everything related to logging
 mod tracing;
 /// Tray icon implementation. Currently supports only windows
-#[cfg(feature = "windows-tray")]
+#[cfg(all(feature = "windows-tray", target_os = "windows"))]
 mod tray;
 /// Universal Plug and Play capabilities of the server
 mod upnp;
@@ -314,5 +314,5 @@ pub use crate::{
     upnp::Upnp,
 };
 
-#[cfg(feature = "windows-tray")]
+#[cfg(all(feature = "windows-tray", target_os = "windows"))]
 pub use crate::tray::spawn_tray_icon;

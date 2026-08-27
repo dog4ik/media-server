@@ -245,23 +245,6 @@ impl PreviewAsset {
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct ChapterThumbnailAsset(PathBuf);
-impl FileAsset for ChapterThumbnailAsset {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl ChapterThumbnailAsset {
-    pub fn new(video_id: i64, number: usize) -> Self {
-        Self(
-            video_sharded_path(video_id)
-                .join("chapters")
-                .join(format!("{}.jpg", number)),
-        )
-    }
-}
-
 // DIRECTORY ASSETS
 
 /// Directory of all video assets
@@ -275,76 +258,6 @@ impl AssetDir for VideoAssetsDir {
 impl VideoAssetsDir {
     pub fn new(video_id: i64) -> Self {
         Self(video_sharded_path(video_id))
-    }
-}
-
-/// Directory of all episode assets
-#[derive(Debug, Clone)]
-pub struct EpisodeAssetsDir(PathBuf);
-impl AssetDir for EpisodeAssetsDir {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl EpisodeAssetsDir {
-    pub fn new(episode_id: i64) -> Self {
-        Self(sharded_path(episode_id, AssetContentType::Episode))
-    }
-}
-
-/// Directory of all season assets
-#[derive(Debug, Clone)]
-pub struct SeasonAssetsDir(PathBuf);
-impl AssetDir for SeasonAssetsDir {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl SeasonAssetsDir {
-    pub fn new(season_id: i64) -> Self {
-        Self(sharded_path(season_id, AssetContentType::Season))
-    }
-}
-
-/// Directory of all show assets
-#[derive(Debug, Clone)]
-pub struct ShowAssetsDir(PathBuf);
-impl AssetDir for ShowAssetsDir {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl ShowAssetsDir {
-    pub fn new(show_id: i64) -> Self {
-        Self(sharded_path(show_id, AssetContentType::Show))
-    }
-}
-
-/// Directory of all movie assets
-#[derive(Debug, Clone)]
-pub struct MovieAssetsDir(PathBuf);
-impl AssetDir for MovieAssetsDir {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl MovieAssetsDir {
-    pub fn new(movie_id: i64) -> Self {
-        Self(sharded_path(movie_id, AssetContentType::Movie))
-    }
-}
-
-/// Directory of all actor assets
-#[derive(Debug, Clone)]
-pub struct ActorAssetsDir(PathBuf);
-impl AssetDir for ActorAssetsDir {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl ActorAssetsDir {
-    pub fn new(actor_id: i64) -> Self {
-        Self(sharded_path(actor_id, AssetContentType::Actor))
     }
 }
 
@@ -406,19 +319,6 @@ impl AssetDir for SubtitlesDirAsset {
 impl SubtitlesDirAsset {
     pub fn new(video_id: i64) -> Self {
         Self(video_sharded_path(video_id).join("subtitles"))
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ChapterThumbnailsDirAsset(PathBuf);
-impl AssetDir for ChapterThumbnailsDirAsset {
-    fn relative_path(&self) -> &Path {
-        &self.0
-    }
-}
-impl ChapterThumbnailsDirAsset {
-    pub fn new(video_id: i64) -> Self {
-        Self(video_sharded_path(video_id).join("chapters"))
     }
 }
 

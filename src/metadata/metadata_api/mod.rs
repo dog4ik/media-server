@@ -1,6 +1,7 @@
 pub mod asset_saver;
 pub mod batch;
 pub mod movie;
+#[allow(unused)]
 pub mod reconcile;
 pub mod show;
 
@@ -264,6 +265,7 @@ impl<T> PendingInsert<T> {
     /// Commit the transaction and ensure assets are saved.
     ///
     /// When the transaction fails to commit assets are not being saved
+    #[allow(unused)]
     pub async fn commit(self, max_concurrency: usize) -> sqlx::Result<()> {
         self.tx.commit().await?;
         self.assets.save(max_concurrency, ()).await;

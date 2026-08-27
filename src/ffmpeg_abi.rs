@@ -231,17 +231,6 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Audio {
 }
 
 #[derive(Debug)]
-pub struct Data {}
-
-impl TryFrom<ffmpeg_next::Stream<'_>> for Data {
-    type Error = anyhow::Error;
-
-    fn try_from(_value: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
-        Ok(Self {})
-    }
-}
-
-#[derive(Debug)]
 pub struct Subtitle {
     pub codec: SubtitlesCodec,
     pub language: Option<String>,
@@ -293,17 +282,6 @@ impl TryFrom<ffmpeg_next::Stream<'_>> for Subtitle {
 }
 
 #[derive(Debug)]
-pub struct Attachment {}
-
-impl TryFrom<ffmpeg_next::Stream<'_>> for Attachment {
-    type Error = anyhow::Error;
-
-    fn try_from(_value: ffmpeg_next::Stream<'_>) -> Result<Self, Self::Error> {
-        Ok(Self {})
-    }
-}
-
-#[derive(Debug)]
 pub struct Track<T> {
     pub stream: T,
     pub index: usize,
@@ -320,9 +298,7 @@ impl<T> Track<T> {
 pub enum StreamType {
     Video(Track<Video>),
     Audio(Track<Audio>),
-    Data(Track<Data>),
     Subtitle(Track<Subtitle>),
-    Attachment(Track<Attachment>),
 }
 
 #[derive(Debug, Default)]
@@ -464,24 +440,13 @@ impl TryFrom<ffmpeg_next::format::context::Input> for ProbeOutput {
                         tracing::warn!("Failed to parse audio params: {e}");
                     }
                 },
-                media::Type::Data => match stream.try_into() {
-                    Ok(d) => streams.push(StreamType::Data(d)),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse data params: {e}");
-                    }
-                },
                 media::Type::Subtitle => match stream.try_into() {
                     Ok(d) => streams.push(StreamType::Subtitle(d)),
                     Err(e) => {
                         tracing::warn!("Failed to parse subtitle params: {e}");
                     }
                 },
-                media::Type::Attachment => match stream.try_into() {
-                    Ok(a) => streams.push(StreamType::Attachment(a)),
-                    Err(e) => {
-                        tracing::warn!("Failed to parse attachment params: {e}");
-                    }
-                },
+                media::Type::Attachment | media::Type::Data => {}
             }
         }
 

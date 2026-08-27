@@ -6,57 +6,6 @@ use tokio::process::Command;
 
 use super::{CONFIG, IntroDetectionFfmpegBuild};
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
-#[serde(rename_all = "lowercase")]
-pub enum CodecType {
-    Audio,
-    Video,
-    Subtitle,
-    Data,
-    Attachment,
-}
-
-impl CodecType {
-    pub fn from_char(char: char) -> Option<Self> {
-        match char {
-            'V' => Some(Self::Video),
-            'A' => Some(Self::Audio),
-            'S' => Some(Self::Subtitle),
-            'D' => Some(Self::Data),
-            'T' => Some(Self::Attachment),
-            _ => None,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, utoipa::ToSchema)]
-pub struct Codec {
-    pub codec_type: CodecType,
-    pub name: String,
-    pub long_name: String,
-    pub decode_supported: bool,
-    pub encode_supported: bool,
-}
-
-impl Codec {
-    pub fn from_capability_line(line: String) -> Self {
-        let mut split = line.split_terminator(' ').filter(|chunk| !chunk.is_empty());
-        let mut params = split.next().unwrap().chars();
-        let name = split.next().unwrap().to_string();
-        let long_name = split.collect::<Vec<_>>().join(" ");
-        let decode_supported = params.next().unwrap() == 'D';
-        let encode_supported = params.next().unwrap() == 'E';
-        let codec_type = CodecType::from_char(params.next().unwrap()).unwrap();
-        Self {
-            name,
-            long_name,
-            codec_type,
-            encode_supported,
-            decode_supported,
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Default, utoipa::ToSchema)]
 pub struct Capabilities {
     pub chromaprint_enabled: bool,

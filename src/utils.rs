@@ -1,37 +1,8 @@
 use std::{
-    fs, io,
+    io,
     net::{Ipv4Addr, SocketAddr, SocketAddrV4},
-    path::{Path, PathBuf},
+    path::Path,
 };
-
-pub fn assert_send<T: Send>(_t: T) {}
-pub fn assert_sync<T: Sync>(_t: T) {}
-
-pub fn walk_recursive<F>(
-    folder: impl AsRef<Path>,
-    filter_fn: Option<F>,
-) -> Result<Vec<PathBuf>, std::io::Error>
-where
-    F: Fn(&PathBuf) -> bool + std::marker::Copy,
-{
-    let mut local_paths = Vec::new();
-    let dir = fs::read_dir(folder)?;
-    for file in dir {
-        let path = file?.path();
-        if path.is_file() {
-            if let Some(filter_fn) = filter_fn {
-                if filter_fn(&path) {
-                    local_paths.push(path);
-                }
-            } else {
-                local_paths.push(path);
-            }
-        } else if path.is_dir() {
-            local_paths.append(walk_recursive(&path, filter_fn)?.as_mut());
-        }
-    }
-    Ok(local_paths)
-}
 
 pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> {
     use tokio::fs;
@@ -45,17 +16,6 @@ pub async fn clear_directory(dir: impl AsRef<Path>) -> Result<usize, io::Error> 
         };
     }
     Ok(removed_files)
-}
-
-pub fn tokenize_filename(file_name: &str) -> Vec<String> {
-    let is_spaced = file_name.contains(' ');
-    match is_spaced {
-        true => file_name.split(' '),
-        false => file_name.split('.'),
-    }
-    .map(|e| e.trim().to_lowercase())
-    .filter(|t| t != "-")
-    .collect()
 }
 
 #[tracing::instrument(level = "debug")]

@@ -37,7 +37,6 @@ use crate::config::{
 };
 use crate::db::query_builders::DbActorsQuery;
 use crate::db::{self, DbActions};
-use crate::ffmpeg::{FFprobeAudioStream, FFprobeSubtitleStream, FFprobeVideoStream};
 use crate::ffmpeg::{PreviewsJob, TranscodeJob};
 use crate::ffmpeg_abi::{self, Audio, Subtitle, Track};
 use crate::library::assets::{
@@ -239,20 +238,6 @@ impl DetailedVideo {
     }
 }
 
-impl DetailedVideoTrack {
-    pub fn from_video_stream(stream: FFprobeVideoStream<'_>, bitrate: usize) -> Self {
-        DetailedVideoTrack {
-            is_default: stream.is_default(),
-            resolution: stream.resolution(),
-            level: stream.level,
-            profile_idc: stream.profile.parse().unwrap(),
-            bitrate,
-            framerate: stream.framerate(),
-            codec: stream.codec(),
-        }
-    }
-}
-
 impl From<&Track<ffmpeg_abi::Video>> for DetailedVideoTrack {
     fn from(val: &Track<ffmpeg_abi::Video>) -> Self {
         Self {
@@ -263,22 +248,6 @@ impl From<&Track<ffmpeg_abi::Video>> for DetailedVideoTrack {
             bitrate: val.stream.bit_rate,
             framerate: val.stream.avg_frame_rate,
             codec: val.stream.codec.clone(),
-        }
-    }
-}
-
-impl From<FFprobeAudioStream<'_>> for DetailedAudioTrack {
-    fn from(val: FFprobeAudioStream<'_>) -> Self {
-        DetailedAudioTrack {
-            is_default: val.disposition.default == 1,
-            is_hearing_impaired: false,
-            is_visual_impaired: false,
-            is_dub: false,
-            sample_rate: val.sample_rate.to_string(),
-            channels: val.channels as u16,
-            profile_idc: val.profile.unwrap().parse().unwrap(),
-            codec: val.codec(),
-            language: None,
         }
     }
 }
@@ -295,19 +264,6 @@ impl From<&Track<Audio>> for DetailedAudioTrack {
             profile_idc: val.stream.profile_idc,
             codec: val.stream.codec.clone(),
             language: val.stream.language.clone(),
-        }
-    }
-}
-
-impl From<FFprobeSubtitleStream<'_>> for DetailedSubtitleTrack {
-    fn from(val: FFprobeSubtitleStream<'_>) -> Self {
-        DetailedSubtitleTrack {
-            is_default: val.is_default(),
-            is_hearing_impaired: false,
-            is_visual_impaired: false,
-            is_text_format: val.codec().supports_text(),
-            language: val.language.map(|x| x.to_string()),
-            codec: val.codec(),
         }
     }
 }
@@ -1723,11 +1679,6 @@ async fn delete_previews(Path(id): Path<i64>) -> crate::Result<()> {
     let previews_dir = PreviewsDirAsset::new(id);
     previews_dir.delete_dir().await?;
     Ok(())
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct CancelTaskPayload {
-    pub task_id: Uuid,
 }
 
 /// Cancel task with provided id

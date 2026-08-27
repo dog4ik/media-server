@@ -46,7 +46,6 @@ pub enum WsMessage {
     Connected {
         state: TasksSnapshot,
     },
-    TorrentUnsubscribe,
 }
 
 #[derive(Debug)]
