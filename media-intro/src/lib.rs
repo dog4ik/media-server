@@ -163,13 +163,12 @@ pub fn match_fingerprints(fp1: &[u32], fp2: &[u32]) -> Result<Vec<Segment>, Matc
                 };
 
                 let mut added = false;
-                if let Some(s1) = segments.last_mut() {
-                    if (s1.score - score).abs() < max_score_difference {
-                        if let Some(merged) = s1.try_merge(&new_segment) {
-                            *s1 = merged;
-                            added = true;
-                        }
-                    }
+                if let Some(s1) = segments.last_mut()
+                    && (s1.score - score).abs() < max_score_difference
+                    && let Some(merged) = s1.try_merge(&new_segment)
+                {
+                    *s1 = merged;
+                    added = true;
                 }
 
                 if !added {

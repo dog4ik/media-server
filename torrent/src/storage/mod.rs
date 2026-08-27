@@ -42,9 +42,9 @@ impl ReadyPiece {
         let end = range.end;
         let start_idx = start / block_length;
         let end_idx = end.div_ceil(block_length);
-        for i in start_idx..end_idx {
-            // This one panics when file gets enabled
-            let bytes = &self.0[i];
+        // This one panics when file gets enabled
+        let blocks = &self.0[start_idx..end_idx];
+        for (i, bytes) in (start_idx..end_idx).zip(blocks) {
             let block_start = i * block_length;
 
             let relative_start = if i == start_idx {
@@ -556,7 +556,7 @@ mod tests {
 
     #[tokio::test]
     async fn each_piece_is_file() {
-        let contents: Vec<_> = (0..8).map(|v| v).collect();
+        let contents: Vec<_> = (0..8).collect();
 
         let mut t = TestBuilder::new(2, &contents)
             .add_file(2)
@@ -578,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn parts_file_populates_file() {
-        let contents: Vec<_> = (0..5).map(|v| v).collect();
+        let contents: Vec<_> = (0..5).collect();
 
         let mut t = TestBuilder::new(3, &contents)
             .add_file(2)
@@ -598,7 +598,7 @@ mod tests {
     #[tokio::test]
     async fn out_of_bounds_access_errors() {
         use std::assert_matches;
-        let contents: Vec<_> = (0..5).map(|v| v).collect();
+        let contents: Vec<_> = (0..5).collect();
 
         let mut t = TestBuilder::new(3, &contents).add_file(5).build().await;
 

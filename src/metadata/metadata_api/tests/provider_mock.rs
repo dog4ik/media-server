@@ -174,26 +174,6 @@ impl ShowTreeBuilder {
         self.show
     }
 
-    pub fn add_episodes(
-        &mut self,
-        season: usize,
-        episode_numbers: impl IntoIterator<Item = usize>,
-    ) {
-        let (season_key, episodes) = match self
-            .seasons
-            .iter_mut()
-            .find(|(key, _)| key.season == season)
-        {
-            Some(v) => v,
-            None => self
-                .seasons
-                .push_mut((self.show.season_key(season), Vec::new())),
-        };
-        for episode in episode_numbers {
-            episodes.push(season_key.episode_key(episode));
-        }
-    }
-
     /// Adds a season with the given episode numbers (e.g. `1..=3` or `[1, 2, 5]`).
     pub fn season(mut self, season: usize, episodes: impl IntoIterator<Item = usize>) -> Self {
         let season_key = self.show.season_key(season);
@@ -212,9 +192,9 @@ impl ShowTreeBuilder {
 
         let show_metadata_id = self.show.unique_local_id();
         let show_meta = self.show.show_metadata();
-        insert_metadata_with_id(&mut tx, show_metadata_id, &show_meta.into_db_metadata()).await?;
+        insert_metadata_with_id(&mut tx, show_metadata_id, &show_meta.to_db_metadata()).await?;
         let show_id = tx
-            .insert_show(&show_meta.into_db_show(show_metadata_id))
+            .insert_show(&show_meta.to_db_show(show_metadata_id))
             .await?;
         insert_external_id(
             &mut tx,
@@ -228,10 +208,10 @@ impl ShowTreeBuilder {
         for (season_key, episode_keys) in &self.seasons {
             let season_metadata_id = season_key.unique_local_id();
             let season_meta = season_key.season_metadata();
-            insert_metadata_with_id(&mut tx, season_metadata_id, &season_meta.into_db_metadata())
+            insert_metadata_with_id(&mut tx, season_metadata_id, &season_meta.to_db_metadata())
                 .await?;
             let season_id = tx
-                .insert_season(season_meta.into_db_season(season_metadata_id, show_id))
+                .insert_season(season_meta.to_db_season(season_metadata_id, show_id))
                 .await?;
 
             let mut saved_episodes = Vec::new();
@@ -241,7 +221,7 @@ impl ShowTreeBuilder {
                 insert_metadata_with_id(
                     &mut tx,
                     episode_metadata_id,
-                    &episode_meta.into_db_metadata(),
+                    &episode_meta.to_db_metadata(),
                 )
                 .await?;
                 let duration = episode_meta
@@ -250,7 +230,7 @@ impl ShowTreeBuilder {
                     .map(|r| r.0)
                     .unwrap_or_default();
                 let episode_id = tx
-                    .insert_episode(&episode_meta.into_db_episode(
+                    .insert_episode(&episode_meta.to_db_episode(
                         episode_metadata_id,
                         season_id,
                         duration,
@@ -523,7 +503,7 @@ impl MovieMetadataProvider for MockProvider {
         Ok(self
             .movies
             .values()
-            .filter(|&movie| movie.title.to_lowercase().contains(&query))
+            .filter(|&movie| movie.title.to_lowercase().contains(query))
             .cloned()
             .collect())
     }

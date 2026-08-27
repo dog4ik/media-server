@@ -275,6 +275,7 @@ pub enum StorageFileEventKind {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", tag = "kind")]
+#[allow(clippy::large_enum_variant)]
 pub enum SessionEvent {
     TorrentAdd { state: TorrentState },
     TorrentRemove { info_hash: String },

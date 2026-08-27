@@ -3,6 +3,8 @@ use std::{convert::Infallible, fmt::Display, str::FromStr};
 
 #[derive(Debug, Deserialize, Clone, PartialEq, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase", untagged)]
+// Codec names are canonically spelled in upper case
+#[allow(clippy::upper_case_acronyms)]
 pub enum SubtitlesCodec {
     SubRip,
     WebVTT,

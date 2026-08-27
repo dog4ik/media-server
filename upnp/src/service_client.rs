@@ -101,6 +101,7 @@ impl Action {
         action.finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_port_mapping(
         &self,
         remote_host: <RemoteHost as SVariable>::VarType,
@@ -132,6 +133,7 @@ impl Action {
         action.finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_any_port_mapping(
         &self,
         remote_host: <RemoteHost as SVariable>::VarType,
@@ -163,6 +165,7 @@ impl Action {
         action.finish()
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn add_any_port_mapping_strict(
         &self,
         remote_host: <RemoteHost as SVariable>::VarType,

@@ -16,7 +16,7 @@ pub struct DeviceDescription<'a> {
 }
 
 impl DeviceDescription<'_> {
-    pub fn into_xml(&self) -> anyhow::Result<String> {
+    pub fn to_xml(&self) -> anyhow::Result<String> {
         use quick_xml::Writer;
         let mut w = Writer::new(Vec::new());
         w.write_event(Event::Decl(BytesDecl::new("1.0", None, None)))?;

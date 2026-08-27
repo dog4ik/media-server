@@ -114,7 +114,7 @@ impl<T: SVariable> AsMut<T::VarType> for OutArgument<T> {
 
 impl<A: SVariable> Display for OutArgument<A> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value = self.var.into_string().unwrap();
+        let value = self.var.to_xml_string().unwrap();
         write!(
             f,
             "{}: {value} @ State variable: {}",
@@ -170,7 +170,7 @@ impl Action {
     pub fn map_out_variables(&self, list: Vec<Box<dyn IntoXml>>) -> Vec<OutArgumentsPayload> {
         let out_variables = self.out_variables();
         let mut arguments = Vec::with_capacity(out_variables.len());
-        for (arg, val) in self.out_variables.iter().zip(list.into_iter()) {
+        for (arg, val) in self.out_variables.iter().zip(list) {
             arguments.push(OutArgumentsPayload {
                 name: arg.name().to_owned(),
                 value: val,

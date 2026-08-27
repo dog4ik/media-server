@@ -59,7 +59,7 @@ where
     // Show: update the metadata row in place and recreate its external ids.
     let poster = show_meta.poster.clone();
     let backdrop = show_meta.backdrop.clone();
-    tx.update_metadata(show_metadata_id, &show_meta.into_db_metadata())
+    tx.update_metadata(show_metadata_id, &show_meta.to_db_metadata())
         .await?;
     tx.update_show_backdrop(old_show_id, backdrop.clone())
         .await?;
@@ -105,16 +105,16 @@ where
         let (season_id, season_metadata_id) = match old_tree.seasons.get(&season_number) {
             Some(local) => {
                 let poster = season_meta.poster.clone();
-                tx.update_metadata(local.metadata_id, &season_meta.into_db_metadata())
+                tx.update_metadata(local.metadata_id, &season_meta.to_db_metadata())
                     .await?;
                 queue_simple_poster(asset_tasks, local.id, PosterContentType::Season, poster);
                 (local.id, local.metadata_id)
             }
             None => {
                 let poster = season_meta.poster.clone();
-                let metadata_id = tx.insert_metadata(&season_meta.into_db_metadata()).await?;
+                let metadata_id = tx.insert_metadata(&season_meta.to_db_metadata()).await?;
                 let season_id = tx
-                    .insert_season(season_meta.into_db_season(metadata_id, old_show_id))
+                    .insert_season(season_meta.to_db_season(metadata_id, old_show_id))
                     .await?;
                 queue_simple_poster(asset_tasks, season_id, PosterContentType::Season, poster);
                 (season_id, metadata_id)
@@ -148,7 +148,7 @@ where
                 .and_then(|s| s.get(&episode_number))
             {
                 Some(local) => {
-                    tx.update_metadata(local.metadata_id, &ep_meta.into_db_metadata())
+                    tx.update_metadata(local.metadata_id, &ep_meta.to_db_metadata())
                         .await?;
                     tx.delete_external_ids(local.metadata_id).await?;
                     if !ep_meta.metadata_provider.is_local() {
@@ -166,7 +166,7 @@ where
                 None => {
                     let ext_provider = ep_meta.metadata_provider;
                     let ext_id = ep_meta.metadata_id.clone();
-                    let metadata_id = tx.insert_metadata(&ep_meta.into_db_metadata()).await?;
+                    let metadata_id = tx.insert_metadata(&ep_meta.to_db_metadata()).await?;
                     if !ext_provider.is_local() {
                         tx.insert_external_id(DbExternalId {
                             external_provider: ext_provider,
@@ -177,7 +177,7 @@ where
                         .await?;
                     }
                     let episode_id = tx
-                        .insert_episode(&ep_meta.into_db_episode(metadata_id, season_id, duration))
+                        .insert_episode(&ep_meta.to_db_episode(metadata_id, season_id, duration))
                         .await?;
                     queue_episode_poster(asset_tasks, episode_id, poster, source);
                     (episode_id, metadata_id)

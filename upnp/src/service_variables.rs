@@ -371,7 +371,7 @@ impl std::fmt::Debug for StateVariableDescriptor {
         s.field("send_events", &self.send_events);
         s.field("range", &self.range);
         s.field("allowed_list", &self.allowed_list);
-        let default = self.default.map(|d| d.into_string().unwrap());
+        let default = self.default.map(|d| d.to_xml_string().unwrap());
         s.field("default", &default);
         s.finish()
     }

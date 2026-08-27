@@ -43,7 +43,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
             tracing::debug!("Serving device description");
             let mut headers = HeaderMap::new();
             headers.typed_insert(headers::ContentType::xml());
-            (headers, desc.into_xml().unwrap())
+            (headers, desc.to_xml().unwrap())
         };
         let router = Router::new().route(DESC_PATH, get(serve_description));
         Self {
@@ -113,7 +113,7 @@ impl<T: Clone + Send + Sync + 'static> UpnpRouter<T> {
             .instrument(span)
         };
         let scpd = S::service_description()
-            .into_xml()
+            .to_xml()
             .expect("services serialize without errors");
         let scpd_handler = || async move {
             let mut headers = HeaderMap::new();

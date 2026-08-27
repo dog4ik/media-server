@@ -3,6 +3,8 @@ use std::{convert::Infallible, fmt::Display, str::FromStr};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
+// Codec names are canonically spelled in upper case
+#[allow(clippy::upper_case_acronyms)]
 pub enum AudioCodec {
     AAC,
     AC3,

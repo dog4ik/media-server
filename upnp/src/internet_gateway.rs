@@ -233,6 +233,7 @@ impl SVariable for LastConnectionError {
 /// - An implementation specific WAN/Gateway device policy,
 /// - EnabledForInternet variable (see WANCommonInterfaceConfig* ) being set to “0” (false) by a control point,
 /// - Connection termination initiated by ISP.
+///
 /// If WarnDisconnectDelay is non-zero, the connection state is changed to PendingDisconnect. It stays in this
 /// state for WarnDisconnectDelay seconds (if no connection requests are made) before switching to
 /// Disconnected. The data type of this variable is ui4.
@@ -743,6 +744,7 @@ impl ScpdClient<InternetGatewayClient> {
     ///
     /// When a control point creates a port forwarding rule with `AddAnyPortMapping` for inbound traffic, this
     /// rule MUST also be applied when NAT port triggering occurs for outbound traffic.
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_any_port_mapping(
         &self,
         external_addr: Option<Ipv4Addr>,
@@ -774,6 +776,7 @@ impl ScpdClient<InternetGatewayClient> {
     /// the [ExternalPort] and [PortMappingProtocol] pair is already mapped to another internal client, an error is
     /// returned.
     #[tracing::instrument(level = "debug", skip_all, fields(external_port = external_port, internal_port = internal_port, ?proto))]
+    #[allow(clippy::too_many_arguments)]
     pub async fn add_port_mapping(
         &self,
         external_addr: Option<Ipv4Addr>,
@@ -834,10 +837,10 @@ impl ScpdClient<InternetGatewayClient> {
     ///
     /// The operation of this action has two modes depending on `NewManage` value:
     /// - If the `NewManage` argument is set to "0" (false), then this action returns a list of port mappings
-    /// that have [InternalClient] value matching to the IP address of the control point between
-    /// `NewStartPort` and `NewEndPort`,
+    ///   that have [InternalClient] value matching to the IP address of the control point between
+    ///   `NewStartPort` and `NewEndPort`,
     /// - If the NewManage argument is set to "1" (true), then the gateway MUST return all port mappings
-    /// between NewStartPort and NewEndPort.
+    ///   between NewStartPort and NewEndPort.
     ///
     /// With the argument `NewNumberOfPorts` (take), a control point MAY limit the size of the list returned in order to
     /// limit the length of the list returned. If NewNumberOfPorts is equal to 0, then the gateway MUST return all

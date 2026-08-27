@@ -141,7 +141,7 @@ pub type XmlWriter = quick_xml::Writer<Vec<u8>>;
 pub trait IntoXml {
     fn write_xml(&self, w: &mut XmlWriter) -> std::io::Result<()>;
 
-    fn into_string(&self) -> std::io::Result<String> {
+    fn to_xml_string(&self) -> std::io::Result<String> {
         let mut w = quick_xml::Writer::new(Vec::new());
         self.write_xml(&mut w)?;
         Ok(String::from_utf8(w.into_inner()).expect("produced value to be utf-8"))
@@ -150,7 +150,7 @@ pub trait IntoXml {
 
 impl std::fmt::Debug for Box<dyn IntoXml> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.into_string().unwrap())
+        write!(f, "{}", self.to_xml_string().unwrap())
     }
 }
 

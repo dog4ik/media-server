@@ -84,6 +84,8 @@ impl SubscriptionError {
 }
 
 #[derive(Debug)]
+// Parsed once per request and consumed immediately
+#[allow(clippy::large_enum_variant)]
 pub enum EventMessage<'a> {
     Subscribe(SubscriptionMessage<'a>),
     Renew,

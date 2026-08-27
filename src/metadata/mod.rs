@@ -441,7 +441,7 @@ impl From<ShowMetadata> for MetadataSearchResult {
 }
 
 impl ShowMetadata {
-    pub fn into_db_metadata(&self) -> DbMetadata {
+    pub fn to_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -465,7 +465,7 @@ impl ShowMetadata {
         }
     }
 
-    pub fn into_db_show(&self, metadata_id: i64) -> DbShow {
+    pub fn to_db_show(&self, metadata_id: i64) -> DbShow {
         let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
 
         DbShow {
@@ -478,7 +478,7 @@ impl ShowMetadata {
 }
 
 impl EpisodeMetadata {
-    pub fn into_db_metadata(&self) -> DbMetadata {
+    pub fn to_db_metadata(&self) -> DbMetadata {
         DbMetadata {
             id: None,
             content_type: DbContentType::Episode,
@@ -491,12 +491,7 @@ impl EpisodeMetadata {
         }
     }
 
-    pub fn into_db_episode(
-        &self,
-        metadata_id: i64,
-        season_id: i64,
-        duration: Duration,
-    ) -> DbEpisode {
+    pub fn to_db_episode(&self, metadata_id: i64, season_id: i64, duration: Duration) -> DbEpisode {
         DbEpisode {
             id: None,
             metadata_id,
@@ -508,7 +503,7 @@ impl EpisodeMetadata {
 }
 
 impl SeasonMetadata {
-    pub fn into_db_metadata(&self) -> DbMetadata {
+    pub fn to_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -531,7 +526,7 @@ impl SeasonMetadata {
         }
     }
 
-    pub fn into_db_season(&self, metadata_id: i64, show_id: i64) -> DbSeason {
+    pub fn to_db_season(&self, metadata_id: i64, show_id: i64) -> DbSeason {
         DbSeason {
             id: None,
             metadata_id,
@@ -542,7 +537,7 @@ impl SeasonMetadata {
 }
 
 impl MovieMetadata {
-    pub fn into_db_metadata(&self) -> DbMetadata {
+    pub fn to_db_metadata(&self) -> DbMetadata {
         let poster;
         if let Some(metadata_image) = &self.poster {
             poster = Some(metadata_image.as_str().to_owned());
@@ -565,7 +560,7 @@ impl MovieMetadata {
             original_title,
         }
     }
-    pub fn into_db_movie(&self, metadata_id: i64, duration: Duration) -> DbMovie {
+    pub fn to_db_movie(&self, metadata_id: i64, duration: Duration) -> DbMovie {
         let backdrop = self.backdrop.as_ref().map(|p| p.as_str().to_owned());
         DbMovie {
             id: None,
@@ -577,7 +572,7 @@ impl MovieMetadata {
 }
 
 impl PersonMetadata {
-    pub fn into_db_actor(&self) -> crate::db::DbActor {
+    pub fn to_db_actor(&self) -> crate::db::DbActor {
         crate::db::DbActor {
             id: None,
             name: self.name.clone(),

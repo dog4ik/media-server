@@ -1762,6 +1762,18 @@ impl SVariable for ArgClockId {
 #[derive(Debug)]
 pub struct AvTransportClient;
 
+/// Raw out arguments of the `GetPositionInfo` action, in the order the spec defines them.
+type PositionInfoArgs = (
+    <CurrentTrack as SVariable>::VarType,
+    <CurrentTrackDuration as SVariable>::VarType,
+    <CurrentTrackMetaData as SVariable>::VarType,
+    <CurrentTrackURI as SVariable>::VarType,
+    <RelativeTimePosition as SVariable>::VarType,
+    <AbsoluteTimePosition as SVariable>::VarType,
+    <RelativeCounterPosition as SVariable>::VarType,
+    <AbsoluteCounterPosition as SVariable>::VarType,
+);
+
 #[derive(Debug)]
 pub struct PositionInfo {
     pub track: u32,
@@ -1836,16 +1848,8 @@ impl ScpdClient<AvTransportClient> {
     pub async fn position_info(&self) -> Result<PositionInfo, ActionCallError> {
         let action = self.action("GetPositionInfo")?;
         let payload = action.av_position_info("0".into())?;
-        let (track, duration, _, url, rel_time, abs_time, _, _): (
-            <CurrentTrack as SVariable>::VarType,
-            <CurrentTrackDuration as SVariable>::VarType,
-            <CurrentTrackMetaData as SVariable>::VarType,
-            <CurrentTrackURI as SVariable>::VarType,
-            <RelativeTimePosition as SVariable>::VarType,
-            <AbsoluteTimePosition as SVariable>::VarType,
-            <RelativeCounterPosition as SVariable>::VarType,
-            <AbsoluteCounterPosition as SVariable>::VarType,
-        ) = self.run_action(action, payload).await?;
+        let (track, duration, _, url, rel_time, abs_time, _, _): PositionInfoArgs =
+            self.run_action(action, payload).await?;
         Ok(PositionInfo {
             track,
             duration: duration.into(),

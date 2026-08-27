@@ -290,17 +290,18 @@ impl From<RecordedDuration> for PropertyValue {
 ///
 /// If @searchable (property on container class) = true, then
 /// - If no upnp:searchClass properties are specified, then the `Search` action can return any
-/// match.
+///   match.
 /// - If upnp:searchClass properties are specified, then the `Search` action shall only return
-/// matches from the classes specified in the upnp:searchClass properties.
+///   matches from the classes specified in the upnp:searchClass properties.
 /// - upnp:searchClass is allowed.
 /// - upnp:searchClass is always determined by the `ContentDirectory` service.
 /// - upnp:searchClass semantics are per container, there is no parent-child relationship, they
-/// only apply to searches started from that container.
+///   only apply to searches started from that container.
+///
 /// else
 /// - The container and its subtrees are not searchable.
 /// - The values of the upnp:searchClass properties are meaningless and therefore the
-/// upnp:searchClass properties should not be included.
+///   upnp:searchClass properties should not be included.
 ///
 /// Default Value: If @searchable (property on container class) = true, then all classes can be searched.
 #[derive(Debug)]
@@ -774,7 +775,11 @@ impl DidlResponse {
         self.items.len() + self.containers.len()
     }
 
-    pub fn into_xml(&self) -> anyhow::Result<String> {
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.containers.is_empty()
+    }
+
+    pub fn to_xml(&self) -> anyhow::Result<String> {
         let mut w = Writer::new(Vec::new());
         w.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
         let didl = BytesStart::new("DIDL-Lite").with_attributes([

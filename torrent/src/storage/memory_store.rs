@@ -134,14 +134,14 @@ impl tokio::io::AsyncRead for AsyncInMemoryBlock {
 impl PartsResource for AsyncInMemoryBlock {
     type Item = AsyncInMemoryBlock;
 
-    fn open_io(&self) -> impl Future<Output = std::io::Result<Self::Item>> + Send {
-        async { Ok(self.clone()) }
+    async fn open_io(&self) -> std::io::Result<Self::Item> {
+        Ok(self.clone())
     }
 
-    fn len(io: &Self::Item) -> impl Future<Output = std::io::Result<u64>> + Send
+    async fn len(io: &Self::Item) -> std::io::Result<u64>
     where
         Self: Sized,
     {
-        async { Ok(io.len() as u64) }
+        Ok(io.len() as u64)
     }
 }

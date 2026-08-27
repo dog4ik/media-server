@@ -314,6 +314,7 @@ impl DetailedVariant {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(tag = "content_type", rename_all = "lowercase")]
+#[allow(clippy::large_enum_variant)]
 pub enum VideoContentMetadata {
     Episode { show: Show, episode: Episode },
     Movie { movie: Movie },

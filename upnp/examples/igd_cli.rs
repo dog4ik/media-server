@@ -8,15 +8,15 @@ use upnp::{
 
 #[derive(ValueEnum, Debug, Clone, Copy)]
 enum Proto {
-    TCP,
-    UDP,
+    Tcp,
+    Udp,
 }
 
 impl From<Proto> for PortMappingProtocol {
     fn from(val: Proto) -> Self {
         match val {
-            Proto::TCP => PortMappingProtocol::TCP,
-            Proto::UDP => PortMappingProtocol::UDP,
+            Proto::Tcp => PortMappingProtocol::TCP,
+            Proto::Udp => PortMappingProtocol::UDP,
         }
     }
 }
@@ -69,10 +69,10 @@ enum Command {
         #[clap(long)]
         protocol: Proto,
         /// - If the NewManage argument is set to false, then this action returns a list of port mappings
-        /// that have InternalClient value matching to the IP address of the control point between
-        /// NewStartPort and NewEndPort
+        ///   that have InternalClient value matching to the IP address of the control point between
+        ///   NewStartPort and NewEndPort
         /// - If the NewManage argument is set to true, then the gateway MUST return all port mappings
-        /// between NewStartPort and NewEndPort
+        ///   between NewStartPort and NewEndPort
         #[clap(long, short, default_value = "true")]
         manage: bool,
         /// How many ports to list

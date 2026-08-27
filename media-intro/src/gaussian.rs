@@ -5,7 +5,7 @@ pub fn gaussian_filter<'a>(
     n: usize,
 ) {
     let w = f64::sqrt(12.0 * sigma * sigma / n as f64 + 1.0).floor() as usize;
-    let wl = w - (w % 2 == 0) as usize;
+    let wl = w - w.is_multiple_of(2) as usize;
     let wu = wl + 2;
 
     let fwl = wl as f64;
@@ -149,7 +149,7 @@ impl ReflectIterator {
         if self.forward {
             return self.size - self.pos - 1;
         }
-        return 0;
+        0
     }
 }
 
@@ -182,7 +182,7 @@ mod tests {
     #[test]
     fn width1() {
         let input = [1.0, 2.0, 4.0];
-        let mut output = input.clone();
+        let mut output = input;
         box_filter(&input, &mut output, 1);
         assert_eq!(input.len(), output.len());
         assert_eq!(1.0, output[0]);
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn width2() {
         let input = [1.0, 2.0, 4.0];
-        let mut output = input.clone();
+        let mut output = input;
         box_filter(&input, &mut output, 2);
         assert_eq!(input.len(), output.len());
         assert_eq!(1.0, output[0]);
@@ -204,7 +204,7 @@ mod tests {
     #[test]
     fn width3() {
         let input = [1.0, 2.0, 4.0];
-        let mut output = input.clone();
+        let mut output = input;
         box_filter(&input, &mut output, 3);
         assert_eq!(input.len(), output.len());
         assert_eq!(1.3333333333333333, output[0]);
@@ -215,7 +215,7 @@ mod tests {
     #[test]
     fn width4() {
         let input = [1.0, 2.0, 4.0];
-        let mut output = input.clone();
+        let mut output = input;
         box_filter(&input, &mut output, 4);
         assert_eq!(input.len(), output.len());
         assert_eq!(1.5, output[0]);
@@ -226,7 +226,7 @@ mod tests {
     #[test]
     fn width5() {
         let input = [1.0, 2.0, 4.0];
-        let mut output = input.clone();
+        let mut output = input;
         box_filter(&input, &mut output, 5);
         assert_eq!(input.len(), output.len());
         assert_eq!(2.0, output[0]);

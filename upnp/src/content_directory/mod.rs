@@ -75,7 +75,7 @@ impl<T: ContentDirectoryHandler> ContentDirectoryService<T> {
         result.apply_filter(filter);
         let number_returned = result.len();
         let total_matches = result.len();
-        let result = result.into_xml().unwrap();
+        let result = result.to_xml().unwrap();
         Ok((
             result,
             number_returned as u32,
@@ -526,7 +526,7 @@ mod filter {
 
     impl Display for Filter {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            write!(f, "{}", self.into_string().unwrap())
+            write!(f, "{}", self.to_xml_string().unwrap())
         }
     }
 

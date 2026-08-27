@@ -205,8 +205,8 @@ impl ContentScanner for ShowScanner {
                 } => {
                     let poster = metadata.poster.clone();
                     let backdrop = metadata.backdrop.clone();
-                    let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
-                    let show_id = tx.insert_show(&metadata.into_db_show(metadata_id)).await?;
+                    let metadata_id = tx.insert_metadata(&metadata.to_db_metadata()).await?;
+                    let show_id = tx.insert_show(&metadata.to_db_show(metadata_id)).await?;
                     if let Some(cast) = metadata.cast {
                         insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                     }
@@ -262,9 +262,9 @@ impl ContentScanner for ShowScanner {
                 let season_id = match lookup {
                     MetadataLookup::New { metadata } => {
                         let poster = metadata.poster.clone();
-                        let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
+                        let metadata_id = tx.insert_metadata(&metadata.to_db_metadata()).await?;
                         let season_id = tx
-                            .insert_season(metadata.into_db_season(metadata_id, show_id))
+                            .insert_season(metadata.to_db_season(metadata_id, show_id))
                             .await?;
                         if let Some(cast) = metadata.cast {
                             insert_roles(tx, metadata_id, cast, asset_tasks).await?;
@@ -297,7 +297,7 @@ impl ContentScanner for ShowScanner {
                             let ext_provider = metadata.metadata_provider;
                             let ext_id = metadata.metadata_id.clone();
                             let metadata_id =
-                                tx.insert_metadata(&metadata.into_db_metadata()).await?;
+                                tx.insert_metadata(&metadata.to_db_metadata()).await?;
                             if metadata.metadata_provider != MetadataProvider::Local {
                                 tx.insert_external_id(DbExternalId {
                                     external_provider: ext_provider,
@@ -308,7 +308,7 @@ impl ContentScanner for ShowScanner {
                                 .await?;
                             }
                             let episode_id = tx
-                                .insert_episode(&metadata.into_db_episode(
+                                .insert_episode(&metadata.to_db_episode(
                                     metadata_id,
                                     season_id,
                                     duration,

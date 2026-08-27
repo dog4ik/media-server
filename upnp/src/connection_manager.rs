@@ -55,20 +55,20 @@ pub trait ConnectionManagerHandler {
     /// to transfer the content.
     ///
     /// - If `PrepareForConnection()` is invoked on a MediaServer device, the RemoteProtocolInfo
-    /// argument MUST be set to one of the ProtocolInfo entries from the CSV list obtained from the
-    /// peer MediaRenderer device via the `GetProtocolInfo()` action. (See Section 2.5.2, `ProtocolInfo
-    /// Concept` for details.) If the peer device does not implement `GetProtocolInfo()` (because it is not a
-    /// MediaRenderer or not even a UPnP device), then the RemoteProtocolInfo argument MUST be set
-    /// to one of the ProtocolInfo entries returned by the `GetProtocolInfo()` action on the local
-    /// MediaServer device.
+    ///   argument MUST be set to one of the ProtocolInfo entries from the CSV list obtained from the
+    ///   peer MediaRenderer device via the `GetProtocolInfo()` action. (See Section 2.5.2, `ProtocolInfo
+    ///   Concept` for details.) If the peer device does not implement `GetProtocolInfo()` (because it is not a
+    ///   MediaRenderer or not even a UPnP device), then the RemoteProtocolInfo argument MUST be set
+    ///   to one of the ProtocolInfo entries returned by the `GetProtocolInfo()` action on the local
+    ///   MediaServer device.
     ///
     /// - If `PrepareForConnection()` is invoked on a MediaRenderer device, the [RemoteProtocolInfo](ArgProtocolInfo)
-    /// argument MUST be set to the value of the protocolInfo attribute of the content item (located in
-    /// the `ContentDirectory` on the peer MediaServer device) that is going to be played. (See Section
-    /// 2.5.2, `ProtocolInfo Concept` for details.) If the peer device does not implement a
-    /// `ContentDirectory` service (because it is not a MediaServer or not even a UPnP device), then the
-    /// [RemoteProtocolInfo](ArgProtocolInfo) argument MUST be set to one of the [ArgProtocolInfo] entries returned by the
-    /// [get_protocol_info](ConnectionManagerService::get_protocol_info) action on the local `MediaRenderer` device.
+    ///   argument MUST be set to the value of the protocolInfo attribute of the content item (located in
+    ///   the `ContentDirectory` on the peer MediaServer device) that is going to be played. (See Section
+    ///   2.5.2, `ProtocolInfo Concept` for details.) If the peer device does not implement a
+    ///   `ContentDirectory` service (because it is not a MediaServer or not even a UPnP device), then the
+    ///   [RemoteProtocolInfo](ArgProtocolInfo) argument MUST be set to one of the [ArgProtocolInfo] entries returned by the
+    ///   [get_protocol_info](ConnectionManagerService::get_protocol_info) action on the local `MediaRenderer` device.
     ///
     /// The [ArgConnectionID] out argument is used to identify the connection that was prepared by the device in
     /// response to this invocation. The [ArgConnectionID] is a device-specific value and is NOT unique throughout
@@ -356,10 +356,10 @@ impl SVariable for CurrentConnectionIDs {
 /// `ConnectionManager` service.
 ///
 /// - The root element of the document is `Features`. It contains zero or more child `Feature`
-/// elements, each of which represents one 'ConnectionManager' service feature that is supported in
-/// this implementation.
+///   elements, each of which represents one 'ConnectionManager' service feature that is supported in
+///   this implementation.
 /// - A `Feature` element MUST have a version attribute and MUST have a name attribute
-/// containing the assigned name of the feature.
+///   containing the assigned name of the feature.
 /// - A `Feature` element MAY have other attributes defined per each feature.
 #[derive(Default, Debug)]
 pub struct FeatureList;

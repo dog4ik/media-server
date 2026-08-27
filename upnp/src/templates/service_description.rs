@@ -23,7 +23,7 @@ pub struct ServiceDescription {
 }
 
 impl ServiceDescription {
-    pub fn into_xml(&self) -> anyhow::Result<Vec<u8>> {
+    pub fn to_xml(&self) -> anyhow::Result<Vec<u8>> {
         let mut w = Writer::new(Vec::new());
         let parent = BytesStart::new("scpd");
         w.write_event(Event::Start(parent.to_owned()))?;

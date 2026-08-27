@@ -61,7 +61,7 @@ impl LazyFFprobeOutput {
 
 impl Video {
     /// Returns struct compatible with database Video table
-    pub async fn into_db_video(&self) -> std::io::Result<DbVideo> {
+    pub async fn to_db_video(&self) -> std::io::Result<DbVideo> {
         let now = time::OffsetDateTime::now_utc();
 
         Ok(DbVideo {
@@ -87,7 +87,7 @@ impl Video {
         let video_id: Result<i64, anyhow::Error> = match res {
             Ok(r) => Ok(r.id),
             Err(sqlx::Error::RowNotFound) => {
-                let db_video = self.into_db_video().await?;
+                let db_video = self.to_db_video().await?;
                 let id = tx.insert_video(db_video).await?;
                 Ok(id)
             }

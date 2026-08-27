@@ -172,9 +172,9 @@ where
     ) -> sqlx::Result<LocalContentId> {
         let poster = metadata.poster.clone();
         let backdrop = metadata.backdrop.clone();
-        let metadata_id = tx.insert_metadata(&metadata.into_db_metadata()).await?;
+        let metadata_id = tx.insert_metadata(&metadata.to_db_metadata()).await?;
         let movie_id = tx
-            .insert_movie(&metadata.into_db_movie(
+            .insert_movie(&metadata.to_db_movie(
                 metadata_id,
                 metadata.runtime.as_ref().map_or(Duration::ZERO, |v| v.0),
             ))

@@ -42,7 +42,7 @@ async fn pull_video_subtitle(
 }
 
 /// Multipart subtitles api data type
-// Not used in actuall implementation
+// Not used in actual implementation
 #[allow(dead_code)]
 #[derive(Debug, utoipa::ToSchema)]
 pub struct MultipartSubtitles {

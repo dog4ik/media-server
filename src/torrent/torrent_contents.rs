@@ -67,6 +67,7 @@ impl TorrentInfo {
 
 #[derive(Debug, Serialize, utoipa::ToSchema)]
 #[serde(tag = "media_type", rename_all = "snake_case")]
+#[allow(clippy::large_enum_variant)]
 pub enum TorrentContent {
     Show {
         show: Show,

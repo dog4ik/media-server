@@ -140,6 +140,7 @@ pub enum ContainerType {
     /// - a partition on a Hard Disk Drive
     /// - a CD-Audio disc
     /// - a Flash memory card
+    ///
     /// The following allowed required are defined for this class:
     /// - `upnp:storageTotal`
     /// - `upnp:storageUsed`
@@ -163,6 +164,7 @@ pub enum ContainerType {
     /// Examples of storageFolder instances are:
     /// - a directory on a Hard Disk Drive
     /// - a directory on CD-Rom, etc.
+    ///
     /// The following required properties are defined for this class:
     /// - `upnp:storageUsed`
     StorageFolder,
@@ -345,13 +347,13 @@ pub enum ItemType {
     /// service shall be accessible within one of the defined bookmark subtrees
     ///
     /// The following properties are either required or recommended for this class:
-    /// `upnp:bookmarkedObjectID upnp (Required)
-    /// `upnp:neverPlayable upnp (Allowed)
-    /// `upnp:deviceUDN upnp (Required)
-    /// `upnp:serviceType upnp (Required)
-    /// `upnp:serviceId upnp (Required)
+    /// - `upnp:bookmarkedObjectID` (Required)
+    /// - `upnp:neverPlayable` (Allowed)
+    /// - `upnp:deviceUDN` (Required)
+    /// - `upnp:serviceType` (Required)
+    /// - `upnp:serviceId` (Required)
     /// - [dc:date](super::properties::Date) (Allowed)
-    /// `upnp:stateVariableCollection upnp (Required)
+    /// - `upnp:stateVariableCollection` (Required)
     BookmarkItem,
 }
 

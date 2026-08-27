@@ -297,7 +297,7 @@ pub(crate) async fn insert_roles(
         }) {
             Some(id) => *id,
             None => {
-                let actor_id = tx.insert_actor(&cast.into_db_actor()).await?;
+                let actor_id = tx.insert_actor(&cast.to_db_actor()).await?;
                 if let Some(poster_url) = cast.person_poster {
                     asset_tasks.push(AssetSaveTask {
                         kind: AssetKind::Poster(PosterAsset::new(
