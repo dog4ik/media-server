@@ -18,9 +18,9 @@ pub struct Intro {
 /// Detect intros for given season
 #[utoipa::path(
     post,
-    path = "/show/{show_id}/{season}/detect_intros",
+    path = "/show/{id}/{season}/detect_intros",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
     ),
     responses(
@@ -107,9 +107,9 @@ async fn delete_video_intro(Path(video_id): Path<i64>, State(db): State<Db>) -> 
 /// Delete all season intros
 #[utoipa::path(
     delete,
-    path = "/show/{show_id}/{season}/intros",
+    path = "/show/{id}/{season}/intros",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
     ),
     responses(
@@ -143,9 +143,9 @@ async fn delete_season_intros(
 /// Delete all intros for the episode
 #[utoipa::path(
     delete,
-    path = "/show/{show_id}/{season}/{episode}/intros",
+    path = "/show/{id}/{season}/{episode}/intros",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
         ("episode", description = "Episode number"),
     ),

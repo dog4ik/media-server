@@ -451,9 +451,9 @@ async fn watch(
 /// Watch episode video
 #[utoipa::path(
     get,
-    path = "/local_episode/{episode_id}/watch",
+    path = "/local_episode/{id}/watch",
     params(
-        ("episode_id", description = "episode id"),
+        ("id", description = "episode id"),
         VariantQuery,
     ),
     responses(
@@ -483,9 +483,9 @@ async fn watch_episode(
 /// Watch movie video
 #[utoipa::path(
     get,
-    path = "/local_movie/{movie_id}/watch",
+    path = "/local_movie/{id}/watch",
     params(
-        ("movie_id", description = "movie id"),
+        ("id", description = "movie id"),
         VariantQuery,
     ),
     responses(
@@ -720,9 +720,9 @@ async fn get_video_by_id(
 /// Get show by id and provider
 #[utoipa::path(
     get,
-    path = "/show/{show_id}",
+    path = "/show/{id}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ProviderQuery,
     ),
     responses(
@@ -749,9 +749,9 @@ async fn get_show(
 /// Get movie by id and provider
 #[utoipa::path(
     get,
-    path = "/movie/{movie_id}",
+    path = "/movie/{id}",
     params(
-        ("movie_id", description = "Movie id"),
+        ("id", description = "Movie id"),
         ProviderQuery,
     ),
     responses(
@@ -778,9 +778,9 @@ async fn get_movie(
 /// Get show poster
 #[utoipa::path(
     get,
-    path = "/show/{show_id}/poster",
+    path = "/show/{id}/poster",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -803,9 +803,9 @@ async fn show_poster(
 /// Get season poster
 #[utoipa::path(
     get,
-    path = "/season/{season_id}/poster",
+    path = "/season/{id}/poster",
     params(
-        ("season_id", description = "Season id"),
+        ("id", description = "Season id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -828,9 +828,9 @@ async fn season_poster(
 /// Get show backdrop image
 #[utoipa::path(
     get,
-    path = "/show/{show_id}/backdrop",
+    path = "/show/{id}/backdrop",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -853,9 +853,9 @@ async fn show_backdrop(
 /// Get movie poster
 #[utoipa::path(
     get,
-    path = "/movie/{movie_id}/poster",
+    path = "/movie/{id}/poster",
     params(
-        ("movie_id", description = "Movie id"),
+        ("id", description = "Movie id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -878,9 +878,9 @@ async fn movie_poster(
 /// Get movie backdrop image
 #[utoipa::path(
     get,
-    path = "/movie/{movie_id}/backdrop",
+    path = "/movie/{id}/backdrop",
     params(
-        ("movie_id", description = "Movie id"),
+        ("id", description = "Movie id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -903,9 +903,9 @@ async fn movie_backdrop(
 /// Get episode poster
 #[utoipa::path(
     get,
-    path = "/episode/{episode_id}/poster",
+    path = "/episode/{id}/poster",
     params(
-        ("episode_id", description = "Episode id"),
+        ("id", description = "Episode id"),
     ),
     responses(
         (status = 200, content_type = "image/*"),
@@ -1003,9 +1003,9 @@ async fn actor_list(
 /// Get season metadata
 #[utoipa::path(
     get,
-    path = "/show/{show_id}/{season}",
+    path = "/show/{id}/{season}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
         ProviderQuery,
     ),
@@ -1033,9 +1033,9 @@ async fn get_season(
 /// Get episode metadata
 #[utoipa::path(
     get,
-    path = "/show/{show_id}/{season}/{episode}",
+    path = "/show/{id}/{season}/{episode}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
         ("episode", description = "Episode number"),
         ProviderQuery,
@@ -1383,9 +1383,9 @@ async fn remove_variant(
 /// Update show metadata
 #[utoipa::path(
     put,
-    path = "/show/{show_id}",
+    path = "/show/{id}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
     ),
     request_body = ShowMetadata,
     responses(
@@ -1413,9 +1413,9 @@ async fn alter_show_metadata(
 /// Update season metadata
 #[utoipa::path(
     put,
-    path = "/show/{show_id}/{season}",
+    path = "/show/{id}/{season}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
     ),
     request_body = SeasonMetadata,
@@ -1444,9 +1444,9 @@ async fn alter_season_metadata(
 /// Update episode metadata
 #[utoipa::path(
     put,
-    path = "/show/{show_id}/{season}/{episode}",
+    path = "/show/{id}/{season}/{episode}",
     params(
-        ("show_id", description = "Show id"),
+        ("id", description = "Show id"),
         ("season", description = "Season number"),
         ("episode", description = "Episode number"),
     ),
@@ -1483,9 +1483,9 @@ async fn alter_episode_metadata(
 /// Update movie metadata
 #[utoipa::path(
     put,
-    path = "/movie/{movie_id}",
+    path = "/movie/{id}",
     params(
-        ("movie_id", description = "Movie id"),
+        ("id", description = "Movie id"),
     ),
     request_body = MovieMetadata,
     responses(
@@ -1513,9 +1513,9 @@ async fn alter_movie_metadata(
 /// Fix show metadata match
 #[utoipa::path(
     post,
-    path = "/show/{show_id}/fix_metadata",
+    path = "/show/{id}/fix_metadata",
     params(
-        ("show_id", description = "Id of the show that needs to be fixed"),
+        ("id", description = "Id of the show that needs to be fixed"),
         ProviderQuery,
         StringIdQuery,
     ),
@@ -1532,9 +1532,9 @@ async fn fix_show_metadata() -> crate::Result<()> {
 /// Fix movie metadata match
 #[utoipa::path(
     post,
-    path = "/movie/{movie_id}/fix_metadata",
+    path = "/movie/{id}/fix_metadata",
     params(
-        ("movie_id", description = "Id of the movie that needs to be fixed"),
+        ("id", description = "Id of the movie that needs to be fixed"),
         ProviderQuery,
         StringIdQuery,
     ),
@@ -1571,9 +1571,9 @@ async fn fix_metadata() -> crate::Result<()> {
 /// Reset show metadata
 #[utoipa::path(
     post,
-    path = "/show/{show_id}/reset_metadata",
+    path = "/show/{id}/reset_metadata",
     params(
-        ("show_id", description = "Id of the show that needs to be fixed"),
+        ("id", description = "Id of the show that needs to be fixed"),
     ),
     responses(
         (status = 200, description = "Successfully reset show metadata"),
@@ -1588,9 +1588,9 @@ async fn reset_show_metadata() -> crate::Result<()> {
 /// Reset movie metadata
 #[utoipa::path(
     post,
-    path = "/movie/{movie_id}/reset_metadata",
+    path = "/movie/{id}/reset_metadata",
     params(
-        ("movie_id", description = "Id of the movie that needs to be fixed"),
+        ("id", description = "Id of the movie that needs to be fixed"),
     ),
     responses(
         (status = 200),
