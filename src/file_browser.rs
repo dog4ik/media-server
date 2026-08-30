@@ -4,6 +4,8 @@ use base64::Engine;
 use serde::{Deserialize, Serialize, de::Visitor};
 use tokio::fs;
 
+use crate::config;
+
 #[derive(Debug)]
 /// Base64 -> Path deserializable path. Used for encoding paths in url
 pub struct FileKey {
@@ -105,12 +107,17 @@ impl BrowseDirectory {
     }
 }
 
+/// Root directories for fs explorer
 #[derive(Serialize, Deserialize, utoipa::ToSchema)]
 pub struct BrowseRootDirs {
     home: Option<BrowseFile>,
     root: BrowseFile,
     videos: Option<BrowseFile>,
     disks: Vec<BrowseFile>,
+    /// Configured movie directories
+    movie_dirs: Vec<BrowseFile>,
+    /// Configured show directories
+    show_dirs: Vec<BrowseFile>,
 }
 
 impl Default for BrowseRootDirs {
@@ -124,6 +131,8 @@ impl BrowseRootDirs {
         let disks = sysinfo::Disks::new_with_refreshed_list();
         let mut disks_mount_points = Vec::with_capacity(disks.list().len());
         let root: PathBuf = Component::RootDir.as_os_str().into();
+        let (config::MovieFolders(movie_dirs), config::ShowFolders(show_dirs)) =
+            config::CONFIG.get_values();
 
         for disk in disks.list() {
             let mount_point = disk.mount_point();
@@ -148,6 +157,8 @@ impl BrowseRootDirs {
             root: root.into(),
             disks: disks_mount_points,
             videos,
+            movie_dirs: movie_dirs.into_iter().map(BrowseFile::from).collect(),
+            show_dirs: show_dirs.into_iter().map(BrowseFile::from).collect(),
         }
     }
 }
