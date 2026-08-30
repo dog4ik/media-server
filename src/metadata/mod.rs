@@ -271,7 +271,7 @@ impl Display for MetadataProvider {
     }
 }
 
-/// Leaf node type of the any content tree
+/// Top level node type of the any content tree
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, utoipa::ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum ParentMediaType {

@@ -18,10 +18,7 @@ pub use capabilities::Capabilities;
 pub use cli_args::Args;
 pub use config_file::ConfigFile;
 pub use resources::{APP_RESOURCES, AppResources};
-pub use store::{
-    CONFIG, ConfigurationApplyError, ConfigurationApplyResult, SerializedSetting,
-    UtoipaConfigSchema,
-};
+pub use store::{CONFIG, ConfigurationApplyResult, SerializedSetting, UtoipaConfigSchema};
 
 use store::{ConfigStore, ConfigValue, UtoipaConfigValue};
 

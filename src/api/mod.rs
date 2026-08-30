@@ -1,15 +1,10 @@
 use crate::AppError;
-use crate::MediaDuration as CrateDuration;
 use crate::OffsetDateTime as CrateOffsetDateTime;
 use crate::app_state;
 use crate::config;
 use crate::db;
-use crate::ffmpeg;
-use crate::library;
 use crate::metadata;
-use crate::progress;
 use crate::torrent_index;
-use crate::watch;
 use crate::ws;
 use axum::extract::FromRequestParts;
 use axum::extract::path;
@@ -43,58 +38,13 @@ pub mod torrent;
 #[openapi(
     components(
         schemas(
-            metadata::MovieMetadata,
-            metadata::ShowMetadata,
-            metadata::EpisodeMetadata,
-            metadata::SeasonMetadata,
-            metadata::MetadataProvider,
-            metadata::ExternalIdMetadata,
-            metadata::MetadataSearchResult,
             metadata::ParentMediaType,
             metadata::LeafMediaType,
             metadata::MediaType,
-            metadata::MetadataProvider,
-            metadata::Language,
-            crate::AppError,
-            crate::AppErrorKind,
-            server::DetailedVideo,
-            server::DetailedVideoTrack,
-            server::DetailedAudioTrack,
-            server::DetailedSubtitleTrack,
-            server::DetailedVariant,
-            server::VideoContentMetadata,
-            server::ProviderOrder,
-            history::UpdateHistoryPayload,
-            history::ShowSuggestion,
-            history::MovieHistory,
             crate::api::torrent::DownloadContentHint,
-            crate::api::torrent::TorrentDownloadPayload,
-            crate::torrent::PendingTorrent,
-            crate::torrent::DownloadState,
-            crate::torrent::TorrentProgress,
-            crate::torrent::PeerStateChange,
-            progress::Task<ffmpeg::TranscodeJob>,
-            progress::Task<ffmpeg::PreviewsJob>,
-            progress::Task<watch::WatchTask>,
-            progress::Notification,
-            progress::TaskProgress,
-            crate::tracing::JsonTracingEvent,
-            torrent_index::TorrentMetadata,
-            db::DbExternalId,
-            library::TranscodePayload,
-            library::media::codec::audio::AudioCodec,
-            library::media::codec::video::VideoCodec,
-            library::media::codec::subtitles::SubtitlesCodec,
-            library::media::Resolution,
-            config::AppResources,
-            config::Capabilities,
             config::UtoipaConfigSchema,
-            config::ConfigurationApplyResult,
-            config::ConfigurationApplyError,
             ws::WsRequest,
-            ws::WsMessage,
-            CrateDuration,
-            CrateOffsetDateTime,
+            ws::WsMessage
         )
     ),
     tags(
