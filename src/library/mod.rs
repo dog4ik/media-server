@@ -13,7 +13,11 @@ use self::media::container::VideoContainer;
 use self::media::{Resolution, Video};
 use crate::{
     db::Db,
-    parser::{movie::MovieIdentifier, show::ShowIdentifier, walk_movie_dirs, walk_show_dirs},
+    parser::{
+        movie::MovieIdentifier,
+        show::{ShowIdent, ShowIdentifier},
+        walk_movie_dirs, walk_show_dirs,
+    },
 };
 
 use self::assets::{
@@ -122,6 +126,13 @@ pub async fn explore_movie_dirs(
 #[serde(rename_all = "lowercase", tag = "media_type")]
 pub enum ContentIdentifier {
     Show(ShowIdentifier),
+    Movie(MovieIdentifier),
+}
+
+#[derive(Debug, Clone, Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase", tag = "media_type")]
+pub enum PartialContentIdentifier {
+    Show(ShowIdent),
     Movie(MovieIdentifier),
 }
 

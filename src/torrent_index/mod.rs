@@ -5,9 +5,9 @@ use serde::{Deserialize, Serialize, Serializer};
 use time::OffsetDateTime;
 
 use crate::{
-    library::ContentIdentifier,
+    library::PartialContentIdentifier,
     metadata::{FetchParams, ParentMediaType},
-    parser::{movie::MovieIdentifier, show::ShowIdentifier},
+    parser::{movie::MovieIdentifier, show::ShowIdent, tokenizer::Tokenizer},
 };
 
 pub mod nyaa;
@@ -73,7 +73,7 @@ pub struct TorrentMetadata {
 pub struct Torrent {
     #[serde(flatten)]
     meta: TorrentMetadata,
-    identifier: Option<ContentIdentifier>,
+    identifier: Option<PartialContentIdentifier>,
 }
 
 impl Torrent {
@@ -81,10 +81,12 @@ impl Torrent {
         let identifier = match media_type {
             Some(ParentMediaType::Movie) => MovieIdentifier::from_str(&meta.name)
                 .ok()
-                .map(ContentIdentifier::Movie),
-            Some(ParentMediaType::Show) => ShowIdentifier::from_str(&meta.name)
-                .ok()
-                .map(ContentIdentifier::Show),
+                .map(PartialContentIdentifier::Movie),
+            Some(ParentMediaType::Show) => {
+                let mut ident = ShowIdent::default();
+                ident.apply_name(&mut Tokenizer::new(&meta.name));
+                Some(PartialContentIdentifier::Show(ident))
+            }
             None => None,
         };
         Self { meta, identifier }

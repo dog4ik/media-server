@@ -66,7 +66,7 @@ fn parse_0x0_episode(value: &str) -> Option<(u16, u16)> {
 /// Partial show identifier representation.
 ///
 /// This is used during parsing where not all parts are yet known.
-#[derive(Debug, Clone, Serialize, Default)]
+#[derive(Debug, Clone, Serialize, Default, utoipa::ToSchema)]
 pub struct ShowIdent {
     pub episode: Option<u16>,
     pub season: Option<u16>,
@@ -261,8 +261,7 @@ impl ShowIdent {
             if self.episode.is_none() {
                 let mut nums = nums.into_iter();
                 // try to interpret numbers as episodes
-                let season_episode = (nums.next(), nums.next());
-                match season_episode {
+                match (nums.next(), nums.next()) {
                     (Some(ep), None) => self.episode = Some(ep),
                     (Some(se), Some(ep)) => {
                         if self.season.is_none() && self.episode.is_none() {
