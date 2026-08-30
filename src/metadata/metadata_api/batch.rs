@@ -3,8 +3,8 @@ use crate::{
     metadata::{
         MovieMetadataProvider, ShowMetadataProvider,
         metadata_api::{
-            LocalLookupScope,
             asset_saver::AssetTasks,
+            local_scope::LocalLookupScope,
             movie::{BatchMovieApi, MovieMetadataApi},
             show::{BatchShowApi, HasSource, ShowMetadataApi, ShowTree, WrittenShow},
         },

@@ -16,7 +16,7 @@ use crate::{
     metadata::{
         ParentMediaType,
         metadata_api::{
-            ApiObjectScope,
+            local_scope,
             movie::MovieMetadataApi,
             show::{ShowItem, ShowMetadataApi, ShowTree},
         },
@@ -210,9 +210,14 @@ async fn resolve_torrent_files(
                 return (other_files, None);
             };
             let api = ShowMetadataApi::new(providers_stack.tmdb.unwrap(), db, http_client);
-            if let Ok(Some(show)) = api.search_show_title::<ApiObjectScope>(title).await
+            if let Ok(Some(show)) = api
+                .search_show_title::<local_scope::ApiObjectScope>(title)
+                .await
                 && let Ok(show_tree) = api
-                    .fetch_show_tree::<_, ApiObjectScope>(show, ShowTree::from_flat(content))
+                    .fetch_show_tree::<_, local_scope::ApiObjectScope>(
+                        show,
+                        ShowTree::from_flat(content),
+                    )
                     .await
                 && let Some(show) = Show::from_lookup(show_tree.show_lookup)
             {

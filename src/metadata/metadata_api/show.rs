@@ -45,7 +45,10 @@ use crate::{
     metadata::{
         EpisodeMetadata, ExternalIdMetadata, FetchParams, SeasonMetadata, ShowMetadata,
         ShowMetadataProvider,
-        metadata_api::{LocalLookupScope, LocalMetadataIdentifier, asset_saver::AssetTasks},
+        metadata_api::{
+            asset_saver::AssetTasks,
+            local_scope::{LocalLookupScope, LocalMetadataIdentifier},
+        },
     },
     scan::{AssetKind, AssetSaveTask, AssetTaskSource, insert_roles},
 };
