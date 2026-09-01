@@ -4,6 +4,8 @@ use crate::app_state;
 use crate::config;
 use crate::db;
 use crate::metadata;
+use crate::metadata::MovieMetadataProvider;
+use crate::metadata::ShowMetadataProvider;
 use crate::torrent_index;
 use crate::ws;
 use axum::extract::FromRequestParts;
@@ -213,6 +215,46 @@ pub struct NumberQuery {
 #[derive(Deserialize, utoipa::IntoParams)]
 pub struct TakeQuery {
     pub take: Option<i64>,
+}
+
+pub struct DynShowProviderQuery(pub &'static (dyn ShowMetadataProvider + Send + Sync + 'static));
+
+impl FromRequestParts<crate::AppState> for DynShowProviderQuery {
+    type Rejection = crate::AppError;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &crate::AppState,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let Query(ProviderQuery { provider }) =
+                Query::<ProviderQuery>::from_request_parts(parts, state).await?;
+            match state.providers_stack.show_provider(provider) {
+                Some(provider) => Ok(Self(provider)),
+                None => Err(AppError::not_found("requested metadata provider not found")),
+            }
+        }
+    }
+}
+
+pub struct DynMovieProviderQuery(pub &'static (dyn MovieMetadataProvider + Send + Sync + 'static));
+
+impl FromRequestParts<crate::AppState> for DynMovieProviderQuery {
+    type Rejection = crate::AppError;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        state: &crate::AppState,
+    ) -> impl Future<Output = Result<Self, Self::Rejection>> + Send {
+        async move {
+            let Query(ProviderQuery { provider }) =
+                Query::<ProviderQuery>::from_request_parts(parts, state).await?;
+            match state.providers_stack.movie_provider(provider) {
+                Some(provider) => Ok(Self(provider)),
+                None => Err(AppError::not_found("requested metadata provider not found")),
+            }
+        }
+    }
 }
 
 /// `Path` extractor wrapper that customizes the error from `axum::extract::Path`

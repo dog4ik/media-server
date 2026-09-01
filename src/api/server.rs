@@ -30,7 +30,8 @@ use crate::api::api_data::api_types::Actor;
 use crate::api::api_data::local_movie::Movie;
 use crate::api::api_data::local_show::{Episode, Season, Show};
 use crate::api::{
-    ContentFilterQuery, CursorQuery, OptionalTorrentIndexQuery, Path, Query, TakeQuery,
+    ContentFilterQuery, CursorQuery, DynShowProviderQuery, OptionalTorrentIndexQuery, Path, Query,
+    TakeQuery,
 };
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
@@ -50,7 +51,7 @@ use crate::library::media::codec::subtitles::SubtitlesCodec;
 use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
-use crate::metadata::metadata_api::fix::MetadataFix;
+use crate::metadata::metadata_api::fix::ShowMetadataFix;
 use crate::metadata::metadata_api::show::ShowMetadataApi;
 use crate::metadata::{
     EpisodeMetadata, MovieMetadata, ParentMediaType, SeasonMetadata, ShowMetadata,
@@ -1529,19 +1530,13 @@ async fn alter_movie_metadata(
 )]
 async fn fix_show_metadata(
     Path(show_id): Path<i64>,
-    Query(ProviderQuery { provider }): Query<ProviderQuery>,
+    DynShowProviderQuery(provider): DynShowProviderQuery,
     Query(StringIdQuery { id }): Query<StringIdQuery>,
     State(AppState {
-        db,
-        providers_stack,
-        http_client,
-        ..
+        db, http_client, ..
     }): State<AppState>,
 ) -> crate::Result<()> {
-    let Some(provider) = providers_stack.show_provider(provider) else {
-        return Err(AppError::not_found("requested provider is not found"));
-    };
-    let api = MetadataFix::new(ShowMetadataApi::new(provider, db, http_client));
+    let api = ShowMetadataFix::new(ShowMetadataApi::new(provider, db, http_client));
     api.show_metadata_fix(show_id, &id).await?;
     Ok(())
 }

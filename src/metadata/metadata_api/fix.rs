@@ -21,11 +21,6 @@ use crate::{
 
 use sqlx::types::Json;
 
-#[derive(Debug)]
-pub struct MetadataFix<T> {
-    api: ShowMetadataApi<T>,
-}
-
 #[derive(Debug, Clone, serde::Deserialize)]
 struct DbVideoItem {
     id: i64,
@@ -116,7 +111,12 @@ group by seasons.id;"#,
     .collect())
 }
 
-impl<T> MetadataFix<T>
+#[derive(Debug)]
+pub struct ShowMetadataFix<T> {
+    api: ShowMetadataApi<T>,
+}
+
+impl<T> ShowMetadataFix<T>
 where
     T: ShowMetadataProvider + Clone + Send + Sync + 'static,
 {
