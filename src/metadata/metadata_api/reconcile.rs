@@ -140,7 +140,7 @@ where
             };
 
             let poster = ep_meta.poster.clone();
-            let source = items.first().and_then(|i| i.fallback_source());
+            let source = items.first().and_then(|i| i.path());
 
             let (episode_id, episode_metadata_id) = match old_tree
                 .episodes
@@ -160,7 +160,12 @@ where
                         })
                         .await?;
                     }
-                    queue_episode_poster(asset_tasks, local.id, poster, source);
+                    queue_episode_poster(
+                        asset_tasks,
+                        local.id,
+                        poster,
+                        source.map(|path| super::LocalVideo { path, duration }),
+                    );
                     (local.id, local.metadata_id)
                 }
                 None => {
@@ -179,7 +184,12 @@ where
                     let episode_id = tx
                         .insert_episode(&ep_meta.to_db_episode(metadata_id, season_id, duration))
                         .await?;
-                    queue_episode_poster(asset_tasks, episode_id, poster, source);
+                    queue_episode_poster(
+                        asset_tasks,
+                        episode_id,
+                        poster,
+                        source.map(|path| super::LocalVideo { path, duration }),
+                    );
                     (episode_id, metadata_id)
                 }
             };

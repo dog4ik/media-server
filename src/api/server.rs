@@ -50,6 +50,8 @@ use crate::library::media::codec::subtitles::SubtitlesCodec;
 use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
+use crate::metadata::metadata_api::fix::MetadataFix;
+use crate::metadata::metadata_api::show::ShowMetadataApi;
 use crate::metadata::{
     EpisodeMetadata, MovieMetadata, ParentMediaType, SeasonMetadata, ShowMetadata,
     metadata_stack::MetadataProvidersStack,
@@ -1525,8 +1527,23 @@ async fn alter_movie_metadata(
     ),
     tag = "Shows",
 )]
-async fn fix_show_metadata() -> crate::Result<()> {
-    unimplemented!("Fixing show metadata is unimplemented");
+async fn fix_show_metadata(
+    Path(show_id): Path<i64>,
+    Query(ProviderQuery { provider }): Query<ProviderQuery>,
+    Query(StringIdQuery { id }): Query<StringIdQuery>,
+    State(AppState {
+        db,
+        providers_stack,
+        http_client,
+        ..
+    }): State<AppState>,
+) -> crate::Result<()> {
+    let Some(provider) = providers_stack.show_provider(provider) else {
+        return Err(AppError::not_found("requested provider is not found"));
+    };
+    let api = MetadataFix::new(ShowMetadataApi::new(provider, db, http_client));
+    api.show_metadata_fix(show_id, &id).await?;
+    Ok(())
 }
 
 /// Fix movie metadata match

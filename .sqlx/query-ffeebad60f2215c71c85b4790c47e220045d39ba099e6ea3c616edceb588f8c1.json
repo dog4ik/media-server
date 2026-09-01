@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "update videos set metadata_id = ? where videos.id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "ffeebad60f2215c71c85b4790c47e220045d39ba099e6ea3c616edceb588f8c1"
+}

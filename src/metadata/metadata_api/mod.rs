@@ -1,5 +1,12 @@
+use std::{path::PathBuf, time::Duration};
+
+use crate::db::{DbTransaction, LocalContentId};
+
+use self::asset_saver::AssetTasks;
+
 pub mod asset_saver;
 pub mod batch;
+pub mod fix;
 pub mod movie;
 #[allow(unused)]
 pub mod reconcile;
@@ -10,10 +17,6 @@ pub mod local_scope;
 #[cfg(test)]
 pub mod tests;
 
-use crate::db::{DbTransaction, LocalContentId};
-
-use self::asset_saver::AssetTasks;
-
 #[derive(Debug, Clone)]
 pub enum MetadataLookup<T, L = LocalContentId> {
     New {
@@ -23,6 +26,45 @@ pub enum MetadataLookup<T, L = LocalContentId> {
     /// Provider returned no metadata
     Missing,
 }
+
+/// Show metadata lookup method
+#[derive(Debug, Clone, Copy)]
+pub enum ShowLookupMethod<'a> {
+    /// Use id to find the show
+    Id(&'a str),
+    /// Use title to find the show
+    Title { title: &'a str, year: Option<u16> },
+}
+
+#[derive(Debug, Clone)]
+pub struct LocalVideo {
+    pub path: PathBuf,
+    pub duration: Duration,
+}
+
+// pub trait ShowFlushFallback<T> {
+//     fn show_fallback(item: &T) -> Option<db::DbShow>;
+//     fn season_fallback(item: &T) -> Option<db::DbSeason>;
+//     fn episode_fallback(item: &T) -> Option<db::DbEpisode>;
+// }
+//
+// /// Marker struct that never produces fallback
+// #[derive(Debug)]
+// pub struct NoFallback;
+//
+// impl<T> ShowFlushFallback<T> for NoFallback {
+//     fn show_fallback(item: &T) -> Option<db::DbShow> {
+//         None
+//     }
+//
+//     fn season_fallback(item: &T) -> Option<db::DbSeason> {
+//         None
+//     }
+//
+//     fn episode_fallback(item: &T) -> Option<db::DbEpisode> {
+//         None
+//     }
+// }
 
 pub struct PendingInsert<T> {
     pub content: T,

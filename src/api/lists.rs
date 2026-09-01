@@ -16,7 +16,7 @@ use crate::{
     metadata::{
         MetadataProvider,
         metadata_api::{
-            PendingInsert,
+            PendingInsert, ShowLookupMethod,
             asset_saver::AssetTasks,
             batch::BatchApi,
             movie::MovieMetadataApi,
@@ -423,7 +423,7 @@ async fn resolve_content(
                     ShowMetadataApi::new(show_provider, db, app_state.http_client.clone());
                 let flushed = show_api
                     .get_or_insert_show_tree(
-                        &id,
+                        ShowLookupMethod::Id(&id),
                         episodes.map(Into::<ShowTree<_>>::into).unwrap_or_default(),
                     )
                     .await?;

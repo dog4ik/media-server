@@ -118,6 +118,10 @@ struct TorrentContentItem<T> {
 }
 
 impl ShowItem for TorrentContentItem<ShowIdentifier> {
+    fn title(&self) -> &str {
+        self.ident.title()
+    }
+
     fn season(&self) -> usize {
         self.ident.season as usize
     }

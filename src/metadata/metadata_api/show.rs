@@ -30,9 +30,9 @@
 //!  2. Fetch fresh metadata
 //!  3. Write new metadata tree
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, path::PathBuf, time::Duration};
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use tokio::task::JoinSet;
 
 use crate::{
@@ -46,11 +46,12 @@ use crate::{
         EpisodeMetadata, ExternalIdMetadata, FetchParams, SeasonMetadata, ShowMetadata,
         ShowMetadataProvider,
         metadata_api::{
+            LocalVideo, ShowLookupMethod,
             asset_saver::AssetTasks,
             local_scope::{LocalLookupScope, LocalMetadataIdentifier},
         },
     },
-    scan::{AssetKind, AssetSaveTask, AssetTaskSource, insert_roles},
+    scan::{AssetKind, AssetSaveTask, AssetTaskSource, fallback, insert_roles},
 };
 
 use super::{MetadataLookup, PendingInsert};
@@ -60,19 +61,31 @@ use super::{MetadataLookup, PendingInsert};
 /// frame-fallback generation. `None` models a node with no local file (e.g. marking
 /// an episode watched outside the library).
 pub trait HasSource {
-    fn fallback_source(&self) -> Option<Source>;
+    fn path(&self) -> Option<PathBuf>;
+    fn duration(&self) -> impl Future<Output = Option<Duration>> + Send;
+    fn fallback_title(&self) -> Option<String>;
 }
 
 /// An item (e.g. a video) that knows which season/episode of a show it belongs to.
 pub trait ShowItem {
+    fn title(&self) -> &str;
     fn season(&self) -> usize;
     fn episode(&self) -> usize;
     fn fallback_source(&self) -> Option<Source>;
 }
 
-impl<T: ShowItem> HasSource for T {
-    fn fallback_source(&self) -> Option<Source> {
-        ShowItem::fallback_source(self)
+impl<T: ShowItem + Sync> HasSource for T {
+    fn fallback_title(&self) -> Option<String> {
+        Some(self.title().to_owned())
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        self.fallback_source().map(|v| v.video.path().to_owned())
+    }
+
+    async fn duration(&self) -> Option<Duration> {
+        let source = self.fallback_source()?;
+        source.video.fetch_duration().await.ok()
     }
 }
 
@@ -81,7 +94,15 @@ impl<T: ShowItem> HasSource for T {
 pub struct EpisodeNumber;
 
 impl HasSource for EpisodeNumber {
-    fn fallback_source(&self) -> Option<Source> {
+    fn fallback_title(&self) -> Option<String> {
+        None
+    }
+
+    fn path(&self) -> Option<PathBuf> {
+        None
+    }
+
+    async fn duration(&self) -> Option<Duration> {
         None
     }
 }
@@ -295,13 +316,13 @@ pub(super) fn queue_episode_poster(
     asset_tasks: &mut AssetTasks,
     episode_id: i64,
     poster: Option<String>,
-    source: Option<Source>,
+    video: Option<LocalVideo>,
 ) {
     let kind = AssetKind::Poster(PosterAsset::new(episode_id, PosterContentType::Episode));
-    let task_source = match (poster, source) {
-        (Some(url), Some(source)) => AssetTaskSource::UrlWithFrameFallback { url, source },
+    let task_source = match (poster, video) {
+        (Some(url), Some(video)) => AssetTaskSource::UrlWithFrameFallback { url, video },
         (Some(url), None) => AssetTaskSource::Url(url),
-        (None, Some(source)) => AssetTaskSource::VideoFrame(source),
+        (None, Some(video)) => AssetTaskSource::VideoFrame(video),
         (None, None) => return,
     };
     asset_tasks.push(AssetSaveTask {
@@ -317,7 +338,7 @@ pub(super) fn queue_episode_poster(
 pub struct ShowMetadataApi<T> {
     provider: T,
     fetch_params: FetchParams,
-    db: &'static Db,
+    pub db: &'static Db,
     http_client: reqwest::Client,
 }
 
@@ -414,6 +435,22 @@ where
         }
     }
 
+    async fn search_show_by_method<L>(
+        &self,
+        method: ShowLookupMethod<'_>,
+    ) -> anyhow::Result<MetadataLookup<ShowMetadata, L::Show>>
+    where
+        L: LocalLookupScope,
+    {
+        match method {
+            ShowLookupMethod::Id(id) => self.search_show_by_id::<L>(id).await,
+            ShowLookupMethod::Title { title, .. } => self
+                .search_show_title::<L>(title)
+                .await?
+                .context("no show was found"),
+        }
+    }
+
     /// Resolve the full season/episode tree for a show.
     ///
     /// `items` are grouped by season and episode; each leaf carries the items that belong to
@@ -490,7 +527,7 @@ where
     /// the UNIQUE constraint. In sutations like this automatic retry picks up winner's local id
     pub async fn get_or_insert_show_tree<C>(
         &self,
-        id: &str,
+        id: ShowLookupMethod<'_>,
         items: impl Into<ShowTree<C>>,
     ) -> anyhow::Result<PendingInsert<WrittenShow<C>>>
     where
@@ -501,7 +538,7 @@ where
             if attempt != 0 {
                 tracing::warn!(%attempt, "External id unique constraint violated, retrying show tree lookup");
             }
-            let show = self.search_show_by_id::<LocalContentId>(id).await?;
+            let show = self.search_show_by_method::<LocalContentId>(id).await?;
             let resolved = self
                 .fetch_show_tree::<_, LocalContentId>(show, tree.clone())
                 .await?;
@@ -546,7 +583,18 @@ where
                 let local = local.local_id();
                 (local.id, local.metadata_id)
             }
-            MetadataLookup::Missing => bail!("cannot flush a show without metadata"),
+            MetadataLookup::Missing
+                if let Some(show_fallback) =
+                    resolved.seasons[0].episodes[0].items[0].fallback_title() =>
+            {
+                let fallback = fallback::show_fallback_meta(&show_fallback);
+                let metadata_id = tx.insert_metadata(&fallback.to_db_metadata()).await?;
+                let show_id = tx.insert_show(&fallback.to_db_show(metadata_id)).await?;
+                (show_id, metadata_id)
+            }
+            MetadataLookup::Missing => {
+                bail!("cannot flush a show without metadata")
+            }
             MetadataLookup::New { metadata } => {
                 let poster = metadata.poster.clone();
                 let backdrop = metadata.backdrop.clone();
@@ -595,17 +643,24 @@ where
         };
 
         let mut written_seasons = Vec::new();
-        for resolved_season in resolved.seasons {
-            let ResolvedSeason {
-                number: season_number,
-                lookup,
-                episodes,
-            } = resolved_season;
-
+        for ResolvedSeason {
+            number: season_number,
+            lookup,
+            episodes,
+        } in resolved.seasons
+        {
             let (season_id, season_metadata_id) = match lookup {
                 MetadataLookup::Local(local) => {
                     let local = local.local_id();
                     (local.id, local.metadata_id)
+                }
+                MetadataLookup::Missing if episodes[0].items[0].fallback_title().is_some() => {
+                    let fallback = fallback::season_fallback_meta(season_number);
+                    let metadata_id = tx.insert_metadata(&fallback.to_db_metadata()).await?;
+                    let season_id = tx
+                        .insert_season(fallback.to_db_season(metadata_id, show_id))
+                        .await?;
+                    (season_id, metadata_id)
                 }
                 MetadataLookup::Missing => {
                     tracing::warn!(season = season_number, "Skipping season without metadata");
@@ -634,18 +689,30 @@ where
             };
 
             let mut written_episodes = Vec::new();
-            for resolved_episode in episodes {
-                let ResolvedEpisode {
-                    number: episode_number,
-                    lookup,
-                    duration,
-                    items,
-                } = resolved_episode;
-
+            for ResolvedEpisode {
+                number: episode_number,
+                lookup,
+                duration,
+                items,
+            } in episodes
+            {
                 let (episode_id, episode_metadata_id) = match lookup {
                     MetadataLookup::Local(local) => {
                         let local = local.local_id();
                         (local.id, local.metadata_id)
+                    }
+                    MetadataLookup::Missing if items[0].fallback_title().is_some() => {
+                        let fallback =
+                            fallback::episode_fallback_meta(episode_number, season_number);
+                        let metadata_id = tx.insert_metadata(&fallback.to_db_metadata()).await?;
+                        let episode_id = tx
+                            .insert_episode(&fallback.to_db_episode(
+                                metadata_id,
+                                season_id,
+                                duration,
+                            ))
+                            .await?;
+                        (episode_id, metadata_id)
                     }
                     MetadataLookup::Missing => {
                         tracing::warn!(
@@ -680,8 +747,13 @@ where
                         if let Some(cast) = metadata.cast {
                             insert_roles(tx, metadata_id, cast, asset_tasks).await?;
                         }
-                        let source = items.first().and_then(|i| i.fallback_source());
-                        queue_episode_poster(asset_tasks, episode_id, poster, source);
+                        let path = items.first().and_then(|i| i.path());
+                        queue_episode_poster(
+                            asset_tasks,
+                            episode_id,
+                            poster,
+                            path.map(|path| LocalVideo { path, duration }),
+                        );
                         (episode_id, metadata_id)
                     }
                 };
@@ -812,9 +884,9 @@ where
 
         // Probe duration here (resolve phase) so the flush transaction never blocks on ffprobe.
         // Bind the source first so the (non-Send) iterator is dropped before the await.
-        let fallback_source = items.iter().find_map(|i| i.fallback_source());
+        let fallback_source = items.first();
         let duration = match fallback_source {
-            Some(source) => source.video.fetch_duration().await.unwrap_or_default(),
+            Some(source) => source.duration().await.unwrap_or_default(),
             None => Duration::ZERO,
         };
 

@@ -22,7 +22,7 @@ use crate::{
     metadata::{
         MetadataProvider, MovieMetadata, MovieMetadataProvider, ShowMetadataProvider,
         metadata_api::{
-            PendingInsert,
+            PendingInsert, ShowLookupMethod,
             movie::MovieMetadataApi,
             show::{EpisodeNumber, ShowMetadataApi, WrittenShow},
         },
@@ -490,7 +490,9 @@ where
         content: written,
         mut tx,
         assets,
-    } = api.get_or_insert_show_tree(provider_id, episodes).await?;
+    } = api
+        .get_or_insert_show_tree(ShowLookupMethod::Id(provider_id), episodes)
+        .await?;
     let update_time = time::OffsetDateTime::now_utc();
     for episode in written.episodes() {
         tx.insert_history(crate::db::DbHistory {

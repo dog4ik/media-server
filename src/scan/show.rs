@@ -20,7 +20,8 @@ use crate::{
     },
     metadata::{
         ExternalIdMetadata, MetadataProvider, ParentMediaType, ShowMetadata, ShowMetadataProvider,
-        metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
+        metadata_api::{LocalVideo, asset_saver::AssetTasks},
+        metadata_stack::MetadataProvidersStack,
     },
     parser::show::ShowIdentifier,
     scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
@@ -320,9 +321,13 @@ impl ContentScanner for ShowScanner {
                             let first_source = videos.first().map(|v| v.source.clone());
                             if let Some(url) = poster {
                                 let task_source = match first_source {
-                                    Some(source) => {
-                                        AssetTaskSource::UrlWithFrameFallback { url, source }
-                                    }
+                                    Some(source) => AssetTaskSource::UrlWithFrameFallback {
+                                        url,
+                                        video: LocalVideo {
+                                            path: source.video.path().to_owned(),
+                                            duration,
+                                        },
+                                    },
                                     None => AssetTaskSource::Url(url),
                                 };
                                 asset_tasks.push(AssetSaveTask {
@@ -338,7 +343,10 @@ impl ContentScanner for ShowScanner {
                                         episode_id,
                                         PosterContentType::Episode,
                                     )),
-                                    source: AssetTaskSource::VideoFrame(source),
+                                    source: AssetTaskSource::VideoFrame(LocalVideo {
+                                        path: source.video.path().to_owned(),
+                                        duration,
+                                    }),
                                 });
                             }
                             metadata_id

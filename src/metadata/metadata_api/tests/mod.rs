@@ -27,6 +27,10 @@ pub struct TestItem {
 }
 
 impl ShowItem for TestItem {
+    fn title(&self) -> &str {
+        "test show"
+    }
+
     fn season(&self) -> usize {
         self.season
     }

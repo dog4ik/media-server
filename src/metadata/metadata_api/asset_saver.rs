@@ -37,6 +37,7 @@ impl AssetTasks {
         self.tasks.len()
     }
 
+    #[tracing::instrument(level = "debug", skip_all, fields(max_concurrency))]
     pub async fn save<T>(self, max_concurrency: usize, progress_handler: T)
     where
         T: AssetsProgressSink,

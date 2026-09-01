@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "\nwith episode_videos as (\n  select\n  episodes.season_id,\n  episodes.number as episode_number,\n  json_group_array(\n      json_object(\n          'path', videos.path,\n          'id', videos.id\n      )\n  ) as videos\n  from episodes\n  join videos on videos.metadata_id = episodes.metadata_id\n  group by episodes.id\n)\nselect\nseasons.number,\njson_group_array(json_object(\n    'number', episode_videos.episode_number,\n    'videos', json(episode_videos.videos)\n)) as \"episodes!: Json<Vec<EpisodeTreeNode>>\"\nfrom seasons\njoin episode_videos on episode_videos.season_id = seasons.id\nwhere seasons.show_id = ?\ngroup by seasons.id;",
+  "describe": {
+    "columns": [
+      {
+        "name": "number",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "seasons",
+            "name": "number"
+          }
+        }
+      },
+      {
+        "name": "episodes!: Json<Vec<EpisodeTreeNode>>",
+        "ordinal": 1,
+        "type_info": "Null",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "3c98192db6a9e4ae8d99260065b85f93ce33f909d8b50e79e1334ab32256ba7f"
+}

@@ -15,6 +15,14 @@ pub(super) fn show_fallback(title: &str) -> MetadataLookupWithIds<ShowMetadata> 
     }
 }
 
+pub fn show_fallback_meta(title: &str) -> ShowMetadata {
+    ShowMetadata {
+        metadata_provider: MetadataProvider::Local,
+        title: title.to_string(),
+        ..Default::default()
+    }
+}
+
 pub(super) fn season_fallback(season_number: usize) -> MetadataLookup<SeasonMetadata> {
     MetadataLookup::New {
         metadata: SeasonMetadata {
@@ -22,6 +30,14 @@ pub(super) fn season_fallback(season_number: usize) -> MetadataLookup<SeasonMeta
             title: Some(format!("Season {season_number}")),
             ..Default::default()
         },
+    }
+}
+
+pub fn season_fallback_meta(season_number: usize) -> SeasonMetadata {
+    SeasonMetadata {
+        number: season_number,
+        title: Some(format!("Season {season_number}")),
+        ..Default::default()
     }
 }
 
@@ -36,6 +52,15 @@ pub(super) fn episode_fallback(
             title: format!("Episode {episode_number}"),
             ..Default::default()
         },
+    }
+}
+
+pub fn episode_fallback_meta(episode_number: usize, season_number: usize) -> EpisodeMetadata {
+    EpisodeMetadata {
+        number: episode_number,
+        season_number,
+        title: format!("Episode {episode_number}"),
+        ..Default::default()
     }
 }
 

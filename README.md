@@ -76,7 +76,7 @@ You can build and run docker container
 
 `docker run --name media-server -p 6969:6969 media-server:latest`
 
-An container image is published to Docker Hub as `dog4ik/media-server`.
+A container image is published to Docker Hub as `dog4ik/media-server`.
 
 ## Build from source
 

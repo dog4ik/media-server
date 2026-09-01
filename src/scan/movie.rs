@@ -19,7 +19,8 @@ use crate::{
     },
     metadata::{
         ExternalIdMetadata, MovieMetadata, MovieMetadataProvider, ParentMediaType,
-        metadata_api::asset_saver::AssetTasks, metadata_stack::MetadataProvidersStack,
+        metadata_api::{LocalVideo, asset_saver::AssetTasks},
+        metadata_stack::MetadataProvidersStack,
     },
     parser::movie::MovieIdentifier,
     scan::{
@@ -196,7 +197,13 @@ impl ContentScanner for MovieScanner {
                     let first_source = videos.first().map(|v| v.source.clone());
                     if let Some(url) = poster {
                         let task_source = match first_source.clone() {
-                            Some(source) => AssetTaskSource::UrlWithFrameFallback { url, source },
+                            Some(source) => AssetTaskSource::UrlWithFrameFallback {
+                                url,
+                                video: LocalVideo {
+                                    path: source.video.path().to_owned(),
+                                    duration,
+                                },
+                            },
                             None => AssetTaskSource::Url(url),
                         };
                         asset_tasks.push(AssetSaveTask {
@@ -212,7 +219,10 @@ impl ContentScanner for MovieScanner {
                                 movie_id,
                                 PosterContentType::Movie,
                             )),
-                            source: AssetTaskSource::VideoFrame(source),
+                            source: AssetTaskSource::VideoFrame(LocalVideo {
+                                path: source.video.path().to_owned(),
+                                duration,
+                            }),
                         });
                     }
                     if let Some(url) = backdrop {

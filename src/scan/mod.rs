@@ -5,12 +5,12 @@ use crate::{
     db::{DbActions, DbQueryBuilder, DbRole, DbTransaction},
     ffmpeg,
     library::{
-        LibraryItem, Media, Source,
+        LibraryItem, Media,
         assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
     },
     metadata::{
         ExternalIdMetadata, FetchParams, MetadataProvider, PersonMetadata,
-        metadata_api::asset_saver::AssetTasks,
+        metadata_api::{LocalVideo, asset_saver::AssetTasks},
     },
     progress::{ProgressStatus, TaskProgress, TaskTrait},
     scan::scan_progress::MetadataProgressEmitter,
@@ -151,8 +151,8 @@ pub enum AssetKind {
 #[derive(Debug)]
 pub enum AssetTaskSource {
     Url(String),
-    VideoFrame(Source),
-    UrlWithFrameFallback { url: String, source: Source },
+    VideoFrame(LocalVideo),
+    UrlWithFrameFallback { url: String, video: LocalVideo },
 }
 
 #[derive(Debug)]
@@ -180,9 +180,9 @@ impl AssetTaskSource {
             AssetTaskSource::Url(url) => {
                 save_asset_from_url(http_client, url.parse()?, asset).await
             }
-            AssetTaskSource::VideoFrame(source) => save_asset_from_frame(asset, &source).await,
-            AssetTaskSource::UrlWithFrameFallback { url, source } => {
-                save_asset_from_url_with_frame_fallback(http_client, url.parse()?, asset, &source)
+            AssetTaskSource::VideoFrame(video) => save_asset_from_frame(asset, &video).await,
+            AssetTaskSource::UrlWithFrameFallback { url, video } => {
+                save_asset_from_url_with_frame_fallback(http_client, url.parse()?, asset, &video)
                     .await
             }
         }
@@ -190,12 +190,11 @@ impl AssetTaskSource {
 }
 
 #[tracing::instrument(level = "debug", skip_all, fields(asset = %asset.path().display()))]
-async fn save_asset_from_frame(asset: impl FileAsset, source: &Source) -> anyhow::Result<()> {
+async fn save_asset_from_frame(asset: impl FileAsset, video: &LocalVideo) -> anyhow::Result<()> {
     use tokio::fs;
     let asset_path = asset.path();
-    let video_duration = source.video.metadata().await?.duration();
     fs::create_dir_all(asset_path.parent().unwrap()).await?;
-    ffmpeg::pull_frame(source.video.path(), asset_path, video_duration / 2).await?;
+    ffmpeg::pull_frame(&video.path, asset_path, video.duration / 2).await?;
     Ok(())
 }
 
@@ -218,20 +217,21 @@ async fn save_asset_from_url(
     Ok(())
 }
 
-#[tracing::instrument(level = "debug", skip(http_client, asset, source), fields(asset = %asset.path().display()))]
+#[tracing::instrument(level = "debug", skip(http_client, asset), fields(asset = %asset.path().display()))]
 async fn save_asset_from_url_with_frame_fallback(
     http_client: &reqwest::Client,
     url: reqwest::Url,
     asset: impl FileAsset,
-    source: &Source,
+    video: &LocalVideo,
 ) -> anyhow::Result<()> {
     use tokio::fs;
     let asset_path = asset.path();
     if let Err(e) = save_asset_from_url(http_client, url, asset).await {
-        let video_duration = source.video.metadata().await?.duration();
         tracing::warn!("Failed to save image, pulling frame: {e}");
-        fs::create_dir_all(asset_path.parent().unwrap()).await?;
-        ffmpeg::pull_frame(source.video.path(), asset_path, video_duration / 2).await?;
+        if let Some(parent) = video.path.parent() {
+            fs::create_dir_all(parent).await?;
+        }
+        ffmpeg::pull_frame(&video.path, asset_path, video.duration / 2).await?;
     }
     Ok(())
 }
