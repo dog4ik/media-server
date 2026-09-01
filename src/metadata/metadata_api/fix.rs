@@ -5,10 +5,11 @@ use crate::{
     db::LocalContentId,
     ffmpeg_abi,
     metadata::{
-        ShowMetadataProvider,
+        MovieMetadataProvider, ShowMetadataProvider,
         metadata_api::{
             PendingInsert, ShowLookupMethod,
             asset_saver::AssetTasks,
+            movie::MovieMetadataApi,
             show::{
                 EpisodeInput, HasSource, LocalTree, SeasonInput, ShowMetadataApi, ShowTree,
                 WrittenEpisode,
@@ -149,6 +150,57 @@ where
                 .execute(&mut *tx)
                 .await?;
             }
+        }
+        tx.commit().await?;
+        assets.save(assets_concurrency, ()).await;
+        Ok(())
+    }
+}
+
+#[derive(Debug)]
+pub struct MovieMetadataFix<T> {
+    api: MovieMetadataApi<T>,
+}
+
+impl<T> MovieMetadataFix<T>
+where
+    T: MovieMetadataProvider + Clone + Send + Sync + 'static,
+{
+    pub fn new(api: MovieMetadataApi<T>) -> Self {
+        Self { api }
+    }
+
+    /// Move all videos of specified movie to the different movie metadata
+    pub async fn movie_metadata_fix(
+        &self,
+        movie_id: i64,
+        target_provider_id: &str,
+    ) -> anyhow::Result<()> {
+        let config::scan::MaxAssetConcurrency(assets_concurrency) = config::CONFIG.get_value();
+        let videos = sqlx::query_scalar!(
+            "select videos.id from videos
+            join movies on movies.metadata_id = videos.metadata_id
+            where movies.id = ?",
+            movie_id,
+        )
+        .fetch_all(&self.api.db.pool)
+        .await?;
+        let lookup = self.api.search_movie_by_id(target_provider_id).await?;
+
+        let mut tx = self.api.db.pool.begin_with("begin immediate").await?;
+        let mut assets = AssetTasks::new(self.api.http_client.clone());
+        let saved = self
+            .api
+            .get_or_insert_lookup(lookup, &mut tx, &mut assets)
+            .await?;
+        for video_id in videos {
+            sqlx::query!(
+                "update videos set metadata_id = ? where videos.id = ?",
+                saved.metadata_id,
+                video_id
+            )
+            .execute(&mut *tx)
+            .await?;
         }
         tx.commit().await?;
         assets.save(assets_concurrency, ()).await;

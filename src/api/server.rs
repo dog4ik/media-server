@@ -30,8 +30,8 @@ use crate::api::api_data::api_types::Actor;
 use crate::api::api_data::local_movie::Movie;
 use crate::api::api_data::local_show::{Episode, Season, Show};
 use crate::api::{
-    ContentFilterQuery, CursorQuery, DynShowProviderQuery, OptionalTorrentIndexQuery, Path, Query,
-    TakeQuery,
+    ContentFilterQuery, CursorQuery, DynMovieProviderQuery, DynShowProviderQuery,
+    OptionalTorrentIndexQuery, Path, Query, TakeQuery,
 };
 use crate::config::{
     self, APP_RESOURCES, Capabilities, ConfigurationApplyResult, SerializedSetting,
@@ -51,7 +51,8 @@ use crate::library::media::codec::subtitles::SubtitlesCodec;
 use crate::library::media::codec::video::VideoCodec;
 use crate::library::media::container::VideoContainer;
 use crate::library::{ContentIdentifier, Source, TranscodePayload};
-use crate::metadata::metadata_api::fix::ShowMetadataFix;
+use crate::metadata::metadata_api::fix::{MovieMetadataFix, ShowMetadataFix};
+use crate::metadata::metadata_api::movie::MovieMetadataApi;
 use crate::metadata::metadata_api::show::ShowMetadataApi;
 use crate::metadata::{
     EpisodeMetadata, MovieMetadata, ParentMediaType, SeasonMetadata, ShowMetadata,
@@ -1556,8 +1557,17 @@ async fn fix_show_metadata(
     ),
     tag = "Movies",
 )]
-async fn fix_movie_metadata() -> crate::Result<()> {
-    unimplemented!("Fixing movie metadata is not implemented")
+async fn fix_movie_metadata(
+    Path(movie_id): Path<i64>,
+    DynMovieProviderQuery(provider): DynMovieProviderQuery,
+    Query(StringIdQuery { id }): Query<StringIdQuery>,
+    State(AppState {
+        db, http_client, ..
+    }): State<AppState>,
+) -> crate::Result<()> {
+    let api = MovieMetadataFix::new(MovieMetadataApi::new(provider, db, http_client));
+    api.movie_metadata_fix(movie_id, &id).await?;
+    Ok(())
 }
 
 /// Fix metadata match

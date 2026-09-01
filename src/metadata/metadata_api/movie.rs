@@ -21,8 +21,8 @@ use super::{MetadataLookup, PendingInsert};
 pub struct MovieMetadataApi<T> {
     provider: T,
     fetch_params: FetchParams,
-    db: &'static Db,
-    http_client: reqwest::Client,
+    pub db: &'static Db,
+    pub http_client: reqwest::Client,
 }
 
 #[cfg(test)]
