@@ -5,9 +5,9 @@ use clap::Parser;
 use dotenvy::dotenv;
 use media_server::{
     APP_RESOURCES, AppResources, AppState, Args, CONFIG, ConfigFile, Db, Library,
-    MetadataProvidersStack, MovieFolders, OtelEndpoint, Port, ShowFolders, TaskResource,
-    TorrentClient, Upnp, WebUiPath, api_router, get_or_init_gpu_accelated_apis, init_tracer,
-    library_state,
+    MetadataProvidersStack, MovieFolders, OpenApiDoc, OtelEndpoint, Port, ShowFolders,
+    TaskResource, TorrentClient, Upnp, WebUiPath, api_router, get_or_init_gpu_accelated_apis,
+    init_tracer, library_state,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tower_http::cors::CorsLayer;
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{Instrument, info_span};
+use utoipa::OpenApi;
 use utoipa_axum::router::OpenApiRouter;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -119,7 +120,7 @@ async fn main() {
         // tokio::spawn(watch::monitor_library(app_state.clone(), media_folders));
         // tokio::spawn(watch::monitor_config(app_state.configuration, config_path));
 
-        let (server_api, openapi) = OpenApiRouter::new()
+        let (server_api, openapi) = OpenApiRouter::with_openapi(OpenApiDoc::openapi())
             .nest("/api", api_router())
             .split_for_parts();
 

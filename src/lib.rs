@@ -297,6 +297,7 @@ impl axum::response::IntoResponse for AppError {
 /// Nothing else is reachable from outside, which is what keeps `dead_code` analysis honest for
 /// everything below.
 pub use crate::{
+    api::OpenApiDoc,
     api::router as api_router,
     api::server::library_state,
     app_state::AppState,

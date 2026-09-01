@@ -81,6 +81,7 @@ pub fn router() -> OpenApiRouter<app_state::AppState> {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ContentFilterQuery {
     #[serde(default)]
     pub actors: Vec<i64>,
@@ -104,6 +105,7 @@ impl From<ContentFilterQuery> for db::ContentFetchParams {
 }
 
 #[derive(utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct CursorQuery {
     pub cursor: Option<String>,
 }
@@ -153,66 +155,78 @@ impl<'de> Deserialize<'de> for CursorQuery {
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct OptionalUuidQuery {
     pub id: Option<uuid::Uuid>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct IdQuery {
     pub id: i64,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct SearchQuery {
     pub search: String,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ContentTypeQuery {
     #[param(inline)]
     pub content_type: metadata::ParentMediaType,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct OptionalContentTypeQuery {
     #[param(inline)]
     pub content_type: Option<metadata::ParentMediaType>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct ProviderQuery {
     #[param(inline)]
     pub provider: metadata::MetadataProvider,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TorrentIndexQuery {
     #[param(inline)]
     pub provider: torrent_index::TorrentIndexIdentifier,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct OptionalTorrentIndexQuery {
     #[param(inline)]
     pub provider: Option<torrent_index::TorrentIndexIdentifier>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct VariantQuery {
     pub variant: Option<String>,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct StringIdQuery {
     pub id: String,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct NumberQuery {
     pub number: usize,
 }
 
 #[derive(Deserialize, utoipa::IntoParams)]
+#[into_params(parameter_in = Query)]
 pub struct TakeQuery {
     pub take: Option<i64>,
 }
