@@ -6,8 +6,7 @@ use dotenvy::dotenv;
 use media_server::{
     APP_RESOURCES, AppResources, AppState, Args, CONFIG, ConfigFile, Db, Library,
     MetadataProvidersStack, MovieFolders, OpenApiDoc, OtelEndpoint, Port, ShowFolders,
-    TaskResource, TorrentClient, Upnp, WebUiPath, api_router, get_or_init_gpu_accelated_apis,
-    init_tracer, library_state,
+    TaskResource, TorrentClient, Upnp, WebUiPath, api_router, init_tracer, library_state,
 };
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Mutex;
@@ -73,10 +72,7 @@ async fn main() {
     }
     tracing::info!("Using log file location: {}", AppResources::log().display());
 
-    // The whole boot sequence runs inside a single `startup` span
     let (cancellation_token, tracker, torrent_client) = async move {
-        tokio::spawn(get_or_init_gpu_accelated_apis());
-
         let cancellation_token = CancellationToken::new();
 
         let http_client = reqwest::Client::new();

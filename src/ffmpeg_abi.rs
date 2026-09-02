@@ -646,6 +646,14 @@ impl std::fmt::Display for GpuEncodingApi {
 
 static GPU_ACCEL_APIS: OnceCell<Box<[GpuEncodingApi]>> = OnceCell::const_new();
 
+/// Probe gpu accelerated apis once.
+/// 
+/// Note that probing while gpu drivers are not initialized (e.g. during boot) will can result in
+/// false negatives for the rest of the program lifetime.
+///
+/// Removing OnceCell cache will result in + ~400ms transcoding startup.
+///
+/// TODO: Ensure that OnceCell gets initialized when gpu drivers are ready. (how though..)
 #[tracing::instrument(name = "init_gpu_apis")]
 pub async fn get_or_init_gpu_accelated_apis() -> &'static [GpuEncodingApi] {
     GPU_ACCEL_APIS

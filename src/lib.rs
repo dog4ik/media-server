@@ -306,7 +306,6 @@ pub use crate::{
         ShowFolders, WebUiPath,
     },
     db::Db,
-    ffmpeg_abi::get_or_init_gpu_accelated_apis,
     library::Library,
     metadata::metadata_stack::MetadataProvidersStack,
     progress::TaskResource,
