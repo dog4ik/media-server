@@ -1400,18 +1400,11 @@ impl Db {
     #[tracing::instrument(level = "debug", skip_all)]
     pub async fn connect(path: impl AsRef<Path>) -> Result<Self, sqlx::Error> {
         let url = path_to_url(path.as_ref());
-        // sqlx emits a tracing event (target `sqlx::query`) per executed statement
-        // carrying the statement summary, rows affected/returned and elapsed time.
-        // These events attach to whatever span is currently active, so they nest
-        // under the semantic spans created at the call sites. Surface them with
-        // e.g. `RUST_LOG=...,sqlx::query=debug`; slow queries are logged at warn.
         let options = SqliteConnectOptions::from_str(&url)
             .unwrap()
-            .busy_timeout(Duration::from_secs(10))
             .log_statements(log::LevelFilter::Debug)
             .log_slow_statements(log::LevelFilter::Warn, Duration::from_millis(300));
         let pool = SqlitePoolOptions::new()
-            .max_connections(30)
             .connect_with(options.clone())
             .await?;
         match MIGRATOR.run(&pool).await {
@@ -1422,10 +1415,7 @@ impl Db {
                 tokio::fs::remove_file(path).await?;
                 tracing::error!("Failed to validate some of the migrations, doing database reset!");
                 config::AppResources::initiate()?;
-                let pool = SqlitePoolOptions::new()
-                    .max_connections(30)
-                    .connect_with(options)
-                    .await?;
+                let pool = SqlitePoolOptions::new().connect_with(options).await?;
                 MIGRATOR.run(&pool).await?;
                 return Ok(Self { pool });
             }
