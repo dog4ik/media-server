@@ -229,7 +229,7 @@ pub(super) struct BatchResult<S> {
     pub state: S,
 }
 
-/// Wrapper around [MovieMetadataApi] that allows processing many shows
+/// Wrapper around [MovieMetadataApi] that allows processing many movies in parallel
 pub(super) struct BatchMovieApi<S = ()> {
     pub join_set: JoinSet<anyhow::Result<BatchResult<S>>>,
 }

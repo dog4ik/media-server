@@ -11,6 +11,7 @@ use crate::{
     },
 };
 
+/// Batch api that drives movie and show api's concurrently
 pub struct BatchApi<T, S, M = (), L: LocalLookupScope = LocalContentId> {
     show_batch: BatchShowApi<T, S, L>,
     movie_batch: BatchMovieApi<M>,

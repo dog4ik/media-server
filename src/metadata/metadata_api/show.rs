@@ -922,7 +922,7 @@ pub(super) struct BatchResult<T, S = (), L: LocalLookupScope = LocalContentId> {
     pub state: S,
 }
 
-/// Wrapper around [ShowMetadataApi] that allows processing many shows
+/// Wrapper around [ShowMetadataApi] that allows processing many shows in parallel
 pub(super) struct BatchShowApi<T, S, L: LocalLookupScope = LocalContentId> {
     pub join_set: JoinSet<anyhow::Result<BatchResult<T, S, L>>>,
 }
