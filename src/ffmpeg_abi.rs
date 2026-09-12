@@ -647,7 +647,7 @@ impl std::fmt::Display for GpuEncodingApi {
 static GPU_ACCEL_APIS: OnceCell<Box<[GpuEncodingApi]>> = OnceCell::const_new();
 
 /// Probe gpu accelerated apis once.
-/// 
+///
 /// Note that probing while gpu drivers are not initialized (e.g. during boot) will can result in
 /// false negatives for the rest of the program lifetime.
 ///

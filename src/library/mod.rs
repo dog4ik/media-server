@@ -13,6 +13,7 @@ use self::media::container::VideoContainer;
 use self::media::{Resolution, Video};
 use crate::{
     db::Db,
+    metadata::metadata_api::show::ShowItem,
     parser::{
         movie::MovieIdentifier,
         show::{ShowIdent, ShowIdentifier},
@@ -146,6 +147,24 @@ pub struct LibraryFile {
 pub struct LibraryItem<T: Media> {
     pub identifier: T,
     pub source: Source,
+}
+
+impl ShowItem for LibraryItem<ShowIdentifier> {
+    fn title(&self) -> &str {
+        &self.identifier.title
+    }
+
+    fn season(&self) -> usize {
+        self.identifier.season as usize
+    }
+
+    fn episode(&self) -> usize {
+        self.identifier.episode as usize
+    }
+
+    fn fallback_source(&self) -> Option<Source> {
+        Some(self.source.clone())
+    }
 }
 
 impl From<LibraryItem<ShowIdentifier>> for LibraryFile {

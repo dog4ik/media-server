@@ -47,11 +47,12 @@ use crate::{
         ShowMetadataProvider,
         metadata_api::{
             LocalVideo, ShowLookupMethod,
-            asset_saver::AssetTasks,
+            asset_saver::{AssetKind, AssetSaveTask, AssetTaskSource, AssetTasks},
+            fallback,
             local_scope::{LocalLookupScope, LocalMetadataIdentifier},
+            roles::insert_roles,
         },
     },
-    scan::{AssetKind, AssetSaveTask, AssetTaskSource, fallback, insert_roles},
 };
 
 use super::{MetadataLookup, PendingInsert};
@@ -338,6 +339,7 @@ pub(super) fn queue_episode_poster(
 pub struct ShowMetadataApi<T> {
     provider: T,
     fetch_params: FetchParams,
+    use_season_episodes: bool,
     pub db: &'static Db,
     http_client: reqwest::Client,
 }
@@ -353,6 +355,7 @@ impl ShowMetadataApi<crate::metadata::metadata_api::tests::provider_mock::MockPr
             provider,
             fetch_params,
             db,
+            use_season_episodes: false,
             http_client: reqwest::Client::new(),
         }
     }
@@ -363,13 +366,15 @@ where
     T: ShowMetadataProvider + Clone + Send + Sync + 'static,
 {
     pub fn new(provider: T, db: &'static Db, http_client: reqwest::Client) -> Self {
-        let config::MetadataLanguage(lang) = config::CONFIG.get_value();
+        let (config::MetadataLanguage(lang), config::scan::UseSeasonEpisodes(use_season_episodes)) =
+            config::CONFIG.get_values();
         let fetch_params = FetchParams { lang };
 
         Self {
             provider,
             db,
             fetch_params,
+            use_season_episodes,
             http_client,
         }
     }
@@ -418,10 +423,10 @@ where
     where
         L: LocalLookupScope,
     {
-        let mut show = self.provider.show(id, self.fetch_params).await?;
-        match L::show_lookup(self.db, show.metadata_provider, &show.metadata_id).await {
+        match L::show_lookup(self.db, self.provider.provider_identifier(), id).await {
             Ok(Some(local)) => Ok(MetadataLookup::Local(local)),
             Ok(None) | Err(_) => {
+                let mut show = self.provider.show(id, self.fetch_params).await?;
                 let external_ids = show.external_ids.get_or_insert_default();
                 external_ids.insert(
                     0,
@@ -817,16 +822,36 @@ where
             Some(LocalSeason { season, episodes }) => (season, episodes),
             None => (None, HashMap::new()),
         };
-        let season_lookup = self
+        let mut season_lookup = self
             .season_lookup::<L>(local, provider_show_id, season_number)
             .await;
 
         let mut resolved_episodes = Vec::new();
+        let mut season_episodes: Option<HashMap<usize, EpisodeMetadata>> = match &mut season_lookup
+        {
+            MetadataLookup::New { metadata } if self.use_season_episodes => Some(
+                metadata
+                    .episodes
+                    .drain(..)
+                    .map(|ep| (ep.number, ep))
+                    .collect(),
+            ),
+            _ => None,
+        };
         for episode in episodes {
             let local_episode = local_episodes.remove(&episode.number);
+            let season_episode = season_episodes
+                .as_mut()
+                .and_then(|map| map.remove(&episode.number));
             resolved_episodes.push(
-                self.resolve_episode(local_episode, provider_show_id, season_number, episode)
-                    .await,
+                self.resolve_episode(
+                    local_episode,
+                    season_episode,
+                    provider_show_id,
+                    season_number,
+                    episode,
+                )
+                .await,
             );
         }
 
@@ -861,6 +886,7 @@ where
     async fn resolve_episode<C, L>(
         &self,
         local_episode: Option<L::Episode>,
+        season_episode: Option<EpisodeMetadata>,
         provider_show_id: Option<&str>,
         season_number: usize,
         episode: EpisodeInput<C>,
@@ -891,6 +917,9 @@ where
         };
 
         let lookup = match provider_show_id {
+            _ if let Some(season_episode) = season_episode => MetadataLookup::New {
+                metadata: season_episode,
+            },
             Some(provider_show_id) => match self
                 .provider
                 .episode(
@@ -902,7 +931,10 @@ where
                 .await
             {
                 Ok(metadata) => MetadataLookup::New { metadata },
-                Err(_) => MetadataLookup::Missing,
+                Err(err) => {
+                    tracing::error!("Failed to lookup episode: {err}");
+                    MetadataLookup::Missing
+                }
             },
             None => MetadataLookup::Missing,
         };

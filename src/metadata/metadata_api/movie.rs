@@ -8,9 +8,11 @@ use crate::{
     library::assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
     metadata::{
         ExternalIdMetadata, FetchParams, MovieMetadata, MovieMetadataProvider,
-        metadata_api::asset_saver::AssetTasks,
+        metadata_api::{
+            asset_saver::{AssetKind, AssetSaveTask, AssetTaskSource, AssetTasks},
+            roles::insert_roles,
+        },
     },
-    scan::{AssetKind, AssetSaveTask, AssetTaskSource, insert_roles},
 };
 
 use super::{MetadataLookup, PendingInsert};

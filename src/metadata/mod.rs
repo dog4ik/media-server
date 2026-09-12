@@ -225,6 +225,7 @@ pub trait DiscoverMetadataProvider: ProviderIdentifier {
 #[serde(rename_all = "lowercase")]
 #[sqlx(rename_all = "lowercase")]
 pub enum MetadataProvider {
+    // Metadata fallbacks rely on Local being default, double check before changing.
     #[default]
     Local,
     Tmdb,

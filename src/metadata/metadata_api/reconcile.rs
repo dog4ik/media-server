@@ -18,8 +18,10 @@ use anyhow::bail;
 use crate::{
     db::{Db, DbActions, DbExternalId, DbTransaction, LocalContentId},
     library::assets::{BackdropAsset, BackdropContentType, PosterAsset, PosterContentType},
-    metadata::{ExternalIdMetadata, metadata_api::asset_saver::AssetTasks},
-    scan::{AssetKind, AssetSaveTask, AssetTaskSource},
+    metadata::{
+        ExternalIdMetadata,
+        metadata_api::asset_saver::{AssetKind, AssetSaveTask, AssetTaskSource, AssetTasks},
+    },
 };
 
 use super::{

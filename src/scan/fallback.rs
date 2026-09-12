@@ -1,43 +1,19 @@
 use crate::metadata::{
-    EpisodeMetadata, MetadataProvider, MovieMetadata, SeasonMetadata, ShowMetadata,
+    EpisodeMetadata, MovieMetadata, SeasonMetadata, ShowMetadata, metadata_api::fallback,
 };
 
 use super::{MetadataLookup, MetadataLookupWithIds};
 
 pub(super) fn show_fallback(title: &str) -> MetadataLookupWithIds<ShowMetadata> {
     MetadataLookupWithIds::New {
-        metadata: ShowMetadata {
-            metadata_provider: MetadataProvider::Local,
-            title: title.to_string(),
-            ..Default::default()
-        },
+        metadata: fallback::show_fallback_meta(title),
         external_ids: vec![],
-    }
-}
-
-pub fn show_fallback_meta(title: &str) -> ShowMetadata {
-    ShowMetadata {
-        metadata_provider: MetadataProvider::Local,
-        title: title.to_string(),
-        ..Default::default()
     }
 }
 
 pub(super) fn season_fallback(season_number: usize) -> MetadataLookup<SeasonMetadata> {
     MetadataLookup::New {
-        metadata: SeasonMetadata {
-            number: season_number,
-            title: Some(format!("Season {season_number}")),
-            ..Default::default()
-        },
-    }
-}
-
-pub fn season_fallback_meta(season_number: usize) -> SeasonMetadata {
-    SeasonMetadata {
-        number: season_number,
-        title: Some(format!("Season {season_number}")),
-        ..Default::default()
+        metadata: fallback::season_fallback_meta(season_number),
     }
 }
 
@@ -46,38 +22,13 @@ pub(super) fn episode_fallback(
     season_number: usize,
 ) -> MetadataLookup<EpisodeMetadata> {
     MetadataLookup::New {
-        metadata: EpisodeMetadata {
-            number: episode_number,
-            season_number,
-            title: format!("Episode {episode_number}"),
-            ..Default::default()
-        },
-    }
-}
-
-pub fn episode_fallback_meta(episode_number: usize, season_number: usize) -> EpisodeMetadata {
-    EpisodeMetadata {
-        number: episode_number,
-        season_number,
-        title: format!("Episode {episode_number}"),
-        ..Default::default()
+        metadata: fallback::episode_fallback_meta(episode_number, season_number),
     }
 }
 
 pub(super) fn movie_fallback(title: &str) -> MetadataLookupWithIds<MovieMetadata> {
-    let mut chars = title.chars();
-    let capitalized: String = chars
-        .next()
-        .and_then(|c| c.to_uppercase().next())
-        .into_iter()
-        .chain(chars)
-        .collect();
     MetadataLookupWithIds::New {
-        metadata: MovieMetadata {
-            metadata_provider: MetadataProvider::Local,
-            title: capitalized,
-            ..Default::default()
-        },
+        metadata: fallback::movie_fallback_meta(title),
         external_ids: vec![],
     }
 }

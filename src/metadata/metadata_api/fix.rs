@@ -16,7 +16,10 @@ use crate::{
             },
         },
     },
-    parser::{show::ShowIdent, tokenizer::Tokenizer},
+    parser::{
+        show::{ShowIdent, ShowIdentifier},
+        tokenizer::Tokenizer,
+    },
     scan::MetadataLookup,
 };
 

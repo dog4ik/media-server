@@ -6,10 +6,15 @@ use self::asset_saver::AssetTasks;
 
 pub mod asset_saver;
 pub mod batch;
+pub mod bucket;
+pub mod fallback;
 pub mod fix;
+pub mod merge;
 pub mod movie;
 #[allow(unused)]
 pub mod reconcile;
+pub mod reset;
+pub mod roles;
 pub mod show;
 
 /// Local object in a content tree
@@ -41,30 +46,6 @@ pub struct LocalVideo {
     pub path: PathBuf,
     pub duration: Duration,
 }
-
-// pub trait ShowFlushFallback<T> {
-//     fn show_fallback(item: &T) -> Option<db::DbShow>;
-//     fn season_fallback(item: &T) -> Option<db::DbSeason>;
-//     fn episode_fallback(item: &T) -> Option<db::DbEpisode>;
-// }
-//
-// /// Marker struct that never produces fallback
-// #[derive(Debug)]
-// pub struct NoFallback;
-//
-// impl<T> ShowFlushFallback<T> for NoFallback {
-//     fn show_fallback(item: &T) -> Option<db::DbShow> {
-//         None
-//     }
-//
-//     fn season_fallback(item: &T) -> Option<db::DbSeason> {
-//         None
-//     }
-//
-//     fn episode_fallback(item: &T) -> Option<db::DbEpisode> {
-//         None
-//     }
-// }
 
 pub struct PendingInsert<T> {
     pub content: T,

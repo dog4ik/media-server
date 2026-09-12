@@ -1,16 +1,13 @@
-use std::collections::HashMap;
-
 use crate::{
     config,
-    db::{DbActions, DbQueryBuilder, DbRole, DbTransaction},
-    ffmpeg,
-    library::{
-        LibraryItem, Media,
-        assets::{BackdropAsset, FileAsset, PosterAsset, PosterContentType},
-    },
+    db::DbTransaction,
+    library::{LibraryItem, Media},
     metadata::{
-        ExternalIdMetadata, FetchParams, MetadataProvider, PersonMetadata,
-        metadata_api::{LocalVideo, asset_saver::AssetTasks},
+        ExternalIdMetadata, FetchParams,
+        metadata_api::{
+            asset_saver::AssetTasks,
+            merge::{MergeKey, Mergeable},
+        },
     },
     progress::{ProgressStatus, TaskProgress, TaskTrait},
     scan::scan_progress::MetadataProgressEmitter,
@@ -18,7 +15,6 @@ use crate::{
 
 pub mod episode;
 pub mod fallback;
-mod merge;
 pub mod movie;
 pub mod reconcile;
 pub mod scan_progress;
@@ -142,182 +138,11 @@ impl ScanConfig {
     }
 }
 
-#[derive(Debug, Clone)]
-pub enum AssetKind {
-    Poster(PosterAsset),
-    Backdrop(BackdropAsset),
-}
-
-#[derive(Debug)]
-pub enum AssetTaskSource {
-    Url(String),
-    VideoFrame(LocalVideo),
-    UrlWithFrameFallback { url: String, video: LocalVideo },
-}
-
-#[derive(Debug)]
-pub struct AssetSaveTask {
-    pub kind: AssetKind,
-    pub source: AssetTaskSource,
-}
-
-impl AssetSaveTask {
-    pub async fn execute(self, http_client: &reqwest::Client) -> anyhow::Result<()> {
-        match self.kind {
-            AssetKind::Poster(asset) => self.source.execute_with(http_client, asset).await,
-            AssetKind::Backdrop(asset) => self.source.execute_with(http_client, asset).await,
-        }
-    }
-}
-
-impl AssetTaskSource {
-    async fn execute_with(
-        self,
-        http_client: &reqwest::Client,
-        asset: impl FileAsset,
-    ) -> anyhow::Result<()> {
+impl<M> Mergeable for MetadataLookupWithIds<M> {
+    fn merge_key(&self) -> MergeKey<'_> {
         match self {
-            AssetTaskSource::Url(url) => {
-                save_asset_from_url(http_client, url.parse()?, asset).await
-            }
-            AssetTaskSource::VideoFrame(video) => save_asset_from_frame(asset, &video).await,
-            AssetTaskSource::UrlWithFrameFallback { url, video } => {
-                save_asset_from_url_with_frame_fallback(http_client, url.parse()?, asset, &video)
-                    .await
-            }
+            MetadataLookupWithIds::New { external_ids, .. } => MergeKey::External(external_ids),
+            MetadataLookupWithIds::Local(local_id) => MergeKey::Local(*local_id),
         }
     }
-}
-
-#[tracing::instrument(level = "debug", skip_all, fields(asset = %asset.path().display()))]
-async fn save_asset_from_frame(asset: impl FileAsset, video: &LocalVideo) -> anyhow::Result<()> {
-    use tokio::fs;
-    let asset_path = asset.path();
-    fs::create_dir_all(asset_path.parent().unwrap()).await?;
-    ffmpeg::pull_frame(&video.path, asset_path, video.duration / 2).await?;
-    Ok(())
-}
-
-#[tracing::instrument(level = "debug", skip(http_client, asset), fields(asset = %asset.path().display()))]
-async fn save_asset_from_url(
-    http_client: &reqwest::Client,
-    url: reqwest::Url,
-    asset: impl FileAsset,
-) -> anyhow::Result<()> {
-    use std::io::Error;
-    use tokio_stream::StreamExt;
-    use tokio_util::io::StreamReader;
-
-    let response = http_client.get(url).send().await?;
-    let stream = response
-        .bytes_stream()
-        .map(|data| data.map_err(Error::other));
-    let mut stream_reader = StreamReader::new(stream);
-    asset.save_from_reader(&mut stream_reader).await?;
-    Ok(())
-}
-
-#[tracing::instrument(level = "debug", skip(http_client, asset), fields(asset = %asset.path().display()))]
-async fn save_asset_from_url_with_frame_fallback(
-    http_client: &reqwest::Client,
-    url: reqwest::Url,
-    asset: impl FileAsset,
-    video: &LocalVideo,
-) -> anyhow::Result<()> {
-    use tokio::fs;
-    let asset_path = asset.path();
-    if let Err(e) = save_asset_from_url(http_client, url, asset).await {
-        tracing::warn!("Failed to save image, pulling frame: {e}");
-        if let Some(parent) = video.path.parent() {
-            fs::create_dir_all(parent).await?;
-        }
-        ffmpeg::pull_frame(&video.path, asset_path, video.duration / 2).await?;
-    }
-    Ok(())
-}
-
-pub(crate) async fn insert_roles(
-    tx: &mut DbTransaction,
-    metadata_id: i64,
-    cast: Vec<PersonMetadata>,
-    asset_tasks: &mut AssetTasks,
-) -> sqlx::Result<()> {
-    if cast.is_empty() {
-        return Ok(());
-    }
-
-    #[derive(sqlx::FromRow)]
-    struct ActorQueryRow {
-        id: i64,
-        external_metadata_id: String,
-        external_metadata_provider: MetadataProvider,
-    }
-
-    #[derive(Debug, Hash, Eq, PartialEq)]
-    struct MapKey<'a> {
-        provider: MetadataProvider,
-        provider_id: &'a str,
-    }
-
-    let local_actors = DbQueryBuilder::new(
-        "select id, external_metadata_id, external_metadata_provider from actors where (external_metadata_id, external_metadata_provider) in ",
-    )
-    .push_tuples(
-        cast.iter(),
-        |mut b,
-         PersonMetadata {
-             metadata_id,
-             metadata_provider,
-             ..
-         }| {
-            b.push_bind(metadata_id).push_bind(metadata_provider);
-        },
-    )
-    .build_query_as::<ActorQueryRow>()
-    .fetch_all(&mut **tx)
-    .await?;
-
-    let local_actors_map: HashMap<_, _> = local_actors
-        .iter()
-        .map(|v| {
-            (
-                MapKey {
-                    provider: v.external_metadata_provider,
-                    provider_id: &v.external_metadata_id,
-                },
-                v.id,
-            )
-        })
-        .collect();
-
-    for cast in cast {
-        let actor_id = match local_actors_map.get(&MapKey {
-            provider: cast.metadata_provider,
-            provider_id: &cast.metadata_id,
-        }) {
-            Some(id) => *id,
-            None => {
-                let actor_id = tx.insert_actor(&cast.to_db_actor()).await?;
-                if let Some(poster_url) = cast.person_poster {
-                    asset_tasks.push(AssetSaveTask {
-                        kind: AssetKind::Poster(PosterAsset::new(
-                            actor_id,
-                            PosterContentType::Actor,
-                        )),
-                        source: AssetTaskSource::Url(poster_url),
-                    });
-                }
-                actor_id
-            }
-        };
-
-        tx.insert_role(&DbRole {
-            id: None,
-            actor_id,
-            metadata_id,
-            character: cast.role.map(|r| r.character),
-        })
-        .await?;
-    }
-    Ok(())
 }

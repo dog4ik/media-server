@@ -19,20 +19,22 @@ use crate::{
     },
     metadata::{
         ExternalIdMetadata, MovieMetadata, MovieMetadataProvider, ParentMediaType,
-        metadata_api::{LocalVideo, asset_saver::AssetTasks},
+        metadata_api::{
+            LocalVideo,
+            asset_saver::{AssetKind, AssetSaveTask, AssetTaskSource, AssetTasks},
+            merge::try_merge_chunks,
+            roles::insert_roles,
+        },
         metadata_stack::MetadataProvidersStack,
     },
     parser::movie::MovieIdentifier,
     scan::{
-        ContentScanner, insert_roles,
+        ContentScanner,
         scan_progress::{FailedContent, MetadataProgressEmitter},
     },
 };
 
-use super::{
-    AssetKind, AssetSaveTask, AssetTaskSource, MetadataLookupWithIds, ScanConfig,
-    fallback::movie_fallback, merge::try_merge_chunks,
-};
+use super::{MetadataLookupWithIds, ScanConfig, fallback::movie_fallback};
 
 pub struct ResolvedMovie {
     lookup: MetadataLookupWithIds<MovieMetadata>,

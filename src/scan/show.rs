@@ -20,18 +20,22 @@ use crate::{
     },
     metadata::{
         ExternalIdMetadata, MetadataProvider, ParentMediaType, ShowMetadata, ShowMetadataProvider,
-        metadata_api::{LocalVideo, asset_saver::AssetTasks},
+        metadata_api::{
+            LocalVideo,
+            asset_saver::{AssetKind, AssetSaveTask, AssetTaskSource, AssetTasks},
+            merge::try_merge_chunks,
+            roles::insert_roles,
+        },
         metadata_stack::MetadataProvidersStack,
     },
     parser::show::ShowIdentifier,
-    scan::{ContentScanner, insert_roles, scan_progress::MetadataProgressEmitter},
+    scan::{ContentScanner, scan_progress::MetadataProgressEmitter},
 };
 
 use super::{
-    AssetKind, AssetSaveTask, AssetTaskSource, MetadataLookup, MetadataLookupWithIds, ScanConfig,
+    MetadataLookup, MetadataLookupWithIds, ScanConfig,
     episode::{EpisodeScanner, ResolvedEpisode, ResolvedSeason, ResolvedShow, ShowProvider},
     fallback::show_fallback,
-    merge::try_merge_chunks,
 };
 
 struct ShowChunk {
