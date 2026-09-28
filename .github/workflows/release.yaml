@@ -106,7 +106,7 @@ jobs:
           mkdir -p installer/media-server-web
           cp -r media-server/dist installer/media-server-web/dist
           mkdir -p installer/ffmpeg/bin
-          cp "$PWD/ffmpeg"/bin/*.dll installer/ffmpeg/bin/
+          cp "$PWD/ffmpeg"/bin/* installer/ffmpeg/bin/
       - name: Build installer
         working-directory: installer
         run: |
