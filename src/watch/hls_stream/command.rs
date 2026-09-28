@@ -6,6 +6,9 @@ use std::{
 
 use std::process::Command;
 
+use anyhow::Context;
+use tokio::io::{AsyncBufReadExt, BufReader};
+
 pub const DEFAULT_SEGMENT_LENGTH: usize = 6;
 
 fn apply_video_arguments(c: &mut Command, codec: &str) {
@@ -121,7 +124,7 @@ pub(super) fn run(
         video_track_idx,
         audio_track_idx,
         temp_path,
-        task_id,
+        task_id: _,
         start,
         seek_to,
         video_encoder,
@@ -132,7 +135,11 @@ pub(super) fn run(
     }: &CommandArgumentsParams,
 ) -> anyhow::Result<tokio::process::Child> {
     let mut c = Command::new(ffmpeg_path);
-    let segment_file_name = format!("{}/%d.mp4", temp_path.display());
+    c.current_dir(temp_path);
+
+    c.arg("-hide_banner");
+    c.arg("-loglevel");
+    c.arg("error");
 
     c.arg("-ss");
     let seek_time = format!("{:.6}", seek_to);
@@ -182,13 +189,18 @@ pub(super) fn run(
     c.arg("-hls_segment_type");
     c.arg("fmp4");
     c.arg("-hls_fmp4_init_filename");
-    c.arg(format!("{}/init.mp4", task_id));
+    c.arg("init.mp4");
+
+    // Segments are written to `{idx}.mp4.tmp` and renamed once complete, which is the only
+    // completion signal available from file watchers on every platform.
+    c.arg("-hls_flags");
+    c.arg("temp_file");
 
     c.arg("-start_number");
     c.arg(start.to_string());
 
     c.arg("-hls_segment_filename");
-    c.arg(&segment_file_name);
+    c.arg("%d.mp4");
 
     c.arg("-hls_playlist_type");
     c.arg("vod");
@@ -198,7 +210,7 @@ pub(super) fn run(
 
     c.arg("-y");
 
-    c.arg(temp_path);
+    c.arg("playlist.m3u8");
 
     let dbg_args: Vec<_> = c.get_args().map(|v| v.to_string_lossy()).collect();
 
@@ -212,12 +224,24 @@ pub(super) fn run(
     );
 
     let mut c = tokio::process::Command::from(c);
+    #[cfg(windows)]
+    {
+        c.creation_flags(crate::utils::CREATE_NO_WINDOW);
+    }
 
-    let child = c
-        .stderr(Stdio::null())
+    let mut child = c
+        .stderr(Stdio::piped())
         .stdout(Stdio::null())
         .kill_on_drop(true)
         .spawn()
-        .unwrap();
+        .context("spawn hls ffmpeg command")?;
+
+    let stderr = child.stderr.take().expect("stderr is not taken");
+    tokio::spawn(async move {
+        let mut lines = BufReader::new(stderr).lines();
+        while let Ok(Some(line)) = lines.next_line().await {
+            tracing::warn!("Hls ffmpeg: {line}");
+        }
+    });
     Ok(child)
 }

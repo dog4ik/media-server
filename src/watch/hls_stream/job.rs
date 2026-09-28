@@ -260,18 +260,16 @@ async fn run_hls_handler(
             }
             Some(path) = file_change_rx.recv() => {
                 requests.retain(|r| !r.ready.is_closed());
-                let Ok(new_segment)= path
-                    .file_stem()
-                    .expect("segment must have a filename")
-                    .to_str()
-                    .expect("utf-8 filename")
-                    .parse::<usize>()
-                else {
-                    debug_assert_eq!(path.file_stem(), Some(std::ffi::OsStr::new("init")));
+                let stem = path.file_stem().and_then(|s| s.to_str());
+                let new_segment = stem.and_then(|s| s.parse::<usize>().ok());
+                // ffmpeg finishes the init file before it starts writing the first segment
+                if !have_init && (stem == Some("init") || new_segment.is_some()) {
                     have_init = true;
                     for waiter in init_waiters.drain(..) {
                         let _ = waiter.send(());
                     }
+                }
+                let Some(new_segment) = new_segment else {
                     continue;
                 };
                 // The current job writes segments sequentially starting at `start_segment`. A
